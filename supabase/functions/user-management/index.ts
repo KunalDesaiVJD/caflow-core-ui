@@ -6,6 +6,24 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const ROLE_HIERARCHY: Record<string, number> = {
+  superadmin: 5,
+  firm_admin: 4,
+  partner_ca: 3,
+  manager: 2,
+  staff_article: 1,
+  client: 0,
+};
+
+const DEFAULT_PASSWORDS: Record<string, string> = {
+  superadmin: "SuperAdmin@2025!",
+  firm_admin: "FirmAdmin@2025!",
+  partner_ca: "Partner@2025!",
+  manager: "Manager@2025!",
+  staff_article: "Staff@2025!",
+  client: "Client@2025!",
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -23,7 +41,7 @@ Deno.serve(async (req) => {
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
-  const token = authHeader.replace('Bearer ', '');
+  const token = authHeader.replace("Bearer ", "");
   const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
   if (claimsError || !claimsData?.claims) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
@@ -47,7 +65,7 @@ Deno.serve(async (req) => {
   const action = url.searchParams.get("action");
 
   try {
-    // LIST USERS for current firm
+    // LIST USERS
     if (req.method === "GET" && action === "list") {
       let query = adminClient.from("users").select("*");
       if (requestingUser.role !== "superadmin") {
@@ -69,10 +87,7 @@ Deno.serve(async (req) => {
       const { name, email, phone, role, firm_id } = body;
 
       // Role hierarchy check
-      const roleHierarchy: Record<string, number> = {
-        superadmin: 4, firm_admin: 3, partner: 2, manager: 1, staff: 0, client: -1,
-      };
-      if ((roleHierarchy[role] || 0) >= (roleHierarchy[requestingUser.role] || 0)) {
+      if ((ROLE_HIERARCHY[role] ?? 0) >= (ROLE_HIERARCHY[requestingUser.role] ?? 0)) {
         return new Response(JSON.stringify({ error: "Cannot create user with equal or higher role" }), {
           status: 403, headers: corsHeaders,
         });
@@ -80,13 +95,13 @@ Deno.serve(async (req) => {
 
       const targetFirmId = requestingUser.role === "superadmin" ? (firm_id || requestingUser.firm_id) : requestingUser.firm_id;
 
-      // Generate temp password
-      const tempPassword = crypto.randomUUID().slice(0, 12) + "A1!";
+      // Use role-based default password
+      const password = DEFAULT_PASSWORDS[role] || "Default@2025!";
 
       // Create auth user
       const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
         email,
-        password: tempPassword,
+        password,
         email_confirm: true,
         user_metadata: { role, firm_id: targetFirmId, name },
       });
@@ -101,10 +116,11 @@ Deno.serve(async (req) => {
         role,
         firm_id: targetFirmId,
         is_active: true,
+        must_change_password: true,
       }).select().single();
       if (insertError) throw insertError;
 
-      return new Response(JSON.stringify({ user: newUser, temp_password: tempPassword }), {
+      return new Response(JSON.stringify({ user: newUser, default_password: password }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -114,12 +130,8 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { user_id, name, phone, role } = body;
 
-      // Role hierarchy check for role changes
       if (role) {
-        const roleHierarchy: Record<string, number> = {
-          superadmin: 4, firm_admin: 3, partner: 2, manager: 1, staff: 0, client: -1,
-        };
-        if ((roleHierarchy[role] || 0) >= (roleHierarchy[requestingUser.role] || 0)) {
+        if ((ROLE_HIERARCHY[role] ?? 0) >= (ROLE_HIERARCHY[requestingUser.role] ?? 0)) {
           return new Response(JSON.stringify({ error: "Cannot assign equal or higher role" }), {
             status: 403, headers: corsHeaders,
           });
@@ -157,23 +169,37 @@ Deno.serve(async (req) => {
       });
     }
 
-    // RESET PASSWORD
+    // ADMIN RESET PASSWORD
     if (req.method === "POST" && action === "reset-password") {
       const body = await req.json();
-      const { error } = await adminClient.auth.admin.generateLink({
-        type: "recovery",
-        email: body.email,
+      const { user_id, temporary_password } = body;
+
+      if (!user_id || !temporary_password) {
+        return new Response(JSON.stringify({ error: "user_id and temporary_password required" }), {
+          status: 400, headers: corsHeaders,
+        });
+      }
+
+      // Update auth password
+      const { error: authError } = await adminClient.auth.admin.updateUserById(user_id, {
+        password: temporary_password,
       });
-      if (error) throw error;
+      if (authError) throw authError;
+
+      // Set must_change_password flag
+      const { error: dbError } = await adminClient.from("users")
+        .update({ must_change_password: true })
+        .eq("id", user_id);
+      if (dbError) throw dbError;
+
       return new Response(JSON.stringify({ success: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // GET ACTIVITY (version_history for a user)
+    // GET ACTIVITY
     if (req.method === "GET" && action === "activity") {
       const targetUserId = url.searchParams.get("user_id");
-      // Get user name first
       const { data: targetUser } = await adminClient.from("users")
         .select("name")
         .eq("id", targetUserId)
