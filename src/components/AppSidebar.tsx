@@ -27,6 +27,7 @@ const navItems = [
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };
+const userMgmtItem = { title: "User Management", path: "/settings/users", icon: Users };
 
 interface AppSidebarProps {
   collapsed: boolean;
@@ -140,6 +141,22 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <settingsItem.icon size={20} className="shrink-0" />
           {!collapsed && <span>Settings</span>}
         </Link>
+
+        {/* User Management - admin only */}
+        {["superadmin", "firm_admin"].includes(user?.role || "") && (
+          <Link
+            to={userMgmtItem.path}
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive(userMgmtItem.path)
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <userMgmtItem.icon size={20} className="shrink-0" />
+            {!collapsed && <span>User Management</span>}
+          </Link>
+        )}
       </nav>
 
       {/* User section */}
