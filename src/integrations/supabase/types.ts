@@ -943,7 +943,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      set_user_context: {
+        Args: { p_user_id: string; p_user_name: string; p_user_role: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
