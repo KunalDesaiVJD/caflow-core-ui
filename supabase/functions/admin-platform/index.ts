@@ -21,16 +21,17 @@ Deno.serve(async (req) => {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
 
-  // Verify the user's JWT
+  // Verify the user's JWT using getClaims (works with signing-keys)
+  const token = authHeader.replace("Bearer ", "");
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
-  const { data: claimsData, error: claimsError } = await userClient.auth.getUser();
-  if (claimsError || !claimsData?.user) {
+  const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
+  if (claimsError || !claimsData?.claims) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
   }
 
-  const userId = claimsData.user.id;
+  const userId = claimsData.claims.sub;
 
   // Service role client for bypassing RLS
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
