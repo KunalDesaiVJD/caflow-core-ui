@@ -87,24 +87,25 @@ const NewClientWizard = () => {
       setSaving(true);
       try {
         const gstins = basicInfo.gstins.filter((g) => g.trim());
+        const insertPayload = {
+          name: basicInfo.name.trim(),
+          pan: basicInfo.pan || null,
+          entity_type: basicInfo.entity_type || null,
+          cin: basicInfo.cin || null,
+          gstin: gstins.length > 0 ? gstins : null,
+          compliance_flags: {
+            ...complianceFlags,
+            financial_profile: financialProfile,
+            basic_info_extra: {
+              date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
+              registered_state: basicInfo.registered_state,
+              business_nature: basicInfo.business_nature,
+            },
+          } as any,
+        };
         const { data, error } = await supabase
           .from("clients")
-          .insert({
-            name: basicInfo.name.trim(),
-            pan: basicInfo.pan || null,
-            entity_type: basicInfo.entity_type || null,
-            cin: basicInfo.cin || null,
-            gstin: gstins.length > 0 ? gstins : null,
-            compliance_flags: {
-              ...complianceFlags,
-              financial_profile: financialProfile,
-              basic_info_extra: {
-                date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
-                registered_state: basicInfo.registered_state,
-                business_nature: basicInfo.business_nature,
-              },
-            },
-          })
+          .insert(insertPayload)
           .select()
           .single();
 
