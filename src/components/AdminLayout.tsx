@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Building2,
   ScrollText,
+  Users,
   LogOut,
   Shield,
 } from "lucide-react";
@@ -12,6 +13,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { title: "Platform Overview", path: "/admin", icon: LayoutDashboard },
   { title: "Firms Management", path: "/admin/firms", icon: Building2 },
+  { title: "User Management", path: "/settings/users", icon: Users },
   { title: "System Logs", path: "/admin/logs", icon: ScrollText },
 ];
 
