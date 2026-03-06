@@ -14,6 +14,7 @@ import Billing from "./pages/Billing";
 import ErpLedger from "./pages/ErpLedger";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import SettingsPage from "./pages/SettingsPage";
+import UserManagement from "./pages/UserManagement";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -49,6 +50,7 @@ const App = () => (
             <Route path="/erp-ledger" element={<ErpLedger />} />
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/users" element={<UserManagement />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

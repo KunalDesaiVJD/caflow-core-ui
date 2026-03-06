@@ -863,8 +863,10 @@ export type Database = {
           icai_reg_no: string | null
           id: string
           is_active: boolean | null
+          last_login: string | null
           mfa_enabled: boolean | null
           name: string | null
+          phone: string | null
           role: string | null
         }
         Insert: {
@@ -874,8 +876,10 @@ export type Database = {
           icai_reg_no?: string | null
           id?: string
           is_active?: boolean | null
+          last_login?: string | null
           mfa_enabled?: boolean | null
           name?: string | null
+          phone?: string | null
           role?: string | null
         }
         Update: {
@@ -885,8 +889,10 @@ export type Database = {
           icai_reg_no?: string | null
           id?: string
           is_active?: boolean | null
+          last_login?: string | null
           mfa_enabled?: boolean | null
           name?: string | null
+          phone?: string | null
           role?: string | null
         }
         Relationships: [
