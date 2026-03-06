@@ -37,11 +37,21 @@ interface VersionEntry {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  partner: "bg-destructive/15 text-destructive border-destructive/30",
+  superadmin: "bg-purple-100 text-purple-800 border-purple-300",
   firm_admin: "bg-destructive/15 text-destructive border-destructive/30",
+  partner: "bg-red-100 text-red-800 border-red-300",
   manager: "bg-amber-100 text-amber-800 border-amber-300",
   staff: "bg-green-100 text-green-800 border-green-300",
   client: "bg-muted text-muted-foreground border-border",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  superadmin: "Superadmin",
+  firm_admin: "Firm Admin",
+  partner: "Partner",
+  manager: "Manager",
+  staff: "Staff",
+  client: "Client",
 };
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -226,9 +236,9 @@ export default function UserManagement() {
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Team Members</h1>
           <div className="flex gap-2 mt-2">
-            {["partner", "manager", "staff", "client"].map(r => (
+            {["superadmin", "firm_admin", "partner", "manager", "staff", "client"].map(r => (
               <Badge key={r} variant="outline" className={ROLE_COLORS[r]}>
-                {roleCounts[r] || 0} {r.charAt(0).toUpperCase() + r.slice(1)}s
+                {roleCounts[r] || 0} {ROLE_LABELS[r] || r}s
               </Badge>
             ))}
           </div>
@@ -272,7 +282,7 @@ export default function UserManagement() {
                   <TableCell className="text-muted-foreground">{u.phone || "—"}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={ROLE_COLORS[u.role || "staff"]}>
-                      {u.role || "staff"}
+                      {ROLE_LABELS[u.role || "staff"] || u.role}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -326,7 +336,7 @@ export default function UserManagement() {
                 <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
                 <SelectContent>
                   {allowedRoles.map(r => (
-                    <SelectItem key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1).replace("_", " ")}</SelectItem>
+                    <SelectItem key={r} value={r}>{ROLE_LABELS[r] || r}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -362,7 +372,7 @@ export default function UserManagement() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {allowedRoles.map(r => (
-                    <SelectItem key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1).replace("_", " ")}</SelectItem>
+                    <SelectItem key={r} value={r}>{ROLE_LABELS[r] || r}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
