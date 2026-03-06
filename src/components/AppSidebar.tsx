@@ -12,6 +12,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeft,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -109,6 +110,22 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         ))}
 
         <div className="flex-1" />
+
+        {/* Superadmin link */}
+        {user?.role === "superadmin" && (
+          <Link
+            to="/admin"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/admin")
+                ? "bg-destructive/15 text-destructive"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-destructive"
+            )}
+          >
+            <Shield size={20} className="shrink-0 text-destructive" />
+            {!collapsed && <span>Superadmin</span>}
+          </Link>
+        )}
 
         {/* Settings */}
         <Link
