@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Navigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -64,12 +65,18 @@ function daysUntil(date: Date) {
 
 const Index = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const t = setTimeout(() => setLoading(false), 800);
     return () => clearTimeout(t);
   }, []);
+
+  // Redirect superadmins to their dedicated platform
+  if (user?.role === "superadmin") {
+    return <Navigate to="/admin" replace />;
+  }
 
   const quickActions = [
     { label: "Add New Client", path: "/clients", icon: Plus },
