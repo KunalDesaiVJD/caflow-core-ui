@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import {
   LayoutDashboard,
   Users,
@@ -34,6 +34,19 @@ interface AppSidebarProps {
 
 export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/login", { replace: true });
+  };
+
+  const initials = user?.name
+    ? user.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
+    : "??";
+  const displayName = user?.name || "User";
+  const displayRole = user?.role || "staff";
 
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
@@ -116,18 +129,18 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
       <div className="border-t border-sidebar-border p-3">
         <div className="flex items-center gap-3 overflow-hidden">
           <div className="w-9 h-9 rounded-full bg-sidebar-gold/20 flex items-center justify-center text-sidebar-gold font-semibold text-sm shrink-0">
-            RS
+            {initials}
           </div>
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">Rajesh Sharma</p>
+              <p className="text-sm font-medium text-sidebar-foreground truncate">{displayName}</p>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
-                Admin
+                {displayRole}
               </span>
             </div>
           )}
           {!collapsed && (
-            <button className="text-sidebar-foreground hover:text-destructive transition-colors shrink-0">
+            <button onClick={handleLogout} className="text-sidebar-foreground hover:text-destructive transition-colors shrink-0">
               <LogOut size={16} />
             </button>
           )}

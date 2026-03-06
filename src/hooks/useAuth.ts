@@ -14,32 +14,59 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    // Set up listener BEFORE getSession per Supabase best practices
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!session?.user) {
         setUser(null);
         setLoading(false);
         return;
       }
 
-      const { data: profile } = await supabase
-        .from("users")
-        .select("id, email, name, role, firm_id")
-        .eq("id", session.user.id)
-        .single();
+      // Use setTimeout to avoid potential deadlock with Supabase auth
+      setTimeout(async () => {
+        const { data: profile } = await supabase
+          .from("users")
+          .select("id, email, name, role, firm_id")
+          .eq("id", session.user.id)
+          .single();
 
-      setUser(profile || null);
-      setLoading(false);
-    };
+        if (profile) {
+          setUser(profile);
+          // Set session context for version_history trigger
+          await supabase.rpc("set_user_context", {
+            p_user_id: profile.id,
+            p_user_name: profile.name || session.user.email || "Unknown",
+            p_user_role: profile.role || "staff",
+          });
+        } else {
+          // Fallback: user exists in auth but not in users table
+          setUser({
+            id: session.user.id,
+            email: session.user.email || null,
+            name: session.user.user_metadata?.name || session.user.email || null,
+            role: session.user.user_metadata?.role || null,
+            firm_id: null,
+          });
+        }
+        setLoading(false);
+      }, 0);
+    });
 
-    fetchUser();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
-      fetchUser();
+    // Then check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        setLoading(false);
+      }
+      // onAuthStateChange will handle the rest
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  return { user, loading };
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+
+  return { user, loading, signOut };
 }
