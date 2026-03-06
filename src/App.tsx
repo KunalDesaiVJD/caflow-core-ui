@@ -12,6 +12,7 @@ import Billing from "./pages/Billing";
 import ErpLedger from "./pages/ErpLedger";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import SettingsPage from "./pages/SettingsPage";
+import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,7 @@ const App = () => (
             <Route path="/erp-ledger" element={<ErpLedger />} />
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/admin" element={<Admin />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
