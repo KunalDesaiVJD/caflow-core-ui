@@ -1,20 +1,19 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { VersionHistoryPanel } from "@/components/VersionHistoryPanel";
-import { Users, Eye } from "lucide-react";
-import { format } from "date-fns";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search } from "lucide-react";
 
 interface Client {
   id: string;
@@ -24,128 +23,151 @@ interface Client {
   cin: string | null;
   gstin: string[] | null;
   created_at: string | null;
+  firm_id: string | null;
 }
 
+const ENTITY_TYPES = [
+  "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd",
+  "HUF", "Trust", "AOP", "BOI",
+];
+
 const Clients = () => {
+  const navigate = useNavigate();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [search, setSearch] = useState("");
+  const [entityFilter, setEntityFilter] = useState("all");
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchClients = async () => {
       const { data } = await supabase
         .from("clients")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(200);
       setClients((data as Client[]) || []);
       setLoading(false);
     };
-    fetch();
+    fetchClients();
   }, []);
 
-  if (selectedClient) {
-    return (
-      <div className="space-y-4">
-        {/* Client Detail Header */}
-        <div className="flex items-start justify-between">
-          <div>
-            <Button variant="ghost" size="sm" className="mb-2 -ml-2 text-xs" onClick={() => setSelectedClient(null)}>
-              ← Back to Clients
-            </Button>
-            <h1 className="text-2xl font-display font-bold text-foreground">{selectedClient.name || "Unnamed Client"}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              {selectedClient.entity_type && <Badge variant="outline">{selectedClient.entity_type}</Badge>}
-              {selectedClient.pan && <span className="text-sm font-mono text-muted-foreground">{selectedClient.pan}</span>}
-            </div>
-          </div>
-          <VersionHistoryPanel table_name="clients" record_id={selectedClient.id} />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card>
-            <CardHeader><CardTitle className="text-sm">General Information</CardTitle></CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">CIN</span><span className="font-mono">{selectedClient.cin || "—"}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">PAN</span><span className="font-mono">{selectedClient.pan || "—"}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Entity Type</span><span>{selectedClient.entity_type || "—"}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Created</span><span>{selectedClient.created_at ? format(new Date(selectedClient.created_at), "dd MMM yyyy") : "—"}</span></div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader><CardTitle className="text-sm">GSTIN Numbers</CardTitle></CardHeader>
-            <CardContent>
-              {selectedClient.gstin && selectedClient.gstin.length > 0 ? (
-                <div className="space-y-1">
-                  {selectedClient.gstin.map((g, i) => (
-                    <Badge key={i} variant="outline" className="font-mono text-xs mr-1">{g}</Badge>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No GSTIN recorded</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  const filtered = clients.filter((c) => {
+    const matchesSearch =
+      !search ||
+      (c.name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (c.pan || "").toLowerCase().includes(search.toLowerCase());
+    const matchesEntity =
+      entityFilter === "all" || c.entity_type === entityFilter;
+    return matchesSearch && matchesEntity;
+  });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground mb-1">Clients</h1>
           <p className="text-sm text-muted-foreground">Manage your client directory.</p>
         </div>
-        <Users className="h-5 w-5 text-muted-foreground" />
+        <Button onClick={() => navigate("/clients/new")} className="gap-2">
+          <Plus className="h-4 w-4" /> Add Client
+        </Button>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="p-6 space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>PAN</TableHead>
-                  <TableHead>Entity Type</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {clients.map((client) => (
-                  <TableRow key={client.id}>
-                    <TableCell className="font-medium">{client.name || "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{client.pan || "—"}</TableCell>
-                    <TableCell>
-                      {client.entity_type ? <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge> : "—"}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {client.created_at ? format(new Date(client.created_at), "dd MMM yyyy") : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="sm" onClick={() => setSelectedClient(client)}>
-                        <Eye className="h-3.5 w-3.5 mr-1" /> View
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {clients.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No clients found</TableCell>
-                  </TableRow>
+      {/* Search & Filter */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name or PAN..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Select value={entityFilter} onValueChange={setEntityFilter}>
+          <SelectTrigger className="w-full sm:w-[200px]">
+            <SelectValue placeholder="Entity Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Entity Types</SelectItem>
+            {ENTITY_TYPES.map((t) => (
+              <SelectItem key={t} value={t}>{t}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Card Grid */}
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-40 rounded-xl" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <Users className="h-10 w-10 mb-3 opacity-40" />
+            <p>No clients found</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map((client) => (
+            <Card
+              key={client.id}
+              className="group cursor-pointer hover:border-primary/40 transition-colors"
+              onClick={() => navigate(`/clients/${client.id}`)}
+            >
+              <CardContent className="p-5 space-y-3">
+                <div className="flex items-start justify-between">
+                  <h3 className="text-lg font-semibold text-foreground leading-tight line-clamp-2">
+                    {client.name || "Unnamed Client"}
+                  </h3>
+                  {client.entity_type && (
+                    <Badge variant="outline" className="text-[10px] shrink-0 ml-2">
+                      {client.entity_type}
+                    </Badge>
+                  )}
+                </div>
+                {client.pan && (
+                  <p className="text-xs font-mono text-muted-foreground">PAN: {client.pan}</p>
                 )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                <div className="flex items-center gap-1 pt-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }}
+                    title="View"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }}
+                    title="Edit"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={(e) => { e.stopPropagation(); }}
+                    title="Audit"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

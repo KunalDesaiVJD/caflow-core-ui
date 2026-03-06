@@ -8,6 +8,8 @@ import { AdminLayout } from "./components/AdminLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
+import ClientDetail from "./pages/ClientDetail";
+import NewClientWizard from "./pages/NewClientWizard";
 import TdsFilings from "./pages/TdsFilings";
 import ItReturns from "./pages/ItReturns";
 import Billing from "./pages/Billing";
@@ -48,6 +50,8 @@ const App = () => (
           <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
             <Route path="/" element={<Index />} />
             <Route path="/clients" element={<Clients />} />
+            <Route path="/clients/new" element={<NewClientWizard />} />
+            <Route path="/clients/:clientId" element={<ClientDetail />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/it-returns" element={<ItReturns />} />
             <Route path="/billing" element={<Billing />} />
