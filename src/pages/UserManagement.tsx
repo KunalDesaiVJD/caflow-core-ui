@@ -25,6 +25,7 @@ interface UserRow {
   last_login: string | null;
   firm_id: string | null;
   created_at: string | null;
+  must_change_password: boolean | null;
 }
 
 interface VersionEntry {
@@ -39,24 +40,26 @@ interface VersionEntry {
 const ROLE_COLORS: Record<string, string> = {
   superadmin: "bg-purple-100 text-purple-800 border-purple-300",
   firm_admin: "bg-destructive/15 text-destructive border-destructive/30",
-  partner: "bg-red-100 text-red-800 border-red-300",
+  partner_ca: "bg-red-100 text-red-800 border-red-300",
   manager: "bg-amber-100 text-amber-800 border-amber-300",
-  staff: "bg-green-100 text-green-800 border-green-300",
+  staff_article: "bg-green-100 text-green-800 border-green-300",
   client: "bg-muted text-muted-foreground border-border",
 };
 
 const ROLE_LABELS: Record<string, string> = {
   superadmin: "Superadmin",
   firm_admin: "Firm Admin",
-  partner: "Partner",
+  partner_ca: "Partner CA",
   manager: "Manager",
-  staff: "Staff",
+  staff_article: "Staff / Article",
   client: "Client",
 };
 
 const ROLE_HIERARCHY: Record<string, number> = {
-  superadmin: 4, firm_admin: 3, partner: 2, manager: 1, staff: 0, client: -1,
+  superadmin: 5, firm_admin: 4, partner_ca: 3, manager: 2, staff_article: 1, client: 0,
 };
+
+const ALL_ROLES = ["superadmin", "firm_admin", "partner_ca", "manager", "staff_article", "client"];
 
 function getAllowedRoles(currentRole: string): string[] {
   const level = ROLE_HIERARCHY[currentRole] ?? 0;
@@ -107,6 +110,11 @@ export default function UserManagement() {
   const [editForm, setEditForm] = useState({ name: "", phone: "", role: "" });
   const [editLoading, setEditLoading] = useState(false);
 
+  // Reset password dialog
+  const [resetUser, setResetUser] = useState<UserRow | null>(null);
+  const [tempPassword, setTempPassword] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+
   // Activity slide-over
   const [activityUser, setActivityUser] = useState<UserRow | null>(null);
   const [activityEntries, setActivityEntries] = useState<VersionEntry[]>([]);
@@ -122,7 +130,6 @@ export default function UserManagement() {
     }
   }, [user, authLoading, navigate, toast]);
 
-  // Load users
   useEffect(() => {
     if (!user || !["superadmin", "firm_admin"].includes(user.role || "")) return;
     loadUsers();
@@ -140,9 +147,8 @@ export default function UserManagement() {
     }
   }
 
-  // Counts
   const roleCounts = users.reduce<Record<string, number>>((acc, u) => {
-    const r = u.role || "staff";
+    const r = u.role || "staff_article";
     acc[r] = (acc[r] || 0) + 1;
     return acc;
   }, {});
@@ -150,13 +156,16 @@ export default function UserManagement() {
   async function handleAddUser() {
     setAddLoading(true);
     try {
-      await invokeUserMgmt("create", "POST", {
+      const result = await invokeUserMgmt("create", "POST", {
         name: addForm.name,
         email: addForm.email,
         phone: addForm.phone,
         role: addForm.role,
       });
-      toast({ title: "User created", description: "User created and welcome email sent" });
+      toast({
+        title: "User created",
+        description: `Default password: ${result.default_password}. User must change it on first login.`,
+      });
       setShowAdd(false);
       setAddForm({ name: "", email: "", phone: "", role: "" });
       loadUsers();
@@ -176,12 +185,24 @@ export default function UserManagement() {
     }
   }
 
-  async function handleResetPassword(u: UserRow) {
+  async function handleResetPassword() {
+    if (!resetUser || !tempPassword) return;
+    setResetLoading(true);
     try {
-      await invokeUserMgmt("reset-password", "POST", { email: u.email });
-      toast({ title: "Password reset", description: `Reset link sent to ${u.email}` });
+      await invokeUserMgmt("reset-password", "POST", {
+        user_id: resetUser.id,
+        temporary_password: tempPassword,
+      });
+      toast({
+        title: "Password Reset",
+        description: "Temporary password set. User must change password on next login.",
+      });
+      setResetUser(null);
+      setTempPassword("");
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setResetLoading(false);
     }
   }
 
@@ -235,10 +256,10 @@ export default function UserManagement() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Team Members</h1>
-          <div className="flex gap-2 mt-2">
-            {["superadmin", "firm_admin", "partner", "manager", "staff", "client"].map(r => (
+          <div className="flex gap-2 mt-2 flex-wrap">
+            {ALL_ROLES.map(r => (
               <Badge key={r} variant="outline" className={ROLE_COLORS[r]}>
-                {roleCounts[r] || 0} {ROLE_LABELS[r] || r}s
+                {roleCounts[r] || 0} {ROLE_LABELS[r] || r}
               </Badge>
             ))}
           </div>
@@ -281,8 +302,8 @@ export default function UserManagement() {
                   <TableCell className="text-muted-foreground">{u.email || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{u.phone || "—"}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={ROLE_COLORS[u.role || "staff"]}>
-                      {ROLE_LABELS[u.role || "staff"] || u.role}
+                    <Badge variant="outline" className={ROLE_COLORS[u.role || "staff_article"]}>
+                      {ROLE_LABELS[u.role || "staff_article"] || u.role}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -296,7 +317,7 @@ export default function UserManagement() {
                       <Button variant="ghost" size="icon" onClick={() => openEdit(u)} title="Edit">
                         <Pencil size={15} />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleResetPassword(u)} title="Reset Password">
+                      <Button variant="ghost" size="icon" onClick={() => setResetUser(u)} title="Reset Password">
                         <KeyRound size={15} />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => openActivity(u)} title="View Activity">
@@ -341,11 +362,43 @@ export default function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            <p className="text-xs text-muted-foreground">
+              A role-based default password will be assigned. User must change it on first login.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button>
             <Button onClick={handleAddUser} disabled={addLoading || !addForm.name || !addForm.email || !addForm.role}>
               {addLoading ? "Creating…" : "Create User"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={!!resetUser} onOpenChange={open => { if (!open) { setResetUser(null); setTempPassword(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Password — {resetUser?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Set a temporary password for <strong>{resetUser?.email}</strong>. The user will be forced to change it on next login.
+            </p>
+            <div className="space-y-2">
+              <Label>Temporary Password</Label>
+              <Input
+                type="text"
+                value={tempPassword}
+                onChange={e => setTempPassword(e.target.value)}
+                placeholder="Enter temporary password"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResetUser(null); setTempPassword(""); }}>Cancel</Button>
+            <Button onClick={handleResetPassword} disabled={resetLoading || !tempPassword}>
+              {resetLoading ? "Resetting…" : "Set Temporary Password"}
             </Button>
           </DialogFooter>
         </DialogContent>

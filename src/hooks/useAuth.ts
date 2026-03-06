@@ -7,6 +7,7 @@ interface AuthUser {
   name: string | null;
   role: string | null;
   firm_id: string | null;
+  must_change_password: boolean;
 }
 
 export function useAuth() {
@@ -14,7 +15,6 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Set up listener BEFORE getSession per Supabase best practices
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!session?.user) {
         setUser(null);
@@ -22,42 +22,41 @@ export function useAuth() {
         return;
       }
 
-      // Use setTimeout to avoid potential deadlock with Supabase auth
       setTimeout(async () => {
         const { data: profile } = await supabase
           .from("users")
-          .select("id, email, name, role, firm_id")
+          .select("id, email, name, role, firm_id, must_change_password")
           .eq("id", session.user.id)
           .single();
 
         if (profile) {
-          setUser(profile);
-          // Set session context for version_history trigger
+          setUser({
+            ...profile,
+            must_change_password: (profile as any).must_change_password ?? false,
+          });
           await supabase.rpc("set_user_context", {
             p_user_id: profile.id,
             p_user_name: profile.name || session.user.email || "Unknown",
-            p_user_role: profile.role || "staff",
+            p_user_role: profile.role || "staff_article",
           });
         } else {
-          // Fallback: user exists in auth but not in users table
           setUser({
             id: session.user.id,
             email: session.user.email || null,
             name: session.user.user_metadata?.name || session.user.email || null,
             role: session.user.user_metadata?.role || null,
             firm_id: null,
+            must_change_password: false,
           });
         }
         setLoading(false);
       }, 0);
     });
 
-    // Then check existing session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
         setLoading(false);
       }
-      // onAuthStateChange will handle the rest
     });
 
     return () => subscription.unsubscribe();

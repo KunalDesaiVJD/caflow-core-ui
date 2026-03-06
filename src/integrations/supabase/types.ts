@@ -865,6 +865,7 @@ export type Database = {
           is_active: boolean | null
           last_login: string | null
           mfa_enabled: boolean | null
+          must_change_password: boolean | null
           name: string | null
           phone: string | null
           role: string | null
@@ -878,6 +879,7 @@ export type Database = {
           is_active?: boolean | null
           last_login?: string | null
           mfa_enabled?: boolean | null
+          must_change_password?: boolean | null
           name?: string | null
           phone?: string | null
           role?: string | null
@@ -891,6 +893,7 @@ export type Database = {
           is_active?: boolean | null
           last_login?: string | null
           mfa_enabled?: boolean | null
+          must_change_password?: boolean | null
           name?: string | null
           phone?: string | null
           role?: string | null

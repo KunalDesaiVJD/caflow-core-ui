@@ -13,8 +13,16 @@ import {
   PanelLeftClose,
   PanelLeft,
   Shield,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const navItems = [
   { title: "Dashboard", path: "/", icon: LayoutDashboard },
@@ -48,7 +56,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
     ? user.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
     : "??";
   const displayName = user?.name || "User";
-  const displayRole = user?.role || "staff";
+  const displayRole = user?.role || "staff_article";
 
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
@@ -128,21 +136,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         )}
 
-        {/* Settings */}
-        <Link
-          to={settingsItem.path}
-          className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-            isActive(settingsItem.path)
-              ? "bg-sidebar-gold/15 text-sidebar-gold"
-              : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-          )}
-        >
-          <settingsItem.icon size={20} className="shrink-0" />
-          {!collapsed && <span>Settings</span>}
-        </Link>
-
-        {/* User Management - admin only */}
+        {/* User Management - superadmin & firm_admin only */}
         {["superadmin", "firm_admin"].includes(user?.role || "") && (
           <Link
             to={userMgmtItem.path}
@@ -157,28 +151,52 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             {!collapsed && <span>User Management</span>}
           </Link>
         )}
+
+        {/* Settings */}
+        <Link
+          to={settingsItem.path}
+          className={cn(
+            "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+            isActive(settingsItem.path) && !isActive("/settings/users")
+              ? "bg-sidebar-gold/15 text-sidebar-gold"
+              : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+          )}
+        >
+          <settingsItem.icon size={20} className="shrink-0" />
+          {!collapsed && <span>Settings</span>}
+        </Link>
       </nav>
 
-      {/* User section */}
+      {/* User section with dropdown */}
       <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-3 overflow-hidden">
-          <div className="w-9 h-9 rounded-full bg-sidebar-gold/20 flex items-center justify-center text-sidebar-gold font-semibold text-sm shrink-0">
-            {initials}
-          </div>
-          {!collapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">{displayName}</p>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
-                {displayRole}
-              </span>
-            </div>
-          )}
-          {!collapsed && (
-            <button onClick={handleLogout} className="text-sidebar-foreground hover:text-destructive transition-colors shrink-0">
-              <LogOut size={16} />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-3 overflow-hidden w-full text-left hover:opacity-80 transition-opacity">
+              <div className="w-9 h-9 rounded-full bg-sidebar-gold/20 flex items-center justify-center text-sidebar-gold font-semibold text-sm shrink-0">
+                {initials}
+              </div>
+              {!collapsed && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-sidebar-foreground truncate">{displayName}</p>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
+                    {displayRole}
+                  </span>
+                </div>
+              )}
             </button>
-          )}
-        </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => navigate("/settings/change-password")}>
+              <KeyRound size={14} className="mr-2" />
+              Change Password
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+              <LogOut size={14} className="mr-2" />
+              Log Out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </aside>
   );

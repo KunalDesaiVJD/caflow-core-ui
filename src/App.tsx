@@ -15,6 +15,7 @@ import ErpLedger from "./pages/ErpLedger";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagement from "./pages/UserManagement";
+import ChangePassword from "./pages/ChangePassword";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -35,7 +36,10 @@ const App = () => (
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* Superadmin platform — own layout */}
+          {/* Change password - protected but outside layouts */}
+          <Route path="/settings/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
+
+          {/* Superadmin platform */}
           <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route path="/admin" element={<Admin />} />
           </Route>
