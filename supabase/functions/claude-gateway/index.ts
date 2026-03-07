@@ -34,29 +34,60 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 
 const RATE_LIMIT = 20;
 
+function parseAiJson(content: string) {
+  try {
+    const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return { raw: content };
+  }
+}
+
+function extractOpenAIContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === "string" ? text : "";
+        }
+        return "";
+      })
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!ANTHROPIC_API_KEY) {
-    return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
   try {
     // --- STEP 1: Auth ---
     const authHeader = req.headers.get("Authorization") ?? "";
-    const token = authHeader.replace("Bearer ", "");
+    const token = authHeader.replace("Bearer ", "").trim();
+
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseAdmin.auth.getUser(token);
+
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
@@ -73,7 +104,8 @@ serve(async (req) => {
 
     const firmId = profile?.firm_id ?? null;
 
-    const { request_type, user_message, stream: wantStream } = await req.json();
+    const body = await req.json();
+    const { request_type, user_message, stream: wantStream } = body;
 
     if (!request_type || !user_message) {
       return new Response(JSON.stringify({ error: "Missing request_type or user_message" }), {
@@ -114,40 +146,104 @@ serve(async (req) => {
     });
 
     // --- STEP 4: Select model ---
-    const model = LIGHT_TYPES.has(request_type)
-      ? "claude-haiku-4-5-20251001"
-      : "claude-sonnet-4-20250514";
-
+    const isLightRequest = LIGHT_TYPES.has(request_type);
+    const anthropicModel = isLightRequest ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-20250514";
+    const lovableModel = isLightRequest ? "google/gemini-2.5-flash-lite" : "google/gemini-3-flash-preview";
     const useStream = wantStream === true;
 
-    // --- STEP 5 & 6: Call Anthropic ---
-    const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: [{ role: "user", content: user_message }],
-        stream: useStream,
-      }),
-    });
+    const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!anthropicResponse.ok) {
-      const errText = await anthropicResponse.text();
-      console.error("Anthropic error:", anthropicResponse.status, errText);
-      return new Response(JSON.stringify({ error: "AI service error" }), {
-        status: anthropicResponse.status >= 500 ? 502 : anthropicResponse.status,
+    let provider: "anthropic" | "lovable" | null = null;
+    let aiResponse: Response | null = null;
+
+    // --- STEP 5: Primary provider (Anthropic) ---
+    if (ANTHROPIC_API_KEY) {
+      const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: anthropicModel,
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: [{ role: "user", content: user_message }],
+          stream: useStream,
+        }),
+      });
+
+      if (anthropicResponse.ok) {
+        provider = "anthropic";
+        aiResponse = anthropicResponse;
+      } else {
+        const errText = await anthropicResponse.text();
+        console.error("Anthropic error:", anthropicResponse.status, errText);
+
+        const isAuthError = anthropicResponse.status === 401 || anthropicResponse.status === 403;
+        if (!isAuthError || !LOVABLE_API_KEY) {
+          const message = isAuthError
+            ? "AI provider authentication failed. Please update ANTHROPIC_API_KEY."
+            : "AI service error";
+
+          return new Response(JSON.stringify({ error: message }), {
+            status: anthropicResponse.status >= 500 ? 502 : anthropicResponse.status,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+    }
+
+    // --- STEP 6: Fallback provider (Lovable AI Gateway) ---
+    if (!aiResponse && LOVABLE_API_KEY) {
+      const gatewayResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: lovableModel,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: user_message },
+          ],
+          stream: useStream,
+        }),
+      });
+
+      if (!gatewayResponse.ok) {
+        const errText = await gatewayResponse.text();
+        console.error("Lovable AI Gateway error:", gatewayResponse.status, errText);
+
+        const message =
+          gatewayResponse.status === 429
+            ? "Rate limits exceeded, please try again later."
+            : gatewayResponse.status === 402
+              ? "Payment required, please add funds to your Lovable AI workspace."
+              : "AI service error";
+
+        return new Response(JSON.stringify({ error: message }), {
+          status: gatewayResponse.status >= 500 ? 502 : gatewayResponse.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      provider = "lovable";
+      aiResponse = gatewayResponse;
+    }
+
+    if (!aiResponse || !provider) {
+      return new Response(JSON.stringify({ error: "No AI provider is configured." }), {
+        status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (useStream) {
-      return new Response(anthropicResponse.body, {
+      return new Response(aiResponse.body, {
         headers: {
           ...corsHeaders,
           "Content-Type": "text/event-stream",
@@ -157,16 +253,14 @@ serve(async (req) => {
     }
 
     // Non-streaming: parse and return JSON
-    const result = await anthropicResponse.json();
-    const content = result.content?.[0]?.text || "";
+    const result = await aiResponse.json();
 
-    let parsed;
-    try {
-      const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      parsed = JSON.parse(cleaned);
-    } catch {
-      parsed = { raw: content };
-    }
+    const content =
+      provider === "anthropic"
+        ? result.content?.[0]?.text || ""
+        : extractOpenAIContent(result.choices?.[0]?.message?.content);
+
+    const parsed = parseAiJson(content);
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
