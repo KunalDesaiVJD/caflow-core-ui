@@ -118,6 +118,8 @@ serve(async (req) => {
       ? "claude-haiku-4-5-20251001"
       : "claude-sonnet-4-20250514";
 
+    const useStream = wantStream === true;
+
     // --- STEP 5 & 6: Call Anthropic ---
     const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -131,7 +133,7 @@ serve(async (req) => {
         max_tokens: 4096,
         system: systemPrompt,
         messages: [{ role: "user", content: user_message }],
-        stream: true,
+        stream: useStream,
       }),
     });
 
@@ -144,19 +146,28 @@ serve(async (req) => {
       });
     }
 
-    // Stream the response back
-    return new Response(anthropicResponse.body, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-      },
-    });
-  } catch (e) {
-    console.error("claude-gateway error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500,
+    if (useStream) {
+      return new Response(anthropicResponse.body, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+
+    // Non-streaming: parse and return JSON
+    const result = await anthropicResponse.json();
+    const content = result.content?.[0]?.text || "";
+
+    let parsed;
+    try {
+      const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      parsed = { raw: content };
+    }
+
+    return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  }
-});
