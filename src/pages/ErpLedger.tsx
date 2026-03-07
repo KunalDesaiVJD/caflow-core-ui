@@ -36,7 +36,7 @@ const ErpLedger = () => {
         supabase.from("trial_balance_snapshots").select("id, client_id, financial_year, source_format, normalised_data"),
       ]);
       setClients(clientsRes.data || []);
-      setSnapshots(tbRes.data || []);
+      setSnapshots((tbRes.data || []) as any);
       setLoading(false);
     };
     load();
