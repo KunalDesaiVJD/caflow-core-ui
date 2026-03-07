@@ -68,8 +68,10 @@ const Billing = () => {
   // Edit state
   const [editOpen, setEditOpen] = useState(false);
   const [editInvoice, setEditInvoice] = useState<Invoice | null>(null);
+  const [editInvoiceNo, setEditInvoiceNo] = useState("");
   const [editStatus, setEditStatus] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
+  const [editAmount, setEditAmount] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
   // Mark paid confirmation
@@ -172,8 +174,10 @@ const Billing = () => {
   // Edit handlers
   const openEdit = (inv: Invoice) => {
     setEditInvoice(inv);
+    setEditInvoiceNo(inv.invoice_no || "");
     setEditStatus(inv.status || "draft");
     setEditDueDate(inv.due_date || "");
+    setEditAmount(inv.amount != null ? String(inv.amount) : "");
     setEditOpen(true);
   };
 
@@ -181,11 +185,16 @@ const Billing = () => {
     if (!editInvoice) return;
     setEditSaving(true);
     try {
+      const newAmount = editAmount ? parseFloat(editAmount) : null;
+      const newGst = newAmount != null ? Math.round(newAmount * 0.18 * 100) / 100 : editInvoice.gst_amount;
       const { data: updated, error } = await supabase
         .from("invoices")
         .update({
+          invoice_no: editInvoiceNo || null,
           status: editStatus,
           due_date: editDueDate || null,
+          amount: newAmount,
+          gst_amount: newGst,
         })
         .eq("id", editInvoice.id)
         .select();
