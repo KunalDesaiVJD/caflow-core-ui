@@ -98,6 +98,7 @@ const emptyForm = {
   due_date: "",
   challan_no: "",
   deductee_id: "",
+  client_id: "",
 };
 
 const TdsFilings = () => {
