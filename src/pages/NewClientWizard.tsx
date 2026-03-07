@@ -257,6 +257,26 @@ const NewClientWizard = () => {
     audit_questions: auditQuestions as any,
   });
 
+  const saveTrialBalance = async (targetClientId: string) => {
+    if (!importData || importData.rows.length === 0) return;
+    const { error } = await supabase.from("trial_balance_snapshots").insert({
+      client_id: targetClientId,
+      financial_year: new Date().getFullYear().toString(),
+      source_format: importData.filename.endsWith(".csv") ? "csv" : "excel",
+      raw_data: importData.rows as any,
+      normalised_data: importData.rows.map((row: any) => ({
+        account_name: row[importData.headers[0]] || "",
+        debit: parseFloat(row["Debit"] || row["debit"] || row[importData.headers.find(h => h.toLowerCase().includes("debit")) || ""] || 0),
+        credit: parseFloat(row["Credit"] || row["credit"] || row[importData.headers.find(h => h.toLowerCase().includes("credit")) || ""] || 0),
+        balance: parseFloat(row["Balance"] || row["balance"] || row[importData.headers.find(h => h.toLowerCase().includes("balance")) || ""] || 0),
+      })) as any,
+    });
+    if (error) {
+      console.error("Failed to save trial balance:", error);
+      toast({ title: "Warning", description: "Client saved but trial balance import failed: " + error.message, variant: "destructive" });
+    }
+  };
+
   const handleFinalSubmit = async () => {
     setSaving(true);
     try {
