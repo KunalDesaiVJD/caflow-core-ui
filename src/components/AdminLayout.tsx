@@ -22,6 +22,12 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
 
+  useEffect(() => {
+    if (user && user.role !== "superadmin") {
+      navigate("/", { replace: true });
+    }
+  }, [user, navigate]);
+
   const handleLogout = async () => {
     await signOut();
     navigate("/login", { replace: true });
