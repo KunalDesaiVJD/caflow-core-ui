@@ -65,11 +65,20 @@ const Index = () => {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
 
   const fetchDashboard = useCallback(async () => {
-    if (!user?.firm_id) { setLoading(false); return; }
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    if (user.role !== "superadmin" && !user.firm_id) {
+      setLoading(false);
+      return;
+    }
 
     const now = new Date();
     const monthStart = startOfMonth(now).toISOString().split("T")[0];
     const monthEnd = endOfMonth(now).toISOString().split("T")[0];
+
 
     const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, activityRes] = await Promise.all([
       supabase.from("clients").select("*", { count: "exact", head: true }),
@@ -118,7 +127,7 @@ const Index = () => {
     );
 
     setLoading(false);
-  }, [user?.firm_id]);
+  }, [user?.firm_id, user?.role]);
 
   useEffect(() => {
     if (user) fetchDashboard();
@@ -127,7 +136,7 @@ const Index = () => {
   // Superadmin can access dashboard too — no redirect
   const userRole = user?.role || "staff_article";
   const greeting = ROLE_GREETINGS[userRole] || "Dashboard";
-  const userName = user?.name || user?.email || "there";
+  const welcomeLine = userRole === "superadmin" ? "Welcome Admin" : `Welcome back, ${user?.name || user?.email || "there"}. Here's your practice overview.`;
 
   const statCards = [
     { label: "Active Clients", value: stats.activeClients, icon: Users },
@@ -149,7 +158,7 @@ const Index = () => {
       <div>
         <h1 className="text-2xl font-display font-bold text-foreground">{greeting}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Welcome back, {userName}. Here's your practice overview.
+          {welcomeLine}
         </p>
       </div>
 
