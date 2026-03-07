@@ -611,6 +611,7 @@ export type Database = {
           content: Json | null
           firm_id: string | null
           id: string
+          provider_id: string | null
           recipient_id: string | null
           sent_at: string | null
           status: string | null
@@ -621,6 +622,7 @@ export type Database = {
           content?: Json | null
           firm_id?: string | null
           id?: string
+          provider_id?: string | null
           recipient_id?: string | null
           sent_at?: string | null
           status?: string | null
@@ -631,6 +633,7 @@ export type Database = {
           content?: Json | null
           firm_id?: string | null
           id?: string
+          provider_id?: string | null
           recipient_id?: string | null
           sent_at?: string | null
           status?: string | null
