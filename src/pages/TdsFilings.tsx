@@ -80,6 +80,12 @@ interface Deductee {
   pan_valid: boolean | null;
 }
 
+interface ClientOption {
+  id: string;
+  name: string | null;
+  pan: string | null;
+}
+
 const emptyForm = {
   date: "",
   party_name: "",
@@ -92,6 +98,7 @@ const emptyForm = {
   due_date: "",
   challan_no: "",
   deductee_id: "",
+  client_id: "",
 };
 
 const TdsFilings = () => {
@@ -102,6 +109,7 @@ const TdsFilings = () => {
   const [entries, setEntries] = useState<TdsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [deductees, setDeductees] = useState<Deductee[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
 
   // Filters
   const [fyFilter, setFyFilter] = useState("2024-25");
@@ -153,10 +161,21 @@ const TdsFilings = () => {
     if (data) setDeductees(data as Deductee[]);
   }, [user?.firm_id]);
 
+  const fetchClients = useCallback(async () => {
+    if (!user?.firm_id) return;
+    const { data } = await supabase
+      .from("clients")
+      .select("id, name, pan")
+      .eq("firm_id", user.firm_id)
+      .order("name");
+    if (data) setClients(data as ClientOption[]);
+  }, [user?.firm_id]);
+
   useEffect(() => {
     fetchEntries();
     fetchDeductees();
-  }, [fetchEntries, fetchDeductees]);
+    fetchClients();
+  }, [fetchEntries, fetchDeductees, fetchClients]);
 
   // ─── Filtered entries ───
   const filtered = useMemo(() => {
@@ -223,8 +242,24 @@ const TdsFilings = () => {
     setShowDeducteeList(false);
   };
 
+  const selectClient = (c: ClientOption) => {
+    setForm((f) => ({
+      ...f,
+      party_name: c.name || "",
+      pan: c.pan || "",
+      client_id: c.id,
+      deductee_id: "",
+    }));
+    setDeducteeSearch(c.name || "");
+    setShowDeducteeList(false);
+  };
+
   const filteredDeductees = deductees.filter((d) =>
     d.party_name.toLowerCase().includes(deducteeSearch.toLowerCase())
+  );
+
+  const filteredClients = clients.filter((c) =>
+    (c.name || "").toLowerCase().includes(deducteeSearch.toLowerCase())
   );
 
   const openAdd = () => {
@@ -249,6 +284,7 @@ const TdsFilings = () => {
       due_date: entry.due_date || "",
       challan_no: entry.challan_no || "",
       deductee_id: entry.deductee_id || "",
+      client_id: entry.client_id || "",
     });
     setDeducteeSearch(entry.party_name || "");
     setAiSuggestion(null);
@@ -327,6 +363,7 @@ const TdsFilings = () => {
         due_date: form.due_date || null,
         challan_no: form.challan_no || null,
         deductee_id: deducteeId,
+        client_id: form.client_id || null,
         status: form.challan_no ? "paid" : "pending",
       };
 
@@ -552,27 +589,43 @@ const TdsFilings = () => {
                   setDeducteeSearch(e.target.value);
                   updateForm("party_name", e.target.value);
                   updateForm("deductee_id", "");
+                  updateForm("client_id", "");
                   setShowDeducteeList(true);
                 }}
                 onFocus={() => setShowDeducteeList(true)}
-                placeholder="Type to search deductees..."
+                placeholder="Type to search clients or deductees..."
               />
-              {showDeducteeList && deducteeSearch && filteredDeductees.length > 0 && (
+              {showDeducteeList && deducteeSearch && (filteredClients.length > 0 || filteredDeductees.length > 0) && (
                 <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                  {filteredDeductees.slice(0, 8).map((d) => (
-                    <button
-                      key={d.id}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
-                      onClick={() => selectDeductee(d)}
-                    >
-                      <span>{d.party_name}</span>
-                      {d.pan && <span className="font-mono text-xs text-muted-foreground">{d.pan}</span>}
-                    </button>
-                  ))}
-                  {filteredDeductees.length === 0 && deducteeSearch && (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">
-                      No match — will add as new deductee
-                    </div>
+                  {filteredClients.length > 0 && (
+                    <>
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Clients</div>
+                      {filteredClients.slice(0, 6).map((c) => (
+                        <button
+                          key={`client-${c.id}`}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
+                          onClick={() => selectClient(c)}
+                        >
+                          <span>{c.name}</span>
+                          {c.pan && <span className="font-mono text-xs text-muted-foreground">{c.pan}</span>}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {filteredDeductees.length > 0 && (
+                    <>
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Deductees</div>
+                      {filteredDeductees.slice(0, 6).map((d) => (
+                        <button
+                          key={`ded-${d.id}`}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
+                          onClick={() => selectDeductee(d)}
+                        >
+                          <span>{d.party_name}</span>
+                          {d.pan && <span className="font-mono text-xs text-muted-foreground">{d.pan}</span>}
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               )}
