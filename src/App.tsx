@@ -18,7 +18,9 @@ import AuditIntelligence from "./pages/AuditIntelligence";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
-import Admin from "./pages/Admin";
+import AdminOverview from "./pages/admin/AdminOverview";
+import AdminFirms from "./pages/admin/AdminFirms";
+import AdminLogs from "./pages/admin/AdminLogs";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -43,7 +45,9 @@ const App = () => (
 
           {/* Superadmin platform */}
           <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
-            <Route path="/admin" element={<Admin />} />
+            <Route path="/admin" element={<AdminOverview />} />
+            <Route path="/admin/firms" element={<AdminFirms />} />
+            <Route path="/admin/logs" element={<AdminLogs />} />
           </Route>
 
           {/* Protected app routes */}
