@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -9,7 +9,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { BookOpen, ArrowRight, FileSpreadsheet, AlertCircle } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { BookOpen, ArrowRight, FileSpreadsheet, AlertCircle, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 interface TBSnapshot {
   id: string;
@@ -17,30 +23,30 @@ interface TBSnapshot {
   financial_year: string | null;
   source_format: string | null;
   normalised_data: any[] | null;
-  client_name?: string;
 }
 
 const ErpLedger = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [clients, setClients] = useState<any[]>([]);
   const [snapshots, setSnapshots] = useState<TBSnapshot[]>([]);
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      const [clientsRes, tbRes] = await Promise.all([
-        supabase.from("clients").select("id, name").order("name"),
-        supabase.from("trial_balance_snapshots").select("id, client_id, financial_year, source_format, normalised_data"),
-      ]);
-      setClients(clientsRes.data || []);
-      setSnapshots((tbRes.data || []) as any);
-      setLoading(false);
-    };
-    load();
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const [clientsRes, tbRes] = await Promise.all([
+      supabase.from("clients").select("id, name").order("name"),
+      supabase.from("trial_balance_snapshots").select("id, client_id, financial_year, source_format, normalised_data"),
+    ]);
+    setClients(clientsRes.data || []);
+    setSnapshots((tbRes.data || []) as any);
+    setLoading(false);
   }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const clientsWithTB = clients.map((c) => {
     const tb = snapshots.filter((s) => s.client_id === c.id);
@@ -54,6 +60,18 @@ const ErpLedger = () => {
   const selectedEntries = selectedTB.length > 0 && Array.isArray(selectedTB[0].normalised_data)
     ? selectedTB[0].normalised_data
     : [];
+
+  const handleDeleteTB = async (snapshotId: string) => {
+    setDeleting(true);
+    const { error } = await supabase.from("trial_balance_snapshots").delete().eq("id", snapshotId);
+    setDeleting(false);
+    if (error) {
+      toast({ title: "Error", description: "Failed to delete: " + error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Deleted", description: "Trial balance snapshot removed." });
+      await loadData();
+    }
+  };
 
   if (loading) {
     return (
@@ -73,7 +91,6 @@ const ErpLedger = () => {
         </div>
       </div>
 
-      {/* Client list with TB status */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -137,19 +154,41 @@ const ErpLedger = () => {
         </CardContent>
       </Card>
 
-      {/* Selected client TB preview */}
       {selectedClient && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">
               Trial Balance — {clients.find((c) => c.id === selectedClient)?.name}
             </CardTitle>
+            {selectedTB.length > 0 && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button size="sm" variant="destructive" className="gap-1" disabled={deleting}>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Trial Balance
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Trial Balance?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove the trial balance snapshot for this client ({selectedTB[0].financial_year || "current year"}). This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => handleDeleteTB(selectedTB[0].id)}>
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
           </CardHeader>
           <CardContent>
             {selectedEntries.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
                 <AlertCircle className="h-8 w-8" />
-                <p className="text-sm">No trial balance imported for this client.</p>
+                <p className="text-sm">No trial balance imported yet.</p>
                 <Button size="sm" variant="outline" onClick={() => navigate(`/clients/edit/${selectedClient}`)}>
                   Import via Client Wizard
                 </Button>

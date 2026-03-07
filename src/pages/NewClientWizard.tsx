@@ -260,7 +260,7 @@ const NewClientWizard = () => {
   const saveTrialBalance = async (targetClientId: string) => {
     if (!importData || importData.rows.length === 0) return;
     // Rows are already pre-parsed by StepImportData with account_name, debit, credit, balance
-    const { error } = await supabase.from("trial_balance_snapshots").insert({
+    const { error } = await supabase.from("trial_balance_snapshots").upsert({
       client_id: targetClientId,
       financial_year: new Date().getFullYear().toString(),
       source_format: importData.filename.endsWith(".csv") ? "csv" : "excel",
@@ -271,7 +271,7 @@ const NewClientWizard = () => {
         credit: typeof row.credit === "number" ? row.credit : 0,
         balance: typeof row.balance === "number" ? row.balance : 0,
       })) as any,
-    });
+    }, { onConflict: "client_id,financial_year" });
     if (error) {
       console.error("Failed to save trial balance:", error);
       toast({ title: "Warning", description: "Client saved but trial balance import failed: " + error.message, variant: "destructive" });
