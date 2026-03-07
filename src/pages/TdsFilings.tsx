@@ -268,6 +268,7 @@ const TdsFilings = () => {
       due_date: entry.due_date || "",
       challan_no: entry.challan_no || "",
       deductee_id: entry.deductee_id || "",
+      client_id: entry.client_id || "",
     });
     setDeducteeSearch(entry.party_name || "");
     setAiSuggestion(null);
