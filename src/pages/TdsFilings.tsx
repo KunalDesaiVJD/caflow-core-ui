@@ -589,27 +589,43 @@ const TdsFilings = () => {
                   setDeducteeSearch(e.target.value);
                   updateForm("party_name", e.target.value);
                   updateForm("deductee_id", "");
+                  updateForm("client_id", "");
                   setShowDeducteeList(true);
                 }}
                 onFocus={() => setShowDeducteeList(true)}
-                placeholder="Type to search deductees..."
+                placeholder="Type to search clients or deductees..."
               />
-              {showDeducteeList && deducteeSearch && filteredDeductees.length > 0 && (
+              {showDeducteeList && deducteeSearch && (filteredClients.length > 0 || filteredDeductees.length > 0) && (
                 <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                  {filteredDeductees.slice(0, 8).map((d) => (
-                    <button
-                      key={d.id}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
-                      onClick={() => selectDeductee(d)}
-                    >
-                      <span>{d.party_name}</span>
-                      {d.pan && <span className="font-mono text-xs text-muted-foreground">{d.pan}</span>}
-                    </button>
-                  ))}
-                  {filteredDeductees.length === 0 && deducteeSearch && (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">
-                      No match — will add as new deductee
-                    </div>
+                  {filteredClients.length > 0 && (
+                    <>
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Clients</div>
+                      {filteredClients.slice(0, 6).map((c) => (
+                        <button
+                          key={`client-${c.id}`}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
+                          onClick={() => selectClient(c)}
+                        >
+                          <span>{c.name}</span>
+                          {c.pan && <span className="font-mono text-xs text-muted-foreground">{c.pan}</span>}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {filteredDeductees.length > 0 && (
+                    <>
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Deductees</div>
+                      {filteredDeductees.slice(0, 6).map((d) => (
+                        <button
+                          key={`ded-${d.id}`}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between"
+                          onClick={() => selectDeductee(d)}
+                        >
+                          <span>{d.party_name}</span>
+                          {d.pan && <span className="font-mono text-xs text-muted-foreground">{d.pan}</span>}
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               )}
