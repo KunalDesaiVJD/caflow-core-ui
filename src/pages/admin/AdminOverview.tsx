@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,10 +45,10 @@ const AdminOverview = () => {
   if (!user || user.role !== "superadmin") return null;
 
   const statCards = [
-    { label: "Active Firms", value: stats?.activeFirms, icon: Building2 },
-    { label: "Total Users", value: stats?.totalUsers, icon: Users },
-    { label: "Total Clients", value: stats?.totalClients, icon: Briefcase },
-    { label: "Active Subscriptions", value: stats?.activeSubscriptions, icon: CreditCard },
+    { label: "Active Firms", value: stats?.activeFirms, icon: Building2, path: "/admin/firms" },
+    { label: "Total Users", value: stats?.totalUsers, icon: Users, path: "/admin/users" },
+    { label: "Total Clients", value: stats?.totalClients, icon: Briefcase, path: "/admin/clients" },
+    { label: "Active Subscriptions", value: stats?.activeSubscriptions, icon: CreditCard, path: "/admin/subscriptions" },
   ];
 
   return (
@@ -62,15 +62,17 @@ const AdminOverview = () => {
           loadingStats ? (
             <Card key={s.label}><CardContent className="p-5"><Skeleton className="h-4 w-24 mb-2" /><Skeleton className="h-8 w-16" /></CardContent></Card>
           ) : (
-            <Card key={s.label}>
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-muted-foreground font-medium">{s.label}</p>
-                  <s.icon className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <p className="text-3xl font-display font-bold text-foreground">{s.value ?? 0}</p>
-              </CardContent>
-            </Card>
+            <Link key={s.label} to={s.path}>
+              <Card className="hover:border-primary/40 transition-colors cursor-pointer">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm text-muted-foreground font-medium">{s.label}</p>
+                    <s.icon className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <p className="text-3xl font-display font-bold text-foreground">{s.value ?? 0}</p>
+                </CardContent>
+              </Card>
+            </Link>
           )
         )}
       </div>
