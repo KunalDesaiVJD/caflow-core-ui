@@ -15,6 +15,8 @@ import {
   Shield,
   KeyRound,
   Building2,
+  Clock,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -31,6 +33,7 @@ const navItems = [
   { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
   { title: "IT Returns", path: "/itr", icon: FileText },
   { title: "Billing", path: "/billing", icon: CreditCard },
+  { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search, premium: true },
 ];
