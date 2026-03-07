@@ -1025,6 +1025,9 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      current_user_firm_id: { Args: never; Returns: string }
+      current_user_role: { Args: never; Returns: string }
+      is_superadmin: { Args: never; Returns: boolean }
       set_user_context: {
         Args: { p_user_id: string; p_user_name: string; p_user_role: string }
         Returns: undefined
