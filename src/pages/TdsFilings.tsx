@@ -216,11 +216,7 @@ const TdsFilings = () => {
     return entries.filter((e) => {
       // FY filter based on date
       if (e.date) {
-        const d = new Date(e.date);
-        const month = d.getMonth(); // 0-indexed
-        const year = d.getFullYear();
-        const fyStart = month >= 3 ? year : year - 1;
-        const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
+        const fy = getFinancialYear(e.date);
         if (fy !== fyFilter) return false;
       }
       if (sectionFilter !== "all" && e.section !== sectionFilter) return false;
