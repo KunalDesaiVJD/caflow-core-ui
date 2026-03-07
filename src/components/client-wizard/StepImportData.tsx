@@ -1,5 +1,4 @@
 import { useState, useRef } from "react";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Upload, FileSpreadsheet, CheckCircle2 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -16,6 +15,95 @@ interface Props {
   onSkip: () => void;
 }
 
+/** Clean a cell value to a number, stripping commas, Cr/Dr suffixes */
+function parseNumeric(val: any): number {
+  if (val == null) return 0;
+  const s = String(val).trim().replace(/,/g, "").replace(/\s*(Cr|Dr|cr|dr|CR|DR)\s*$/i, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
+/** Rows to skip: company info, titles, blank amounts */
+const SKIP_PATTERNS = /^(trial balance|share holder|loans \(liability\)|capital account|current liabilities|current assets|fixed assets|investments|direct|indirect|purchase|sales|branch|closing stock|opening stock|suspense|profit & loss|difference in)/i;
+
+function isHeaderRow(row: any[], headers: string[]): boolean {
+  const joined = headers.map(h => String(h).toLowerCase());
+  return joined.some(h => h.includes("particulars")) && joined.some(h => h.includes("debit") || h.includes("credit"));
+}
+
+function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
+  // Get all rows as arrays
+  const allRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+  // Find header row containing "Particulars" and "Debit"/"Credit"
+  let headerIdx = -1;
+  let colMap: Record<string, number> = {};
+
+  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+    const cells = allRows[i].map((c: any) => String(c).trim().toLowerCase());
+    const partIdx = cells.findIndex(c => c.includes("particulars") || c === "account name" || c === "ledger name");
+    const debitIdx = cells.findIndex(c => c === "debit" || c.includes("debit"));
+    const creditIdx = cells.findIndex(c => c === "credit" || c.includes("credit"));
+
+    if (partIdx >= 0 && (debitIdx >= 0 || creditIdx >= 0)) {
+      headerIdx = i;
+      colMap.account = partIdx;
+      colMap.debit = debitIdx >= 0 ? debitIdx : -1;
+      colMap.credit = creditIdx >= 0 ? creditIdx : -1;
+      // Look for closing balance
+      const balIdx = cells.findIndex(c => c.includes("closing") || (c === "balance"));
+      colMap.balance = balIdx >= 0 ? balIdx : -1;
+      break;
+    }
+  }
+
+  // Fallback: if no header detected, use first row
+  if (headerIdx === -1) {
+    headerIdx = 0;
+    colMap = { account: 0, debit: -1, credit: -1, balance: -1 };
+    // Try to guess from first row
+    const first = allRows[0]?.map((c: any) => String(c).trim().toLowerCase()) || [];
+    first.forEach((c, idx) => {
+      if (c.includes("debit")) colMap.debit = idx;
+      if (c.includes("credit")) colMap.credit = idx;
+      if (c.includes("balance") || c.includes("closing")) colMap.balance = idx;
+      if (c.includes("particular") || c.includes("account") || c.includes("ledger")) colMap.account = idx;
+    });
+  }
+
+  const dataRows = allRows.slice(headerIdx + 1);
+  const parsed: any[] = [];
+
+  for (const row of dataRows) {
+    const accountName = String(row[colMap.account] ?? "").trim();
+    
+    // Skip empty, skip title/section rows
+    if (!accountName) continue;
+    if (SKIP_PATTERNS.test(accountName)) continue;
+    // Skip rows that look like company metadata (contains @, www, CIN, address-like)
+    if (/[@]|www\.|CIN:|L\d{5}|^\d{6,}$/.test(accountName)) continue;
+
+    const debit = colMap.debit >= 0 ? parseNumeric(row[colMap.debit]) : 0;
+    const credit = colMap.credit >= 0 ? parseNumeric(row[colMap.credit]) : 0;
+    const balance = colMap.balance >= 0 ? parseNumeric(row[colMap.balance]) : 0;
+
+    // Must have at least one numeric value
+    if (debit === 0 && credit === 0 && balance === 0) continue;
+
+    parsed.push({
+      account_name: accountName,
+      debit,
+      credit,
+      balance,
+    });
+  }
+
+  return {
+    headers: ["account_name", "debit", "credit", "balance"],
+    rows: parsed,
+  };
+}
+
 export const StepImportData = ({ data, onChange, onSkip }: Props) => {
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -30,15 +118,15 @@ export const StepImportData = ({ data, onChange, onSkip }: Props) => {
       try {
         const wb = XLSX.read(evt.target?.result, { type: "array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json<any>(ws);
-        if (jsonData.length === 0) {
-          setError("The file appears to be empty.");
+        const { headers, rows } = detectAndParse(ws);
+
+        if (rows.length === 0) {
+          setError("No ledger entries detected in uploaded file.");
           return;
         }
-        const headers = Object.keys(jsonData[0]);
-        onChange({ filename: file.name, rows: jsonData, headers });
+        onChange({ filename: file.name, rows, headers });
       } catch {
-        setError("Failed to parse the file. Ensure it's a valid Excel or CSV file.");
+        setError("Unable to read file. Please upload a valid trial balance export.");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -65,28 +153,33 @@ export const StepImportData = ({ data, onChange, onSkip }: Props) => {
             <CheckCircle2 className="h-5 w-5 text-green-600" />
             <FileSpreadsheet className="h-4 w-4" />
             <span className="font-medium">{data.filename}</span>
-            <span className="text-muted-foreground">— {data.rows.length} rows found</span>
+            <span className="text-muted-foreground">— {data.rows.length} ledger entries found</span>
           </div>
-          {/* Preview first 5 rows */}
+          {/* Preview first 10 rows */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs border">
               <thead>
                 <tr className="bg-muted">
-                  {data.headers.slice(0, 6).map((h) => (
-                    <th key={h} className="px-2 py-1 text-left font-medium border-b">{h}</th>
-                  ))}
+                  <th className="px-2 py-1 text-left font-medium border-b">Account Name</th>
+                  <th className="px-2 py-1 text-right font-medium border-b">Debit</th>
+                  <th className="px-2 py-1 text-right font-medium border-b">Credit</th>
+                  <th className="px-2 py-1 text-right font-medium border-b">Balance</th>
                 </tr>
               </thead>
               <tbody>
-                {data.rows.slice(0, 5).map((row, i) => (
+                {data.rows.slice(0, 10).map((row, i) => (
                   <tr key={i} className="border-b">
-                    {data.headers.slice(0, 6).map((h) => (
-                      <td key={h} className="px-2 py-1">{String(row[h] ?? "")}</td>
-                    ))}
+                    <td className="px-2 py-1">{row.account_name}</td>
+                    <td className="px-2 py-1 text-right font-mono">{row.debit ? row.debit.toLocaleString("en-IN") : "—"}</td>
+                    <td className="px-2 py-1 text-right font-mono">{row.credit ? row.credit.toLocaleString("en-IN") : "—"}</td>
+                    <td className="px-2 py-1 text-right font-mono">{row.balance ? row.balance.toLocaleString("en-IN") : "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {data.rows.length > 10 && (
+              <p className="text-xs text-muted-foreground mt-1">Showing 10 of {data.rows.length} entries</p>
+            )}
           </div>
           <Button variant="outline" size="sm" onClick={() => { onChange(null); if (fileRef.current) fileRef.current.value = ""; }}>
             Remove & Re-upload
