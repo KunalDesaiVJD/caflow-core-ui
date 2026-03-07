@@ -307,6 +307,41 @@ export type Database = {
           },
         ]
       }
+      deductees: {
+        Row: {
+          created_at: string | null
+          firm_id: string | null
+          id: string
+          pan: string | null
+          pan_valid: boolean | null
+          party_name: string
+        }
+        Insert: {
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          pan?: string | null
+          pan_valid?: boolean | null
+          party_name: string
+        }
+        Update: {
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          pan?: string | null
+          pan_valid?: boolean | null
+          party_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deductees_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       documents: {
         Row: {
           category: string | null
@@ -733,44 +768,56 @@ export type Database = {
       }
       tds_entries: {
         Row: {
+          amount: number | null
           challan_no: string | null
           client_id: string | null
           date: string | null
+          deductee_id: string | null
           due_date: string | null
           filed_at: string | null
           firm_id: string | null
           id: string
           pan: string | null
           party_name: string | null
+          payment_nature: string | null
           section: string | null
+          status: string | null
           tds_amount: number | null
           tds_rate: number | null
         }
         Insert: {
+          amount?: number | null
           challan_no?: string | null
           client_id?: string | null
           date?: string | null
+          deductee_id?: string | null
           due_date?: string | null
           filed_at?: string | null
           firm_id?: string | null
           id?: string
           pan?: string | null
           party_name?: string | null
+          payment_nature?: string | null
           section?: string | null
+          status?: string | null
           tds_amount?: number | null
           tds_rate?: number | null
         }
         Update: {
+          amount?: number | null
           challan_no?: string | null
           client_id?: string | null
           date?: string | null
+          deductee_id?: string | null
           due_date?: string | null
           filed_at?: string | null
           firm_id?: string | null
           id?: string
           pan?: string | null
           party_name?: string | null
+          payment_nature?: string | null
           section?: string | null
+          status?: string | null
           tds_amount?: number | null
           tds_rate?: number | null
         }
@@ -780,6 +827,13 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_entries_deductee_id_fkey"
+            columns: ["deductee_id"]
+            isOneToOne: false
+            referencedRelation: "deductees"
             referencedColumns: ["id"]
           },
           {
