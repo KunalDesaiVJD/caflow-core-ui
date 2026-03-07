@@ -244,12 +244,12 @@ const NewInvoice = () => {
         firm_id: firmId || null,
         amount: subtotal,
         gst_amount: gstAmount,
-        line_items: lineItems.filter((li) => li.description.trim()),
+        line_items: lineItems.filter((li) => li.description.trim()) as any,
         status: "draft",
         due_date: dueDate || null,
       };
 
-      const { error } = await supabase.from("invoices").insert(payload);
+      const { error } = await supabase.from("invoices").insert([payload]);
       if (error) throw error;
       toast({ title: "Invoice created" });
       navigate("/billing");
