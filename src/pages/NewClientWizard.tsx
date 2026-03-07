@@ -320,6 +320,11 @@ const NewClientWizard = () => {
 
         if (profileError) throw profileError;
 
+        // Save imported trial balance data
+        if (importData && importData.rows.length > 0) {
+          await saveTrialBalance(clientData.id);
+        }
+
         confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
         toast({ title: "Client created!", description: "All wizard data saved successfully." });
         setTimeout(() => navigate(`/clients/${clientData.id}`), 700);
