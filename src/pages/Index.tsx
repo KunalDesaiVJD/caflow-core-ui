@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,54 +11,46 @@ import {
   Receipt,
   FileText,
   Search,
-  TrendingUp,
-  TrendingDown,
   ArrowRight,
   Plus,
   Clock,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-
-// Mock role — will come from JWT later
-const MOCK_ROLE: "partner" | "manager" | "staff" | "firm_admin" = "partner";
+import { formatDistanceToNow, startOfMonth, endOfMonth } from "date-fns";
 
 const ROLE_GREETINGS: Record<string, string> = {
-  partner: "Partner Dashboard",
+  partner_ca: "Partner Dashboard",
   manager: "Manager Dashboard",
-  staff: "My Tasks",
+  staff_article: "My Tasks",
   firm_admin: "Firm Overview",
+  superadmin: "Admin Dashboard",
 };
-
-const MOCK_STATS = [
-  { label: "Active Clients", value: 142, trend: 8, icon: Users },
-  { label: "TDS Due This Month", value: 23, trend: -3, icon: Receipt },
-  { label: "ITR Pending", value: 8, trend: 2, icon: FileText },
-  { label: "Open Audits", value: 5, trend: 0, icon: Search },
-];
-
-const MOCK_DUE_ITEMS = [
-  { client: "ABC Enterprises", due: new Date(Date.now() + 1 * 86400000), type: "TDS" },
-  { client: "Sharma & Sons", due: new Date(Date.now() + 2 * 86400000), type: "ITR" },
-  { client: "Global Infra Ltd", due: new Date(Date.now() + 3 * 86400000), type: "TDS" },
-  { client: "Priya Textiles", due: new Date(Date.now() + 5 * 86400000), type: "ITR" },
-  { client: "Metro Builders", due: new Date(Date.now() + 6 * 86400000), type: "TDS" },
-];
-
-const MOCK_ACTIVITY = [
-  { user: "Rajesh K.", role: "partner", table: "clients", op: "INSERT", at: new Date(Date.now() - 2 * 3600000) },
-  { user: "Sneha M.", role: "manager", table: "tds_entries", op: "UPDATE", at: new Date(Date.now() - 5 * 3600000) },
-  { user: "Amit P.", role: "staff", table: "itr_profiles", op: "INSERT", at: new Date(Date.now() - 8 * 3600000) },
-  { user: "Rajesh K.", role: "partner", table: "audit_engagements", op: "UPDATE", at: new Date(Date.now() - 12 * 3600000) },
-  { user: "Priya S.", role: "staff", table: "tds_entries", op: "INSERT", at: new Date(Date.now() - 24 * 3600000) },
-  { user: "Sneha M.", role: "manager", table: "clients", op: "DELETE", at: new Date(Date.now() - 36 * 3600000) },
-  { user: "Amit P.", role: "staff", table: "itr_profiles", op: "UPDATE", at: new Date(Date.now() - 48 * 3600000) },
-];
 
 const OP_COLORS: Record<string, string> = {
   INSERT: "bg-emerald-100 text-emerald-700 border-emerald-200",
   UPDATE: "bg-sky-100 text-sky-700 border-sky-200",
   DELETE: "bg-red-100 text-red-700 border-red-200",
 };
+
+interface DashboardStats {
+  activeClients: number;
+  tdsDue: number;
+  itrPending: number;
+  openAudits: number;
+}
+
+interface DueItem {
+  client: string;
+  due: Date;
+  type: string;
+}
+
+interface ActivityItem {
+  user: string;
+  role: string;
+  table: string;
+  op: string;
+  at: Date;
+}
 
 function daysUntil(date: Date) {
   return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000));
@@ -67,16 +60,81 @@ const Index = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<DashboardStats>({ activeClients: 0, tdsDue: 0, itrPending: 0, openAudits: 0 });
+  const [dueItems, setDueItems] = useState<DueItem[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+
+  const fetchDashboard = useCallback(async () => {
+    if (!user?.firm_id) { setLoading(false); return; }
+
+    const now = new Date();
+    const monthStart = startOfMonth(now).toISOString().split("T")[0];
+    const monthEnd = endOfMonth(now).toISOString().split("T")[0];
+
+    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, activityRes] = await Promise.all([
+      supabase.from("clients").select("*", { count: "exact", head: true }),
+      supabase.from("tds_entries").select("*", { count: "exact", head: true })
+        .gte("due_date", monthStart).lte("due_date", monthEnd).is("challan_no", null),
+      supabase.from("itr_profiles").select("*", { count: "exact", head: true })
+        .neq("filing_status", "filed"),
+      supabase.from("audit_engagements").select("*", { count: "exact", head: true })
+        .neq("status", "completed"),
+      // Due this week: TDS entries due in next 7 days
+      supabase.from("tds_entries").select("party_name, due_date")
+        .gte("due_date", now.toISOString().split("T")[0])
+        .lte("due_date", new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0])
+        .is("challan_no", null)
+        .order("due_date", { ascending: true })
+        .limit(5),
+      // Recent activity from version_history
+      supabase.from("version_history").select("user_name, user_role, table_name, operation, created_at")
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
+
+    setStats({
+      activeClients: clientsRes.count ?? 0,
+      tdsDue: tdsRes.count ?? 0,
+      itrPending: itrRes.count ?? 0,
+      openAudits: auditsRes.count ?? 0,
+    });
+
+    setDueItems(
+      (dueRes.data || []).map((d: any) => ({
+        client: d.party_name || "Unknown",
+        due: new Date(d.due_date),
+        type: "TDS",
+      }))
+    );
+
+    setActivity(
+      (activityRes.data || []).map((a: any) => ({
+        user: a.user_name || "System",
+        role: a.user_role || "unknown",
+        table: a.table_name || "",
+        op: a.operation || "",
+        at: new Date(a.created_at),
+      }))
+    );
+
+    setLoading(false);
+  }, [user?.firm_id]);
 
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(t);
-  }, []);
+    if (user) fetchDashboard();
+  }, [user, fetchDashboard]);
 
-  // Redirect superadmins to their dedicated platform
-  if (user?.role === "superadmin") {
-    return <Navigate to="/admin" replace />;
-  }
+  // Superadmin can access dashboard too — no redirect
+  const userRole = user?.role || "staff_article";
+  const greeting = ROLE_GREETINGS[userRole] || "Dashboard";
+  const userName = user?.name || user?.email || "there";
+
+  const statCards = [
+    { label: "Active Clients", value: stats.activeClients, icon: Users },
+    { label: "TDS Due This Month", value: stats.tdsDue, icon: Receipt },
+    { label: "ITR Pending", value: stats.itrPending, icon: FileText },
+    { label: "Open Audits", value: stats.openAudits, icon: Search },
+  ];
 
   const quickActions = [
     { label: "Add New Client", path: "/clients", icon: Plus },
@@ -89,23 +147,20 @@ const Index = () => {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-display font-bold text-foreground">
-          {ROLE_GREETINGS[MOCK_ROLE]}
-        </h1>
+        <h1 className="text-2xl font-display font-bold text-foreground">{greeting}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Welcome back, Rajesh. Here's your practice overview.
+          Welcome back, {userName}. Here's your practice overview.
         </p>
       </div>
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {MOCK_STATS.map((stat) =>
+        {statCards.map((stat) =>
           loading ? (
             <Card key={stat.label}>
               <CardContent className="p-5 space-y-3">
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="h-8 w-16" />
-                <Skeleton className="h-3 w-20" />
               </CardContent>
             </Card>
           ) : (
@@ -116,25 +171,6 @@ const Index = () => {
                   <stat.icon className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <p className="text-3xl font-display font-bold text-foreground">{stat.value}</p>
-                <div className="flex items-center gap-1 mt-1">
-                  {stat.trend > 0 ? (
-                    <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
-                  ) : stat.trend < 0 ? (
-                    <TrendingDown className="h-3.5 w-3.5 text-red-500" />
-                  ) : null}
-                  <span
-                    className={`text-xs font-medium ${
-                      stat.trend > 0
-                        ? "text-emerald-600"
-                        : stat.trend < 0
-                        ? "text-red-600"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {stat.trend > 0 ? `+${stat.trend}` : stat.trend < 0 ? stat.trend : "No change"}{" "}
-                    {stat.trend !== 0 && "this month"}
-                  </span>
-                </div>
               </CardContent>
             </Card>
           )
@@ -152,42 +188,32 @@ const Index = () => {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
-            {loading
-              ? Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 py-3">
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-5 w-12" />
-                    <Skeleton className="ml-auto h-4 w-16" />
-                  </div>
-                ))
-              : MOCK_DUE_ITEMS.map((item, i) => {
-                  const days = daysUntil(item.due);
-                  return (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between py-3 border-b border-border last:border-0"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-foreground">{item.client}</span>
-                        <Badge
-                          variant={item.type === "TDS" ? "default" : "secondary"}
-                          className="text-[10px] px-1.5 py-0"
-                        >
-                          {item.type}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span
-                          className={`font-semibold ${
-                            days <= 2 ? "text-red-600" : "text-muted-foreground"
-                          }`}
-                        >
-                          {days === 0 ? "Today" : days === 1 ? "Tomorrow" : `${days} days`}
-                        </span>
-                      </div>
+            {loading ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 py-3">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-5 w-12" />
+                  <Skeleton className="ml-auto h-4 w-16" />
+                </div>
+              ))
+            ) : dueItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No upcoming items due this week.</p>
+            ) : (
+              dueItems.map((item, i) => {
+                const days = daysUntil(item.due);
+                return (
+                  <div key={i} className="flex items-center justify-between py-3 border-b border-border last:border-0">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-foreground">{item.client}</span>
+                      <Badge variant="default" className="text-[10px] px-1.5 py-0">{item.type}</Badge>
                     </div>
-                  );
-                })}
+                    <span className={`text-xs font-semibold ${days <= 2 ? "text-red-600" : "text-muted-foreground"}`}>
+                      {days === 0 ? "Today" : days === 1 ? "Tomorrow" : `${days} days`}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </CardContent>
         </Card>
 
@@ -200,39 +226,34 @@ const Index = () => {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
-            {loading
-              ? Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 py-3">
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-5 w-14" />
-                    <Skeleton className="ml-auto h-4 w-24" />
-                  </div>
-                ))
-              : MOCK_ACTIVITY.map((item, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between py-3 border-b border-border last:border-0"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-sm font-medium text-foreground whitespace-nowrap">
-                        {item.user}
-                      </span>
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
-                        {item.role}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground truncate">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border ${OP_COLORS[item.op]}`}>
-                          {item.op}
-                        </span>
-                        {" "}on{" "}
-                        <span className="font-mono">{item.table}</span>
-                      </span>
-                    </div>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                      {formatDistanceToNow(item.at, { addSuffix: true })}
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 py-3">
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-5 w-14" />
+                  <Skeleton className="ml-auto h-4 w-24" />
+                </div>
+              ))
+            ) : activity.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No recent activity.</p>
+            ) : (
+              activity.map((item, i) => (
+                <div key={i} className="flex items-center justify-between py-3 border-b border-border last:border-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-medium text-foreground whitespace-nowrap">{item.user}</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">{item.role}</Badge>
+                    <span className="text-xs text-muted-foreground truncate">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border ${OP_COLORS[item.op] || ""}`}>
+                        {item.op}
+                      </span>{" "}on <span className="font-mono">{item.table}</span>
                     </span>
                   </div>
-                ))}
+                  <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                    {formatDistanceToNow(item.at, { addSuffix: true })}
+                  </span>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
       </div>

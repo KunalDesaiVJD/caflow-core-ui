@@ -148,7 +148,7 @@ const Clients = () => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}?edit=true`); }}
                     title="Edit"
                   >
                     <Pencil className="h-4 w-4" />
