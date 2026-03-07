@@ -416,7 +416,7 @@ const NewInvoice = () => {
               size="sm"
               className="gap-1"
               onClick={handleAiDescriptions}
-              disabled={aiLoading || !engagementId}
+              disabled={aiLoading || !clientId}
             >
               <Sparkles className="h-3.5 w-3.5" />
               {aiLoading ? "Generating..." : "AI Descriptions"}
