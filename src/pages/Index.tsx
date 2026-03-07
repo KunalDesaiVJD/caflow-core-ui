@@ -127,7 +127,7 @@ const Index = () => {
     );
 
     setLoading(false);
-  }, [user?.firm_id, user?.role, user]);
+  }, [user?.firm_id, user?.role]);
 
   useEffect(() => {
     if (user) fetchDashboard();
