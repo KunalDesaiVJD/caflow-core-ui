@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -23,6 +24,7 @@ const STEPS = [
 const NewClientWizard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
 
@@ -93,6 +95,7 @@ const NewClientWizard = () => {
           entity_type: basicInfo.entity_type || null,
           cin: basicInfo.cin || null,
           gstin: gstins.length > 0 ? gstins : null,
+          firm_id: user?.firm_id || null,
           compliance_flags: {
             ...complianceFlags,
             financial_profile: financialProfile,
