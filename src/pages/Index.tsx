@@ -136,7 +136,7 @@ const Index = () => {
   // Superadmin can access dashboard too — no redirect
   const userRole = user?.role || "staff_article";
   const greeting = ROLE_GREETINGS[userRole] || "Dashboard";
-  const userName = user?.name || user?.email || "there";
+  const welcomeLine = userRole === "superadmin" ? "Welcome Admin" : `Welcome back, ${user?.name || user?.email || "there"}. Here's your practice overview.`;
 
   const statCards = [
     { label: "Active Clients", value: stats.activeClients, icon: Users },
