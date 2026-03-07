@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -21,6 +22,12 @@ export function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+
+  useEffect(() => {
+    if (user && user.role !== "superadmin") {
+      navigate("/", { replace: true });
+    }
+  }, [user, navigate]);
 
   const handleLogout = async () => {
     await signOut();
