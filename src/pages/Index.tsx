@@ -158,7 +158,7 @@ const Index = () => {
       <div>
         <h1 className="text-2xl font-display font-bold text-foreground">{greeting}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Welcome back, {userName}. Here's your practice overview.
+          {welcomeLine}
         </p>
       </div>
 
