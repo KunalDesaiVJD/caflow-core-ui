@@ -216,7 +216,7 @@ const ItrAisRecon = () => {
       const { error } = await supabase
         .from("itr_profiles")
         .update({
-          ais_recon_data: { entries: aisEntries, analysis: aiAnalysis, saved_at: new Date().toISOString() },
+          ais_recon_data: JSON.parse(JSON.stringify({ entries: aisEntries, analysis: aiAnalysis, saved_at: new Date().toISOString() })),
         })
         .eq("id", itrProfile.id);
       if (error) throw error;
