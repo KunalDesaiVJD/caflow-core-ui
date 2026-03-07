@@ -65,11 +65,20 @@ const Index = () => {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
 
   const fetchDashboard = useCallback(async () => {
-    if (!user?.firm_id) { setLoading(false); return; }
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    if (user.role !== "superadmin" && !user.firm_id) {
+      setLoading(false);
+      return;
+    }
 
     const now = new Date();
     const monthStart = startOfMonth(now).toISOString().split("T")[0];
     const monthEnd = endOfMonth(now).toISOString().split("T")[0];
+
 
     const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, activityRes] = await Promise.all([
       supabase.from("clients").select("*", { count: "exact", head: true }),
