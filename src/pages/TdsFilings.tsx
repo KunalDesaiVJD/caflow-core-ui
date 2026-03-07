@@ -52,7 +52,12 @@ const STATUS_COLORS: Record<string, string> = {
   filed: "bg-emerald-100 text-emerald-700",
 };
 
-const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23"];
+const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
+const FY_OPTIONS = Array.from({ length: 4 }, (_, index) => {
+  const fyStart = CURRENT_FY_START - index;
+  return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+});
 
 interface TdsEntry {
   id: string;
@@ -101,6 +106,14 @@ const emptyForm = {
   client_id: "",
 };
 
+const getFinancialYear = (dateValue: string) => {
+  const parsed = new Date(dateValue);
+  const month = parsed.getMonth();
+  const year = parsed.getFullYear();
+  const fyStart = month >= 3 ? year : year - 1;
+  return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+};
+
 const TdsFilings = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -112,7 +125,7 @@ const TdsFilings = () => {
   const [clients, setClients] = useState<ClientOption[]>([]);
 
   // Filters
-  const [fyFilter, setFyFilter] = useState("2024-25");
+  const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [sectionFilter, setSectionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -140,16 +153,37 @@ const TdsFilings = () => {
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
 
   // ─── Fetch ───
+  const resolveFirmId = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const metadataFirmId = session?.user?.user_metadata?.firm_id;
+    if (typeof metadataFirmId === "string" && metadataFirmId.length > 0) return metadataFirmId;
+    return user?.firm_id ?? null;
+  }, [user?.firm_id]);
+
   const fetchEntries = useCallback(async () => {
     setLoading(true);
+    const firmId = await resolveFirmId();
+
+    if (!firmId) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("tds_entries")
       .select("*")
+      .eq("firm_id", firmId)
       .order("date", { ascending: false })
       .limit(500);
-    if (!error) setEntries((data as TdsEntry[]) || []);
+
+    if (!error) {
+      setEntries((data as TdsEntry[]) || []);
+    } else {
+      setEntries([]);
+    }
     setLoading(false);
-  }, []);
+  }, [resolveFirmId]);
 
   const fetchDeductees = useCallback(async () => {
     if (!user?.firm_id) return;
@@ -182,11 +216,7 @@ const TdsFilings = () => {
     return entries.filter((e) => {
       // FY filter based on date
       if (e.date) {
-        const d = new Date(e.date);
-        const month = d.getMonth(); // 0-indexed
-        const year = d.getFullYear();
-        const fyStart = month >= 3 ? year : year - 1;
-        const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
+        const fy = getFinancialYear(e.date);
         if (fy !== fyFilter) return false;
       }
       if (sectionFilter !== "all" && e.section !== sectionFilter) return false;
@@ -340,12 +370,17 @@ const TdsFilings = () => {
     }
     setSaving(true);
     try {
+      const firmId = await resolveFirmId();
+      if (!firmId) {
+        throw new Error("Unable to resolve firm for current user. Please sign in again.");
+      }
+
       // If new deductee, create it
       let deducteeId = form.deductee_id || null;
-      if (!deducteeId && form.party_name.trim() && user?.firm_id) {
+      if (!deducteeId && form.party_name.trim()) {
         const { data: newDed } = await supabase
           .from("deductees")
-          .insert({ firm_id: user.firm_id, party_name: form.party_name.trim(), pan: form.pan || null })
+          .insert({ firm_id: firmId, party_name: form.party_name.trim(), pan: form.pan || null })
           .select("id")
           .single();
         if (newDed) deducteeId = newDed.id;
@@ -368,7 +403,7 @@ const TdsFilings = () => {
       };
 
       if (!editingId) {
-        payload.firm_id = user?.firm_id || null;
+        payload.firm_id = firmId;
       }
 
       if (editingId) {
