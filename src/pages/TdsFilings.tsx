@@ -153,16 +153,37 @@ const TdsFilings = () => {
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
 
   // ─── Fetch ───
+  const resolveFirmId = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const metadataFirmId = session?.user?.user_metadata?.firm_id;
+    if (typeof metadataFirmId === "string" && metadataFirmId.length > 0) return metadataFirmId;
+    return user?.firm_id ?? null;
+  }, [user?.firm_id]);
+
   const fetchEntries = useCallback(async () => {
     setLoading(true);
+    const firmId = await resolveFirmId();
+
+    if (!firmId) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("tds_entries")
       .select("*")
+      .eq("firm_id", firmId)
       .order("date", { ascending: false })
       .limit(500);
-    if (!error) setEntries((data as TdsEntry[]) || []);
+
+    if (!error) {
+      setEntries((data as TdsEntry[]) || []);
+    } else {
+      setEntries([]);
+    }
     setLoading(false);
-  }, []);
+  }, [resolveFirmId]);
 
   const fetchDeductees = useCallback(async () => {
     if (!user?.firm_id) return;
