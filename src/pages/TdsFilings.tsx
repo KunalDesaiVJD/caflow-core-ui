@@ -242,8 +242,24 @@ const TdsFilings = () => {
     setShowDeducteeList(false);
   };
 
+  const selectClient = (c: ClientOption) => {
+    setForm((f) => ({
+      ...f,
+      party_name: c.name || "",
+      pan: c.pan || "",
+      client_id: c.id,
+      deductee_id: "",
+    }));
+    setDeducteeSearch(c.name || "");
+    setShowDeducteeList(false);
+  };
+
   const filteredDeductees = deductees.filter((d) =>
     d.party_name.toLowerCase().includes(deducteeSearch.toLowerCase())
+  );
+
+  const filteredClients = clients.filter((c) =>
+    (c.name || "").toLowerCase().includes(deducteeSearch.toLowerCase())
   );
 
   const openAdd = () => {
@@ -347,6 +363,7 @@ const TdsFilings = () => {
         due_date: form.due_date || null,
         challan_no: form.challan_no || null,
         deductee_id: deducteeId,
+        client_id: form.client_id || null,
         status: form.challan_no ? "paid" : "pending",
       };
 
