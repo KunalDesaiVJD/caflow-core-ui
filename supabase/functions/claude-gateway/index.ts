@@ -73,7 +73,7 @@ serve(async (req) => {
 
     const firmId = profile?.firm_id ?? null;
 
-    const { request_type, user_message } = await req.json();
+    const { request_type, user_message, stream: wantStream } = await req.json();
 
     if (!request_type || !user_message) {
       return new Response(JSON.stringify({ error: "Missing request_type or user_message" }), {
