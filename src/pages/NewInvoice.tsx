@@ -111,14 +111,16 @@ const NewInvoice = () => {
       return;
     }
     const fetchEngagements = async () => {
-      const { data } = await supabase
+      let query = supabase
         .from("audit_engagements")
         .select("id, client_id, financial_year, status")
         .eq("client_id", clientId);
+      if (!isSuperadmin && firmId) query = query.eq("firm_id", firmId);
+      const { data } = await query;
       setEngagements(data || []);
     };
     fetchEngagements();
-  }, [clientId]);
+  }, [clientId, firmId, isSuperadmin]);
 
   // Line item helpers
   const updateLineItem = (index: number, field: keyof LineItem, value: string | number) => {
@@ -157,30 +159,41 @@ const NewInvoice = () => {
 
   // AI Description
   const handleAiDescriptions = async () => {
-    if (!engagementId) {
-      toast({ title: "Select an engagement first", variant: "destructive" });
+    if (!clientId) {
+      toast({ title: "Select a client first", variant: "destructive" });
       return;
     }
     setAiLoading(true);
     setAiDescriptions([]);
     try {
-      // Fetch timesheets for this engagement
-      const { data: tsData } = await supabase
-        .from("timesheets")
-        .select("id, description, hours, work_date, billable")
-        .eq("engagement_id", engagementId)
-        .order("work_date");
+      // Try fetching timesheets for engagement first, fall back to client context
+      let contextMessage = "";
 
-      if (!tsData || tsData.length === 0) {
-        toast({ title: "No timesheet entries found for this engagement" });
-        setAiLoading(false);
-        return;
+      if (engagementId) {
+        const { data: tsData } = await supabase
+          .from("timesheets")
+          .select("id, description, hours, work_date, billable")
+          .eq("engagement_id", engagementId)
+          .order("work_date");
+
+        if (tsData && tsData.length > 0) {
+          contextMessage = JSON.stringify(tsData);
+        }
+      }
+
+      // If no timesheets, build context from client + line items
+      if (!contextMessage) {
+        const clientName = clients.find((c) => c.id === clientId)?.name || "Client";
+        const engagement = engagements.find((e) => e.id === engagementId);
+        contextMessage = `Generate professional invoice line items for ${clientName}. ${
+          engagement ? `Engagement: ${engagement.financial_year || "current year"} ${engagement.status || "audit"}.` : "General compliance services."
+        } Current line items: ${lineItems.filter((l) => l.description).map((l) => l.description).join(", ") || "none yet"}`;
       }
 
       const { data, error } = await supabase.functions.invoke("claude-gateway", {
         body: {
           request_type: "invoice_description",
-          user_message: JSON.stringify(tsData),
+          user_message: contextMessage,
         },
       });
 
@@ -189,19 +202,26 @@ const NewInvoice = () => {
       // Parse AI response - expect array of descriptions
       let descriptions: string[] = [];
       if (Array.isArray(data)) {
-        descriptions = data.map((d: any) => typeof d === "string" ? d : d.description || "");
+        descriptions = data.map((d: any) => typeof d === "string" ? d : d.description || String(d));
       } else if (data?.descriptions && Array.isArray(data.descriptions)) {
         descriptions = data.descriptions;
+      } else if (data?.raw) {
+        // AI returned raw text, split into lines
+        descriptions = data.raw.split("\n").filter((l: string) => l.trim());
       } else if (typeof data === "string") {
         try {
           const parsed = JSON.parse(data);
           descriptions = Array.isArray(parsed) ? parsed : [data];
         } catch {
-          descriptions = [data];
+          descriptions = data.split("\n").filter((l: string) => l.trim());
         }
       }
 
-      setAiDescriptions(descriptions);
+      if (descriptions.length === 0) {
+        toast({ title: "AI returned no descriptions. Try adding more context." });
+      } else {
+        setAiDescriptions(descriptions);
+      }
     } catch (e: any) {
       toast({ title: "AI error", description: e.message, variant: "destructive" });
     } finally {
@@ -396,7 +416,7 @@ const NewInvoice = () => {
               size="sm"
               className="gap-1"
               onClick={handleAiDescriptions}
-              disabled={aiLoading || !engagementId}
+              disabled={aiLoading || !clientId}
             >
               <Sparkles className="h-3.5 w-3.5" />
               {aiLoading ? "Generating..." : "AI Descriptions"}
