@@ -29,7 +29,7 @@ const navItems = [
   { title: "Dashboard", path: "/", icon: LayoutDashboard },
   { title: "Clients", path: "/clients", icon: Users },
   { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
-  { title: "IT Returns", path: "/it-returns", icon: FileText },
+  { title: "IT Returns", path: "/itr", icon: FileText },
   { title: "Billing", path: "/billing", icon: CreditCard },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search, premium: true },
