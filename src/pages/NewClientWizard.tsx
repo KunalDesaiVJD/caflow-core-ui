@@ -93,6 +93,12 @@ const NewClientWizard = () => {
   const handleFinalSubmit = async () => {
     setSaving(true);
     try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+
+      const authUserId = authData.user?.id;
+      if (!authUserId) throw new Error("You must be logged in to create a client.");
+
       const gstins = basicInfo.gstins.filter((g) => g.trim());
       const insertPayload = {
         name: basicInfo.name.trim(),
@@ -101,6 +107,7 @@ const NewClientWizard = () => {
         cin: basicInfo.cin || null,
         gstin: gstins.length > 0 ? gstins : null,
         firm_id: user?.firm_id || null,
+        user_id: authUserId,
         compliance_flags: {
           ...complianceFlags,
           financial_profile: financialProfile,
@@ -114,7 +121,7 @@ const NewClientWizard = () => {
 
       const { data: clientData, error: clientError } = await supabase
         .from("clients")
-        .insert(insertPayload)
+        .insert(insertPayload as any)
         .select()
         .single();
 

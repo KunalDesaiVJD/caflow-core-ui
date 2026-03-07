@@ -229,6 +229,7 @@ export type Database = {
           id: string
           name: string | null
           pan: string | null
+          user_id: string | null
         }
         Insert: {
           cin?: string | null
@@ -240,6 +241,7 @@ export type Database = {
           id?: string
           name?: string | null
           pan?: string | null
+          user_id?: string | null
         }
         Update: {
           cin?: string | null
@@ -251,6 +253,7 @@ export type Database = {
           id?: string
           name?: string | null
           pan?: string | null
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -258,6 +261,13 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "clients_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
