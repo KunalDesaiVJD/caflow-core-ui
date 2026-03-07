@@ -106,6 +106,14 @@ const emptyForm = {
   client_id: "",
 };
 
+const getFinancialYear = (dateValue: string) => {
+  const parsed = new Date(dateValue);
+  const month = parsed.getMonth();
+  const year = parsed.getFullYear();
+  const fyStart = month >= 3 ? year : year - 1;
+  return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+};
+
 const TdsFilings = () => {
   const { user } = useAuth();
   const { toast } = useToast();
