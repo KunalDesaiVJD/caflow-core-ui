@@ -109,6 +109,7 @@ const TdsFilings = () => {
   const [entries, setEntries] = useState<TdsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [deductees, setDeductees] = useState<Deductee[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
 
   // Filters
   const [fyFilter, setFyFilter] = useState("2024-25");
@@ -160,10 +161,21 @@ const TdsFilings = () => {
     if (data) setDeductees(data as Deductee[]);
   }, [user?.firm_id]);
 
+  const fetchClients = useCallback(async () => {
+    if (!user?.firm_id) return;
+    const { data } = await supabase
+      .from("clients")
+      .select("id, name, pan")
+      .eq("firm_id", user.firm_id)
+      .order("name");
+    if (data) setClients(data as ClientOption[]);
+  }, [user?.firm_id]);
+
   useEffect(() => {
     fetchEntries();
     fetchDeductees();
-  }, [fetchEntries, fetchDeductees]);
+    fetchClients();
+  }, [fetchEntries, fetchDeductees, fetchClients]);
 
   // ─── Filtered entries ───
   const filtered = useMemo(() => {
