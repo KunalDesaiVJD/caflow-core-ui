@@ -318,6 +318,12 @@ const NewClientWizard = () => {
         }
 
         toast({ title: "Client updated", description: "Full client profile saved successfully." });
+
+        // Save imported trial balance data in edit mode too
+        if (importData && importData.rows.length > 0) {
+          await saveTrialBalance(clientId);
+        }
+
         navigate(`/clients/${clientId}`);
       } else {
         const insertPayload = {
