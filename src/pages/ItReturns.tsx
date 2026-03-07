@@ -54,10 +54,18 @@ const FILING_STATUSES = ["Not Started", "In Progress", "Filed", "Revised", "Defe
 function suggestItrForm(entityType: string | null): string {
   if (!entityType) return "ITR-3";
   const t = entityType.toLowerCase();
-  if (t.includes("individual") || t.includes("huf")) return "ITR-1";
-  if (t.includes("company")) return "ITR-6";
-  if (t.includes("llp")) return "ITR-5";
-  if (t.includes("firm") || t.includes("partnership")) return "ITR-5";
+  // Company types → ITR-6
+  if (t.includes("private") || t.includes("public") || t.includes("company") || t.includes("ltd")) return "ITR-6";
+  // LLP / Partnership → ITR-5
+  if (t.includes("llp") || t.includes("partnership")) return "ITR-5";
+  // Firm (non-LLP) → ITR-5
+  if (t === "firm" || t.includes("partner")) return "ITR-5";
+  // HUF → ITR-2
+  if (t.includes("huf")) return "ITR-2";
+  // Trust / AOP / BOI → ITR-5
+  if (t.includes("trust") || t.includes("aop") || t.includes("boi")) return "ITR-5";
+  // Individual / Proprietorship → ITR-3
+  if (t.includes("individual") || t.includes("proprietor")) return "ITR-3";
   return "ITR-3";
 }
 

@@ -453,8 +453,15 @@ const TdsFilings = () => {
       }
 
       if (editingId) {
-        const { error } = await supabase.from("tds_entries").update(payload).eq("id", editingId);
+        const { data: updated, error } = await supabase
+          .from("tds_entries")
+          .update(payload)
+          .eq("id", editingId)
+          .select();
         if (error) throw error;
+        if (!updated || updated.length === 0) {
+          throw new Error("Update failed — no rows were modified. Check your permissions.");
+        }
         toast({ title: "TDS entry updated" });
       } else {
         const { error } = await supabase.from("tds_entries").insert(payload);
