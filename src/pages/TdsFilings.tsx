@@ -80,6 +80,12 @@ interface Deductee {
   pan_valid: boolean | null;
 }
 
+interface ClientOption {
+  id: string;
+  name: string | null;
+  pan: string | null;
+}
+
 const emptyForm = {
   date: "",
   party_name: "",

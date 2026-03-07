@@ -76,13 +76,13 @@ export function AdminLayout() {
 
           <div className="flex-1" />
 
-          <Link
-            to="/"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))] hover:text-primary transition-all duration-200"
+          <button
+            onClick={() => navigate("/")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))] hover:text-primary transition-all duration-200 w-full"
           >
             <LayoutDashboard size={20} className="shrink-0" />
             <span>Go to App</span>
-          </Link>
+          </button>
         </nav>
 
         {/* User section */}
