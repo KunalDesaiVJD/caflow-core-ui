@@ -125,7 +125,7 @@ const TdsFilings = () => {
   const [clients, setClients] = useState<ClientOption[]>([]);
 
   // Filters
-  const [fyFilter, setFyFilter] = useState("2024-25");
+  const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [sectionFilter, setSectionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
