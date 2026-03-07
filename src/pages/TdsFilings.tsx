@@ -370,12 +370,17 @@ const TdsFilings = () => {
     }
     setSaving(true);
     try {
+      const firmId = await resolveFirmId();
+      if (!firmId) {
+        throw new Error("Unable to resolve firm for current user. Please sign in again.");
+      }
+
       // If new deductee, create it
       let deducteeId = form.deductee_id || null;
-      if (!deducteeId && form.party_name.trim() && user?.firm_id) {
+      if (!deducteeId && form.party_name.trim()) {
         const { data: newDed } = await supabase
           .from("deductees")
-          .insert({ firm_id: user.firm_id, party_name: form.party_name.trim(), pan: form.pan || null })
+          .insert({ firm_id: firmId, party_name: form.party_name.trim(), pan: form.pan || null })
           .select("id")
           .single();
         if (newDed) deducteeId = newDed.id;
@@ -398,7 +403,7 @@ const TdsFilings = () => {
       };
 
       if (!editingId) {
-        payload.firm_id = user?.firm_id || null;
+        payload.firm_id = firmId;
       }
 
       if (editingId) {
