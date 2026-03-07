@@ -433,7 +433,21 @@ const TdsFilings = () => {
       }
 
       const payload: any = {
-...
+        date: form.date || null,
+        party_name: form.party_name.trim(),
+        pan: form.pan || null,
+        payment_nature: form.payment_nature || null,
+        amount: form.amount ? parseFloat(form.amount) : null,
+        section: form.section || null,
+        tds_rate: form.tds_rate ? parseFloat(form.tds_rate) : null,
+        tds_amount: form.tds_amount ? parseFloat(form.tds_amount) : null,
+        due_date: form.due_date || null,
+        challan_no: form.challan_no || null,
+        deductee_id: deducteeId,
+        client_id: form.client_id || null,
+        status: form.challan_no ? "paid" : "pending",
+      };
+
       if (!editingId && firmId) {
         payload.firm_id = firmId;
       }
