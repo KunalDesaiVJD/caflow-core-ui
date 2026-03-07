@@ -16,6 +16,8 @@ import ItrAisRecon from "./pages/ItrAisRecon";
 import Billing from "./pages/Billing";
 import NewInvoice from "./pages/NewInvoice";
 import ErpLedger from "./pages/ErpLedger";
+import Timesheets from "./pages/Timesheets";
+import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagement from "./pages/UserManagement";
@@ -65,7 +67,9 @@ const App = () => (
             <Route path="/itr/:clientId" element={<ItrAisRecon />} />
             <Route path="/billing" element={<Billing />} />
             <Route path="/billing/new" element={<NewInvoice />} />
+            <Route path="/billing/timesheets" element={<Timesheets />} />
             <Route path="/erp-ledger" element={<ErpLedger />} />
+            <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/users" element={<UserManagement />} />
