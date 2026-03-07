@@ -736,6 +736,8 @@ export type Database = {
           challan_no: string | null
           client_id: string | null
           date: string | null
+          due_date: string | null
+          filed_at: string | null
           firm_id: string | null
           id: string
           pan: string | null
@@ -748,6 +750,8 @@ export type Database = {
           challan_no?: string | null
           client_id?: string | null
           date?: string | null
+          due_date?: string | null
+          filed_at?: string | null
           firm_id?: string | null
           id?: string
           pan?: string | null
@@ -760,6 +764,8 @@ export type Database = {
           challan_no?: string | null
           client_id?: string | null
           date?: string | null
+          due_date?: string | null
+          filed_at?: string | null
           firm_id?: string | null
           id?: string
           pan?: string | null
