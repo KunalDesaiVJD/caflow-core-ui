@@ -52,7 +52,12 @@ const STATUS_COLORS: Record<string, string> = {
   filed: "bg-emerald-100 text-emerald-700",
 };
 
-const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23"];
+const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}`;
+const FY_OPTIONS = Array.from({ length: 4 }, (_, index) => {
+  const fyStart = CURRENT_FY_START - index;
+  return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+});
 
 interface TdsEntry {
   id: string;
