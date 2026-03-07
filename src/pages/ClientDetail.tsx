@@ -83,7 +83,7 @@ const ClientDetail = () => {
         </div>
         <div className="flex items-center gap-2">
           {!editing && (
-            <Button variant="outline" size="sm" className="gap-1" onClick={() => setEditing(true)}>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => navigate(`/clients/edit/${client.id}`)}>
               <Pencil className="h-3 w-3" /> Edit
             </Button>
           )}

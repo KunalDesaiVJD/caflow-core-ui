@@ -14,6 +14,7 @@ import {
   PanelLeft,
   Shield,
   KeyRound,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -120,24 +121,52 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
 
         <div className="flex-1" />
 
-        {/* Superadmin link */}
+        {/* Superadmin links */}
         {user?.role === "superadmin" && (
-          <Link
-            to="/admin"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive("/admin")
-                ? "bg-destructive/15 text-destructive"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-destructive"
-            )}
-          >
-            <Shield size={20} className="shrink-0 text-destructive" />
-            {!collapsed && <span>Superadmin</span>}
-          </Link>
+          <>
+            <Link
+              to="/admin"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                isActive("/admin")
+                  ? "bg-destructive/15 text-destructive"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-destructive"
+              )}
+            >
+              <Shield size={20} className="shrink-0 text-destructive" />
+              {!collapsed && <span>Superadmin</span>}
+            </Link>
+
+            <Link
+              to="/admin/firms"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                isActive("/admin/firms")
+                  ? "bg-sidebar-gold/15 text-sidebar-gold"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+              )}
+            >
+              <Building2 size={20} className="shrink-0" />
+              {!collapsed && <span>Firm Management</span>}
+            </Link>
+
+            <Link
+              to="/admin/users"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                isActive("/admin/users")
+                  ? "bg-sidebar-gold/15 text-sidebar-gold"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+              )}
+            >
+              <Users size={20} className="shrink-0" />
+              {!collapsed && <span>User Management</span>}
+            </Link>
+          </>
         )}
 
-        {/* User Management - superadmin & firm_admin only */}
-        {["superadmin", "firm_admin"].includes(user?.role || "") && (
+        {/* User Management - firm_admin only */}
+        {user?.role === "firm_admin" && (
           <Link
             to={userMgmtItem.path}
             className={cn(

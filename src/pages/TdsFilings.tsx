@@ -152,6 +152,8 @@ const TdsFilings = () => {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
 
+  const isSuperadmin = user?.role === "superadmin";
+
   // ─── Fetch ───
   const resolveFirmId = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -164,18 +166,22 @@ const TdsFilings = () => {
     setLoading(true);
     const firmId = await resolveFirmId();
 
-    if (!firmId) {
-      setEntries([]);
-      setLoading(false);
-      return;
-    }
-
-    const { data, error } = await supabase
+    let query = supabase
       .from("tds_entries")
       .select("*")
-      .eq("firm_id", firmId)
       .order("date", { ascending: false })
       .limit(500);
+
+    if (!isSuperadmin) {
+      if (!firmId) {
+        setEntries([]);
+        setLoading(false);
+        return;
+      }
+      query = query.eq("firm_id", firmId);
+    }
+
+    const { data, error } = await query;
 
     if (!error) {
       setEntries((data as TdsEntry[]) || []);
@@ -183,27 +189,47 @@ const TdsFilings = () => {
       setEntries([]);
     }
     setLoading(false);
-  }, [resolveFirmId]);
+  }, [isSuperadmin, resolveFirmId]);
 
   const fetchDeductees = useCallback(async () => {
-    if (!user?.firm_id) return;
-    const { data } = await supabase
+    const firmId = await resolveFirmId();
+
+    let query = supabase
       .from("deductees")
       .select("id, party_name, pan, pan_valid")
-      .eq("firm_id", user.firm_id)
       .order("party_name");
-    if (data) setDeductees(data as Deductee[]);
-  }, [user?.firm_id]);
+
+    if (!isSuperadmin) {
+      if (!firmId) {
+        setDeductees([]);
+        return;
+      }
+      query = query.eq("firm_id", firmId);
+    }
+
+    const { data } = await query;
+    setDeductees((data as Deductee[]) || []);
+  }, [isSuperadmin, resolveFirmId]);
 
   const fetchClients = useCallback(async () => {
-    if (!user?.firm_id) return;
-    const { data } = await supabase
+    const firmId = await resolveFirmId();
+
+    let query = supabase
       .from("clients")
       .select("id, name, pan")
-      .eq("firm_id", user.firm_id)
       .order("name");
-    if (data) setClients(data as ClientOption[]);
-  }, [user?.firm_id]);
+
+    if (!isSuperadmin) {
+      if (!firmId) {
+        setClients([]);
+        return;
+      }
+      query = query.eq("firm_id", firmId);
+    }
+
+    const { data } = await query;
+    setClients((data as ClientOption[]) || []);
+  }, [isSuperadmin, resolveFirmId]);
 
   useEffect(() => {
     fetchEntries();
@@ -370,19 +396,39 @@ const TdsFilings = () => {
     }
     setSaving(true);
     try {
-      const firmId = await resolveFirmId();
-      if (!firmId) {
-        throw new Error("Unable to resolve firm for current user. Please sign in again.");
+      let firmId = await resolveFirmId();
+
+      if (!firmId && editingId) {
+        firmId = entries.find((entry) => entry.id === editingId)?.firm_id || null;
+      }
+
+      if (!firmId && isSuperadmin && form.client_id) {
+        const { data: selectedClient } = await supabase
+          .from("clients")
+          .select("firm_id")
+          .eq("id", form.client_id)
+          .maybeSingle();
+        firmId = selectedClient?.firm_id || null;
+      }
+
+      if (!editingId && !firmId) {
+        throw new Error("Unable to resolve firm for this entry. Please pick a client first.");
       }
 
       // If new deductee, create it
       let deducteeId = form.deductee_id || null;
       if (!deducteeId && form.party_name.trim()) {
-        const { data: newDed } = await supabase
+        if (!firmId) {
+          throw new Error("Please select a client to infer firm before creating a new deductee.");
+        }
+
+        const { data: newDed, error: newDedError } = await supabase
           .from("deductees")
           .insert({ firm_id: firmId, party_name: form.party_name.trim(), pan: form.pan || null })
           .select("id")
           .single();
+
+        if (newDedError) throw newDedError;
         if (newDed) deducteeId = newDed.id;
       }
 
@@ -402,7 +448,7 @@ const TdsFilings = () => {
         status: form.challan_no ? "paid" : "pending",
       };
 
-      if (!editingId) {
+      if (!editingId && firmId) {
         payload.firm_id = firmId;
       }
 

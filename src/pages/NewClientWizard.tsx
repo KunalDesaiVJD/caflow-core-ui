@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft } from "lucide-react";
 import confetti from "canvas-confetti";
@@ -26,69 +27,235 @@ const STEPS = [
   "Done",
 ];
 
+const defaultBasicInfo: BasicInfoData = {
+  name: "",
+  pan: "",
+  entity_type: "",
+  date_of_incorporation: undefined,
+  registered_state: "",
+  business_nature: "",
+  gstins: [""],
+  cin: "",
+};
+
+const defaultFinancialProfile: FinancialProfileData = {
+  accounting_software: "",
+  accounting_method: "mercantile",
+  turnover_range: "",
+  financial_standards: "indian_gaap",
+  has_subsidiaries: false,
+};
+
+const defaultComplianceFlags: ComplianceFlagsData = {
+  gst_registered: false,
+  tds_deductor: false,
+  fixed_assets: false,
+  govt_grants: false,
+  multiple_banks: false,
+  caro_applicable: false,
+  transfer_pricing: false,
+  mat_applicable: false,
+  special_deductions: false,
+  msme_suppliers: false,
+};
+
+const asRecord = (value: unknown): Record<string, any> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, any>;
+};
+
+const asArray = <T,>(value: unknown, fallback: T[]): T[] => {
+  if (!Array.isArray(value)) return fallback;
+  return value as T[];
+};
+
 const NewClientWizard = () => {
   const navigate = useNavigate();
+  const { clientId } = useParams<{ clientId: string }>();
   const { toast } = useToast();
   const { user } = useAuth();
+
+  const isEditMode = Boolean(clientId);
+
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [loadingClient, setLoadingClient] = useState(isEditMode);
+  const [clientMissing, setClientMissing] = useState(false);
 
-  const [basicInfo, setBasicInfo] = useState<BasicInfoData>({
-    name: "",
-    pan: "",
-    entity_type: "",
-    date_of_incorporation: undefined,
-    registered_state: "",
-    business_nature: "",
-    gstins: [""],
-    cin: "",
-  });
-
-  const [financialProfile, setFinancialProfile] = useState<FinancialProfileData>({
-    accounting_software: "",
-    accounting_method: "mercantile",
-    turnover_range: "",
-    financial_standards: "indian_gaap",
-    has_subsidiaries: false,
-  });
-
-  const [complianceFlags, setComplianceFlags] = useState<ComplianceFlagsData>({
-    gst_registered: false,
-    tds_deductor: false,
-    fixed_assets: false,
-    govt_grants: false,
-    multiple_banks: false,
-    caro_applicable: false,
-    transfer_pricing: false,
-    mat_applicable: false,
-    special_deductions: false,
-    msme_suppliers: false,
-  });
-
+  const [basicInfo, setBasicInfo] = useState<BasicInfoData>(defaultBasicInfo);
+  const [financialProfile, setFinancialProfile] = useState<FinancialProfileData>(defaultFinancialProfile);
+  const [complianceFlags, setComplianceFlags] = useState<ComplianceFlagsData>(defaultComplianceFlags);
   const [bankingLoans, setBankingLoans] = useState<BankingLoansData>(emptyBankingLoans);
   const [auditQuestions, setAuditQuestions] = useState<AuditQuestionsData>(emptyAuditQuestions);
   const [importData, setImportData] = useState<ImportDataResult | null>(null);
 
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    if (!isEditMode || !clientId) {
+      setLoadingClient(false);
+      return;
+    }
+
+    let mounted = true;
+
+    const loadClient = async () => {
+      setLoadingClient(true);
+      setClientMissing(false);
+
+      const [clientRes, profileRes] = await Promise.all([
+        supabase
+          .from("clients")
+          .select("id, name, pan, entity_type, cin, gstin, compliance_flags")
+          .eq("id", clientId)
+          .maybeSingle(),
+        supabase
+          .from("client_profiles")
+          .select("id, client_id, banking_data, loan_data, audit_questions")
+          .eq("client_id", clientId)
+          .order("id", { ascending: false })
+          .limit(1),
+      ]);
+
+      if (!mounted) return;
+
+      if (clientRes.error) {
+        toast({ title: "Failed to load client", description: clientRes.error.message, variant: "destructive" });
+        setLoadingClient(false);
+        return;
+      }
+
+      if (!clientRes.data) {
+        setClientMissing(true);
+        setLoadingClient(false);
+        return;
+      }
+
+      const client = clientRes.data as any;
+      const profile = (profileRes.data?.[0] as any) ?? null;
+
+      const compliance = asRecord(client.compliance_flags);
+      const financial = asRecord(compliance.financial_profile);
+      const basicExtra = asRecord(compliance.basic_info_extra);
+      const bankingData = asRecord(profile?.banking_data);
+      const loanData = asRecord(profile?.loan_data);
+      const auditData = asRecord(profile?.audit_questions);
+
+      setBasicInfo({
+        name: client.name || "",
+        pan: client.pan || "",
+        entity_type: client.entity_type || "",
+        cin: client.cin || "",
+        gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
+        date_of_incorporation: basicExtra.date_of_incorporation ? new Date(basicExtra.date_of_incorporation) : undefined,
+        registered_state: basicExtra.registered_state || "",
+        business_nature: basicExtra.business_nature || "",
+      });
+
+      setFinancialProfile({
+        accounting_software: financial.accounting_software || "",
+        accounting_method: financial.accounting_method || "mercantile",
+        turnover_range: financial.turnover_range || "",
+        financial_standards: financial.financial_standards || "indian_gaap",
+        has_subsidiaries: Boolean(financial.has_subsidiaries),
+      });
+
+      setComplianceFlags({
+        gst_registered: Boolean(compliance.gst_registered),
+        tds_deductor: Boolean(compliance.tds_deductor),
+        fixed_assets: Boolean(compliance.fixed_assets),
+        govt_grants: Boolean(compliance.govt_grants),
+        multiple_banks: Boolean(compliance.multiple_banks),
+        caro_applicable: Boolean(compliance.caro_applicable),
+        transfer_pricing: Boolean(compliance.transfer_pricing),
+        mat_applicable: Boolean(compliance.mat_applicable),
+        special_deductions: Boolean(compliance.special_deductions),
+        msme_suppliers: Boolean(compliance.msme_suppliers),
+      });
+
+      const securedLoans = asArray(bankingData.secured_loans, asArray(loanData.secured_loans, []));
+      const unsecuredLoans = asArray(bankingData.unsecured_loans, asArray(loanData.unsecured_loans, []));
+
+      setBankingLoans({
+        bank_accounts: asArray(bankingData.bank_accounts, []).length > 0
+          ? asArray(bankingData.bank_accounts, [])
+          : [{ bank_name: "", branch: "", account_number: "", account_type: "" }],
+        secured_loans: securedLoans,
+        unsecured_loans: unsecuredLoans,
+        loans_to_related_parties: Boolean(bankingData.loans_to_related_parties),
+        related_party_loans: asArray(bankingData.related_party_loans, []),
+      });
+
+      setAuditQuestions({ ...emptyAuditQuestions, ...auditData });
+      setImportData(null);
+      setLoadingClient(false);
+    };
+
+    loadClient();
+
+    return () => {
+      mounted = false;
+    };
+  }, [clientId, isEditMode, toast]);
+
   const validateBasicInfo = (): boolean => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
-    if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan))
+    if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
       errors.pan = "Invalid PAN format";
+    }
     basicInfo.gstins.forEach((g, i) => {
-      if (g && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(g))
+      if (g && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(g)) {
         errors[`gstin_${i}`] = "Invalid GSTIN format (15 chars)";
+      }
     });
     if (
       (basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd") &&
       basicInfo.cin &&
       basicInfo.cin.length !== 21
-    )
+    ) {
       errors.cin = "CIN must be exactly 21 characters";
+    }
     setBasicErrors(errors);
     return Object.keys(errors).length === 0;
   };
+
+  const buildClientPayload = () => {
+    const gstins = basicInfo.gstins.filter((g) => g.trim());
+
+    return {
+      name: basicInfo.name.trim(),
+      pan: basicInfo.pan || null,
+      entity_type: basicInfo.entity_type || null,
+      cin: basicInfo.cin || null,
+      gstin: gstins.length > 0 ? gstins : null,
+      compliance_flags: {
+        ...complianceFlags,
+        financial_profile: financialProfile,
+        basic_info_extra: {
+          date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
+          registered_state: basicInfo.registered_state,
+          business_nature: basicInfo.business_nature,
+        },
+      } as any,
+    };
+  };
+
+  const buildProfilePayload = (targetClientId: string) => ({
+    client_id: targetClientId,
+    banking_data: {
+      bank_accounts: bankingLoans.bank_accounts.filter((b) => b.bank_name),
+      secured_loans: bankingLoans.secured_loans,
+      unsecured_loans: bankingLoans.unsecured_loans,
+      loans_to_related_parties: bankingLoans.loans_to_related_parties,
+      related_party_loans: bankingLoans.related_party_loans,
+    } as any,
+    loan_data: {
+      secured_loans: bankingLoans.secured_loans,
+      unsecured_loans: bankingLoans.unsecured_loans,
+    } as any,
+    audit_questions: auditQuestions as any,
+  });
 
   const handleFinalSubmit = async () => {
     setSaving(true);
@@ -97,67 +264,68 @@ const NewClientWizard = () => {
       if (authError) throw authError;
 
       const authUserId = authData.user?.id;
-      if (!authUserId) throw new Error("You must be logged in to create a client.");
+      if (!authUserId) throw new Error("You must be logged in to save this client.");
 
-      const gstins = basicInfo.gstins.filter((g) => g.trim());
-      const insertPayload = {
-        name: basicInfo.name.trim(),
-        pan: basicInfo.pan || null,
-        entity_type: basicInfo.entity_type || null,
-        cin: basicInfo.cin || null,
-        gstin: gstins.length > 0 ? gstins : null,
-        firm_id: user?.firm_id || null,
-        user_id: authUserId,
-        compliance_flags: {
-          ...complianceFlags,
-          financial_profile: financialProfile,
-          basic_info_extra: {
-            date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
-            registered_state: basicInfo.registered_state,
-            business_nature: basicInfo.business_nature,
-          },
-        } as any,
-      };
+      if (isEditMode && clientId) {
+        const { error: clientError } = await supabase
+          .from("clients")
+          .update(buildClientPayload() as any)
+          .eq("id", clientId);
 
-      const { data: clientData, error: clientError } = await supabase
-        .from("clients")
-        .insert(insertPayload as any)
-        .select()
-        .single();
+        if (clientError) throw clientError;
 
-      if (clientError) throw clientError;
+        const { data: existingProfiles, error: profileFetchError } = await supabase
+          .from("client_profiles")
+          .select("id")
+          .eq("client_id", clientId)
+          .order("id", { ascending: false })
+          .limit(1);
 
-      // Save extended profile to client_profiles
-      const profilePayload = {
-        client_id: clientData.id,
-        banking_data: {
-          bank_accounts: bankingLoans.bank_accounts.filter((b) => b.bank_name),
-          secured_loans: bankingLoans.secured_loans,
-          unsecured_loans: bankingLoans.unsecured_loans,
-          loans_to_related_parties: bankingLoans.loans_to_related_parties,
-          related_party_loans: bankingLoans.related_party_loans,
-        } as any,
-        loan_data: {
-          secured_loans: bankingLoans.secured_loans,
-          unsecured_loans: bankingLoans.unsecured_loans,
-        } as any,
-        audit_questions: auditQuestions as any,
-      };
+        if (profileFetchError) throw profileFetchError;
 
-      const { error: profileError } = await supabase
-        .from("client_profiles")
-        .insert(profilePayload);
+        const profilePayload = buildProfilePayload(clientId);
+        if ((existingProfiles || []).length > 0) {
+          const { error: profileUpdateError } = await supabase
+            .from("client_profiles")
+            .update(profilePayload)
+            .eq("id", existingProfiles![0].id);
+          if (profileUpdateError) throw profileUpdateError;
+        } else {
+          const { error: profileInsertError } = await supabase
+            .from("client_profiles")
+            .insert(profilePayload);
+          if (profileInsertError) throw profileInsertError;
+        }
 
-      if (profileError) throw profileError;
+        toast({ title: "Client updated", description: "Full client profile saved successfully." });
+        navigate(`/clients/${clientId}`);
+      } else {
+        const insertPayload = {
+          ...buildClientPayload(),
+          firm_id: user?.firm_id || null,
+          user_id: authUserId,
+        };
 
-      // Confetti!
-      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+        const { data: clientData, error: clientError } = await supabase
+          .from("clients")
+          .insert(insertPayload as any)
+          .select("id")
+          .single();
 
-      toast({ title: "Client created!", description: "All wizard data saved successfully." });
+        if (clientError) throw clientError;
 
-      setTimeout(() => navigate(`/clients/${clientData.id}`), 1500);
+        const { error: profileError } = await supabase
+          .from("client_profiles")
+          .insert(buildProfilePayload(clientData.id));
+
+        if (profileError) throw profileError;
+
+        confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+        toast({ title: "Client created!", description: "All wizard data saved successfully." });
+        setTimeout(() => navigate(`/clients/${clientData.id}`), 700);
+      }
     } catch (err: any) {
-      toast({ title: "Error saving client", description: err.message, variant: "destructive" });
+      toast({ title: isEditMode ? "Error updating client" : "Error saving client", description: err.message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -166,7 +334,6 @@ const NewClientWizard = () => {
   const handleNext = async () => {
     if (step === 0 && !validateBasicInfo()) return;
     if (step === STEPS.length - 1) {
-      // Final step — submit
       await handleFinalSubmit();
       return;
     }
@@ -175,15 +342,33 @@ const NewClientWizard = () => {
 
   const progress = ((step + 1) / STEPS.length) * 100;
 
+  if (loadingClient) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-2 w-full" />
+        <Skeleton className="h-96 w-full" />
+      </div>
+    );
+  }
+
+  if (clientMissing) {
+    return <div className="text-center py-16 text-muted-foreground">Client not found.</div>;
+  }
+
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}>
+        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}> 
           <ArrowLeft className="h-3 w-3" /> Back to Clients
         </Button>
-        <h1 className="text-2xl font-display font-bold text-foreground">New Client</h1>
-        <p className="text-sm text-muted-foreground mt-1">Onboarding wizard — complete all steps to set up the client.</p>
+        <h1 className="text-2xl font-display font-bold text-foreground">{isEditMode ? "Edit Client" : "New Client"}</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {isEditMode
+            ? "Update all onboarding sections for this client."
+            : "Onboarding wizard — complete all steps to set up the client."}
+        </p>
       </div>
 
       {/* Progress */}
@@ -209,6 +394,7 @@ const NewClientWizard = () => {
           {step === 5 && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(6)} />}
           {step === 6 && (
             <StepDone
+              mode={isEditMode ? "edit" : "create"}
               basicInfo={basicInfo}
               complianceFlags={complianceFlags}
               partnerName={user?.name || null}
