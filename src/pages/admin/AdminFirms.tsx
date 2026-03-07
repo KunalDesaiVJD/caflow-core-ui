@@ -37,7 +37,7 @@ const AdminFirms = () => {
   const [adding, setAdding] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
-  const [editFirm, setEditFirm] = useState<{ id: string; name: string; plan: string }>({ id: "", name: "", plan: "" });
+  const [editFirm, setEditFirm] = useState<{ id: string; name: string; plan: string; icai_reg_no: string }>({ id: "", name: "", plan: "", icai_reg_no: "" });
   const [saving, setSaving] = useState(false);
 
   const [impersonateOpen, setImpersonateOpen] = useState(false);
@@ -173,7 +173,7 @@ const AdminFirms = () => {
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => { setEditFirm({ id: firm.id, name: firm.name, plan: firm.plan || "starter" }); setEditOpen(true); }}>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditFirm({ id: firm.id, name: firm.name, plan: firm.plan || "starter", icai_reg_no: firm.icai_reg_no || "" }); setEditOpen(true); }}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => { setImpersonateFirm(firm); setImpersonateOpen(true); }}>
@@ -232,8 +232,12 @@ const AdminFirms = () => {
           <SheetHeader><SheetTitle>Edit Firm</SheetTitle></SheetHeader>
           <div className="space-y-4 py-6">
             <div>
-              <label className="text-sm font-medium">Firm Name</label>
+              <label className="text-sm font-medium">Firm Name *</label>
               <Input value={editFirm.name} onChange={(e) => setEditFirm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-sm font-medium">ICAI Registration No</label>
+              <Input value={editFirm.icai_reg_no} onChange={(e) => setEditFirm((f) => ({ ...f, icai_reg_no: e.target.value }))} />
             </div>
             <div>
               <label className="text-sm font-medium">Plan</label>
