@@ -109,7 +109,7 @@ export default function UserManagement() {
 
   // Edit slide-over
   const [editUser, setEditUser] = useState<UserRow | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", phone: "", role: "" });
+  const [editForm, setEditForm] = useState({ name: "", phone: "", role: "", firm_id: "" });
   const [editLoading, setEditLoading] = useState(false);
 
   // Reset password dialog
