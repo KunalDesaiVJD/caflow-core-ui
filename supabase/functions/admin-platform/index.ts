@@ -183,6 +183,18 @@ Deno.serve(async (req) => {
       });
     }
 
+    // DELETE FIRM
+    if (req.method === "POST" && action === "delete-firm") {
+      const body = await req.json();
+      const { id } = body;
+      if (!id) {
+        return new Response(JSON.stringify({ error: "id required" }), { status: 400, headers: corsHeaders });
+      }
+      const { error } = await adminClient.from("firms").delete().eq("id", id);
+      if (error) throw error;
+      return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     return new Response(JSON.stringify({ error: "Unknown action" }), { status: 400, headers: corsHeaders });
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });

@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -20,7 +21,7 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
-import { Plus, Pencil, UserCheck } from "lucide-react";
+import { Plus, Pencil, UserCheck, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { callAdmin, Firm, PLAN_COLORS } from "./adminShared";
 
@@ -42,6 +43,8 @@ const AdminFirms = () => {
 
   const [impersonateOpen, setImpersonateOpen] = useState(false);
   const [impersonateFirm, setImpersonateFirm] = useState<Firm | null>(null);
+  const [deleteFirm, setDeleteFirm] = useState<Firm | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!authLoading && (!user || user.role !== "superadmin")) {
@@ -99,6 +102,21 @@ const AdminFirms = () => {
       fetchFirms();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handleDeleteFirm = async () => {
+    if (!deleteFirm) return;
+    setDeleting(true);
+    try {
+      await callAdmin("delete-firm", "POST", { id: deleteFirm.id });
+      toast({ title: "Firm deleted" });
+      setDeleteFirm(null);
+      fetchFirms();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -178,6 +196,9 @@ const AdminFirms = () => {
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => { setImpersonateFirm(firm); setImpersonateOpen(true); }}>
                           <UserCheck className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteFirm(firm)}>
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </TableCell>
@@ -274,6 +295,24 @@ const AdminFirms = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Firm Confirmation */}
+      <AlertDialog open={!!deleteFirm} onOpenChange={open => { if (!open) setDeleteFirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Firm</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deleteFirm?.name}</strong>? This action cannot be undone. All users and clients associated with this firm will be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteFirm} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

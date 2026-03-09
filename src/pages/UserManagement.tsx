@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserPlus, Pencil, KeyRound, Activity } from "lucide-react";
+import { UserPlus, Pencil, KeyRound, Activity, Trash2 } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { format } from "date-fns";
 
 interface UserRow {
@@ -114,6 +115,10 @@ export default function UserManagement() {
   const [resetUser, setResetUser] = useState<UserRow | null>(null);
   const [tempPassword, setTempPassword] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
+
+  // Delete confirmation
+  const [deleteUser, setDeleteUser] = useState<UserRow | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Activity slide-over
   const [activityUser, setActivityUser] = useState<UserRow | null>(null);
@@ -244,6 +249,21 @@ export default function UserManagement() {
     }
   }
 
+  async function handleDeleteUser() {
+    if (!deleteUser) return;
+    setDeleteLoading(true);
+    try {
+      await invokeUserMgmt("delete", "POST", { user_id: deleteUser.id });
+      toast({ title: "User deleted" });
+      setDeleteUser(null);
+      loadUsers();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   const allowedRoles = getAllowedRoles(user?.role || "");
   const initials = (name: string | null) =>
     name ? name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "??";
@@ -322,6 +342,9 @@ export default function UserManagement() {
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => openActivity(u)} title="View Activity">
                         <Activity size={15} />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => setDeleteUser(u)} title="Delete" className="text-destructive hover:text-destructive">
+                        <Trash2 size={15} />
                       </Button>
                     </div>
                   </TableCell>
@@ -471,6 +494,24 @@ export default function UserManagement() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Delete User Confirmation */}
+      <AlertDialog open={!!deleteUser} onOpenChange={open => { if (!open) setDeleteUser(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete User</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deleteUser?.name}</strong> ({deleteUser?.email})? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteUser} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleteLoading ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

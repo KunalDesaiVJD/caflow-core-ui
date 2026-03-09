@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -13,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search } from "lucide-react";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2 } from "lucide-react";
 
 interface Client {
   id: string;
@@ -33,23 +35,41 @@ const ENTITY_TYPES = [
 
 const Clients = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
+  const [deleteClient, setDeleteClient] = useState<Client | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
-  useEffect(() => {
-    const fetchClients = async () => {
-      const { data } = await supabase
-        .from("clients")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      setClients((data as Client[]) || []);
-      setLoading(false);
-    };
-    fetchClients();
-  }, []);
+  const fetchClients = async () => {
+    const { data } = await supabase
+      .from("clients")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setClients((data as Client[]) || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchClients(); }, []);
+
+  const handleDeleteClient = async () => {
+    if (!deleteClient) return;
+    setDeleteLoading(true);
+    try {
+      const { error } = await supabase.from("clients").delete().eq("id", deleteClient.id);
+      if (error) throw error;
+      toast({ title: "Client deleted" });
+      setDeleteClient(null);
+      fetchClients();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
 
   const filtered = clients.filter((c) => {
     const matchesSearch =
@@ -162,12 +182,39 @@ const Clients = () => {
                   >
                     <ShieldCheck className="h-4 w-4" />
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); setDeleteClient(client); }}
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
+
+      {/* Delete Client Confirmation */}
+      <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Client</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deleteClient?.name}</strong>? This action cannot be undone. All related data (trial balances, profiles, etc.) may also be removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleteLoading ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

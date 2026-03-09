@@ -216,6 +216,35 @@ Deno.serve(async (req) => {
       });
     }
 
+    // DELETE USER
+    if (req.method === "POST" && action === "delete") {
+      const body = await req.json();
+      const { user_id } = body;
+      if (!user_id) {
+        return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
+      }
+
+      // Check target user exists and hierarchy
+      const { data: targetUser } = await adminClient.from("users").select("role, firm_id").eq("id", user_id).single();
+      if (!targetUser) {
+        return new Response(JSON.stringify({ error: "User not found" }), { status: 404, headers: corsHeaders });
+      }
+      if ((ROLE_HIERARCHY[targetUser.role || ""] ?? 0) >= (ROLE_HIERARCHY[requestingUser.role] ?? 0)) {
+        return new Response(JSON.stringify({ error: "Cannot delete user with equal or higher role" }), { status: 403, headers: corsHeaders });
+      }
+      if (requestingUser.role !== "superadmin" && targetUser.firm_id !== requestingUser.firm_id) {
+        return new Response(JSON.stringify({ error: "Cannot delete user from another firm" }), { status: 403, headers: corsHeaders });
+      }
+
+      // Delete from users table first, then auth
+      const { error: dbError } = await adminClient.from("users").delete().eq("id", user_id);
+      if (dbError) throw dbError;
+      const { error: authError } = await adminClient.auth.admin.deleteUser(user_id);
+      if (authError) console.error("Auth delete error (non-fatal):", authError.message);
+
+      return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     return new Response(JSON.stringify({ error: "Unknown action" }), { status: 400, headers: corsHeaders });
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });

@@ -19,6 +19,7 @@ import ErpLedger from "./pages/ErpLedger";
 import Timesheets from "./pages/Timesheets";
 import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
+import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
@@ -71,6 +72,7 @@ const App = () => (
             <Route path="/erp-ledger" element={<ErpLedger />} />
             <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
+            <Route path="/documents" element={<Documents />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/users" element={<UserManagement />} />
           </Route>
