@@ -779,7 +779,7 @@ const SettingsPage = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddRule(false)}>Cancel</Button>
-            <Button onClick={saveRule} disabled={ruleSaving || ruleForm.keywords.length === 0 || !ruleForm.category}>
+            <Button onClick={saveRule} disabled={ruleSaving || ruleForm.keywords.length === 0 || !ruleForm.category || !ruleForm.message.trim()}>
               {ruleSaving ? "Saving…" : editingRule ? "Update Rule" : "Add Rule"}
             </Button>
           </DialogFooter>
