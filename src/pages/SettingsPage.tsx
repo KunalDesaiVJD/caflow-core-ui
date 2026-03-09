@@ -18,7 +18,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Building, Bell, Shield, Users, BookOpen, CreditCard,
-  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink,
+  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink, Upload, Image,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -83,6 +83,10 @@ const SettingsPage = () => {
   const [firmLoading, setFirmLoading] = useState(true);
   const [firmSaving, setFirmSaving] = useState(false);
   const [firmId, setFirmId] = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [sigUploading, setSigUploading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const sigInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Notification State ───
   const [notifPrefs, setNotifPrefs] = useState<Record<string, { whatsapp: boolean; email: boolean; wati_template_id?: string }>>({});
@@ -94,9 +98,10 @@ const SettingsPage = () => {
   const [showAddRule, setShowAddRule] = useState(false);
   const [editingRule, setEditingRule] = useState<NarrationRule | null>(null);
   const [deleteRule, setDeleteRule] = useState<NarrationRule | null>(null);
-  const [ruleForm, setRuleForm] = useState({ keywords: [] as string[], category: "", action: "flag", severity: "MEDIUM", message: "" });
+  const [ruleForm, setRuleForm] = useState({ keywords: [] as string[], category: "", action: "flag", severity: "MEDIUM", message: "", firm_id: "" });
   const [keywordInput, setKeywordInput] = useState("");
   const [ruleSaving, setRuleSaving] = useState(false);
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
 
   // ─── COA State ───
   const [unmappedCount, setUnmappedCount] = useState(0);
@@ -109,6 +114,7 @@ const SettingsPage = () => {
   useEffect(() => {
     loadFirm();
     loadRules();
+    loadFirmsList();
   }, [user]);
 
   async function loadFirm() {
@@ -135,6 +141,37 @@ const SettingsPage = () => {
     const { data } = await supabase.from("narration_rules").select("*").order("category");
     setRules((data as NarrationRule[]) || []);
     setRulesLoading(false);
+  }
+
+  async function loadFirmsList() {
+    const { data } = await supabase.from("firms").select("id, name").order("name");
+    setFirmsList(data || []);
+  }
+
+  const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml"];
+  const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+  async function handleFileUpload(file: File, path: string, setter: (url: string) => void, setUploading: (v: boolean) => void) {
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      toast({ title: "Invalid file type", description: "Please upload PNG, JPG, or SVG under 5MB.", variant: "destructive" });
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast({ title: "File too large", description: "Maximum file size is 5MB.", variant: "destructive" });
+      return;
+    }
+    setUploading(true);
+    try {
+      const { error } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
+      if (error) throw error;
+      const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
+      setter(data.publicUrl);
+      toast({ title: "File uploaded successfully" });
+    } catch (e: any) {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function saveFirmProfile() {
@@ -220,7 +257,7 @@ const SettingsPage = () => {
   }
 
   function openAddRule() {
-    setRuleForm({ keywords: [], category: "", action: "flag", severity: "MEDIUM", message: "" });
+    setRuleForm({ keywords: [], category: "", action: "flag", severity: "MEDIUM", message: "", firm_id: firmId || "" });
     setKeywordInput("");
     setEditingRule(null);
     setShowAddRule(true);
@@ -233,6 +270,7 @@ const SettingsPage = () => {
       action: rule.action || "flag",
       severity: rule.severity || "MEDIUM",
       message: rule.message || "",
+      firm_id: rule.firm_id || firmId || "",
     });
     setKeywordInput("");
     setEditingRule(rule);
@@ -252,16 +290,24 @@ const SettingsPage = () => {
   }
 
   async function saveRule() {
-    if (!firmId) return;
+    const targetFirmId = user?.role === "superadmin" ? ruleForm.firm_id : firmId;
+    if (!targetFirmId) {
+      toast({ title: "Please select a firm", variant: "destructive" });
+      return;
+    }
+    if (ruleForm.keywords.length === 0 || !ruleForm.category || !ruleForm.message.trim()) {
+      toast({ title: "Please fill all required fields", variant: "destructive" });
+      return;
+    }
     setRuleSaving(true);
     try {
       const payload = {
-        keywords: ruleForm.keywords,
+        keywords: ruleForm.keywords.map(k => k.trim().toLowerCase()),
         category: ruleForm.category,
         action: ruleForm.action,
         severity: ruleForm.severity,
         message: ruleForm.message,
-        firm_id: firmId,
+        firm_id: targetFirmId,
         is_active: true,
       };
       if (editingRule) {
@@ -345,25 +391,68 @@ const SettingsPage = () => {
                   <Label>GSTIN</Label>
                   <Input value={gstin} onChange={e => setGstin(e.target.value)} disabled={!isAdmin} placeholder="22AAAAA0000A1Z5" />
                 </div>
-                <div className="space-y-2">
-                  <Label>Logo URL</Label>
-                  <Input value={logoUrl} onChange={e => setLogoUrl(e.target.value)} disabled={!isAdmin} placeholder="https://..." />
-                </div>
-                <div className="space-y-2">
-                  <Label>Signature Image URL</Label>
-                  <Input value={signatureUrl} onChange={e => setSignatureUrl(e.target.value)} disabled={!isAdmin} placeholder="https://..." />
-                </div>
               </div>
               <div className="space-y-2">
                 <Label>Registered Address</Label>
                 <Textarea value={address} onChange={e => setAddress(e.target.value)} disabled={!isAdmin} rows={3} />
               </div>
-              {logoUrl && (
-                <div className="flex items-center gap-4">
-                  <Label className="text-muted-foreground text-sm">Logo preview:</Label>
-                  <img src={logoUrl} alt="Firm Logo" className="h-12 object-contain rounded border border-border" />
-                </div>
-              )}
+
+              {/* Logo Upload */}
+              <div className="space-y-2">
+                <Label>Firm Logo</Label>
+                {logoUrl && (
+                  <div className="flex items-center gap-4 mb-2">
+                    <img src={logoUrl} alt="Firm Logo" className="h-16 object-contain rounded border border-border p-1" />
+                  </div>
+                )}
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.svg"
+                  className="hidden"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file && firmId) handleFileUpload(file, `logos/${firmId}.png`, setLogoUrl, setLogoUploading);
+                    e.target.value = "";
+                  }}
+                />
+                {isAdmin && (
+                  <Button variant="outline" onClick={() => logoInputRef.current?.click()} disabled={logoUploading} className="gap-2">
+                    {logoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {logoUrl ? "Replace Logo" : "Upload Logo"}
+                  </Button>
+                )}
+                <p className="text-xs text-muted-foreground">Supported: PNG, JPG, SVG. Max 5MB.</p>
+              </div>
+
+              {/* Signature Upload */}
+              <div className="space-y-2">
+                <Label>Signature Image (for letterhead)</Label>
+                {signatureUrl && (
+                  <div className="flex items-center gap-4 mb-2">
+                    <img src={signatureUrl} alt="Signature" className="h-12 object-contain rounded border border-border p-1" />
+                  </div>
+                )}
+                <input
+                  ref={sigInputRef}
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.svg"
+                  className="hidden"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file && firmId) handleFileUpload(file, `signatures/${firmId}.png`, setSignatureUrl, setSigUploading);
+                    e.target.value = "";
+                  }}
+                />
+                {isAdmin && (
+                  <Button variant="outline" onClick={() => sigInputRef.current?.click()} disabled={sigUploading} className="gap-2">
+                    {sigUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {signatureUrl ? "Replace Signature" : "Upload Signature"}
+                  </Button>
+                )}
+                <p className="text-xs text-muted-foreground">Supported: PNG, JPG, SVG. Max 5MB.</p>
+              </div>
+
               {isAdmin && (
                 <Button onClick={saveFirmProfile} disabled={firmSaving}>
                   {firmSaving ? "Saving…" : "Save Firm Profile"}
@@ -616,6 +705,18 @@ const SettingsPage = () => {
             <DialogTitle>{editingRule ? "Edit Rule" : "Add Custom Rule"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Firm Dropdown - visible to superadmin */}
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm Name</Label>
+                <Select value={ruleForm.firm_id} onValueChange={v => setRuleForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Keywords</Label>
               <div className="flex gap-2">
@@ -678,7 +779,7 @@ const SettingsPage = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddRule(false)}>Cancel</Button>
-            <Button onClick={saveRule} disabled={ruleSaving || ruleForm.keywords.length === 0 || !ruleForm.category}>
+            <Button onClick={saveRule} disabled={ruleSaving || ruleForm.keywords.length === 0 || !ruleForm.category || !ruleForm.message.trim()}>
               {ruleSaving ? "Saving…" : editingRule ? "Update Rule" : "Add Rule"}
             </Button>
           </DialogFooter>
