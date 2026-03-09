@@ -257,7 +257,7 @@ const SettingsPage = () => {
   }
 
   function openAddRule() {
-    setRuleForm({ keywords: [], category: "", action: "flag", severity: "MEDIUM", message: "" });
+    setRuleForm({ keywords: [], category: "", action: "flag", severity: "MEDIUM", message: "", firm_id: firmId || "" });
     setKeywordInput("");
     setEditingRule(null);
     setShowAddRule(true);
