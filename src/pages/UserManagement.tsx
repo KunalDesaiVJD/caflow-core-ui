@@ -100,10 +100,11 @@ export default function UserManagement() {
 
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
 
   // Add user modal
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name: "", email: "", phone: "", role: "" });
+  const [addForm, setAddForm] = useState({ name: "", email: "", phone: "", role: "", firm_id: "" });
   const [addLoading, setAddLoading] = useState(false);
 
   // Edit slide-over
