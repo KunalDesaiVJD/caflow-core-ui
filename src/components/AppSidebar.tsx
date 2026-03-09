@@ -54,6 +54,19 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const [firmLogo, setFirmLogo] = useState<string | null>(null);
+  const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.firm_id) return;
+    supabase.from("firms").select("name, settings").eq("id", user.firm_id).single().then(({ data }) => {
+      if (data) {
+        setFirmDisplayName(data.name);
+        const settings = (data.settings || {}) as { logo_url?: string };
+        if (settings.logo_url) setFirmLogo(settings.logo_url);
+      }
+    });
+  }, [user?.firm_id]);
 
   const handleLogout = async () => {
     await signOut();
