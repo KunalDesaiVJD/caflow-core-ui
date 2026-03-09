@@ -19,6 +19,7 @@ import ErpLedger from "./pages/ErpLedger";
 import Timesheets from "./pages/Timesheets";
 import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
+import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
