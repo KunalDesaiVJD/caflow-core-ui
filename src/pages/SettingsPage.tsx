@@ -18,7 +18,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Building, Bell, Shield, Users, BookOpen, CreditCard,
-  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink,
+  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink, Upload, Image,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
