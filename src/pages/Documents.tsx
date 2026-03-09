@@ -87,10 +87,11 @@ export default function Documents() {
   const [deleteDoc, setDeleteDoc] = useState<DocRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // AI Search
+  // Search (local text filter)
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [localSearchQuery, setLocalSearchQuery] = useState("");
 
   // Load clients
   useEffect(() => {
