@@ -239,22 +239,39 @@ export default function Documents() {
         </div>
       </div>
 
-      {/* Search */}
+      {/* AI Search */}
       <Card>
         <CardContent className="p-4">
           <div className="flex gap-2">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Bot className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search documents by name, type, client, or tags..."
-                value={localSearchQuery}
-                onChange={e => setLocalSearchQuery(e.target.value)}
+                placeholder="Ask anything about your documents..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAiSearch(); }}
                 className="pl-9"
               />
             </div>
+            <Button onClick={handleAiSearch} disabled={searching || !searchQuery.trim()} className="gap-2">
+              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              Search
+            </Button>
           </div>
-          {localSearchQuery.trim() && allDocsForFolder.length === 0 && (
-            <p className="mt-3 text-sm text-muted-foreground">No documents found</p>
+          {/* Local filter below AI search */}
+          <div className="relative mt-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Quick filter by name, type, client, or tags..."
+              value={localSearchQuery}
+              onChange={e => setLocalSearchQuery(e.target.value)}
+              className="pl-9 h-8 text-xs"
+            />
+          </div>
+          {searchResult && (
+            <div className="mt-3 p-3 rounded-md border border-border bg-muted/50">
+              <p className="text-sm text-foreground whitespace-pre-wrap">{searchResult}</p>
+            </div>
           )}
         </CardContent>
       </Card>
