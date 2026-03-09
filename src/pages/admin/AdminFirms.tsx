@@ -43,6 +43,8 @@ const AdminFirms = () => {
 
   const [impersonateOpen, setImpersonateOpen] = useState(false);
   const [impersonateFirm, setImpersonateFirm] = useState<Firm | null>(null);
+  const [deleteFirm, setDeleteFirm] = useState<Firm | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!authLoading && (!user || user.role !== "superadmin")) {
