@@ -9,6 +9,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
 import ImportTrialBalance from "./pages/ImportTrialBalance";
+import AuditScrutiny from "./pages/AuditScrutiny";
 import ClientDetail from "./pages/ClientDetail";
 import NewClientWizard from "./pages/NewClientWizard";
 import TdsFilings from "./pages/TdsFilings";
