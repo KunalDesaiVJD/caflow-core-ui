@@ -227,18 +227,37 @@ Deno.serve(async (req) => {
     // GET ACTIVITY
     if (req.method === "GET" && action === "activity") {
       const targetUserId = url.searchParams.get("user_id");
+
+      // Search by record_id (changes TO this user) and by user_name (changes BY this user)
       const { data: targetUser } = await adminClient.from("users")
         .select("name")
         .eq("id", targetUserId)
         .single();
 
-      const { data, error } = await adminClient.from("version_history")
+      // Get entries where this user was the target of the change (record_id matches)
+      const { data: targetEntries } = await adminClient.from("version_history")
+        .select("*")
+        .eq("record_id", targetUserId)
+        .eq("table_name", "users")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      // Also get entries where this user made changes (user_name matches)
+      const { data: actorEntries } = await adminClient.from("version_history")
         .select("*")
         .eq("user_name", targetUser?.name || "")
         .order("created_at", { ascending: false })
         .limit(20);
-      if (error) throw error;
-      return new Response(JSON.stringify(data || []), {
+
+      // Merge, deduplicate, and sort
+      const allEntries = [...(targetEntries || []), ...(actorEntries || [])];
+      const uniqueMap = new Map();
+      for (const e of allEntries) uniqueMap.set(e.id, e);
+      const merged = Array.from(uniqueMap.values())
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+        .slice(0, 30);
+
+      return new Response(JSON.stringify(merged), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
