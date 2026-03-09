@@ -249,6 +249,21 @@ export default function UserManagement() {
     }
   }
 
+  async function handleDeleteUser() {
+    if (!deleteUser) return;
+    setDeleteLoading(true);
+    try {
+      await invokeUserMgmt("delete", "POST", { user_id: deleteUser.id });
+      toast({ title: "User deleted" });
+      setDeleteUser(null);
+      loadUsers();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   const allowedRoles = getAllowedRoles(user?.role || "");
   const initials = (name: string | null) =>
     name ? name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "??";
