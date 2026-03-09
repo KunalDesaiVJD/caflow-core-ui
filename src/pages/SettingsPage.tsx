@@ -113,15 +113,30 @@ const SettingsPage = () => {
 
   // ─── Load Firm Data ───
   useEffect(() => {
-    loadFirm();
-    loadRules();
     loadFirmsList();
+    loadRules();
   }, [user]);
 
-  async function loadFirm() {
-    if (!user?.firm_id) { setFirmLoading(false); return; }
-    setFirmId(user.firm_id);
-    const { data } = await supabase.from("firms").select("*").eq("id", user.firm_id).single();
+  // When firmsList loads and user is superadmin, auto-select first firm; otherwise use user's firm
+  useEffect(() => {
+    if (user?.role === "superadmin" && firmsList.length > 0 && !selectedFirmId) {
+      setSelectedFirmId(firmsList[0].id);
+    } else if (user?.firm_id && !selectedFirmId) {
+      setSelectedFirmId(user.firm_id);
+    }
+  }, [user, firmsList, selectedFirmId]);
+
+  // Load firm data when selectedFirmId changes
+  useEffect(() => {
+    if (selectedFirmId) {
+      setFirmId(selectedFirmId);
+      loadFirmData(selectedFirmId);
+    }
+  }, [selectedFirmId]);
+
+  async function loadFirmData(id: string) {
+    setFirmLoading(true);
+    const { data } = await supabase.from("firms").select("*").eq("id", id).single();
     if (data) {
       setFirmName(data.name || "");
       setIcaiReg(data.icai_reg_no || "");
