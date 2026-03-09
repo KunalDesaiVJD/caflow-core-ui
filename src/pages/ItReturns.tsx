@@ -18,7 +18,11 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
 import {
-  FileText, Plus, IndianRupee, Clock, CheckCircle2, AlertTriangle, XCircle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  FileText, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, Pencil, Trash2,
 } from "lucide-react";
 
 // ─── Types ───
@@ -89,6 +93,12 @@ const ItReturns = () => {
   const [formItrForm, setFormItrForm] = useState("ITR-3");
   const [formStatus, setFormStatus] = useState("Not Started");
 
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Delete state
+  const [deleteProfile, setDeleteProfile] = useState<ItrProfile | null>(null);
+
   const firmId = user?.firm_id;
 
   const fetchData = useCallback(async () => {
@@ -155,21 +165,55 @@ const ItReturns = () => {
     }
     setSaving(true);
     try {
-      const { error } = await supabase.from("itr_profiles").insert({
-        client_id: formClientId,
-        firm_id: firmId || null,
-        financial_year: formFY,
-        itr_form: formItrForm,
-        filing_status: formStatus,
-      });
-      if (error) throw error;
-      toast({ title: "ITR profile created" });
+      if (editingId) {
+        const { error } = await supabase.from("itr_profiles").update({
+          client_id: formClientId,
+          financial_year: formFY,
+          itr_form: formItrForm,
+          filing_status: formStatus,
+        } as any).eq("id", editingId);
+        if (error) throw error;
+        toast({ title: "ITR profile updated" });
+      } else {
+        const { error } = await supabase.from("itr_profiles").insert({
+          client_id: formClientId,
+          firm_id: firmId || null,
+          financial_year: formFY,
+          itr_form: formItrForm,
+          filing_status: formStatus,
+        });
+        if (error) throw error;
+        toast({ title: "ITR profile created" });
+      }
       setSheetOpen(false);
+      setEditingId(null);
       fetchData();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleEdit = (p: ItrProfile) => {
+    setEditingId(p.id);
+    setFormClientId(p.client_id || "");
+    setFormFY(p.financial_year || "2024-25");
+    setFormItrForm(p.itr_form || "ITR-3");
+    setFormStatus(p.filing_status || "Not Started");
+    setSheetOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteProfile) return;
+    try {
+      const { error } = await supabase.from("itr_profiles").delete().eq("id", deleteProfile.id);
+      if (error) throw error;
+      toast({ title: "ITR profile deleted" });
+      setDeleteProfile(null);
+      fetchData();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
     }
   };
 
@@ -188,9 +232,14 @@ const ItReturns = () => {
           <h1 className="text-2xl font-display font-bold text-foreground">IT Returns</h1>
           <p className="text-muted-foreground text-sm">Income tax return filing and tracking</p>
         </div>
-        <Button onClick={() => setSheetOpen(true)}>
-          <Plus size={16} className="mr-2" /> Add ITR Profile
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate("/itr/demands")}>
+            <AlertTriangle size={16} className="mr-2" /> Demand & Notices
+          </Button>
+          <Button onClick={() => { setEditingId(null); setFormClientId(""); setFormFY("2024-25"); setFormItrForm("ITR-3"); setFormStatus("Not Started"); setSheetOpen(true); }}>
+            <Plus size={16} className="mr-2" /> Add ITR Profile
+          </Button>
+        </div>
       </div>
 
       {/* Stat cards */}
@@ -236,12 +285,13 @@ const ItReturns = () => {
                 <TableHead>AIS Reconciled</TableHead>
                 <TableHead>Demand</TableHead>
                 <TableHead>FY</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     No ITR profiles found. Click "Add ITR Profile" to get started.
                   </TableCell>
                 </TableRow>
@@ -252,12 +302,8 @@ const ItReturns = () => {
                   const aisReconciled = p.ais_recon_data && Object.keys(p.ais_recon_data).length > 0;
 
                   return (
-                    <TableRow
-                      key={p.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => navigate(`/itr/${p.client_id}`)}
-                    >
-                      <TableCell className="font-medium">{p.client_name}</TableCell>
+                    <TableRow key={p.id} className="hover:bg-muted/50">
+                      <TableCell className="font-medium cursor-pointer" onClick={() => navigate(`/itr/${p.client_id}`)}>{p.client_name}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">{p.entity_type || "—"}</Badge>
                       </TableCell>
@@ -282,6 +328,19 @@ const ItReturns = () => {
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">{p.financial_year || "—"}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => navigate(`/itr/${p.client_id}`)}>
+                            <FileText size={14} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEdit(p)}>
+                            <Pencil size={14} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteProfile(p)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   );
                 })
@@ -292,10 +351,10 @@ const ItReturns = () => {
       )}
 
       {/* Add ITR Profile Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+      <Sheet open={sheetOpen} onOpenChange={open => { if (!open) { setSheetOpen(false); setEditingId(null); } else setSheetOpen(true); }}>
         <SheetContent>
           <SheetHeader>
-            <SheetTitle>Add ITR Profile</SheetTitle>
+            <SheetTitle>{editingId ? "Edit ITR Profile" : "Add ITR Profile"}</SheetTitle>
           </SheetHeader>
           <div className="space-y-4 py-4">
             <div>
@@ -350,11 +409,29 @@ const ItReturns = () => {
           </div>
           <SheetFooter>
             <Button onClick={handleSave} disabled={saving} className="w-full">
-              {saving ? "Saving..." : "Create Profile"}
+              {saving ? "Saving..." : editingId ? "Update Profile" : "Create Profile"}
             </Button>
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={!!deleteProfile} onOpenChange={open => { if (!open) setDeleteProfile(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete ITR Profile</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the ITR profile for <strong>{deleteProfile?.client_name}</strong>?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

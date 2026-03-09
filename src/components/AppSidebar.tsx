@@ -20,6 +20,7 @@ import {
   Clock,
   Landmark,
   FolderOpen,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -35,6 +36,7 @@ const navItems = [
   { title: "Clients", path: "/clients", icon: Users },
   { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
   { title: "IT Returns", path: "/itr", icon: FileText },
+  { title: "Demand & Notices", path: "/itr/demands", icon: AlertTriangle },
   { title: "Billing", path: "/billing", icon: CreditCard },
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
