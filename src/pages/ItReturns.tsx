@@ -408,11 +408,29 @@ const ItReturns = () => {
           </div>
           <SheetFooter>
             <Button onClick={handleSave} disabled={saving} className="w-full">
-              {saving ? "Saving..." : "Create Profile"}
+              {saving ? "Saving..." : editingId ? "Update Profile" : "Create Profile"}
             </Button>
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={!!deleteProfile} onOpenChange={open => { if (!open) setDeleteProfile(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete ITR Profile</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the ITR profile for <strong>{deleteProfile?.client_name}</strong>?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
