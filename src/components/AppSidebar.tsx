@@ -1,5 +1,7 @@
+import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import {
   LayoutDashboard,
   Users,
@@ -52,6 +54,19 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const [firmLogo, setFirmLogo] = useState<string | null>(null);
+  const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.firm_id) return;
+    supabase.from("firms").select("name, settings").eq("id", user.firm_id).single().then(({ data }) => {
+      if (data) {
+        setFirmDisplayName(data.name);
+        const settings = (data.settings || {}) as { logo_url?: string };
+        if (settings.logo_url) setFirmLogo(settings.logo_url);
+      }
+    });
+  }, [user?.firm_id]);
 
   const handleLogout = async () => {
     await signOut();
@@ -77,9 +92,20 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
       {/* Logo */}
       <div className="flex items-center h-16 px-4 border-b border-sidebar-border">
         <Link to="/" className="flex items-center gap-2 overflow-hidden">
-          <span className="text-sidebar-gold font-display font-bold text-xl tracking-tight shrink-0">CA</span>
-          {!collapsed && (
-            <span className="text-sidebar-foreground font-display font-semibold text-lg tracking-tight">Flow</span>
+          {firmLogo ? (
+            <>
+              <img src={firmLogo} alt="Firm Logo" className="h-8 w-8 object-contain shrink-0 rounded" />
+              {!collapsed && (
+                <span className="text-sidebar-foreground font-display font-semibold text-sm tracking-tight truncate">{firmDisplayName || "CA Flow"}</span>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="text-sidebar-gold font-display font-bold text-xl tracking-tight shrink-0">CA</span>
+              {!collapsed && (
+                <span className="text-sidebar-foreground font-display font-semibold text-lg tracking-tight">Flow</span>
+              )}
+            </>
           )}
         </Link>
         <button

@@ -100,10 +100,11 @@ export default function UserManagement() {
 
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
 
   // Add user modal
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name: "", email: "", phone: "", role: "" });
+  const [addForm, setAddForm] = useState({ name: "", email: "", phone: "", role: "", firm_id: "" });
   const [addLoading, setAddLoading] = useState(false);
 
   // Edit slide-over
@@ -138,6 +139,9 @@ export default function UserManagement() {
   useEffect(() => {
     if (!user || !["superadmin", "firm_admin"].includes(user.role || "")) return;
     loadUsers();
+    if (user.role === "superadmin") {
+      supabase.from("firms").select("id, name").order("name").then(({ data }) => setFirmsList(data || []));
+    }
   }, [user]);
 
   async function loadUsers() {
@@ -166,13 +170,14 @@ export default function UserManagement() {
         email: addForm.email,
         phone: addForm.phone,
         role: addForm.role,
+        firm_id: addForm.firm_id || undefined,
       });
       toast({
         title: "User created",
         description: `Default password: ${result.default_password}. User must change it on first login.`,
       });
       setShowAdd(false);
-      setAddForm({ name: "", email: "", phone: "", role: "" });
+      setAddForm({ name: "", email: "", phone: "", role: "", firm_id: "" });
       loadUsers();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
@@ -385,6 +390,19 @@ export default function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm</Label>
+                <Select value={addForm.firm_id} onValueChange={v => setAddForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
               A role-based default password will be assigned. User must change it on first login.
             </p>
