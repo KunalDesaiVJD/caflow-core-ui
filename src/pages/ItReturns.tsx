@@ -285,7 +285,7 @@ const ItReturns = () => {
                 <TableHead>AIS Reconciled</TableHead>
                 <TableHead>Demand</TableHead>
                 <TableHead>FY</TableHead>
-              </TableRow>
+                <TableHead className="text-right">Actions</TableHead>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
