@@ -189,8 +189,8 @@ const ErpLedger = () => {
               <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
                 <AlertCircle className="h-8 w-8" />
                 <p className="text-sm">No trial balance imported yet.</p>
-                <Button size="sm" variant="outline" onClick={() => navigate(`/clients/edit/${selectedClient}`)}>
-                  Import via Client Wizard
+                <Button size="sm" variant="outline" onClick={() => navigate(`/clients/${selectedClient}/audit/import-trial-balance`)}>
+                  Import Trial Balance
                 </Button>
               </div>
             ) : (
