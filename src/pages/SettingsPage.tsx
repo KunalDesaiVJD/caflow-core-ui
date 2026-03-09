@@ -83,6 +83,7 @@ const SettingsPage = () => {
   const [firmLoading, setFirmLoading] = useState(true);
   const [firmSaving, setFirmSaving] = useState(false);
   const [firmId, setFirmId] = useState<string | null>(null);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [sigUploading, setSigUploading] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
