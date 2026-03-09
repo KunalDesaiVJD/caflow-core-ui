@@ -9,6 +9,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
 import ImportTrialBalance from "./pages/ImportTrialBalance";
+import AuditScrutiny from "./pages/AuditScrutiny";
 import ClientDetail from "./pages/ClientDetail";
 import NewClientWizard from "./pages/NewClientWizard";
 import TdsFilings from "./pages/TdsFilings";
@@ -66,6 +67,7 @@ const App = () => (
             <Route path="/clients/new" element={<NewClientWizard />} />
             <Route path="/clients/edit/:clientId" element={<NewClientWizard />} />
             <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />
+            <Route path="/clients/:clientId/audit/scrutiny" element={<AuditScrutiny />} />
             <Route path="/clients/:clientId" element={<ClientDetail />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/itr" element={<ItReturns />} />
