@@ -13,6 +13,7 @@ import NewClientWizard from "./pages/NewClientWizard";
 import TdsFilings from "./pages/TdsFilings";
 import ItReturns from "./pages/ItReturns";
 import ItrAisRecon from "./pages/ItrAisRecon";
+import ItrDemands from "./pages/ItrDemands";
 import Billing from "./pages/Billing";
 import NewInvoice from "./pages/NewInvoice";
 import ErpLedger from "./pages/ErpLedger";
