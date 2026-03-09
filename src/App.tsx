@@ -72,6 +72,8 @@ const App = () => (
             <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />
             <Route path="/clients/:clientId/audit/scrutiny" element={<AuditScrutiny />} />
             <Route path="/clients/:clientId" element={<ClientDetail />} />
+            <Route path="/clients/:clientId/audit/3cd" element={<Form3CD />} />
+            <Route path="/clients/:clientId/audit/comparative" element={<ComparativeStatements />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/itr" element={<ItReturns />} />
             <Route path="/itr/demands" element={<ItrDemands />} />
