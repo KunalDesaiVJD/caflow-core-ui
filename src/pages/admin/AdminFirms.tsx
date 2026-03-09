@@ -295,6 +295,24 @@ const AdminFirms = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Firm Confirmation */}
+      <AlertDialog open={!!deleteFirm} onOpenChange={open => { if (!open) setDeleteFirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Firm</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deleteFirm?.name}</strong>? This action cannot be undone. All users and clients associated with this firm will be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteFirm} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
