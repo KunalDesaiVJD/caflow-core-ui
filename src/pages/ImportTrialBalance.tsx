@@ -81,6 +81,18 @@ export default function ImportTrialBalance() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Guard: clientId must be a valid UUID
+  const isValidUuid = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
+  if (!isValidUuid) {
+    return (
+      <div className="p-8 text-center space-y-4">
+        <h2 className="text-xl font-semibold">Invalid Client</h2>
+        <p className="text-muted-foreground">No valid client ID provided. Please navigate from a client page.</p>
+        <Button onClick={() => navigate("/clients")}>Go to Clients</Button>
+      </div>
+    );
+  }
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState(1);
