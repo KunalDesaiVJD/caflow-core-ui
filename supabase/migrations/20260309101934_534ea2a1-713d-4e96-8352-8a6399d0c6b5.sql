@@ -1,0 +1,1 @@
+DELETE FROM narration_rules WHERE firm_id IS NULL AND keywords && ARRAY['prior period', 'bad debt', 'subsidy', 'journal', 'advance', 'cash'];
