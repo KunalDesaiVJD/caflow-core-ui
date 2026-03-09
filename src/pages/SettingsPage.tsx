@@ -114,6 +114,7 @@ const SettingsPage = () => {
   useEffect(() => {
     loadFirm();
     loadRules();
+    loadFirmsList();
   }, [user]);
 
   async function loadFirm() {
