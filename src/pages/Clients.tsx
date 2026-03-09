@@ -43,18 +43,33 @@ const Clients = () => {
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  useEffect(() => {
-    const fetchClients = async () => {
-      const { data } = await supabase
-        .from("clients")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      setClients((data as Client[]) || []);
-      setLoading(false);
-    };
-    fetchClients();
-  }, []);
+  const fetchClients = async () => {
+    const { data } = await supabase
+      .from("clients")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    setClients((data as Client[]) || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchClients(); }, []);
+
+  const handleDeleteClient = async () => {
+    if (!deleteClient) return;
+    setDeleteLoading(true);
+    try {
+      const { error } = await supabase.from("clients").delete().eq("id", deleteClient.id);
+      if (error) throw error;
+      toast({ title: "Client deleted" });
+      setDeleteClient(null);
+      fetchClients();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
 
   const filtered = clients.filter((c) => {
     const matchesSearch =
