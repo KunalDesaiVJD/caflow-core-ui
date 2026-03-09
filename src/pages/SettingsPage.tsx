@@ -83,6 +83,10 @@ const SettingsPage = () => {
   const [firmLoading, setFirmLoading] = useState(true);
   const [firmSaving, setFirmSaving] = useState(false);
   const [firmId, setFirmId] = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [sigUploading, setSigUploading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const sigInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Notification State ───
   const [notifPrefs, setNotifPrefs] = useState<Record<string, { whatsapp: boolean; email: boolean; wati_template_id?: string }>>({});
@@ -94,9 +98,10 @@ const SettingsPage = () => {
   const [showAddRule, setShowAddRule] = useState(false);
   const [editingRule, setEditingRule] = useState<NarrationRule | null>(null);
   const [deleteRule, setDeleteRule] = useState<NarrationRule | null>(null);
-  const [ruleForm, setRuleForm] = useState({ keywords: [] as string[], category: "", action: "flag", severity: "MEDIUM", message: "" });
+  const [ruleForm, setRuleForm] = useState({ keywords: [] as string[], category: "", action: "flag", severity: "MEDIUM", message: "", firm_id: "" });
   const [keywordInput, setKeywordInput] = useState("");
   const [ruleSaving, setRuleSaving] = useState(false);
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
 
   // ─── COA State ───
   const [unmappedCount, setUnmappedCount] = useState(0);
