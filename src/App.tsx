@@ -25,6 +25,8 @@ import AuditIntelligence from "./pages/AuditIntelligence";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
+import Form3CD from "./pages/Form3CD";
+import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
 import AdminOverview from "./pages/admin/AdminOverview";
