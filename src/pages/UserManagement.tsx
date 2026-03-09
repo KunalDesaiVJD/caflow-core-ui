@@ -343,6 +343,9 @@ export default function UserManagement() {
                       <Button variant="ghost" size="icon" onClick={() => openActivity(u)} title="View Activity">
                         <Activity size={15} />
                       </Button>
+                      <Button variant="ghost" size="icon" onClick={() => setDeleteUser(u)} title="Delete" className="text-destructive hover:text-destructive">
+                        <Trash2 size={15} />
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
