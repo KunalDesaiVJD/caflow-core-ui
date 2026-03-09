@@ -82,6 +82,7 @@ const App = () => (
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
             <Route path="/documents" element={<Documents />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/coa-mappings" element={<CoaMappings />} />
             <Route path="/settings/users" element={<UserManagement />} />
           </Route>
           <Route path="*" element={<NotFound />} />
