@@ -232,9 +232,14 @@ const ItReturns = () => {
           <h1 className="text-2xl font-display font-bold text-foreground">IT Returns</h1>
           <p className="text-muted-foreground text-sm">Income tax return filing and tracking</p>
         </div>
-        <Button onClick={() => setSheetOpen(true)}>
-          <Plus size={16} className="mr-2" /> Add ITR Profile
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate("/itr/demands")}>
+            <AlertTriangle size={16} className="mr-2" /> Demand & Notices
+          </Button>
+          <Button onClick={() => { setEditingId(null); setFormClientId(""); setFormFY("2024-25"); setFormItrForm("ITR-3"); setFormStatus("Not Started"); setSheetOpen(true); }}>
+            <Plus size={16} className="mr-2" /> Add ITR Profile
+          </Button>
+        </div>
       </div>
 
       {/* Stat cards */}
