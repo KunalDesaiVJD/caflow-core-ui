@@ -37,6 +37,7 @@ const navItems = [
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search, premium: true },
+  { title: "Documents", path: "/documents", icon: FolderOpen },
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };
