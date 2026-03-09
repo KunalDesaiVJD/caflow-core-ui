@@ -59,9 +59,13 @@ const Clients = () => {
     if (!deleteClient) return;
     setDeleteLoading(true);
     try {
-      const { error } = await supabase.from("clients").delete().eq("id", deleteClient.id);
+      const { error, count } = await supabase.from("clients").delete({ count: "exact" }).eq("id", deleteClient.id);
       if (error) throw error;
-      toast({ title: "Client deleted" });
+      if (count === 0) {
+        toast({ title: "Delete failed", description: "You may not have permission to delete this client.", variant: "destructive" });
+      } else {
+        toast({ title: "Client deleted" });
+      }
       setDeleteClient(null);
       fetchClients();
     } catch (e: any) {
