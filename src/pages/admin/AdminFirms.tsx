@@ -21,7 +21,7 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
-import { Plus, Pencil, UserCheck } from "lucide-react";
+import { Plus, Pencil, UserCheck, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { callAdmin, Firm, PLAN_COLORS } from "./adminShared";
 
