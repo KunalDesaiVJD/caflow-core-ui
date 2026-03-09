@@ -705,8 +705,8 @@ const SettingsPage = () => {
             <DialogTitle>{editingRule ? "Edit Rule" : "Add Custom Rule"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {/* Firm Dropdown - visible to superadmin */}
-            {user?.role === "superadmin" && (
+            {/* Firm Dropdown - visible to superadmin and firm_admin */}
+            {(user?.role === "superadmin" || user?.role === "firm_admin") && (
               <div className="space-y-2">
                 <Label>Firm Name</Label>
                 <Select value={ruleForm.firm_id} onValueChange={v => setRuleForm(p => ({ ...p, firm_id: v }))}>
