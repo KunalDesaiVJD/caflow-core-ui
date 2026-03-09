@@ -165,21 +165,55 @@ const ItReturns = () => {
     }
     setSaving(true);
     try {
-      const { error } = await supabase.from("itr_profiles").insert({
-        client_id: formClientId,
-        firm_id: firmId || null,
-        financial_year: formFY,
-        itr_form: formItrForm,
-        filing_status: formStatus,
-      });
-      if (error) throw error;
-      toast({ title: "ITR profile created" });
+      if (editingId) {
+        const { error } = await supabase.from("itr_profiles").update({
+          client_id: formClientId,
+          financial_year: formFY,
+          itr_form: formItrForm,
+          filing_status: formStatus,
+        } as any).eq("id", editingId);
+        if (error) throw error;
+        toast({ title: "ITR profile updated" });
+      } else {
+        const { error } = await supabase.from("itr_profiles").insert({
+          client_id: formClientId,
+          firm_id: firmId || null,
+          financial_year: formFY,
+          itr_form: formItrForm,
+          filing_status: formStatus,
+        });
+        if (error) throw error;
+        toast({ title: "ITR profile created" });
+      }
       setSheetOpen(false);
+      setEditingId(null);
       fetchData();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleEdit = (p: ItrProfile) => {
+    setEditingId(p.id);
+    setFormClientId(p.client_id || "");
+    setFormFY(p.financial_year || "2024-25");
+    setFormItrForm(p.itr_form || "ITR-3");
+    setFormStatus(p.filing_status || "Not Started");
+    setSheetOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteProfile) return;
+    try {
+      const { error } = await supabase.from("itr_profiles").delete().eq("id", deleteProfile.id);
+      if (error) throw error;
+      toast({ title: "ITR profile deleted" });
+      setDeleteProfile(null);
+      fetchData();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
     }
   };
 
