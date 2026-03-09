@@ -301,12 +301,8 @@ const ItReturns = () => {
                   const aisReconciled = p.ais_recon_data && Object.keys(p.ais_recon_data).length > 0;
 
                   return (
-                    <TableRow
-                      key={p.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => navigate(`/itr/${p.client_id}`)}
-                    >
-                      <TableCell className="font-medium">{p.client_name}</TableCell>
+                    <TableRow key={p.id} className="hover:bg-muted/50">
+                      <TableCell className="font-medium cursor-pointer" onClick={() => navigate(`/itr/${p.client_id}`)}>{p.client_name}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">{p.entity_type || "—"}</Badge>
                       </TableCell>
@@ -331,6 +327,19 @@ const ItReturns = () => {
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">{p.financial_year || "—"}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => navigate(`/itr/${p.client_id}`)}>
+                            <FileText size={14} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEdit(p)}>
+                            <Pencil size={14} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteProfile(p)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   );
                 })
