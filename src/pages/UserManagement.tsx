@@ -177,7 +177,7 @@ export default function UserManagement() {
         description: `Default password: ${result.default_password}. User must change it on first login.`,
       });
       setShowAdd(false);
-      setAddForm({ name: "", email: "", phone: "", role: "" });
+      setAddForm({ name: "", email: "", phone: "", role: "", firm_id: "" });
       loadUsers();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
