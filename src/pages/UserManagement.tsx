@@ -170,6 +170,7 @@ export default function UserManagement() {
         email: addForm.email,
         phone: addForm.phone,
         role: addForm.role,
+        firm_id: addForm.firm_id || undefined,
       });
       toast({
         title: "User created",
