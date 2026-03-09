@@ -18,7 +18,11 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
 import {
-  FileText, Plus, IndianRupee, Clock, CheckCircle2, AlertTriangle, XCircle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  FileText, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, Pencil, Trash2,
 } from "lucide-react";
 
 // ─── Types ───
