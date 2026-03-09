@@ -390,6 +390,19 @@ export default function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm</Label>
+                <Select value={addForm.firm_id} onValueChange={v => setAddForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
               A role-based default password will be assigned. User must change it on first login.
             </p>
