@@ -55,6 +55,7 @@ export type Database = {
       }
       audit_engagements: {
         Row: {
+          audit_type: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
           client_id: string | null
@@ -62,11 +63,19 @@ export type Database = {
           firm_id: string | null
           form_3cd: Json | null
           id: string
+          manager_id: string | null
+          materiality: Json | null
           notes_to_accounts: Json | null
+          partner_id: string | null
+          planned_end: string | null
+          planned_start: string | null
           risk_assessment: Json | null
+          risk_rating: string | null
           status: string | null
+          team_members: string[] | null
         }
         Insert: {
+          audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           client_id?: string | null
@@ -74,11 +83,19 @@ export type Database = {
           firm_id?: string | null
           form_3cd?: Json | null
           id?: string
+          manager_id?: string | null
+          materiality?: Json | null
           notes_to_accounts?: Json | null
+          partner_id?: string | null
+          planned_end?: string | null
+          planned_start?: string | null
           risk_assessment?: Json | null
+          risk_rating?: string | null
           status?: string | null
+          team_members?: string[] | null
         }
         Update: {
+          audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           client_id?: string | null
@@ -86,9 +103,16 @@ export type Database = {
           firm_id?: string | null
           form_3cd?: Json | null
           id?: string
+          manager_id?: string | null
+          materiality?: Json | null
           notes_to_accounts?: Json | null
+          partner_id?: string | null
+          planned_end?: string | null
+          planned_start?: string | null
           risk_assessment?: Json | null
+          risk_rating?: string | null
           status?: string | null
+          team_members?: string[] | null
         }
         Relationships: [
           {
@@ -103,6 +127,20 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_engagements_manager_id_fkey"
+            columns: ["manager_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_engagements_partner_id_fkey"
+            columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
