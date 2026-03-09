@@ -65,6 +65,7 @@ const App = () => (
             <Route path="/clients" element={<Clients />} />
             <Route path="/clients/new" element={<NewClientWizard />} />
             <Route path="/clients/edit/:clientId" element={<NewClientWizard />} />
+            <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />
             <Route path="/clients/:clientId" element={<ClientDetail />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/itr" element={<ItReturns />} />
