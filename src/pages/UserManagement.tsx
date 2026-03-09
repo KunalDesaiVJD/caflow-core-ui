@@ -139,6 +139,9 @@ export default function UserManagement() {
   useEffect(() => {
     if (!user || !["superadmin", "firm_admin"].includes(user.role || "")) return;
     loadUsers();
+    if (user.role === "superadmin") {
+      supabase.from("firms").select("id, name").order("name").then(({ data }) => setFirmsList(data || []));
+    }
   }, [user]);
 
   async function loadUsers() {
