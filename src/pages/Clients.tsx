@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search } from "lucide-react";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2 } from "lucide-react";
 
 interface Client {
   id: string;
