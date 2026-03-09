@@ -25,6 +25,8 @@ import AuditIntelligence from "./pages/AuditIntelligence";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
+import Form3CD from "./pages/Form3CD";
+import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
 import AdminOverview from "./pages/admin/AdminOverview";
@@ -70,6 +72,8 @@ const App = () => (
             <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />
             <Route path="/clients/:clientId/audit/scrutiny" element={<AuditScrutiny />} />
             <Route path="/clients/:clientId" element={<ClientDetail />} />
+            <Route path="/clients/:clientId/audit/3cd" element={<Form3CD />} />
+            <Route path="/clients/:clientId/audit/comparative" element={<ComparativeStatements />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/itr" element={<ItReturns />} />
             <Route path="/itr/demands" element={<ItrDemands />} />
