@@ -290,7 +290,7 @@ const ItReturns = () => {
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     No ITR profiles found. Click "Add ITR Profile" to get started.
                   </TableCell>
                 </TableRow>
