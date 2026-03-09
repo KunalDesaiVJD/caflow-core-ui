@@ -105,6 +105,21 @@ const AdminFirms = () => {
     }
   };
 
+  const handleDeleteFirm = async () => {
+    if (!deleteFirm) return;
+    setDeleting(true);
+    try {
+      await callAdmin("delete-firm", "POST", { id: deleteFirm.id });
+      toast({ title: "Firm deleted" });
+      setDeleteFirm(null);
+      fetchFirms();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleImpersonate = async () => {
     if (!impersonateFirm) return;
     try {
