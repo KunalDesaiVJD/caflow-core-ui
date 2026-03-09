@@ -239,28 +239,22 @@ export default function Documents() {
         </div>
       </div>
 
-      {/* AI Search */}
+      {/* Search */}
       <Card>
         <CardContent className="p-4">
           <div className="flex gap-2">
             <div className="relative flex-1">
-              <Bot className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Ask anything about your documents..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleAiSearch()}
+                placeholder="Search documents by name, type, client, or tags..."
+                value={localSearchQuery}
+                onChange={e => setLocalSearchQuery(e.target.value)}
                 className="pl-9"
               />
             </div>
-            <Button onClick={handleAiSearch} disabled={searching || !searchQuery.trim()}>
-              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            </Button>
           </div>
-          {searchResult && (
-            <div className="mt-3 p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-64 overflow-y-auto">
-              {searchResult}
-            </div>
+          {localSearchQuery.trim() && allDocsForFolder.length === 0 && (
+            <p className="mt-3 text-sm text-muted-foreground">No documents found</p>
           )}
         </CardContent>
       </Card>
