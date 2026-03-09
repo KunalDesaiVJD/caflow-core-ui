@@ -116,6 +116,10 @@ export default function UserManagement() {
   const [tempPassword, setTempPassword] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
 
+  // Delete confirmation
+  const [deleteUser, setDeleteUser] = useState<UserRow | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   // Activity slide-over
   const [activityUser, setActivityUser] = useState<UserRow | null>(null);
   const [activityEntries, setActivityEntries] = useState<VersionEntry[]>([]);
