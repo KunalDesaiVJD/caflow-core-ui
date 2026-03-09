@@ -83,6 +83,7 @@ const SettingsPage = () => {
   const [firmLoading, setFirmLoading] = useState(true);
   const [firmSaving, setFirmSaving] = useState(false);
   const [firmId, setFirmId] = useState<string | null>(null);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [sigUploading, setSigUploading] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -112,15 +113,30 @@ const SettingsPage = () => {
 
   // ─── Load Firm Data ───
   useEffect(() => {
-    loadFirm();
-    loadRules();
     loadFirmsList();
+    loadRules();
   }, [user]);
 
-  async function loadFirm() {
-    if (!user?.firm_id) { setFirmLoading(false); return; }
-    setFirmId(user.firm_id);
-    const { data } = await supabase.from("firms").select("*").eq("id", user.firm_id).single();
+  // When firmsList loads and user is superadmin, auto-select first firm; otherwise use user's firm
+  useEffect(() => {
+    if (user?.role === "superadmin" && firmsList.length > 0 && !selectedFirmId) {
+      setSelectedFirmId(firmsList[0].id);
+    } else if (user?.firm_id && !selectedFirmId) {
+      setSelectedFirmId(user.firm_id);
+    }
+  }, [user, firmsList, selectedFirmId]);
+
+  // Load firm data when selectedFirmId changes
+  useEffect(() => {
+    if (selectedFirmId) {
+      setFirmId(selectedFirmId);
+      loadFirmData(selectedFirmId);
+    }
+  }, [selectedFirmId]);
+
+  async function loadFirmData(id: string) {
+    setFirmLoading(true);
+    const { data } = await supabase.from("firms").select("*").eq("id", id).single();
     if (data) {
       setFirmName(data.name || "");
       setIcaiReg(data.icai_reg_no || "");
@@ -378,6 +394,18 @@ const SettingsPage = () => {
               <CardDescription>Update your firm's details and branding.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Firm Selector for Superadmin */}
+              {user?.role === "superadmin" && firmsList.length > 1 && (
+                <div className="space-y-2">
+                  <Label>Select Firm</Label>
+                  <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+                    <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                    <SelectContent>
+                      {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Firm Name</Label>

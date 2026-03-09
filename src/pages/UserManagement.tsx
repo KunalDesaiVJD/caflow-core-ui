@@ -109,7 +109,7 @@ export default function UserManagement() {
 
   // Edit slide-over
   const [editUser, setEditUser] = useState<UserRow | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", phone: "", role: "" });
+  const [editForm, setEditForm] = useState({ name: "", phone: "", role: "", firm_id: "" });
   const [editLoading, setEditLoading] = useState(false);
 
   // Reset password dialog
@@ -218,7 +218,7 @@ export default function UserManagement() {
 
   function openEdit(u: UserRow) {
     setEditUser(u);
-    setEditForm({ name: u.name || "", phone: u.phone || "", role: u.role || "" });
+    setEditForm({ name: u.name || "", phone: u.phone || "", role: u.role || "", firm_id: u.firm_id || "" });
   }
 
   async function handleEditSave() {
@@ -230,6 +230,7 @@ export default function UserManagement() {
         name: editForm.name,
         phone: editForm.phone,
         role: editForm.role,
+        firm_id: editForm.firm_id || undefined,
       });
       toast({ title: "User updated" });
       setEditUser(null);
@@ -471,6 +472,19 @@ export default function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm</Label>
+                <Select value={editForm.firm_id} onValueChange={v => setEditForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <Button onClick={handleEditSave} disabled={editLoading} className="w-full mt-4">
               {editLoading ? "Saving…" : "Save Changes"}
             </Button>

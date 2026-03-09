@@ -13,6 +13,7 @@ import NewClientWizard from "./pages/NewClientWizard";
 import TdsFilings from "./pages/TdsFilings";
 import ItReturns from "./pages/ItReturns";
 import ItrAisRecon from "./pages/ItrAisRecon";
+import ItrDemands from "./pages/ItrDemands";
 import Billing from "./pages/Billing";
 import NewInvoice from "./pages/NewInvoice";
 import ErpLedger from "./pages/ErpLedger";
@@ -66,6 +67,7 @@ const App = () => (
             <Route path="/clients/:clientId" element={<ClientDetail />} />
             <Route path="/tds-filings" element={<TdsFilings />} />
             <Route path="/itr" element={<ItReturns />} />
+            <Route path="/itr/demands" element={<ItrDemands />} />
             <Route path="/itr/:clientId" element={<ItrAisRecon />} />
             <Route path="/billing" element={<Billing />} />
             <Route path="/billing/new" element={<NewInvoice />} />
