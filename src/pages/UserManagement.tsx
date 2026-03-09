@@ -218,7 +218,7 @@ export default function UserManagement() {
 
   function openEdit(u: UserRow) {
     setEditUser(u);
-    setEditForm({ name: u.name || "", phone: u.phone || "", role: u.role || "" });
+    setEditForm({ name: u.name || "", phone: u.phone || "", role: u.role || "", firm_id: u.firm_id || "" });
   }
 
   async function handleEditSave() {
@@ -230,6 +230,7 @@ export default function UserManagement() {
         name: editForm.name,
         phone: editForm.phone,
         role: editForm.role,
+        firm_id: editForm.firm_id || undefined,
       });
       toast({ title: "User updated" });
       setEditUser(null);
