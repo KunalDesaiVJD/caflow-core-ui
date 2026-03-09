@@ -286,6 +286,7 @@ const ItReturns = () => {
                 <TableHead>Demand</TableHead>
                 <TableHead>FY</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
