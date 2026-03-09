@@ -202,7 +202,7 @@ const NewClientWizard = () => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
     if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
-      errors.pan = "Invalid PAN format";
+      errors.pan = "Invalid PAN format. Example: ABCDE1234F";
     }
     basicInfo.gstins.forEach((g, i) => {
       if (g && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(g)) {

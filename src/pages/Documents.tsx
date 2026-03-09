@@ -398,7 +398,23 @@ export default function Documents() {
                         </div>
                       )}
                       <div className="flex items-center gap-1 pt-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Download">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="Download"
+                          onClick={() => {
+                            // Create a text blob with document info as download
+                            const content = `Document: ${doc.filename}\nCategory: ${doc.category}\n\n${doc.extracted_text || "No extracted text available."}`;
+                            const blob = new Blob([content], { type: "text/plain" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = doc.filename || "document.txt";
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
                           <Download className="h-3.5 w-3.5" />
                         </Button>
                         <Button
