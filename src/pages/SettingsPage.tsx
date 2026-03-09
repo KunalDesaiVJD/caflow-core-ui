@@ -290,16 +290,24 @@ const SettingsPage = () => {
   }
 
   async function saveRule() {
-    if (!firmId) return;
+    const targetFirmId = user?.role === "superadmin" ? ruleForm.firm_id : firmId;
+    if (!targetFirmId) {
+      toast({ title: "Please select a firm", variant: "destructive" });
+      return;
+    }
+    if (ruleForm.keywords.length === 0 || !ruleForm.category || !ruleForm.message.trim()) {
+      toast({ title: "Please fill all required fields", variant: "destructive" });
+      return;
+    }
     setRuleSaving(true);
     try {
       const payload = {
-        keywords: ruleForm.keywords,
+        keywords: ruleForm.keywords.map(k => k.trim().toLowerCase()),
         category: ruleForm.category,
         action: ruleForm.action,
         severity: ruleForm.severity,
         message: ruleForm.message,
-        firm_id: firmId,
+        firm_id: targetFirmId,
         is_active: true,
       };
       if (editingRule) {
