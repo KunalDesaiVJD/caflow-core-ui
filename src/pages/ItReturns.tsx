@@ -350,10 +350,10 @@ const ItReturns = () => {
       )}
 
       {/* Add ITR Profile Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+      <Sheet open={sheetOpen} onOpenChange={open => { if (!open) { setSheetOpen(false); setEditingId(null); } else setSheetOpen(true); }}>
         <SheetContent>
           <SheetHeader>
-            <SheetTitle>Add ITR Profile</SheetTitle>
+            <SheetTitle>{editingId ? "Edit ITR Profile" : "Add ITR Profile"}</SheetTitle>
           </SheetHeader>
           <div className="space-y-4 py-4">
             <div>
