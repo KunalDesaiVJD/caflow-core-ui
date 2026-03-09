@@ -18,50 +18,50 @@ interface Props {
 /** Clean a cell value to a number, stripping commas, Cr/Dr suffixes */
 function parseNumeric(val: any): number {
   if (val == null) return 0;
+  if (typeof val === "number") return val;
   const s = String(val).trim().replace(/,/g, "").replace(/\s*(Cr|Dr|cr|dr|CR|DR)\s*$/i, "");
   const n = parseFloat(s);
   return isNaN(n) ? 0 : n;
 }
 
-/** Rows to skip: company info, titles, blank amounts */
-const SKIP_PATTERNS = /^(trial balance|share holder|loans \(liability\)|capital account|current liabilities|current assets|fixed assets|investments|direct|indirect|purchase|sales|branch|closing stock|opening stock|suspense|profit & loss|difference in)/i;
+/** Section header rows — these group accounts but are NOT ledger entries themselves.
+ *  Only match when the row has zero amounts. */
+const SECTION_HEADER_PATTERNS = /^(trial balance|share holder\s*funds?|loans?\s*\(liability\)|capital account|current liabilities|current assets|fixed assets|investments|direct\s*(income|expense)|indirect\s*(income|expense)|purchase\s*accounts?|sales\s*accounts?|branch\s*\/\s*divisions?|closing stock|opening stock|suspense\s*a\/c|profit\s*&\s*loss\s*a\/c|difference in opening|income|expenditure)$/i;
 
-function isHeaderRow(row: any[], headers: string[]): boolean {
-  const joined = headers.map(h => String(h).toLowerCase());
-  return joined.some(h => h.includes("particulars")) && joined.some(h => h.includes("debit") || h.includes("credit"));
-}
+/** Metadata rows to always skip */
+const METADATA_PATTERN = /[@]|www\.|CIN:|GSTIN|^\d{6,}$|L\d{5}/;
 
 function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
-  // Get all rows as arrays
   const allRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-  // Find header row containing "Particulars" and "Debit"/"Credit"
+  // Find header row — scan ALL rows (not just first 30)
   let headerIdx = -1;
   let colMap: Record<string, number> = {};
 
-  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+  for (let i = 0; i < allRows.length; i++) {
     const cells = allRows[i].map((c: any) => String(c).trim().toLowerCase());
-    const partIdx = cells.findIndex(c => c.includes("particulars") || c === "account name" || c === "ledger name");
+    const partIdx = cells.findIndex(c =>
+      c.includes("particulars") || c === "account name" || c === "ledger name"
+    );
     const debitIdx = cells.findIndex(c => c === "debit" || c.includes("debit"));
     const creditIdx = cells.findIndex(c => c === "credit" || c.includes("credit"));
+    const balIdx = cells.findIndex(c => c.includes("closing") && c.includes("balance"));
+    const balIdx2 = balIdx >= 0 ? balIdx : cells.findIndex(c => c === "balance");
 
-    if (partIdx >= 0 && (debitIdx >= 0 || creditIdx >= 0)) {
+    if (partIdx >= 0 && (debitIdx >= 0 || creditIdx >= 0 || balIdx2 >= 0)) {
       headerIdx = i;
       colMap.account = partIdx;
       colMap.debit = debitIdx >= 0 ? debitIdx : -1;
       colMap.credit = creditIdx >= 0 ? creditIdx : -1;
-      // Look for closing balance
-      const balIdx = cells.findIndex(c => c.includes("closing") || (c === "balance"));
-      colMap.balance = balIdx >= 0 ? balIdx : -1;
+      colMap.balance = balIdx2 >= 0 ? balIdx2 : -1;
       break;
     }
   }
 
-  // Fallback: if no header detected, use first row
+  // Fallback: use first row
   if (headerIdx === -1) {
     headerIdx = 0;
     colMap = { account: 0, debit: -1, credit: -1, balance: -1 };
-    // Try to guess from first row
     const first = allRows[0]?.map((c: any) => String(c).trim().toLowerCase()) || [];
     first.forEach((c, idx) => {
       if (c.includes("debit")) colMap.debit = idx;
@@ -73,21 +73,33 @@ function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } 
 
   const dataRows = allRows.slice(headerIdx + 1);
   const parsed: any[] = [];
+  let consecutiveEmpty = 0;
 
   for (const row of dataRows) {
     const accountName = String(row[colMap.account] ?? "").trim();
-    
-    // Skip empty, skip title/section rows
-    if (!accountName) continue;
-    if (SKIP_PATTERNS.test(accountName)) continue;
-    // Skip rows that look like company metadata (contains @, www, CIN, address-like)
-    if (/[@]|www\.|CIN:|L\d{5}|^\d{6,}$/.test(accountName)) continue;
-
     const debit = colMap.debit >= 0 ? parseNumeric(row[colMap.debit]) : 0;
     const credit = colMap.credit >= 0 ? parseNumeric(row[colMap.credit]) : 0;
     const balance = colMap.balance >= 0 ? parseNumeric(row[colMap.balance]) : 0;
 
-    // Must have at least one numeric value
+    // Stop after 3 consecutive fully empty rows (end of table)
+    if (!accountName && debit === 0 && credit === 0 && balance === 0) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= 3) break;
+      continue;
+    }
+    consecutiveEmpty = 0;
+
+    // Skip empty account name
+    if (!accountName) continue;
+
+    // Skip metadata rows (company info, CIN, email, etc.)
+    if (METADATA_PATTERN.test(accountName)) continue;
+
+    // Skip section headers ONLY when they have zero amounts
+    if (debit === 0 && credit === 0 && balance === 0 && SECTION_HEADER_PATTERNS.test(accountName)) continue;
+
+    // Must have account name — rows with zero amounts but valid name are kept
+    // (some ledger accounts genuinely have zero balance)
     if (debit === 0 && credit === 0 && balance === 0) continue;
 
     parsed.push({
