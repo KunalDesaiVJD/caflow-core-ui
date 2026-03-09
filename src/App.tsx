@@ -24,6 +24,7 @@ import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
+import CoaMappings from "./pages/CoaMappings";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
 import AdminOverview from "./pages/admin/AdminOverview";
