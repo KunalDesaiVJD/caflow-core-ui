@@ -472,6 +472,19 @@ export default function UserManagement() {
                 </SelectContent>
               </Select>
             </div>
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm</Label>
+                <Select value={editForm.firm_id} onValueChange={v => setEditForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <Button onClick={handleEditSave} disabled={editLoading} className="w-full mt-4">
               {editLoading ? "Saving…" : "Save Changes"}
             </Button>

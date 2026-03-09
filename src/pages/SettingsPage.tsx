@@ -394,6 +394,18 @@ const SettingsPage = () => {
               <CardDescription>Update your firm's details and branding.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Firm Selector for Superadmin */}
+              {user?.role === "superadmin" && firmsList.length > 1 && (
+                <div className="space-y-2">
+                  <Label>Select Firm</Label>
+                  <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+                    <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                    <SelectContent>
+                      {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Firm Name</Label>
