@@ -71,7 +71,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 const SettingsPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = ["superadmin", "firm_admin"].includes(user?.role || "");
+  const isAdmin = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
 
   // ─── Firm Profile State ───
   const [firmName, setFirmName] = useState("");

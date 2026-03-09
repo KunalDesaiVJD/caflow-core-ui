@@ -8,6 +8,7 @@ import {
   Users,
   LogOut,
   Shield,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ const navItems = [
   { title: "Firms Management", path: "/admin/firms", icon: Building2 },
   { title: "User Management", path: "/admin/users", icon: Users },
   { title: "System Logs", path: "/admin/logs", icon: ScrollText },
+  { title: "Settings", path: "/admin/settings", icon: Settings },
 ];
 
 export function AdminLayout() {
