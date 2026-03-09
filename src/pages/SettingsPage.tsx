@@ -705,6 +705,18 @@ const SettingsPage = () => {
             <DialogTitle>{editingRule ? "Edit Rule" : "Add Custom Rule"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Firm Dropdown - visible to superadmin */}
+            {user?.role === "superadmin" && (
+              <div className="space-y-2">
+                <Label>Firm Name</Label>
+                <Select value={ruleForm.firm_id} onValueChange={v => setRuleForm(p => ({ ...p, firm_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+                  <SelectContent>
+                    {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Keywords</Label>
               <div className="flex gap-2">
