@@ -136,13 +136,25 @@ export default function Documents() {
     return acc;
   }, {});
 
-  // All docs count for "all" filter
-  const allDocsForFolder = selectedFolder === "all"
-    ? documents
-    : documents.filter(d => {
-        if (selectedFolder === "audit") return (d.category || "").startsWith("audit");
-        return d.category === selectedFolder;
-      });
+  // Filter docs by folder and search
+  const allDocsForFolder = documents.filter(d => {
+    // Folder filter
+    if (selectedFolder !== "all") {
+      if (selectedFolder === "audit") {
+        if (!(d.category || "").startsWith("audit")) return false;
+      } else if (d.category !== selectedFolder) return false;
+    }
+    // Local search filter
+    if (localSearchQuery.trim()) {
+      const q = localSearchQuery.toLowerCase();
+      const matchName = (d.filename || "").toLowerCase().includes(q);
+      const matchCategory = (d.category || "").toLowerCase().includes(q);
+      const matchTags = (d.tags || []).some(t => t.toLowerCase().includes(q));
+      const matchClient = clients.find(c => c.id === d.client_id)?.name?.toLowerCase().includes(q);
+      if (!matchName && !matchCategory && !matchTags && !matchClient) return false;
+    }
+    return true;
+  });
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
