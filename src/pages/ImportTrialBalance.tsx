@@ -290,6 +290,16 @@ export default function ImportTrialBalance() {
 
   const progress = step >= 6 ? 100 : ((step - 1) / 5) * 100;
 
+  if (!isValidUuid) {
+    return (
+      <div className="p-8 text-center space-y-4">
+        <h2 className="text-xl font-semibold">Invalid Client</h2>
+        <p className="text-muted-foreground">No valid client ID provided. Please navigate from a client page.</p>
+        <Button onClick={() => navigate("/clients")}>Go to Clients</Button>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto">
       {/* Header */}
