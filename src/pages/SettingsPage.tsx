@@ -270,6 +270,7 @@ const SettingsPage = () => {
       action: rule.action || "flag",
       severity: rule.severity || "MEDIUM",
       message: rule.message || "",
+      firm_id: rule.firm_id || firmId || "",
     });
     setKeywordInput("");
     setEditingRule(rule);
