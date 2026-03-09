@@ -87,10 +87,11 @@ export default function Documents() {
   const [deleteDoc, setDeleteDoc] = useState<DocRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // AI Search
+  // Search (local text filter)
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [localSearchQuery, setLocalSearchQuery] = useState("");
 
   // Load clients
   useEffect(() => {
@@ -135,13 +136,25 @@ export default function Documents() {
     return acc;
   }, {});
 
-  // All docs count for "all" filter
-  const allDocsForFolder = selectedFolder === "all"
-    ? documents
-    : documents.filter(d => {
-        if (selectedFolder === "audit") return (d.category || "").startsWith("audit");
-        return d.category === selectedFolder;
-      });
+  // Filter docs by folder and search
+  const allDocsForFolder = documents.filter(d => {
+    // Folder filter
+    if (selectedFolder !== "all") {
+      if (selectedFolder === "audit") {
+        if (!(d.category || "").startsWith("audit")) return false;
+      } else if (d.category !== selectedFolder) return false;
+    }
+    // Local search filter
+    if (localSearchQuery.trim()) {
+      const q = localSearchQuery.toLowerCase();
+      const matchName = (d.filename || "").toLowerCase().includes(q);
+      const matchCategory = (d.category || "").toLowerCase().includes(q);
+      const matchTags = (d.tags || []).some(t => t.toLowerCase().includes(q));
+      const matchClient = clients.find(c => c.id === d.client_id)?.name?.toLowerCase().includes(q);
+      if (!matchName && !matchCategory && !matchTags && !matchClient) return false;
+    }
+    return true;
+  });
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -226,28 +239,22 @@ export default function Documents() {
         </div>
       </div>
 
-      {/* AI Search */}
+      {/* Search */}
       <Card>
         <CardContent className="p-4">
           <div className="flex gap-2">
             <div className="relative flex-1">
-              <Bot className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Ask anything about your documents..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleAiSearch()}
+                placeholder="Search documents by name, type, client, or tags..."
+                value={localSearchQuery}
+                onChange={e => setLocalSearchQuery(e.target.value)}
                 className="pl-9"
               />
             </div>
-            <Button onClick={handleAiSearch} disabled={searching || !searchQuery.trim()}>
-              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            </Button>
           </div>
-          {searchResult && (
-            <div className="mt-3 p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-64 overflow-y-auto">
-              {searchResult}
-            </div>
+          {localSearchQuery.trim() && allDocsForFolder.length === 0 && (
+            <p className="mt-3 text-sm text-muted-foreground">No documents found</p>
           )}
         </CardContent>
       </Card>
@@ -391,7 +398,23 @@ export default function Documents() {
                         </div>
                       )}
                       <div className="flex items-center gap-1 pt-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Download">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="Download"
+                          onClick={() => {
+                            // Create a text blob with document info as download
+                            const content = `Document: ${doc.filename}\nCategory: ${doc.category}\n\n${doc.extracted_text || "No extracted text available."}`;
+                            const blob = new Blob([content], { type: "text/plain" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = doc.filename || "document.txt";
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
                           <Download className="h-3.5 w-3.5" />
                         </Button>
                         <Button

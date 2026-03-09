@@ -138,6 +138,12 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Fetch old data for audit logging
+      const { data: oldUser } = await adminClient.from("users")
+        .select("*")
+        .eq("id", user_id)
+        .single();
+
       const updateData: Record<string, unknown> = {};
       if (name !== undefined) updateData.name = name;
       if (phone !== undefined) updateData.phone = phone;
@@ -149,6 +155,27 @@ Deno.serve(async (req) => {
         .select()
         .single();
       if (error) throw error;
+
+      // Log to version_history for audit trail
+      if (oldUser) {
+        const changedFields: string[] = [];
+        if (name !== undefined && name !== oldUser.name) changedFields.push("name");
+        if (phone !== undefined && phone !== oldUser.phone) changedFields.push("phone");
+        if (role !== undefined && role !== oldUser.role) changedFields.push("role");
+
+        if (changedFields.length > 0) {
+          await adminClient.from("version_history").insert({
+            operation: "UPDATE",
+            user_name: requestingUser.name || "Unknown",
+            user_role: requestingUser.role,
+            table_name: "users",
+            record_id: user_id,
+            old_data: oldUser,
+            new_data: data,
+            changed_fields: changedFields,
+          });
+        }
+      }
 
       return new Response(JSON.stringify(data), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

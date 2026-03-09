@@ -47,10 +47,15 @@ const ClientDetail = () => {
 
   const handleSave = async () => {
     if (!clientId) return;
+    // Validate PAN if provided
+    if (form.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.toUpperCase())) {
+      toast({ title: "Invalid PAN", description: "Invalid PAN format. Example: ABCDE1234F", variant: "destructive" });
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.from("clients").update({
       name: form.name || null,
-      pan: form.pan || null,
+      pan: form.pan ? form.pan.toUpperCase() : null,
       cin: form.cin || null,
       entity_type: form.entity_type || null,
     }).eq("id", clientId);
@@ -60,7 +65,7 @@ const ClientDetail = () => {
       toast({ title: "Error saving", description: error.message, variant: "destructive" });
     } else {
       toast({ title: "Client updated" });
-      setClient((prev) => prev ? { ...prev, ...form } : prev);
+      setClient((prev) => prev ? { ...prev, ...form, pan: form.pan ? form.pan.toUpperCase() : "" } : prev);
       setEditing(false);
     }
   };
