@@ -197,6 +197,9 @@ const AdminFirms = () => {
                         <Button size="sm" variant="ghost" onClick={() => { setImpersonateFirm(firm); setImpersonateOpen(true); }}>
                           <UserCheck className="h-3.5 w-3.5" />
                         </Button>
+                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteFirm(firm)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
