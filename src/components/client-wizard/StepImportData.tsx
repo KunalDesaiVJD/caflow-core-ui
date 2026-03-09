@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Upload, FileSpreadsheet, CheckCircle2 } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle2, Shield, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
 
 export interface ImportDataResult {
@@ -13,6 +14,9 @@ interface Props {
   data: ImportDataResult | null;
   onChange: (d: ImportDataResult | null) => void;
   onSkip: () => void;
+  clientId?: string | null;
+  firmId?: string | null;
+  onScrutinyComplete?: (summary: { total: number; high: number }) => void;
 }
 
 /** Clean a cell value to a number, stripping commas, Cr/Dr suffixes */
@@ -21,34 +25,23 @@ function parseNumeric(val: any): number {
   if (typeof val === "number") return val;
   const s = String(val).trim();
   if (!s) return 0;
-  // Remove commas, spaces, and Cr/Dr suffixes
   const cleaned = s.replace(/,/g, "").replace(/\s*(Cr|Dr|cr|dr|CR|DR)\s*$/i, "").trim();
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 }
 
-/** Metadata rows to always skip */
 const METADATA_PATTERN = /[@]|www\.|CIN:|GSTIN|^\d{6,}$|L\d{5}/;
-
-/** Section header rows — skip only when all amounts are zero */
 const SECTION_HEADER_PATTERNS = /^(trial balance|share\s*holder\s*funds?|loans?\s*\(liability\)|capital account|current liabilities|current assets|fixed assets|investments|direct\s*(income|expense)|indirect\s*(income|expense)|purchase\s*accounts?|sales\s*accounts?|branch\s*\/\s*divisions?|closing stock|opening stock|suspense\s*a\/c|profit\s*&\s*loss\s*a\/c|difference in opening|income|expenditure)$/i;
 
 function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
   const allRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-  // Find header row — scan ALL rows
   let headerIdx = -1;
   let colMap: Record<string, number> = {};
 
   for (let i = 0; i < allRows.length; i++) {
     const cells = allRows[i].map((c: any) => String(c).trim().toLowerCase());
-
-    // Look for "particulars" or similar column
-    const partIdx = cells.findIndex(c =>
-      c.includes("particulars") || c === "account name" || c === "ledger name"
-    );
-
-    // Look for debit/credit/closing balance columns
+    const partIdx = cells.findIndex(c => c.includes("particulars") || c === "account name" || c === "ledger name");
     const debitIdx = cells.findIndex(c => c === "debit" || c.includes("debit"));
     const creditIdx = cells.findIndex(c => c === "credit" || c.includes("credit"));
     const closingBalIdx = cells.findIndex(c => c.includes("closing") && c.includes("balance"));
@@ -64,7 +57,6 @@ function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } 
     }
   }
 
-  // Fallback: use first row as header
   if (headerIdx === -1) {
     headerIdx = 0;
     colMap = { account: 0, debit: -1, credit: -1, balance: -1 };
@@ -87,46 +79,32 @@ function detectAndParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } 
     const credit = colMap.credit >= 0 ? parseNumeric(row[colMap.credit]) : 0;
     const balance = colMap.balance >= 0 ? parseNumeric(row[colMap.balance]) : 0;
 
-    // Stop after 3 consecutive fully empty rows
     if (!accountName && debit === 0 && credit === 0 && balance === 0) {
       consecutiveEmpty++;
       if (consecutiveEmpty >= 3) break;
       continue;
     }
     consecutiveEmpty = 0;
-
-    // Skip empty account name
     if (!accountName) continue;
-
-    // Skip metadata rows
     if (METADATA_PATTERN.test(accountName)) continue;
-
-    // Skip section headers ONLY when they have zero amounts
     if (debit === 0 && credit === 0 && balance === 0 && SECTION_HEADER_PATTERNS.test(accountName)) continue;
-
-    // Skip rows with no values at all
     if (debit === 0 && credit === 0 && balance === 0) continue;
 
-    parsed.push({
-      account_name: accountName,
-      debit,
-      credit,
-      balance,
-    });
+    parsed.push({ account_name: accountName, debit, credit, balance });
   }
 
-  return {
-    headers: ["account_name", "debit", "credit", "balance"],
-    rows: parsed,
-  };
+  return { headers: ["account_name", "debit", "credit", "balance"], rows: parsed };
 }
 
-export const StepImportData = ({ data, onChange, onSkip }: Props) => {
+export const StepImportData = ({ data, onChange, onSkip, clientId, firmId, onScrutinyComplete }: Props) => {
   const [error, setError] = useState<string | null>(null);
+  const [scrutinyRunning, setScrutinyRunning] = useState(false);
+  const [scrutinySummary, setScrutinySummary] = useState<{ total: number; high: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
+    setScrutinySummary(null);
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -147,6 +125,44 @@ export const StepImportData = ({ data, onChange, onSkip }: Props) => {
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const handleRunScrutiny = async () => {
+    if (!clientId || !data) return;
+    setScrutinyRunning(true);
+    try {
+      // Import supabase here to avoid circular deps
+      const { supabase } = await import("@/integrations/supabase/client");
+
+      // First save the TB snapshot
+      await supabase.from("trial_balance_snapshots").upsert({
+        client_id: clientId,
+        financial_year: new Date().getFullYear().toString(),
+        source_format: data.filename.endsWith(".csv") ? "csv" : "excel",
+        raw_data: data.rows as any,
+        normalised_data: data.rows.map((row: any) => ({
+          account_name: row.account_name || "",
+          debit: typeof row.debit === "number" ? row.debit : 0,
+          credit: typeof row.credit === "number" ? row.credit : 0,
+          balance: typeof row.balance === "number" ? row.balance : 0,
+        })) as any,
+      }, { onConflict: "client_id,financial_year" });
+
+      // Then run scrutiny
+      const { data: result, error } = await supabase.functions.invoke("run-scrutiny", {
+        body: { client_id: clientId, financial_year: new Date().getFullYear().toString(), firm_id: firmId },
+      });
+      if (error) throw error;
+
+      const total = result?.total || 0;
+      const high = result?.findings_created?.HIGH || 0;
+      setScrutinySummary({ total, high });
+      onScrutinyComplete?.({ total, high });
+    } catch (e: any) {
+      setError("Scrutiny failed: " + (e.message || "Unknown error"));
+    } finally {
+      setScrutinyRunning(false);
+    }
   };
 
   return (
@@ -198,9 +214,42 @@ export const StepImportData = ({ data, onChange, onSkip }: Props) => {
               <p className="text-xs text-muted-foreground mt-1">Showing 10 of {data.rows.length} entries</p>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => { onChange(null); if (fileRef.current) fileRef.current.value = ""; }}>
-            Remove & Re-upload
-          </Button>
+
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => { onChange(null); setScrutinySummary(null); if (fileRef.current) fileRef.current.value = ""; }}>
+              Remove & Re-upload
+            </Button>
+
+            {/* Run Initial Scrutiny Button */}
+            {clientId && (
+              <Button
+                size="sm"
+                variant="default"
+                className="gap-1"
+                onClick={handleRunScrutiny}
+                disabled={scrutinyRunning}
+              >
+                {scrutinyRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Shield className="h-3 w-3" />}
+                {scrutinyRunning ? "Running Scrutiny…" : "Run Initial Scrutiny"}
+              </Button>
+            )}
+          </div>
+
+          {/* Scrutiny Summary */}
+          {scrutinySummary && (
+            <div className="border border-primary/20 bg-primary/5 rounded-lg p-3 space-y-1">
+              <p className="text-sm font-medium text-foreground flex items-center gap-2">
+                <Shield className="h-4 w-4 text-primary" />
+                Initial Scrutiny Complete
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Found <span className="font-semibold text-foreground">{scrutinySummary.total}</span> findings
+                {scrutinySummary.high > 0 && (
+                  <> (<Badge variant="destructive" className="text-[10px] px-1 py-0 ml-1">{scrutinySummary.high} HIGH</Badge>)</>
+                )}. You can review them after setup is complete.
+              </p>
+            </div>
+          )}
         </div>
       )}
 

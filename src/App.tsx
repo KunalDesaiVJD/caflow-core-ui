@@ -24,6 +24,7 @@ import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
+import CoaMappings from "./pages/CoaMappings";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
 import AdminOverview from "./pages/admin/AdminOverview";
@@ -81,6 +82,7 @@ const App = () => (
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
             <Route path="/documents" element={<Documents />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/coa-mappings" element={<CoaMappings />} />
             <Route path="/settings/users" element={<UserManagement />} />
           </Route>
           <Route path="*" element={<NotFound />} />

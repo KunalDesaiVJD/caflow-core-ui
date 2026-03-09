@@ -423,7 +423,7 @@ const NewClientWizard = () => {
           {step === 2 && <StepComplianceFlags data={complianceFlags} onChange={setComplianceFlags} />}
           {step === 3 && <StepBankingLoans data={bankingLoans} onChange={setBankingLoans} />}
           {step === 4 && <StepAuditQuestions data={auditQuestions} onChange={setAuditQuestions} />}
-          {step === 5 && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(6)} />}
+          {step === 5 && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(6)} clientId={isEditMode ? clientId : undefined} firmId={user?.firm_id} />}
           {step === 6 && (
             <StepDone
               mode={isEditMode ? "edit" : "create"}
