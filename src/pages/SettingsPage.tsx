@@ -143,6 +143,37 @@ const SettingsPage = () => {
     setRulesLoading(false);
   }
 
+  async function loadFirmsList() {
+    const { data } = await supabase.from("firms").select("id, name").order("name");
+    setFirmsList(data || []);
+  }
+
+  const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml"];
+  const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+  async function handleFileUpload(file: File, path: string, setter: (url: string) => void, setUploading: (v: boolean) => void) {
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      toast({ title: "Invalid file type", description: "Please upload PNG, JPG, or SVG under 5MB.", variant: "destructive" });
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast({ title: "File too large", description: "Maximum file size is 5MB.", variant: "destructive" });
+      return;
+    }
+    setUploading(true);
+    try {
+      const { error } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
+      if (error) throw error;
+      const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
+      setter(data.publicUrl);
+      toast({ title: "File uploaded successfully" });
+    } catch (e: any) {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function saveFirmProfile() {
     if (!firmId || !isAdmin) return;
     setFirmSaving(true);
