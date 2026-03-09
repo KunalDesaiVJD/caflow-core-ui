@@ -93,6 +93,12 @@ const ItReturns = () => {
   const [formItrForm, setFormItrForm] = useState("ITR-3");
   const [formStatus, setFormStatus] = useState("Not Started");
 
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Delete state
+  const [deleteProfile, setDeleteProfile] = useState<ItrProfile | null>(null);
+
   const firmId = user?.firm_id;
 
   const fetchData = useCallback(async () => {
