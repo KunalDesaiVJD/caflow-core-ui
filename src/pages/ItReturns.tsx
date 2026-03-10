@@ -516,7 +516,7 @@ const ItReturns = () => {
         <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
       ) : (
         <>
-          {viewMode === "table" && <TableView profiles={filtered} demands={demands} onEdit={handleEdit} onDelete={setDeleteProfile} onNavigate={navigate} />}
+          {viewMode === "table" && <TableView profiles={filtered} demands={demands} onEdit={handleEdit} onDelete={setDeleteProfile} onNavigate={navigate} scrutinyAlerts={scrutinyAlerts} onScrutinyClick={openScrutinyDrawer} />}
           {viewMode === "card" && <CardView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
           {viewMode === "kanban" && <KanbanView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
           {viewMode === "summary" && <SummaryView profiles={profiles} workGroups={workGroups} />}
