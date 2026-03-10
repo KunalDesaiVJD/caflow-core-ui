@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Drawer, DrawerContent, DrawerHeader, DrawerTitle,
+} from "@/components/ui/drawer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,7 +29,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   FileText, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, Pencil, Trash2,
-  TableIcon, LayoutGrid, Columns3, BarChart3, Filter, X, ChevronRight,
+  TableIcon, LayoutGrid, Columns3, BarChart3, Filter, X, ChevronRight, ShieldAlert,
 } from "lucide-react";
 
 // ─── Types ───
@@ -107,6 +110,12 @@ const ItReturns = () => {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Scrutiny alerts
+  const [scrutinyAlerts, setScrutinyAlerts] = useState<Record<string, number>>({});
+  const [scrutinyDrawerOpen, setScrutinyDrawerOpen] = useState(false);
+  const [scrutinyFindings, setScrutinyFindings] = useState<any[]>([]);
+  const [scrutinyDrawerClient, setScrutinyDrawerClient] = useState<string>("");
+
   // View & filters
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [activeGroup, setActiveGroup] = useState<string>("all");
@@ -179,6 +188,42 @@ const ItReturns = () => {
   }, [firmId, isSuperadmin]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch scrutiny alert counts (HIGH severity) per client
+  useEffect(() => {
+    const clientIds = [...new Set(profiles.map((p) => p.client_id).filter(Boolean))] as string[];
+    if (clientIds.length === 0) return;
+    supabase
+      .from("scrutiny_findings")
+      .select("client_id, id")
+      .in("client_id", clientIds)
+      .eq("status", "open")
+      .eq("severity", "HIGH")
+      .then(({ data }) => {
+        const counts: Record<string, number> = {};
+        (data || []).forEach((f: any) => {
+          counts[f.client_id] = (counts[f.client_id] || 0) + 1;
+        });
+        setScrutinyAlerts(counts);
+      });
+  }, [profiles]);
+
+  const openScrutinyDrawer = async (clientId: string, clientName: string) => {
+    setScrutinyDrawerClient(clientName);
+    setScrutinyDrawerOpen(true);
+    const { data } = await supabase
+      .from("scrutiny_findings")
+      .select("*")
+      .eq("client_id", clientId)
+      .eq("status", "open")
+      .eq("severity", "HIGH")
+      .order("rule_id");
+    const relevant = (data || []).filter((f: any) => {
+      const ruleId = (f.rule_id || "").toUpperCase();
+      return ruleId.startsWith("T") || ruleId.startsWith("C");
+    });
+    setScrutinyFindings(relevant);
+  };
 
   // Filtering
   const filtered = useMemo(() => {
@@ -471,7 +516,7 @@ const ItReturns = () => {
         <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
       ) : (
         <>
-          {viewMode === "table" && <TableView profiles={filtered} demands={demands} onEdit={handleEdit} onDelete={setDeleteProfile} onNavigate={navigate} />}
+          {viewMode === "table" && <TableView profiles={filtered} demands={demands} onEdit={handleEdit} onDelete={setDeleteProfile} onNavigate={navigate} scrutinyAlerts={scrutinyAlerts} onScrutinyClick={openScrutinyDrawer} />}
           {viewMode === "card" && <CardView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
           {viewMode === "kanban" && <KanbanView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
           {viewMode === "summary" && <SummaryView profiles={profiles} workGroups={workGroups} />}
@@ -583,14 +628,43 @@ const ItReturns = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Scrutiny Alerts Drawer */}
+      <Drawer open={scrutinyDrawerOpen} onOpenChange={setScrutinyDrawerOpen}>
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>Scrutiny Alerts — {scrutinyDrawerClient}</DrawerTitle>
+          </DrawerHeader>
+          <div className="px-4 pb-6 max-h-[60vh] overflow-y-auto">
+            {scrutinyFindings.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No relevant HIGH severity findings.</p>
+            ) : (
+              <div className="space-y-2">
+                {scrutinyFindings.map((f: any) => (
+                  <div key={f.id} className="border rounded-lg p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="destructive" className="text-[10px]">HIGH</Badge>
+                      <span className="text-xs font-mono text-muted-foreground">{f.rule_id}</span>
+                    </div>
+                    <p className="text-sm text-foreground">{f.flag_message}</p>
+                    {f.narration && <p className="text-xs text-muted-foreground truncate">{f.narration}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground text-center mt-4">Read-only view. Edit findings in Scrutiny module.</p>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 };
 
 // ─── Table View ───
-function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
+function TableView({ profiles, demands, onEdit, onDelete, onNavigate, scrutinyAlerts, onScrutinyClick }: {
   profiles: ItrProfile[]; demands: any[]; onEdit: (p: ItrProfile) => void;
   onDelete: (p: ItrProfile) => void; onNavigate: (path: string) => void;
+  scrutinyAlerts?: Record<string, number>; onScrutinyClick?: (clientId: string, clientName: string) => void;
 }) {
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -604,6 +678,7 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
             <TableHead>Assigned To</TableHead>
             <TableHead>Date Recd</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Alerts</TableHead>
             <TableHead>Date Filed</TableHead>
             <TableHead>Ack No</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -611,7 +686,7 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
         </TableHeader>
         <TableBody>
           {profiles.length === 0 ? (
-            <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-8">No ITR profiles found.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No ITR profiles found.</TableCell></TableRow>
           ) : profiles.map((p) => (
             <TableRow key={p.id} className="hover:bg-muted/50">
               <TableCell className="font-medium cursor-pointer" onClick={() => onNavigate(`/itr/${p.client_id}`)}>{p.client_name}</TableCell>
@@ -628,6 +703,21 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
                 <Badge className={STATUS_COLORS[p.filing_status || "Not Started"] || STATUS_COLORS["Not Started"]}>
                   {p.filing_status || "Not Started"}
                 </Badge>
+              </TableCell>
+              <TableCell>
+                {p.client_id && (scrutinyAlerts?.[p.client_id] || 0) > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 gap-1 text-destructive hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); onScrutinyClick?.(p.client_id!, p.client_name || ""); }}
+                  >
+                    <ShieldAlert size={12} />
+                    <span className="text-xs font-bold">{scrutinyAlerts![p.client_id!]}</span>
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
+                )}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{p.date_filed || "—"}</TableCell>
               <TableCell className="text-sm text-muted-foreground">{p.acknowledgment_no || "—"}</TableCell>

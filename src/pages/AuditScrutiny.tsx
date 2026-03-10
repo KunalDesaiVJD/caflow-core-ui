@@ -63,6 +63,7 @@ export default function AuditScrutiny() {
   const [actionNote, setActionNote] = useState("");
   const [linkClauseId, setLinkClauseId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [auditFirmName, setAuditFirmName] = useState<string | null>(null);
 
   // Check trial balance existence
   useEffect(() => {
@@ -86,6 +87,22 @@ export default function AuditScrutiny() {
   };
 
   useEffect(() => { fetchFindings(); }, [clientId, fy]);
+
+  // Fetch assigned audit firm for this client + FY
+  useEffect(() => {
+    if (!clientId) return;
+    setAuditFirmName(null);
+    supabase
+      .from("client_auditor_assignments")
+      .select("audit_firms(name)")
+      .eq("client_id", clientId)
+      .eq("financial_year", fy)
+      .maybeSingle()
+      .then(({ data }) => {
+        const firm = (data as any)?.audit_firms;
+        setAuditFirmName(firm?.name || null);
+      });
+  }, [clientId, fy]);
 
   // Realtime subscription
   useEffect(() => {
@@ -215,7 +232,11 @@ export default function AuditScrutiny() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Scrutiny Dashboard</h1>
-          <p className="text-sm text-muted-foreground">AI-powered audit findings for FY {fy}</p>
+          <p className="text-sm text-muted-foreground">
+            AI-powered audit findings for FY {fy}
+            {auditFirmName && <span className="ml-2 text-foreground font-medium">· Audit Firm: {auditFirmName}</span>}
+            {!auditFirmName && <span className="ml-2 text-amber-600">· No audit firm assigned for this FY</span>}
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button onClick={handleRunScrutiny} disabled={running} className="bg-amber-600 hover:bg-amber-700 text-white">

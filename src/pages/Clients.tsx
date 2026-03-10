@@ -1,13 +1,16 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -15,7 +18,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags } from "lucide-react";
+import * as XLSX from "xlsx";
 
 interface Client {
   id: string;
@@ -42,17 +57,22 @@ const ENTITY_TYPES = [
 const Clients = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
-  const [groupFilter, setGroupFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useState<string[]>([]);
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Groups data
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
+
+  // Manage groups dialog
+  const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
+  const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
   const fetchData = async () => {
     const [clientsRes, groupsRes, membershipsRes] = await Promise.all([
@@ -95,6 +115,49 @@ const Clients = () => {
     }
   };
 
+  const toggleGroupForClient = async (clientId: string, groupId: string, isMember: boolean) => {
+    setManageGroupsSaving(true);
+    try {
+      if (isMember) {
+        const { error } = await supabase
+          .from("client_group_memberships")
+          .delete()
+          .eq("client_id", clientId)
+          .eq("group_id", groupId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("client_group_memberships")
+          .insert({ client_id: clientId, group_id: groupId, added_by: user?.id || null });
+        if (error) throw error;
+      }
+      await fetchData();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setManageGroupsSaving(false);
+    }
+  };
+
+  const handleExportExcel = () => {
+    const rows = filtered.map((c) => {
+      const clientGroups = clientGroupMap[c.id] || [];
+      return {
+        Name: c.name || "",
+        PAN: c.pan || "",
+        "Entity Type": c.entity_type || "",
+        CIN: c.cin || "",
+        GSTIN: (c.gstin || []).join(", "),
+        Groups: clientGroups.map((g) => g.name).join(", ") || "Ungrouped",
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Clients");
+    XLSX.writeFile(wb, "clients-export.xlsx");
+    toast({ title: "Exported to Excel" });
+  };
+
   const filtered = clients.filter((c) => {
     const matchesSearch =
       !search ||
@@ -103,13 +166,24 @@ const Clients = () => {
     const matchesEntity =
       entityFilter === "all" || c.entity_type === entityFilter;
     let matchesGroup = true;
-    if (groupFilter === "ungrouped") {
+    if (groupFilter.includes("ungrouped")) {
       matchesGroup = !clientGroupMap[c.id] || clientGroupMap[c.id].length === 0;
-    } else if (groupFilter !== "all") {
-      matchesGroup = (clientGroupMap[c.id] || []).some((g) => g.id === groupFilter);
+    } else if (groupFilter.length > 0) {
+      const cGroups = (clientGroupMap[c.id] || []).map((g) => g.id);
+      matchesGroup = groupFilter.every((gId) => cGroups.includes(gId));
     }
     return matchesSearch && matchesEntity && matchesGroup;
   });
+
+  const toggleGroupFilter = (id: string) => {
+    setGroupFilter((prev) => {
+      if (id === "ungrouped") {
+        return prev.includes("ungrouped") ? prev.filter((x) => x !== "ungrouped") : ["ungrouped"];
+      }
+      const without = prev.filter((x) => x !== "ungrouped");
+      return without.includes(id) ? without.filter((x) => x !== id) : [...without, id];
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -120,6 +194,9 @@ const Clients = () => {
           <p className="text-sm text-muted-foreground">Manage your client directory.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5">
+            <Download className="h-4 w-4" /> Export
+          </Button>
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2">
             <FolderOpen className="h-4 w-4" /> Manage Groups
           </Button>
@@ -151,18 +228,40 @@ const Clients = () => {
             ))}
           </SelectContent>
         </Select>
-        <Select value={groupFilter} onValueChange={setGroupFilter}>
-          <SelectTrigger className="w-full sm:w-[200px]">
-            <SelectValue placeholder="Group" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Groups</SelectItem>
-            <SelectItem value="ungrouped">Ungrouped</SelectItem>
+
+        {/* Multi-select group filter */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full sm:w-[200px] justify-between">
+              <span className="truncate">
+                {groupFilter.length === 0 ? "All Groups" : `${groupFilter.length} group${groupFilter.length > 1 ? "s" : ""}`}
+              </span>
+              {groupFilter.length > 0 && (
+                <X className="h-3 w-3 ml-1 shrink-0" onClick={(e) => { e.stopPropagation(); setGroupFilter([]); }} />
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 p-2" align="end">
+            <button
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left"
+              onClick={() => toggleGroupFilter("ungrouped")}
+            >
+              <Checkbox checked={groupFilter.includes("ungrouped")} />
+              <span>Ungrouped</span>
+            </button>
             {groups.map((g) => (
-              <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+              <button
+                key={g.id}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left"
+                onClick={() => toggleGroupFilter(g.id)}
+              >
+                <Checkbox checked={groupFilter.includes(g.id)} />
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
+                {g.name}
+              </button>
             ))}
-          </SelectContent>
-        </Select>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Card Grid */}
@@ -194,11 +293,37 @@ const Clients = () => {
                     <h3 className="text-lg font-semibold text-foreground leading-tight line-clamp-2">
                       {client.name || "Unnamed Client"}
                     </h3>
-                    {client.entity_type && (
-                      <Badge variant="outline" className="text-[10px] shrink-0 ml-2">
-                        {client.entity_type}
-                      </Badge>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {client.entity_type && (
+                        <Badge variant="outline" className="text-[10px]">
+                          {client.entity_type}
+                        </Badge>
+                      )}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}>
+                            <Eye className="h-4 w-4 mr-2" /> View
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}>
+                            <Pencil className="h-4 w-4 mr-2" /> Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setManageGroupsClient(client)}>
+                            <Tags className="h-4 w-4 mr-2" /> Manage Groups
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}/audit/scrutiny`)}>
+                            <ShieldCheck className="h-4 w-4 mr-2" /> Audit Scrutiny
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}>
+                            <Trash2 className="h-4 w-4 mr-2" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
                   {client.pan && (
                     <p className="text-xs font-mono text-muted-foreground">PAN: {client.pan}</p>
@@ -220,20 +345,6 @@ const Clients = () => {
                     ) : (
                       <span className="text-[10px] text-muted-foreground">Ungrouped</span>
                     )}
-                  </div>
-                  <div className="flex items-center gap-1 pt-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }} title="View">
-                      <Eye className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/edit/${client.id}`); }} title="Edit">
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}/audit/scrutiny`); }} title="Audit">
-                      <ShieldCheck className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteClient(client); }} title="Delete">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -259,6 +370,36 @@ const Clients = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Manage Groups Dialog */}
+      <Dialog open={!!manageGroupsClient} onOpenChange={(open) => { if (!open) setManageGroupsClient(null); }}>
+        <DialogContent onClick={(e) => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle>Manage Groups — {manageGroupsClient?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {groups.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No groups created yet.</p>
+            ) : (
+              groups.map((g) => {
+                const isMember = (clientGroupMap[manageGroupsClient?.id || ""] || []).some((cg) => cg.id === g.id);
+                return (
+                  <button
+                    key={g.id}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md hover:bg-accent text-left"
+                    disabled={manageGroupsSaving}
+                    onClick={() => manageGroupsClient && toggleGroupForClient(manageGroupsClient.id, g.id, isMember)}
+                  >
+                    <Checkbox checked={isMember} />
+                    <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
+                    <span>{g.name}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
