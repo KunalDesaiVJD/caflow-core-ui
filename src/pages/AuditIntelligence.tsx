@@ -101,15 +101,24 @@ export default function AuditIntelligence() {
     risk_rating: "medium",
   });
 
+  const isSuperadmin = user?.role === "superadmin";
+
   const fetchData = async () => {
-    if (!user?.firm_id) return;
+    if (!user) return;
+    if (!user.firm_id && !isSuperadmin) return;
     setLoading(true);
 
-    const [engRes, userRes, clientRes] = await Promise.all([
-      supabase.from("audit_engagements").select("*").eq("firm_id", user.firm_id),
-      supabase.from("users").select("id, name, role, icai_reg_no").eq("firm_id", user.firm_id).eq("is_active", true),
-      supabase.from("clients").select("id, name, entity_type").eq("firm_id", user.firm_id),
-    ]);
+    const engQuery = supabase.from("audit_engagements").select("*");
+    const userQuery = supabase.from("users").select("id, name, role, icai_reg_no").eq("is_active", true);
+    const clientQuery = supabase.from("clients").select("id, name, entity_type");
+
+    if (user.firm_id) {
+      engQuery.eq("firm_id", user.firm_id);
+      userQuery.eq("firm_id", user.firm_id);
+      clientQuery.eq("firm_id", user.firm_id);
+    }
+
+    const [engRes, userRes, clientRes] = await Promise.all([engQuery, userQuery, clientQuery]);
 
     const userMap = new Map((userRes.data || []).map(u => [u.id, u]));
     const clientMap = new Map((clientRes.data || []).map(c => [c.id, c]));
@@ -137,7 +146,7 @@ export default function AuditIntelligence() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, [user?.firm_id]);
+  useEffect(() => { fetchData(); }, [user?.firm_id, user?.role]);
 
   // Realtime subscription
   useEffect(() => {
