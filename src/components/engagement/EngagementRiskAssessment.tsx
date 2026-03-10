@@ -199,7 +199,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
           <Button variant="outline" size="sm" onClick={runAI}>
             <Sparkles className="w-4 h-4 mr-1" /> AI Risk Assessment
           </Button>
-          <Button size="sm" onClick={save} disabled={saving}>
+          <Button size="sm" onClick={saveWithTracking} disabled={saving}>
             {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
             Save Assessment
           </Button>
