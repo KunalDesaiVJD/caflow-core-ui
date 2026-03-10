@@ -26,6 +26,7 @@ const navItems = [
 ];
 
 export function AdminLayout() {
+  useThemeLoader();
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
