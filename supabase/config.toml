@@ -21,5 +21,8 @@ verify_jwt = false
 [functions.generate-audit-bundle]
 verify_jwt = false
 
+[functions.get-document-url]
+verify_jwt = false
+
 [functions.generate-audit-report]
 verify_jwt = false
