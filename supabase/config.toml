@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.export-scrutiny-xlsx]
 verify_jwt = false
+
+[functions.generate-audit-report]
+verify_jwt = false

@@ -10,6 +10,7 @@ import { EngagementAuditProgramme } from "@/components/engagement/EngagementAudi
 import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
+import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import { CheckCircle, Circle } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
@@ -19,6 +20,8 @@ const TAB_MAP: Record<string, string> = {
   "Fieldwork": "fieldwork",
   "CARO": "caro",
   "Notes": "notes",
+  "Review": "review",
+  "Sign-off": "review",
 };
 
 const statusColors: Record<string, string> = {
@@ -147,6 +150,7 @@ export default function EngagementDetail() {
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
           {engagement.caro_applicable && <TabsTrigger value="caro">CARO</TabsTrigger>}
           <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+          <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
 
         <TabsContent value="risk">
@@ -189,6 +193,15 @@ export default function EngagementDetail() {
           <EngagementNotesToAccounts
             engagement={engagement}
             client={client}
+            onUpdate={fetchData}
+          />
+        </TabsContent>
+
+        <TabsContent value="review">
+          <EngagementReviewSignoff
+            engagement={engagement}
+            client={client}
+            partner={partner}
             onUpdate={fetchData}
           />
         </TabsContent>
