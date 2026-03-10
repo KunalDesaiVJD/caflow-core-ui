@@ -8,13 +8,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EngagementRiskAssessment } from "@/components/engagement/EngagementRiskAssessment";
 import { EngagementAuditProgramme } from "@/components/engagement/EngagementAuditProgramme";
 import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork";
+import { EngagementCARO } from "@/components/engagement/EngagementCARO";
+import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { CheckCircle, Circle } from "lucide-react";
 
-const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "Review", "Sign-off"];
+const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
   "Risk Assessment": "risk",
   "Audit Programme": "programme",
   "Fieldwork": "fieldwork",
+  "CARO": "caro",
+  "Notes": "notes",
 };
 
 const statusColors: Record<string, string> = {
