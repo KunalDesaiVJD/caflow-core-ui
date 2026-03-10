@@ -196,6 +196,7 @@ export default function AuditQueryTracker() {
       financial_year: financialYear,
     } as any);
     if (error) { toast.error(error.message); return; }
+    track("query_manual", { ref_number: refNum, query_text: newQuery.query_text, priority: newQuery.priority });
     toast.success("Query added");
     setAddOpen(false);
     setNewQuery({ query_text: "", priority: "Medium", due_date: "" });
