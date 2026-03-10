@@ -70,6 +70,8 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
   const [aiLoading, setAiLoading] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null);
+  const prevRowsRef = useRef<RiskRow[]>([]);
+  const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
     const saved = engagement.risk_assessment as any;
