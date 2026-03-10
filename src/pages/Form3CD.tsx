@@ -89,7 +89,8 @@ export default function Form3CD() {
   const [saving, setSaving] = useState(false);
   const [autoFilling, setAutoFilling] = useState(false);
   const [tdsEntries, setTdsEntries] = useState<any[]>([]);
-
+  const prevAnswersRef = useRef<Record<string, string>>({});
+  const { track } = useAuditTracker(engagement?.id);
   useEffect(() => {
     if (!clientId) return;
     loadData();
