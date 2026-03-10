@@ -345,6 +345,17 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
               <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={handleUploadMgmtLetter} />
             </label>
           </Button>
+
+          {allPassed && (
+            <Button
+              onClick={handleGenerateBundle}
+              disabled={generatingBundle}
+              className="bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-semibold"
+            >
+              {generatingBundle ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Package className="w-4 h-4 mr-2" />}
+              {generatingBundle ? "Generating Bundle..." : "Generate Complete Bundle"}
+            </Button>
+          )}
         </div>
       )}
 
