@@ -40,6 +40,7 @@ const navItems = [
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search, premium: true },
   { title: "Documents", path: "/documents", icon: FolderOpen },
+  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark },
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };

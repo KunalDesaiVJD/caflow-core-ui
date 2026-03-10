@@ -127,6 +127,7 @@ const App = () => (
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
               <Route path="/settings/users" element={<UserManagement />} />
+              <Route path="/settings/audit-firms" element={<AuditFirms />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
