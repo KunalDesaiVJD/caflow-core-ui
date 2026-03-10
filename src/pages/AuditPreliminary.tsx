@@ -203,14 +203,14 @@ export default function AuditPreliminary() {
     setSaving(true);
 
     // Upsert answers
-    const { error: ansErr } = await supabase.from("audit_preliminary_answers" as any).upsert({
+    const { error: ansErr } = await (supabase as any).from("audit_preliminary_answers").upsert({
       engagement_id: engagementId,
       client_id: clientId,
       firm_id: user.firm_id,
-      answers: answers as any,
-      activated_tabs: activeTabs as any,
+      answers: answers,
+      activated_tabs: activeTabs,
       updated_at: new Date().toISOString(),
-    } as any, { onConflict: "engagement_id" });
+    }, { onConflict: "engagement_id" });
 
     if (ansErr) {
       toast.error("Failed to save answers");
