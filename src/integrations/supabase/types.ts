@@ -55,6 +55,7 @@ export type Database = {
       }
       audit_engagements: {
         Row: {
+          audit_firm_id: string | null
           audit_programme: Json | null
           audit_type: string | null
           caro_applicable: boolean | null
@@ -78,6 +79,7 @@ export type Database = {
           team_members: string[] | null
         }
         Insert: {
+          audit_firm_id?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
@@ -101,6 +103,7 @@ export type Database = {
           team_members?: string[] | null
         }
         Update: {
+          audit_firm_id?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
@@ -124,6 +127,13 @@ export type Database = {
           team_members?: string[] | null
         }
         Relationships: [
+          {
+            foreignKeyName: "audit_engagements_audit_firm_id_fkey"
+            columns: ["audit_firm_id"]
+            isOneToOne: false
+            referencedRelation: "audit_firms"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "audit_engagements_client_id_fkey"
             columns: ["client_id"]
@@ -157,6 +167,72 @@ export type Database = {
             columns: ["signed_by"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_firms: {
+        Row: {
+          active: boolean | null
+          address: string | null
+          city: string | null
+          created_at: string | null
+          created_by: string | null
+          email: string | null
+          firm_id: string
+          icai_reg_no: string | null
+          id: string
+          logo_r2_key: string | null
+          name: string
+          partner_icai_no: string | null
+          partner_name: string | null
+          phone: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          address?: string | null
+          city?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          email?: string | null
+          firm_id: string
+          icai_reg_no?: string | null
+          id?: string
+          logo_r2_key?: string | null
+          name: string
+          partner_icai_no?: string | null
+          partner_name?: string | null
+          phone?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          address?: string | null
+          city?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          email?: string | null
+          firm_id?: string
+          icai_reg_no?: string | null
+          id?: string
+          logo_r2_key?: string | null
+          name?: string
+          partner_icai_no?: string | null
+          partner_name?: string | null
+          phone?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_firms_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_firms_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
             referencedColumns: ["id"]
           },
         ]
@@ -236,6 +312,61 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      client_auditor_assignments: {
+        Row: {
+          appointed_date: string | null
+          audit_firm_id: string
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          financial_year: string
+          id: string
+          remarks: string | null
+        }
+        Insert: {
+          appointed_date?: string | null
+          audit_firm_id: string
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          financial_year: string
+          id?: string
+          remarks?: string | null
+        }
+        Update: {
+          appointed_date?: string | null
+          audit_firm_id?: string
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          financial_year?: string
+          id?: string
+          remarks?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_auditor_assignments_audit_firm_id_fkey"
+            columns: ["audit_firm_id"]
+            isOneToOne: false
+            referencedRelation: "audit_firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_auditor_assignments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_auditor_assignments_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
