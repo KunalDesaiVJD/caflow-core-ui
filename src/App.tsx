@@ -46,7 +46,9 @@ import NotFound from "./pages/NotFound";
 import AuditRedirect from "./pages/AuditRedirect";
 import AuditPreliminary from "./pages/AuditPreliminary";
 import AuditQueryTracker from "./pages/AuditQueryTracker";
+import AuditQueryDispatch from "./pages/AuditQueryDispatch";
 import AuditReportEngine from "./pages/AuditReportEngine";
+import PortalQueries from "./pages/PortalQueries";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
