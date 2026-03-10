@@ -55,6 +55,7 @@ export type Database = {
       }
       audit_engagements: {
         Row: {
+          audit_programme: Json | null
           audit_type: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
@@ -75,6 +76,7 @@ export type Database = {
           team_members: string[] | null
         }
         Insert: {
+          audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
@@ -95,6 +97,7 @@ export type Database = {
           team_members?: string[] | null
         }
         Update: {
+          audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null

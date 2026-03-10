@@ -22,6 +22,7 @@ import ErpLedger from "./pages/ErpLedger";
 import Timesheets from "./pages/Timesheets";
 import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
+import EngagementDetail from "./pages/EngagementDetail";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
@@ -84,6 +85,7 @@ const App = () => (
             <Route path="/erp-ledger" element={<ErpLedger />} />
             <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
             <Route path="/audit-intelligence" element={<AuditIntelligence />} />
+            <Route path="/audit/:engagementId" element={<EngagementDetail />} />
             <Route path="/documents" element={<Documents />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/coa-mappings" element={<CoaMappings />} />
