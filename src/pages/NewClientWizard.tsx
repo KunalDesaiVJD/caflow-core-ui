@@ -353,6 +353,18 @@ const NewClientWizard = () => {
           await saveTrialBalance(clientData.id);
         }
 
+        // Save group memberships
+        const groupIds = basicInfo.selectedGroupIds || [];
+        if (groupIds.length > 0) {
+          await supabase.from("client_group_memberships").insert(
+            groupIds.map((gid) => ({
+              group_id: gid,
+              client_id: clientData.id,
+              added_by: authUserId,
+            }))
+          );
+        }
+
         confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
         toast({ title: "Client created!", description: "All wizard data saved successfully." });
         setTimeout(() => navigate(`/clients/${clientData.id}`), 700);
