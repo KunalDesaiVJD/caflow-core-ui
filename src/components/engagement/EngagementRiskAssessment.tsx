@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -69,6 +70,8 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
   const [aiLoading, setAiLoading] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null);
+  const prevRowsRef = useRef<RiskRow[]>([]);
+  const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
     const saved = engagement.risk_assessment as any;
@@ -151,6 +154,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
 
   function applyAiSuggestions() {
     if (!aiSuggestions) return;
+    const prevSnap = [...rows];
     setRows(prev => prev.map((row, i) => {
       const sug = aiSuggestions.find((s: any) =>
         s.area?.toLowerCase() === row.area.toLowerCase()
@@ -164,8 +168,27 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
         notes: sug.reasoning || row.notes,
       };
     }));
+    prevRowsRef.current = prevSnap;
     toast.success("AI suggestions applied");
     setAiOpen(false);
+  }
+
+  async function saveWithTracking() {
+    // Track overrides where human changed AI-applied values
+    if (prevRowsRef.current.length > 0) {
+      rows.forEach((row, i) => {
+        const prev = prevRowsRef.current[i];
+        if (prev && (row.inherent !== prev.inherent || row.control !== prev.control)) {
+          track("risk_override", {
+            area: row.area,
+            ai_level: { inherent: riskLabel(prev.inherent), control: riskLabel(prev.control) },
+            human_level: { inherent: riskLabel(row.inherent), control: riskLabel(row.control) },
+            rationale: row.notes,
+          }, { humanOverride: true });
+        }
+      });
+    }
+    await save();
   }
 
   return (
@@ -176,7 +199,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
           <Button variant="outline" size="sm" onClick={runAI}>
             <Sparkles className="w-4 h-4 mr-1" /> AI Risk Assessment
           </Button>
-          <Button size="sm" onClick={save} disabled={saving}>
+          <Button size="sm" onClick={saveWithTracking} disabled={saving}>
             {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
             Save Assessment
           </Button>

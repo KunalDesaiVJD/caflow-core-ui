@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,7 @@ export default function AuditQueryTracker() {
   const [clientName, setClientName] = useState("");
   const [financialYear, setFinancialYear] = useState("2024-25");
   const [engagementId, setEngagementId] = useState<string | null>(null);
+  const { track } = useAuditTracker(engagementId);
 
   // Filters
   const [filterStatus, setFilterStatus] = useState("all");
@@ -194,6 +196,7 @@ export default function AuditQueryTracker() {
       financial_year: financialYear,
     } as any);
     if (error) { toast.error(error.message); return; }
+    track("query_manual", { ref_number: refNum, query_text: newQuery.query_text, priority: newQuery.priority });
     toast.success("Query added");
     setAddOpen(false);
     setNewQuery({ query_text: "", priority: "Medium", due_date: "" });

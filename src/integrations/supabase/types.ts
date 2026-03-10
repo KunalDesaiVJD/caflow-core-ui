@@ -53,6 +53,60 @@ export type Database = {
           },
         ]
       }
+      audit_ai_skills: {
+        Row: {
+          action_count: number | null
+          action_type: string
+          active: boolean | null
+          applied_count: number | null
+          approved_at: string | null
+          approved_by: string | null
+          created_at: string | null
+          entity_type: string | null
+          example_after: string | null
+          example_before: string | null
+          firms_affected: number | null
+          id: string
+          last_used_at: string | null
+          pattern_name: string | null
+          skill_data: Json
+        }
+        Insert: {
+          action_count?: number | null
+          action_type: string
+          active?: boolean | null
+          applied_count?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string | null
+          entity_type?: string | null
+          example_after?: string | null
+          example_before?: string | null
+          firms_affected?: number | null
+          id?: string
+          last_used_at?: string | null
+          pattern_name?: string | null
+          skill_data?: Json
+        }
+        Update: {
+          action_count?: number | null
+          action_type?: string
+          active?: boolean | null
+          applied_count?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string | null
+          entity_type?: string | null
+          example_after?: string | null
+          example_before?: string | null
+          firms_affected?: number | null
+          id?: string
+          last_used_at?: string | null
+          pattern_name?: string | null
+          skill_data?: Json
+        }
+        Relationships: []
+      }
       audit_client_queries: {
         Row: {
           carry_forward_from_year: string | null
@@ -330,6 +384,60 @@ export type Database = {
           },
           {
             foreignKeyName: "audit_firms_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_human_actions: {
+        Row: {
+          action_context: Json | null
+          action_type: string
+          ai_suggestion: string | null
+          created_at: string | null
+          engagement_id: string | null
+          firm_id: string | null
+          human_override: boolean | null
+          id: string
+          session_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          action_context?: Json | null
+          action_type: string
+          ai_suggestion?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          firm_id?: string | null
+          human_override?: boolean | null
+          id?: string
+          session_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          action_context?: Json | null
+          action_type?: string
+          ai_suggestion?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          firm_id?: string | null
+          human_override?: boolean | null
+          id?: string
+          session_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_human_actions_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_human_actions_firm_id_fkey"
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"

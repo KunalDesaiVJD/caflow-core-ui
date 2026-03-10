@@ -38,6 +38,7 @@ import ChangePassword from "./pages/ChangePassword";
 import AdminOverview from "./pages/admin/AdminOverview";
 import AdminFirms from "./pages/admin/AdminFirms";
 import AdminLogs from "./pages/admin/AdminLogs";
+import AdminAiSkills from "./pages/admin/AdminAiSkills";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -106,6 +107,7 @@ const App = () => (
               <Route path="/admin/firms" element={<AdminFirms />} />
               <Route path="/admin/users" element={<UserManagement />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
+              <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/settings" element={<SettingsPage />} />
             </Route>
 

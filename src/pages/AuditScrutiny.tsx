@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ export default function AuditScrutiny() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { track } = useAuditTracker();
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,7 +144,13 @@ export default function AuditScrutiny() {
 
   const handleResolve = async () => {
     if (!resolveId) return;
+    const finding = findings.find(f => f.id === resolveId);
     await supabase.from("scrutiny_findings").update({ status: "resolved" }).eq("id", resolveId);
+    track("finding_resolve", {
+      rule_id: finding?.rule_id,
+      resolution_note: actionNote,
+      severity: finding?.severity,
+    });
     toast({ title: "Finding resolved" });
     setResolveId(null);
     setActionNote("");
