@@ -145,6 +145,8 @@ export default function EngagementDetail() {
           <TabsTrigger value="risk">Risk Assessment</TabsTrigger>
           <TabsTrigger value="programme">Audit Programme</TabsTrigger>
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
+          {engagement.caro_applicable && <TabsTrigger value="caro">CARO</TabsTrigger>}
+          <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
         </TabsList>
 
         <TabsContent value="risk">
@@ -169,6 +171,24 @@ export default function EngagementDetail() {
             client={client}
             teamUsers={teamUsers}
             currentUser={user}
+            onUpdate={fetchData}
+          />
+        </TabsContent>
+
+        {engagement.caro_applicable && (
+          <TabsContent value="caro">
+            <EngagementCARO
+              engagement={engagement}
+              client={client}
+              onUpdate={fetchData}
+            />
+          </TabsContent>
+        )}
+
+        <TabsContent value="notes">
+          <EngagementNotesToAccounts
+            engagement={engagement}
+            client={client}
             onUpdate={fetchData}
           />
         </TabsContent>
