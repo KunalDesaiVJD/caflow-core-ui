@@ -1,17 +1,18 @@
 import { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { EngagementRiskAssessment } from "@/components/engagement/EngagementRiskAssessment";
 import { EngagementAuditProgramme } from "@/components/engagement/EngagementAuditProgramme";
 import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
-import { CheckCircle, Circle, AlertTriangle } from "lucide-react";
+import { CheckCircle, Circle, AlertTriangle, Pencil } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
@@ -34,6 +35,7 @@ const statusColors: Record<string, string> = {
 
 export default function EngagementDetail() {
   const { engagementId } = useParams<{ engagementId: string }>();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [engagement, setEngagement] = useState<any>(null);
   const [client, setClient] = useState<any>(null);
@@ -128,7 +130,12 @@ export default function EngagementDetail() {
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
           {auditorAssignment ? (
-            <span>Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> ({auditorAssignment.audit_firms?.partner_name})</span>
+            <span className="flex items-center gap-1">
+              Assigned Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> — {auditorAssignment.audit_firms?.partner_name}
+              <Button variant="ghost" size="icon" className="h-5 w-5 ml-1" onClick={() => navigate(`/clients/${engagement.client_id}?tab=auditors`)}>
+                <Pencil size={12} />
+              </Button>
+            </span>
           ) : (
             <span className="flex items-center gap-1 text-amber-600">
               <AlertTriangle className="h-3.5 w-3.5" />

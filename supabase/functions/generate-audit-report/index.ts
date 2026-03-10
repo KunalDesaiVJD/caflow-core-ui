@@ -63,6 +63,54 @@ serve(async (req) => {
       .eq("id", engagement.client_id)
       .single();
 
+    // Fetch the assigned audit firm for this engagement's FY
+    let auditFirm: {
+      name: string;
+      icai_reg_no: string;
+      partner_name: string;
+      partner_icai_no: string;
+      address: string;
+      city: string;
+    } | null = null;
+    let auditFirmAssigned = false;
+
+    if (engagement.client_id && engagement.financial_year) {
+      const { data: assignment } = await supabase
+        .from("client_auditor_assignments")
+        .select(`
+          audit_firm_id,
+          audit_firms (name, icai_reg_no, partner_name, partner_icai_no, address, city, logo_r2_key)
+        `)
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", engagement.financial_year)
+        .maybeSingle();
+
+      if (assignment?.audit_firms) {
+        const af = assignment.audit_firms as any;
+        auditFirm = {
+          name: af.name || "",
+          icai_reg_no: af.icai_reg_no || "",
+          partner_name: af.partner_name || "",
+          partner_icai_no: af.partner_icai_no || "",
+          address: af.address || "",
+          city: af.city || "",
+        };
+        auditFirmAssigned = true;
+      }
+    }
+
+    // Fallback to the parent firm if no audit firm assigned
+    if (!auditFirm) {
+      auditFirm = {
+        name: "Audit Firm Not Assigned",
+        icai_reg_no: "—",
+        partner_name: "—",
+        partner_icai_no: "—",
+        address: "",
+        city: "",
+      };
+    }
+
     let comparativeData = null;
     if (include_comparative && engagement.client_id && engagement.financial_year) {
       const { data: snapshots } = await supabase
@@ -114,6 +162,7 @@ serve(async (req) => {
       notes_to_accounts: engagement.notes_to_accounts,
       partner,
       firm,
+      auditFirm,
     };
 
     const claudeUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/claude-gateway`;
@@ -141,11 +190,14 @@ serve(async (req) => {
     const entityLabel = client?.entity_type === "company" ? "Members" : "Owner/Partners";
     const clientName = client?.name || "the Entity";
     const fy = engagement.financial_year || "";
-    const partnerName = partner?.name || "Partner";
-    const partnerICAI = partner?.icai_reg_no || "";
-    const firmName = firm?.name || "";
-    const firmICAI = firm?.icai_reg_no || "";
     const today = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+
+    // Use audit firm details from client_auditor_assignments
+    const firmName = auditFirm.name;
+    const firmICAI = auditFirm.icai_reg_no;
+    const sigPartnerName = auditFirm.partner_name;
+    const sigPartnerICAI = auditFirm.partner_icai_no;
+    const sigCity = auditFirm.city || "_____________";
 
     const kamHtml = (reportSections.key_audit_matters || [])
       .map((k: { title: string; description: string }) =>
@@ -180,6 +232,13 @@ serve(async (req) => {
       ? Object.keys(engagement.notes_to_accounts as Record<string, unknown>).length
       : 0;
 
+    // Warning banner if audit firm not assigned
+    const warningBanner = !auditFirmAssigned
+      ? `<div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 16px;border-radius:4px;margin-bottom:20px;font-size:10pt;color:#92400E;">
+          ⚠ Audit firm not assigned for FY ${fy}. Report generated with placeholder details. Please assign an audit firm from Client &gt; Auditors tab.
+        </div>`
+      : "";
+
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
@@ -197,13 +256,15 @@ serve(async (req) => {
   th, td { border: 1px solid #999; padding: 4px 8px; text-align: left; font-size: 10pt; }
   th { background: #eee; }
   .signature { margin-top: 48px; }
-  .signature-line { border-top: 1px solid #1a1a1a; width: 250px; margin-top: 48px; padding-top: 4px; }
+  .signature-block { margin-top: 48px; }
+  .signature-space { height: 60px; }
   .page-break { page-break-before: always; }
   .footer { position: fixed; bottom: 0; width: 100%; text-align: center; font-size: 8pt; color: #999; }
 </style></head><body>
+  ${warningBanner}
   <div class="letterhead">
     <div class="letterhead-left">${firmName}</div>
-    <div class="letterhead-right">ICAI Firm Reg. No: ${firmICAI}<br>Chartered Accountants</div>
+    <div class="letterhead-right">ICAI Registration No.: ${firmICAI}<br>Chartered Accountants</div>
   </div>
 
   <h2>Independent Auditor's Report</h2>
@@ -238,25 +299,24 @@ serve(async (req) => {
   ${notesCount > 0 ? `<p><em>See accompanying Notes 1 to ${notesCount} forming part of the financial statements.</em></p>` : ""}
 
   <div class="signature">
-    <p>For <strong>${firmName}</strong><br>Chartered Accountants<br>Firm Registration No: ${firmICAI}</p>
-    <div class="signature-line">
-      <strong>${partnerName}</strong><br>
+    <p>For <strong>${firmName}</strong><br>
+    Chartered Accountants<br>
+    Firm Registration Number: ${firmICAI}</p>
+    <div class="signature-space"></div>
+    <div class="signature-block">
+      <strong>${sigPartnerName}</strong><br>
       Partner<br>
-      ICAI Membership No: ${partnerICAI}<br>
-      Date: ${today}<br>
-      Place: _____________
+      Membership No.: ${sigPartnerICAI}<br>
+      Place: ${sigCity}<br>
+      Date: ${today}
     </div>
   </div>
 </body></html>`;
 
-    // STEP 4 — For now, store the HTML as the report artifact
-    // (Puppeteer PDF rendering would require a separate service; storing HTML for client-side rendering)
-
-    // STEP 5 — UPLOAD to storage and save metadata
+    // STEP 4 — UPLOAD to storage and save metadata
     const fy_clean = fy.replace(/[^a-zA-Z0-9-]/g, "_");
     const basePath = `firms/${engagement.firm_id}/clients/${engagement.client_id}/${fy_clean}/audit/${engagement_id}/reports/draft`;
 
-    // Get current version
     const { count: existingCount } = await supabase
       .from("documents")
       .select("*", { count: "exact", head: true })
@@ -267,7 +327,6 @@ serve(async (req) => {
     const filename = `audit_report_v${version}.html`;
     const r2Key = `${basePath}/${filename}`;
 
-    // Upload HTML to storage
     const htmlBlob = new Blob([html], { type: "text/html" });
     await supabase.storage.from("firm-assets").upload(r2Key, htmlBlob, {
       contentType: "text/html",
@@ -278,7 +337,6 @@ serve(async (req) => {
       .from("firm-assets")
       .createSignedUrl(r2Key, 3600);
 
-    // Save metadata to documents table
     await supabase.from("documents").insert({
       firm_id: engagement.firm_id,
       client_id: engagement.client_id,
@@ -295,6 +353,7 @@ serve(async (req) => {
         signed_url: urlData?.signedUrl || null,
         version_number: version,
         report_sections: reportSections,
+        audit_firm_assigned: auditFirmAssigned,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
