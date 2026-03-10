@@ -51,6 +51,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   const [clauses, setClauses] = useState<CaroAnswer[]>([]);
   const [autoFilling, setAutoFilling] = useState(false);
   const [saving, setSaving] = useState(false);
+  const prevClausesRef = useRef<CaroAnswer[]>([]);
+  const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
     const saved = engagement.caro_responses as CaroAnswer[] | null;
