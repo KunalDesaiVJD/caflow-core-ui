@@ -88,6 +88,22 @@ export default function AuditScrutiny() {
 
   useEffect(() => { fetchFindings(); }, [clientId, fy]);
 
+  // Fetch assigned audit firm for this client + FY
+  useEffect(() => {
+    if (!clientId) return;
+    setAuditFirmName(null);
+    supabase
+      .from("client_auditor_assignments")
+      .select("audit_firms(name)")
+      .eq("client_id", clientId)
+      .eq("financial_year", fy)
+      .maybeSingle()
+      .then(({ data }) => {
+        const firm = (data as any)?.audit_firms;
+        setAuditFirmName(firm?.name || null);
+      });
+  }, [clientId, fy]);
+
   // Realtime subscription
   useEffect(() => {
     if (!clientId) return;
