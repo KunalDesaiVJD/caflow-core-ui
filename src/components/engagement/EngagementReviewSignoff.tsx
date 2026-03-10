@@ -236,6 +236,54 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   }
 
+  async function handleGenerateBundle() {
+    setGeneratingBundle(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-audit-bundle", {
+        body: { engagement_id: engagement.id },
+      });
+      if (error) throw error;
+
+      // Build XLSX from returned sheet data using xlsx library
+      const wb = XLSX.utils.book_new();
+      const sheetsData = data.xlsx_sheets || {};
+      for (const [sheetName, rows] of Object.entries(sheetsData)) {
+        const ws = XLSX.utils.json_to_sheet(rows as any[]);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
+      }
+      const xlsxBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+
+      // Fetch the HTML report
+      const pdfResponse = data.pdf_url ? await fetch(data.pdf_url) : null;
+      const pdfBlob = pdfResponse ? await pdfResponse.blob() : null;
+
+      // Create ZIP with both files
+      const zip = new JSZip();
+      if (pdfBlob) {
+        zip.file("Audit_Report.html", pdfBlob);
+      }
+      zip.file("Workpaper_Master.xlsx", xlsxBuffer);
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Audit_Bundle_${client?.name || "Client"}_${engagement.financial_year || "FY"}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success("Audit bundle generated and downloaded!");
+      await runChecks();
+      onUpdate();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to generate bundle");
+    } finally {
+      setGeneratingBundle(false);
+    }
+  }
+
   if (loading) {
     return (
       <Card>
