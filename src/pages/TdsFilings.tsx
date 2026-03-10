@@ -471,6 +471,33 @@ const TdsFilings = () => {
       const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", advanceFiling.id);
       if (error) throw error;
       toast({ title: `Status advanced to "${nextStatus}"` });
+
+      // Trigger notifications based on status transition
+      try {
+        const firmId = await resolveFirmId();
+        if (nextStatus === "Ready for Check" && advanceFiling.checker_id) {
+          await supabase.functions.invoke("send-notification", {
+            body: { type: "tds_filing_status_change", recipient_id: advanceFiling.checker_id, firm_id: firmId, channel: "both",
+              content: { subject: "TDS Filing Ready for Check", message: `TDS filing for ${advanceFiling.client_name || "client"} (${advanceFiling.financial_year} ${advanceFiling.quarter}) is ready for your check.` } },
+          });
+        } else if (nextStatus === "Check Complete" && advanceFiling.approver_id) {
+          await supabase.functions.invoke("send-notification", {
+            body: { type: "tds_filing_status_change", recipient_id: advanceFiling.approver_id, firm_id: firmId, channel: "both",
+              content: { subject: "TDS Filing Check Complete", message: `TDS filing for ${advanceFiling.client_name || "client"} (${advanceFiling.financial_year} ${advanceFiling.quarter}) check is complete and awaiting approval.` } },
+          });
+        } else if (nextStatus === "Filed") {
+          // Notify preparer
+          if (advanceFiling.preparer_id) {
+            await supabase.functions.invoke("send-notification", {
+              body: { type: "tds_filing_status_change", recipient_id: advanceFiling.preparer_id, firm_id: firmId, channel: "email",
+                content: { subject: "TDS Filing Completed", message: `TDS filing for ${advanceFiling.client_name || "client"} (${advanceFiling.financial_year} ${advanceFiling.quarter}) has been filed. Ack: ${advanceAckNo}` } },
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.warn("Notification send failed (non-blocking):", notifErr);
+      }
+
       setAdvanceFiling(null);
       setAdvanceDateFiled("");
       setAdvanceAckNo("");
