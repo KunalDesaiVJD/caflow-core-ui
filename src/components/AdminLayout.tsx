@@ -9,6 +9,8 @@ import {
   LogOut,
   Shield,
   Settings,
+  Brain,
+  Palette,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
