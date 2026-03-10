@@ -166,13 +166,13 @@ export default function AuditPreliminary() {
         if (eng.financial_year) setAnswers(a => ({ ...a, financial_year: eng.financial_year! }));
 
         // Load existing answers
-        const { data: existing } = await supabase
-          .from("audit_preliminary_answers" as any)
+        const { data: existing } = await (supabase as any)
+          .from("audit_preliminary_answers")
           .select("answers")
           .eq("engagement_id", eng.id)
           .single();
         if (existing?.answers) {
-          setAnswers(prev => ({ ...prev, ...(existing.answers as any) }));
+          setAnswers(prev => ({ ...prev, ...existing.answers }));
         }
       }
     };
