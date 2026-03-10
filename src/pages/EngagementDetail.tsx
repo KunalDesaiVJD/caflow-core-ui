@@ -20,6 +20,8 @@ const TAB_MAP: Record<string, string> = {
   "Fieldwork": "fieldwork",
   "CARO": "caro",
   "Notes": "notes",
+  "Review": "review",
+  "Sign-off": "review",
 };
 
 const statusColors: Record<string, string> = {
