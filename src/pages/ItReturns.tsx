@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   FileText, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, Pencil, Trash2,
-  TableIcon, LayoutGrid, Columns3, BarChart3, Filter, X, ChevronRight,
+  TableIcon, LayoutGrid, Columns3, BarChart3, Filter, X, ChevronRight, ShieldAlert,
 } from "lucide-react";
 
 // ─── Types ───
