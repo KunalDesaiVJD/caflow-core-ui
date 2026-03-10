@@ -175,7 +175,6 @@ const ClientDetail = () => {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="filings">Filings</TabsTrigger>
-          <TabsTrigger value="audit">Audit</TabsTrigger>
           <TabsTrigger value="auditors">Auditors</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
@@ -325,40 +324,6 @@ const ClientDetail = () => {
               </CardContent>
             </Card>
           </div>
-        </TabsContent>
-
-        {/* Audit */}
-        <TabsContent value="audit">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-sm">Audit Engagements</CardTitle>
-              <Button size="sm" className="gap-1"><FileText className="h-3 w-3" /> New Engagement</Button>
-            </CardHeader>
-            <CardContent>
-              {engagements.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>FY</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>CARO</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {engagements.map(e => (
-                      <TableRow key={e.id}>
-                        <TableCell className="text-xs">{e.financial_year}</TableCell>
-                        <TableCell><Badge variant="outline" className="text-[10px]">{e.status || "Draft"}</Badge></TableCell>
-                        <TableCell className="text-xs">{e.caro_applicable ? "Yes" : "No"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-muted-foreground py-4 text-center">No audit engagements</p>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
 
         {/* Auditors */}

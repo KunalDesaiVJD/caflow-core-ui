@@ -43,6 +43,10 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import PortalHome from "./pages/PortalHome";
 import NotFound from "./pages/NotFound";
+import AuditRedirect from "./pages/AuditRedirect";
+import AuditPreliminary from "./pages/AuditPreliminary";
+import AuditQueryTracker from "./pages/AuditQueryTracker";
+import AuditReportEngine from "./pages/AuditReportEngine";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -109,11 +113,35 @@ const App = () => (
               <Route path="/clients/groups" element={<ClientGroups />} />
               <Route path="/clients/new" element={<NewClientWizard />} />
               <Route path="/clients/edit/:clientId" element={<NewClientWizard />} />
-              <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />
-              <Route path="/clients/:clientId/audit/scrutiny" element={<AuditScrutiny />} />
               <Route path="/clients/:clientId" element={<ClientDetail />} />
-              <Route path="/clients/:clientId/audit/3cd" element={<Form3CD />} />
-              <Route path="/clients/:clientId/audit/comparative" element={<ComparativeStatements />} />
+
+              {/* Old audit routes → redirect banner */}
+              <Route path="/clients/:clientId/audit/*" element={<AuditRedirect />} />
+
+              {/* Consolidated Audit Intelligence routes */}
+              <Route path="/audit" element={<AuditIntelligence />} />
+              <Route path="/audit/import" element={<ImportTrialBalance />} />
+              <Route path="/audit/scrutiny" element={<AuditScrutiny />} />
+              <Route path="/audit/:clientId/scrutiny" element={<AuditScrutiny />} />
+              <Route path="/audit/:clientId/import-trial-balance" element={<ImportTrialBalance />} />
+              <Route path="/audit/3cd" element={<Form3CD />} />
+              <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
+              <Route path="/audit/comparative" element={<ComparativeStatements />} />
+              <Route path="/audit/:clientId/comparative" element={<ComparativeStatements />} />
+              <Route path="/audit/preliminary" element={<AuditPreliminary />} />
+              <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />
+              <Route path="/audit/queries" element={<AuditQueryTracker />} />
+              <Route path="/audit/:clientId/queries" element={<AuditQueryTracker />} />
+              <Route path="/audit/report" element={<AuditReportEngine />} />
+              <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
+              <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
+
+              {/* Keep legacy engagement detail route working */}
+              <Route path="/audit/:engagementId" element={<EngagementDetail />} />
+
+              {/* Remove old audit-intelligence route → redirect */}
+              <Route path="/audit-intelligence" element={<Navigate to="/audit" replace />} />
+
               <Route path="/tds-filings" element={<TdsFilings />} />
               <Route path="/itr" element={<ItReturns />} />
               <Route path="/itr/demands" element={<ItrDemands />} />
@@ -123,8 +151,6 @@ const App = () => (
               <Route path="/billing/timesheets" element={<Timesheets />} />
               <Route path="/erp-ledger" element={<ErpLedger />} />
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
-              <Route path="/audit-intelligence" element={<AuditIntelligence />} />
-              <Route path="/audit/:engagementId" element={<EngagementDetail />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
