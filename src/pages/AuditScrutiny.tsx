@@ -45,6 +45,7 @@ export default function AuditScrutiny() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { track } = useAuditTracker();
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
