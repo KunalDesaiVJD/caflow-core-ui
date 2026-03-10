@@ -27,7 +27,7 @@ const navItems = [
   { title: "Billing", path: "/billing", icon: CreditCard },
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
-  { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search },
+  { title: "Audit Intelligence", path: "/audit", icon: Search },
   { title: "Documents", path: "/documents", icon: FolderOpen },
   { title: "Settings", path: "/settings", icon: Settings },
 ];
@@ -42,12 +42,10 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
 
-  // Close on route change
   useEffect(() => {
     onClose();
   }, [location.pathname]);
 
-  // Prevent scroll when open
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
@@ -68,7 +66,6 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
 
   return (
     <>
-      {/* Overlay */}
       {open && (
         <div
           className="fixed inset-0 z-50 bg-black/50 animate-in fade-in duration-200"
@@ -76,14 +73,12 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
         />
       )}
 
-      {/* Drawer */}
       <aside
         className={cn(
           "fixed top-0 left-0 h-full w-72 bg-sidebar z-50 flex flex-col transition-transform duration-300 ease-in-out",
           open ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Header */}
         <div className="flex items-center justify-between h-16 px-4 border-b border-sidebar-border">
           <span className="text-sidebar-gold font-display font-bold text-xl tracking-tight">
             CA<span className="text-sidebar-foreground">Flow</span>
@@ -93,7 +88,6 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
           </button>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 py-4 px-2 overflow-y-auto space-y-1">
           {navItems.map((item) => (
             <Link
@@ -137,7 +131,6 @@ export function MobileDrawer({ open, onClose }: MobileDrawerProps) {
           )}
         </nav>
 
-        {/* User footer */}
         <div className="border-t border-sidebar-border p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-9 h-9 rounded-full bg-sidebar-gold/20 flex items-center justify-center text-sidebar-gold font-semibold text-sm">

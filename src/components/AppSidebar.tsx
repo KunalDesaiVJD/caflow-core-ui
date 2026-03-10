@@ -20,6 +20,21 @@ import {
   Clock,
   Landmark,
   FolderOpen,
+  ChevronDown,
+  ChevronRight,
+  FileSearch,
+  BarChart3,
+  ClipboardList,
+  CalendarDays,
+  AlertTriangle,
+  FileCheck,
+  BookMarked,
+  MessageSquare,
+  BrainCircuit,
+  FileOutput,
+  HelpCircle,
+  Send,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -29,8 +44,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
-const navItems = [
+const topNavItems = [
   { title: "Dashboard", path: "/", icon: LayoutDashboard },
   { title: "Clients", path: "/clients", icon: Users },
   { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
@@ -38,9 +54,49 @@ const navItems = [
   { title: "Billing", path: "/billing", icon: CreditCard },
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
-  { title: "Audit Intelligence", path: "/audit-intelligence", icon: Search, premium: true },
   { title: "Documents", path: "/documents", icon: FolderOpen },
   { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark },
+];
+
+const auditSections = [
+  {
+    label: "Scrutiny",
+    items: [
+      { title: "TB Import", path: "/audit/import", icon: FileOutput },
+      { title: "Scrutiny Dashboard", path: "/audit/scrutiny", icon: FileSearch },
+      { title: "Narration AI", path: "/audit/narration", icon: BrainCircuit },
+      { title: "COA Mapping", path: "/settings/coa-mappings", icon: Layers },
+      { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Reports",
+    items: [
+      { title: "3CD Clauses", path: "/audit/3cd", icon: ClipboardList },
+      { title: "CARO 2020", path: "/audit/caro", icon: FileCheck },
+      { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
+    ],
+  },
+  {
+    label: "Engagements",
+    items: [
+      { title: "Engagements", path: "/audit", icon: FileText },
+      { title: "Calendar", path: "/audit/calendar", icon: CalendarDays },
+      { title: "Risk Assessment", path: "/audit/risk", icon: AlertTriangle },
+      { title: "Workpapers", path: "/audit/workpapers", icon: FileText },
+      { title: "Sign-Off & Bundle", path: "/audit/signoff", icon: FileCheck },
+    ],
+  },
+  {
+    label: "Intelligence",
+    items: [
+      { title: "Preliminary Questions", path: "/audit/preliminary", icon: HelpCircle },
+      { title: "Query Tracker", path: "/audit/queries", icon: MessageSquare },
+      { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
+      { title: "Audit Report", path: "/audit/report", icon: FileOutput },
+      { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
+    ],
+  },
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };
@@ -57,6 +113,21 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const { user, signOut } = useAuth();
   const [firmLogo, setFirmLogo] = useState<string | null>(null);
   const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+
+  // Auto-expand audit section if on /audit route
+  useEffect(() => {
+    if (location.pathname.startsWith("/audit")) {
+      setAuditOpen(true);
+      // Auto-expand the section that contains the active route
+      for (const section of auditSections) {
+        if (section.items.some(item => isActive(item.path))) {
+          setOpenSections(prev => ({ ...prev, [section.label]: true }));
+        }
+      }
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!user?.firm_id) return;
@@ -81,7 +152,13 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const displayRole = user?.role || "staff_article";
 
   const isActive = (path: string) =>
-    path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
+    path === "/" ? location.pathname === "/" : location.pathname === path || location.pathname.startsWith(path + "/");
+
+  const isAuditActive = location.pathname.startsWith("/audit");
+
+  const toggleSection = (label: string) => {
+    setOpenSections(prev => ({ ...prev, [label]: !prev[label] }));
+  };
 
   return (
     <aside
@@ -118,8 +195,8 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 py-4 flex flex-col gap-1 px-2 overflow-hidden">
-        {navItems.map((item) => (
+      <nav className="flex-1 py-4 flex flex-col gap-0.5 px-2 overflow-y-auto overflow-x-hidden">
+        {topNavItems.map((item) => (
           <Link
             key={item.path}
             to={item.path}
@@ -130,26 +207,78 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}
           >
-            <item.icon
-              size={20}
-              className={cn(
-                "shrink-0 transition-colors",
-                item.premium && "text-sidebar-gold",
-                isActive(item.path) && "text-sidebar-gold"
-              )}
-            />
-            {!collapsed && (
-              <span className="truncate">
-                {item.title}
-                {item.premium && (
-                  <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
-                    Pro
-                  </span>
-                )}
-              </span>
-            )}
+            <item.icon size={20} className={cn("shrink-0 transition-colors", isActive(item.path) && "text-sidebar-gold")} />
+            {!collapsed && <span className="truncate">{item.title}</span>}
           </Link>
         ))}
+
+        {/* Audit Intelligence - Collapsible */}
+        {collapsed ? (
+          <Link
+            to="/audit"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isAuditActive
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
+          </Link>
+        ) : (
+          <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
+            <CollapsibleTrigger className="w-full">
+              <div
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
+                  isAuditActive
+                    ? "bg-sidebar-gold/15 text-sidebar-gold"
+                    : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                )}
+              >
+                <Search size={20} className="shrink-0 text-sidebar-gold" />
+                <span className="truncate flex-1 text-left">
+                  Audit Intelligence
+                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
+                    Pro
+                  </span>
+                </span>
+                {auditOpen ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
+                {auditSections.map((section) => (
+                  <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
+                    <CollapsibleTrigger className="w-full">
+                      <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
+                        <span>{section.label}</span>
+                        {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      </div>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      {section.items.map((item) => (
+                        <Link
+                          key={item.path}
+                          to={item.path}
+                          className={cn(
+                            "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                            isActive(item.path)
+                              ? "bg-sidebar-gold/10 text-sidebar-gold"
+                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                          )}
+                        >
+                          <item.icon size={14} className="shrink-0" />
+                          <span className="truncate">{item.title}</span>
+                        </Link>
+                      ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+                ))}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
 
         <div className="flex-1" />
 
@@ -218,7 +347,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           to={settingsItem.path}
           className={cn(
             "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-            isActive(settingsItem.path) && !isActive("/settings/users")
+            isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms")
               ? "bg-sidebar-gold/15 text-sidebar-gold"
               : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
           )}

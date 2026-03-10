@@ -13,7 +13,7 @@ const items = [
   { title: "Clients", path: "/clients", icon: Users },
   { title: "TDS", path: "/tds-filings", icon: Receipt },
   { title: "ITR", path: "/itr", icon: FileText },
-  { title: "Audit", path: "/audit-intelligence", icon: Search },
+  { title: "Audit", path: "/audit", icon: Search },
 ];
 
 export function MobileBottomNav() {
@@ -33,15 +33,10 @@ export function MobileBottomNav() {
               to={item.path}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 flex-1 h-full text-[10px] font-medium transition-colors",
-                active
-                  ? "text-primary"
-                  : "text-muted-foreground"
+                active ? "text-primary" : "text-muted-foreground"
               )}
             >
-              <item.icon
-                size={20}
-                className={cn(active && "text-primary")}
-              />
+              <item.icon size={20} className={cn(active && "text-primary")} />
               <span>{item.title}</span>
             </Link>
           );
