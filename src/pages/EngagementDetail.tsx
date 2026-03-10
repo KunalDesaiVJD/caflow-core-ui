@@ -130,7 +130,12 @@ export default function EngagementDetail() {
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
           {auditorAssignment ? (
-            <span>Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> ({auditorAssignment.audit_firms?.partner_name})</span>
+            <span className="flex items-center gap-1">
+              Assigned Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> — {auditorAssignment.audit_firms?.partner_name}
+              <Button variant="ghost" size="icon" className="h-5 w-5 ml-1" onClick={() => navigate(`/clients/${engagement.client_id}?tab=auditors`)}>
+                <Pencil size={12} />
+              </Button>
+            </span>
           ) : (
             <span className="flex items-center gap-1 text-amber-600">
               <AlertTriangle className="h-3.5 w-3.5" />
