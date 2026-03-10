@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ArrowLeft, Pencil, Shield, FileText, Upload, Loader2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { ClientAuditorsTab } from "@/components/client-detail/ClientAuditorsTab";
 
 interface Client {
   id: string;
@@ -167,6 +168,7 @@ const ClientDetail = () => {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="filings">Filings</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
+          <TabsTrigger value="auditors">Auditors</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
@@ -349,6 +351,11 @@ const ClientDetail = () => {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Auditors */}
+        <TabsContent value="auditors">
+          <ClientAuditorsTab clientId={clientId!} />
         </TabsContent>
 
         {/* Documents */}

@@ -11,7 +11,7 @@ import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
-import { CheckCircle, Circle } from "lucide-react";
+import { CheckCircle, Circle, AlertTriangle } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
@@ -40,6 +40,7 @@ export default function EngagementDetail() {
   const [partner, setPartner] = useState<any>(null);
   const [manager, setManager] = useState<any>(null);
   const [teamUsers, setTeamUsers] = useState<any[]>([]);
+  const [auditorAssignment, setAuditorAssignment] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("risk");
 
@@ -62,6 +63,17 @@ export default function EngagementDetail() {
     if (eng.client_id) {
       const { data } = await supabase.from("clients").select("*").eq("id", eng.client_id).single();
       setClient(data);
+
+      // Fetch auditor assignment for this FY
+      if (eng.financial_year) {
+        const { data: assignment } = await supabase
+          .from("client_auditor_assignments")
+          .select("*, audit_firms(name, partner_name, icai_reg_no)")
+          .eq("client_id", eng.client_id)
+          .eq("financial_year", eng.financial_year)
+          .maybeSingle();
+        setAuditorAssignment(assignment);
+      }
     }
     if (eng.partner_id) {
       const { data } = await supabase.from("users").select("id, name, icai_reg_no").eq("id", eng.partner_id).single();
@@ -115,6 +127,14 @@ export default function EngagementDetail() {
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
+          {auditorAssignment ? (
+            <span>Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> ({auditorAssignment.audit_firms?.partner_name})</span>
+          ) : (
+            <span className="flex items-center gap-1 text-amber-600">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              No audit firm assigned for FY {engagement.financial_year}. Assign one from Client &gt; Auditors tab.
+            </span>
+          )}
           {engagement.planned_start && <span>Start: {engagement.planned_start}</span>}
           {engagement.planned_end && <span>End: {engagement.planned_end}</span>}
         </div>

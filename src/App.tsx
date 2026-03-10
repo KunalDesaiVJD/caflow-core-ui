@@ -29,6 +29,7 @@ import EngagementDetail from "./pages/EngagementDetail";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
+import AuditFirms from "./pages/AuditFirms";
 import Form3CD from "./pages/Form3CD";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
@@ -126,6 +127,7 @@ const App = () => (
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
               <Route path="/settings/users" element={<UserManagement />} />
+              <Route path="/settings/audit-firms" element={<AuditFirms />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
