@@ -196,6 +196,15 @@ export default function EngagementDetail() {
             onUpdate={fetchData}
           />
         </TabsContent>
+
+        <TabsContent value="review">
+          <EngagementReviewSignoff
+            engagement={engagement}
+            client={client}
+            partner={partner}
+            onUpdate={fetchData}
+          />
+        </TabsContent>
       </Tabs>
     </div>
   );
