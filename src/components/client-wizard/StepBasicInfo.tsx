@@ -63,6 +63,23 @@ interface Props {
 }
 
 export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
+  const [groups, setGroups] = useState<GroupOption[]>([]);
+
+  useEffect(() => {
+    supabase.from("client_groups").select("id, name, color").order("name").then(({ data: g }) => {
+      setGroups((g as GroupOption[]) || []);
+    });
+  }, []);
+
+  const selectedGroupIds = data.selectedGroupIds || [];
+
+  const toggleGroup = (id: string) => {
+    const next = selectedGroupIds.includes(id)
+      ? selectedGroupIds.filter((g) => g !== id)
+      : [...selectedGroupIds, id];
+    onChange({ ...data, selectedGroupIds: next });
+  };
+
   const update = (field: keyof BasicInfoData, value: any) =>
     onChange({ ...data, [field]: value });
 
