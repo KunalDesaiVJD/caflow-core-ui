@@ -110,6 +110,12 @@ const ItReturns = () => {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Scrutiny alerts
+  const [scrutinyAlerts, setScrutinyAlerts] = useState<Record<string, number>>({});
+  const [scrutinyDrawerOpen, setScrutinyDrawerOpen] = useState(false);
+  const [scrutinyFindings, setScrutinyFindings] = useState<any[]>([]);
+  const [scrutinyDrawerClient, setScrutinyDrawerClient] = useState<string>("");
+
   // View & filters
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [activeGroup, setActiveGroup] = useState<string>("all");
