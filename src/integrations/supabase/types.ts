@@ -55,12 +55,14 @@ export type Database = {
       }
       audit_engagements: {
         Row: {
+          active_tabs: Json | null
           audit_firm_id: string | null
           audit_programme: Json | null
           audit_type: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
           client_id: string | null
+          entity_type_logic: string | null
           financial_year: string | null
           firm_id: string | null
           form_3cd: Json | null
@@ -71,6 +73,7 @@ export type Database = {
           partner_id: string | null
           planned_end: string | null
           planned_start: string | null
+          preliminary_complete: boolean | null
           risk_assessment: Json | null
           risk_rating: string | null
           signed_at: string | null
@@ -79,12 +82,14 @@ export type Database = {
           team_members: string[] | null
         }
         Insert: {
+          active_tabs?: Json | null
           audit_firm_id?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           client_id?: string | null
+          entity_type_logic?: string | null
           financial_year?: string | null
           firm_id?: string | null
           form_3cd?: Json | null
@@ -95,6 +100,7 @@ export type Database = {
           partner_id?: string | null
           planned_end?: string | null
           planned_start?: string | null
+          preliminary_complete?: boolean | null
           risk_assessment?: Json | null
           risk_rating?: string | null
           signed_at?: string | null
@@ -103,12 +109,14 @@ export type Database = {
           team_members?: string[] | null
         }
         Update: {
+          active_tabs?: Json | null
           audit_firm_id?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           client_id?: string | null
+          entity_type_logic?: string | null
           financial_year?: string | null
           firm_id?: string | null
           form_3cd?: Json | null
@@ -119,6 +127,7 @@ export type Database = {
           partner_id?: string | null
           planned_end?: string | null
           planned_start?: string | null
+          preliminary_complete?: boolean | null
           risk_assessment?: Json | null
           risk_rating?: string | null
           signed_at?: string | null
@@ -1104,6 +1113,7 @@ export type Database = {
           financial_year: string | null
           flag_message: string | null
           id: string
+          linked_query_id: string | null
           narration: string | null
           rule_id: string | null
           severity: string | null
@@ -1115,6 +1125,7 @@ export type Database = {
           financial_year?: string | null
           flag_message?: string | null
           id?: string
+          linked_query_id?: string | null
           narration?: string | null
           rule_id?: string | null
           severity?: string | null
@@ -1126,6 +1137,7 @@ export type Database = {
           financial_year?: string | null
           flag_message?: string | null
           id?: string
+          linked_query_id?: string | null
           narration?: string | null
           rule_id?: string | null
           severity?: string | null
