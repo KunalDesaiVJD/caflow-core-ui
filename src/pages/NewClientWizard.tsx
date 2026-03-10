@@ -36,6 +36,7 @@ const defaultBasicInfo: BasicInfoData = {
   business_nature: "",
   gstins: [""],
   cin: "",
+  selectedGroupIds: [],
 };
 
 const defaultFinancialProfile: FinancialProfileData = {
