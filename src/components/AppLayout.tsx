@@ -7,8 +7,10 @@ import { MobileBottomNav } from "./MobileBottomNav";
 import { MobileFAB } from "./MobileFAB";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useThemeLoader } from "@/hooks/useThemeLoader";
 
 export function AppLayout() {
+  useThemeLoader();
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);

@@ -86,11 +86,45 @@ export default function AdminThemeStudio() {
     if (!selectedFirmId) { toast.error("Select a firm first"); return; }
     setSaving(true);
     const firm = firms.find(f => f.id === selectedFirmId);
-    const settings = { ...(firm?.settings || {}), theme_layout: selectedLayout, theme_color: selectedColor, tab_layout_overrides: tabOverrides, allow_firm_admin_theme: allowFirmTheme };
+
+    // Upsert the theme into app_themes and get its id
+    const themeName = `${COLOR_OPTIONS.find(c => c.value === selectedColor)?.label} - ${LAYOUT_OPTIONS.find(l => l.value === selectedLayout)?.label}`;
+    const { data: themeRow, error: themeErr } = await supabase.from("app_themes").upsert({
+      name: themeName,
+      layout_type: selectedLayout,
+      color_scheme: selectedColor,
+      css_vars: cssVars,
+      active: true,
+    }, { onConflict: "id" }).select("id").single();
+
+    if (themeErr || !themeRow) {
+      // Fallback: try insert
+      const { data: inserted } = await supabase.from("app_themes").insert({
+        name: themeName, layout_type: selectedLayout, color_scheme: selectedColor, css_vars: cssVars, active: true,
+      }).select("id").single();
+      var themeId = inserted?.id;
+    } else {
+      var themeId = themeRow.id;
+    }
+
+    const settings = {
+      ...(firm?.settings || {}),
+      theme_id: themeId,
+      theme_layout: selectedLayout,
+      theme_color: selectedColor,
+      tab_layout_overrides: tabOverrides,
+      allow_firm_admin_theme: allowFirmTheme,
+    };
     const { error } = await supabase.from("firms").update({ settings }).eq("id", selectedFirmId);
     setSaving(false);
     if (error) toast.error("Failed to apply theme");
-    else toast.success(`Theme applied to ${firm?.name}`);
+    else {
+      toast.success(`Theme applied to ${firm?.name}`);
+      // Update localStorage for instant refresh if current user belongs to this firm
+      try {
+        localStorage.setItem("firmTheme", JSON.stringify({ cssVars, firmId: selectedFirmId, themeId, ts: Date.now() }));
+      } catch {}
+    }
   };
 
   const handleSetDefault = async () => {

@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { useThemeLoader } from "@/hooks/useThemeLoader";
 import {
   LayoutDashboard,
   Building2,
@@ -25,6 +26,7 @@ const navItems = [
 ];
 
 export function AdminLayout() {
+  useThemeLoader();
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
