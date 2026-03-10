@@ -63,6 +63,7 @@ export default function AuditScrutiny() {
   const [actionNote, setActionNote] = useState("");
   const [linkClauseId, setLinkClauseId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [auditFirmName, setAuditFirmName] = useState<string | null>(null);
 
   // Check trial balance existence
   useEffect(() => {
