@@ -347,7 +347,7 @@ export default function AuditIntelligence() {
           {filtered.map(e => {
             const daysLeft = e.planned_end ? differenceInDays(new Date(e.planned_end), new Date()) : null;
             return (
-              <Card key={e.id} className="p-4 space-y-2 hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/clients/${e.client_id}`)}>
+              <Card key={e.id} className="p-4 space-y-2 hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/audit/${e.id}`)}>
                 <div className="flex items-start justify-between">
                   <h3 className="font-semibold text-foreground">{e.client_name}</h3>
                   <Badge variant={statusBadgeVariant(e.status)} className="capitalize">{e.status}</Badge>
