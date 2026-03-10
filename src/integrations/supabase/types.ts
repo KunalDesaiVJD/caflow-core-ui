@@ -864,33 +864,58 @@ export type Database = {
       }
       itr_profiles: {
         Row: {
+          acknowledgment_no: string | null
           ais_recon_data: Json | null
+          assessment_year: string | null
+          assigned_to: string | null
           client_id: string | null
+          date_data_received: string | null
+          date_filed: string | null
           filing_status: string | null
           financial_year: string | null
           firm_id: string | null
           id: string
           itr_form: string | null
+          itr_work_group_id: string | null
         }
         Insert: {
+          acknowledgment_no?: string | null
           ais_recon_data?: Json | null
+          assessment_year?: string | null
+          assigned_to?: string | null
           client_id?: string | null
+          date_data_received?: string | null
+          date_filed?: string | null
           filing_status?: string | null
           financial_year?: string | null
           firm_id?: string | null
           id?: string
           itr_form?: string | null
+          itr_work_group_id?: string | null
         }
         Update: {
+          acknowledgment_no?: string | null
           ais_recon_data?: Json | null
+          assessment_year?: string | null
+          assigned_to?: string | null
           client_id?: string | null
+          date_data_received?: string | null
+          date_filed?: string | null
           filing_status?: string | null
           financial_year?: string | null
           firm_id?: string | null
           id?: string
           itr_form?: string | null
+          itr_work_group_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "itr_profiles_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "itr_profiles_client_id_fkey"
             columns: ["client_id"]
@@ -900,6 +925,48 @@ export type Database = {
           },
           {
             foreignKeyName: "itr_profiles_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "itr_profiles_itr_work_group_id_fkey"
+            columns: ["itr_work_group_id"]
+            isOneToOne: false
+            referencedRelation: "itr_work_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      itr_work_groups: {
+        Row: {
+          code: string
+          color: string | null
+          description: string | null
+          firm_id: string
+          id: string
+          name: string
+        }
+        Insert: {
+          code: string
+          color?: string | null
+          description?: string | null
+          firm_id: string
+          id?: string
+          name: string
+        }
+        Update: {
+          code?: string
+          color?: string | null
+          description?: string | null
+          firm_id?: string
+          id?: string
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "itr_work_groups_firm_id_fkey"
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
