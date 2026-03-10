@@ -72,6 +72,8 @@ export type Database = {
           planned_start: string | null
           risk_assessment: Json | null
           risk_rating: string | null
+          signed_at: string | null
+          signed_by: string | null
           status: string | null
           team_members: string[] | null
         }
@@ -93,6 +95,8 @@ export type Database = {
           planned_start?: string | null
           risk_assessment?: Json | null
           risk_rating?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
           status?: string | null
           team_members?: string[] | null
         }
@@ -114,6 +118,8 @@ export type Database = {
           planned_start?: string | null
           risk_assessment?: Json | null
           risk_rating?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
           status?: string | null
           team_members?: string[] | null
         }
@@ -142,6 +148,13 @@ export type Database = {
           {
             foreignKeyName: "audit_engagements_partner_id_fkey"
             columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_engagements_signed_by_fkey"
+            columns: ["signed_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
@@ -387,31 +400,49 @@ export type Database = {
         Row: {
           category: string | null
           client_id: string | null
+          engagement_id: string | null
           extracted_text: string | null
           filename: string | null
           firm_id: string | null
           id: string
+          is_final: boolean | null
+          is_signed: boolean | null
           r2_key: string | null
+          signed_at: string | null
+          signed_by: string | null
+          sub_category: string | null
           tags: string[] | null
         }
         Insert: {
           category?: string | null
           client_id?: string | null
+          engagement_id?: string | null
           extracted_text?: string | null
           filename?: string | null
           firm_id?: string | null
           id?: string
+          is_final?: boolean | null
+          is_signed?: boolean | null
           r2_key?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
+          sub_category?: string | null
           tags?: string[] | null
         }
         Update: {
           category?: string | null
           client_id?: string | null
+          engagement_id?: string | null
           extracted_text?: string | null
           filename?: string | null
           firm_id?: string | null
           id?: string
+          is_final?: boolean | null
+          is_signed?: boolean | null
           r2_key?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
+          sub_category?: string | null
           tags?: string[] | null
         }
         Relationships: [
@@ -423,10 +454,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "documents_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "documents_firm_id_fkey"
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "documents_signed_by_fkey"
+            columns: ["signed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
