@@ -1000,6 +1000,7 @@ export type Database = {
           section: string | null
           status: string | null
           tds_amount: number | null
+          tds_filing_id: string | null
           tds_rate: number | null
         }
         Insert: {
@@ -1018,6 +1019,7 @@ export type Database = {
           section?: string | null
           status?: string | null
           tds_amount?: number | null
+          tds_filing_id?: string | null
           tds_rate?: number | null
         }
         Update: {
@@ -1036,6 +1038,7 @@ export type Database = {
           section?: string | null
           status?: string | null
           tds_amount?: number | null
+          tds_filing_id?: string | null
           tds_rate?: number | null
         }
         Relationships: [
@@ -1058,6 +1061,113 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_entries_tds_filing_id_fkey"
+            columns: ["tds_filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_filings: {
+        Row: {
+          acknowledgment_number: string | null
+          approver_id: string | null
+          checker_id: string | null
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          date_data_received: string | null
+          date_of_filing: string | null
+          financial_year: string
+          firm_id: string
+          id: string
+          preparer_id: string | null
+          quarter: string
+          remarks: string | null
+          tds_forms: string[] | null
+          work_status: string
+        }
+        Insert: {
+          acknowledgment_number?: string | null
+          approver_id?: string | null
+          checker_id?: string | null
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          date_data_received?: string | null
+          date_of_filing?: string | null
+          financial_year: string
+          firm_id: string
+          id?: string
+          preparer_id?: string | null
+          quarter: string
+          remarks?: string | null
+          tds_forms?: string[] | null
+          work_status?: string
+        }
+        Update: {
+          acknowledgment_number?: string | null
+          approver_id?: string | null
+          checker_id?: string | null
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          date_data_received?: string | null
+          date_of_filing?: string | null
+          financial_year?: string
+          firm_id?: string
+          id?: string
+          preparer_id?: string | null
+          quarter?: string
+          remarks?: string | null
+          tds_forms?: string[] | null
+          work_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_filings_approver_id_fkey"
+            columns: ["approver_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filings_checker_id_fkey"
+            columns: ["checker_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filings_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filings_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filings_preparer_id_fkey"
+            columns: ["preparer_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
