@@ -48,6 +48,8 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Prop
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [hasTB, setHasTB] = useState(false);
+  const prevNotesRef = useRef<NoteData[]>([]);
+  const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
     // Check if trial balance exists
