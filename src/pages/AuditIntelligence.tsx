@@ -146,7 +146,7 @@ export default function AuditIntelligence() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, [user?.firm_id]);
+  useEffect(() => { fetchData(); }, [user?.firm_id, user?.role]);
 
   // Realtime subscription
   useEffect(() => {
