@@ -63,6 +63,17 @@ export default function EngagementDetail() {
     if (eng.client_id) {
       const { data } = await supabase.from("clients").select("*").eq("id", eng.client_id).single();
       setClient(data);
+
+      // Fetch auditor assignment for this FY
+      if (eng.financial_year) {
+        const { data: assignment } = await supabase
+          .from("client_auditor_assignments")
+          .select("*, audit_firms(name, partner_name, icai_reg_no)")
+          .eq("client_id", eng.client_id)
+          .eq("financial_year", eng.financial_year)
+          .maybeSingle();
+        setAuditorAssignment(assignment);
+      }
     }
     if (eng.partner_id) {
       const { data } = await supabase.from("users").select("id, name, icai_reg_no").eq("id", eng.partner_id).single();
