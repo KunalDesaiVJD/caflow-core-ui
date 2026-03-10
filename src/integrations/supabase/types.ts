@@ -981,6 +981,164 @@ export type Database = {
           },
         ]
       }
+      demand_notice_status_history: {
+        Row: {
+          change_note: string | null
+          changed_at: string | null
+          changed_by: string | null
+          from_status: string | null
+          id: string
+          notice_id: string
+          to_status: string
+        }
+        Insert: {
+          change_note?: string | null
+          changed_at?: string | null
+          changed_by?: string | null
+          from_status?: string | null
+          id?: string
+          notice_id: string
+          to_status: string
+        }
+        Update: {
+          change_note?: string | null
+          changed_at?: string | null
+          changed_by?: string | null
+          from_status?: string | null
+          id?: string
+          notice_id?: string
+          to_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "demand_notice_status_history_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "demand_notice_status_history_notice_id_fkey"
+            columns: ["notice_id"]
+            isOneToOne: false
+            referencedRelation: "demand_notices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      demand_notices: {
+        Row: {
+          ai_draft_reply: string | null
+          amount_demanded: number | null
+          amount_disputed: number | null
+          assessment_year: string | null
+          assigned_to: string | null
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          date_received: string | null
+          department: string | null
+          extended_due_date: string | null
+          final_reply: string | null
+          firm_id: string
+          id: string
+          notice_date: string | null
+          notice_document_r2_key: string | null
+          notice_ref_no: string | null
+          notice_type: string | null
+          order_document_r2_key: string | null
+          priority: string | null
+          remarks: string | null
+          reply_due_date: string | null
+          section: string | null
+          status: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          ai_draft_reply?: string | null
+          amount_demanded?: number | null
+          amount_disputed?: number | null
+          assessment_year?: string | null
+          assigned_to?: string | null
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          date_received?: string | null
+          department?: string | null
+          extended_due_date?: string | null
+          final_reply?: string | null
+          firm_id: string
+          id?: string
+          notice_date?: string | null
+          notice_document_r2_key?: string | null
+          notice_ref_no?: string | null
+          notice_type?: string | null
+          order_document_r2_key?: string | null
+          priority?: string | null
+          remarks?: string | null
+          reply_due_date?: string | null
+          section?: string | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          ai_draft_reply?: string | null
+          amount_demanded?: number | null
+          amount_disputed?: number | null
+          assessment_year?: string | null
+          assigned_to?: string | null
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          date_received?: string | null
+          department?: string | null
+          extended_due_date?: string | null
+          final_reply?: string | null
+          firm_id?: string
+          id?: string
+          notice_date?: string | null
+          notice_document_r2_key?: string | null
+          notice_ref_no?: string | null
+          notice_type?: string | null
+          order_document_r2_key?: string | null
+          priority?: string | null
+          remarks?: string | null
+          reply_due_date?: string | null
+          section?: string | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "demand_notices_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "demand_notices_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "demand_notices_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "demand_notices_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       documents: {
         Row: {
           category: string | null
