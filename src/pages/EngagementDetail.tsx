@@ -127,6 +127,14 @@ export default function EngagementDetail() {
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
+          {auditorAssignment ? (
+            <span>Auditor: <strong className="text-foreground">{auditorAssignment.audit_firms?.name}</strong> ({auditorAssignment.audit_firms?.partner_name})</span>
+          ) : (
+            <span className="flex items-center gap-1 text-amber-600">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              No audit firm assigned for FY {engagement.financial_year}. Assign one from Client &gt; Auditors tab.
+            </span>
+          )}
           {engagement.planned_start && <span>Start: {engagement.planned_start}</span>}
           {engagement.planned_end && <span>End: {engagement.planned_end}</span>}
         </div>

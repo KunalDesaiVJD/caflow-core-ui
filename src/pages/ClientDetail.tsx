@@ -353,6 +353,11 @@ const ClientDetail = () => {
           </Card>
         </TabsContent>
 
+        {/* Auditors */}
+        <TabsContent value="auditors">
+          <ClientAuditorsTab clientId={clientId!} />
+        </TabsContent>
+
         {/* Documents */}
         <TabsContent value="documents">
           <Card>
