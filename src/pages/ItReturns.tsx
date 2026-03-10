@@ -628,6 +628,34 @@ const ItReturns = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Scrutiny Alerts Drawer */}
+      <Drawer open={scrutinyDrawerOpen} onOpenChange={setScrutinyDrawerOpen}>
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>Scrutiny Alerts — {scrutinyDrawerClient}</DrawerTitle>
+          </DrawerHeader>
+          <div className="px-4 pb-6 max-h-[60vh] overflow-y-auto">
+            {scrutinyFindings.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No relevant HIGH severity findings.</p>
+            ) : (
+              <div className="space-y-2">
+                {scrutinyFindings.map((f: any) => (
+                  <div key={f.id} className="border rounded-lg p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="destructive" className="text-[10px]">HIGH</Badge>
+                      <span className="text-xs font-mono text-muted-foreground">{f.rule_id}</span>
+                    </div>
+                    <p className="text-sm text-foreground">{f.flag_message}</p>
+                    {f.narration && <p className="text-xs text-muted-foreground truncate">{f.narration}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground text-center mt-4">Read-only view. Edit findings in Scrutiny module.</p>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 };
