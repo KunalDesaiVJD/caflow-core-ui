@@ -291,7 +291,7 @@ export default function AuditIntelligence() {
                   {dayEngs.slice(0, 4).map(e => (
                     <button
                       key={e.id}
-                      onClick={() => navigate(`/clients/${e.client_id}`)}
+                      onClick={() => navigate(`/audit/${e.id}`)}
                       title={`${e.client_name} — ${e.status}`}
                       className={cn("w-5 h-5 rounded-full text-[8px] font-bold text-white flex items-center justify-center cursor-pointer hover:scale-110 transition-transform", statusColor[e.status || "planning"])}
                     >
