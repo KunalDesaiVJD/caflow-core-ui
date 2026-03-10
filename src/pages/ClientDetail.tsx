@@ -14,6 +14,7 @@ import { format } from "date-fns";
 import { ArrowLeft, Pencil, Shield, FileText, Upload, Loader2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { ClientAuditorsTab } from "@/components/client-detail/ClientAuditorsTab";
+import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSection";
 
 interface Client {
   id: string;
