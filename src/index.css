@@ -60,5 +60,30 @@
   }
   body {
     @apply bg-background text-foreground font-sans;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  /* Safe area for bottom nav on notched devices */
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Horizontal scroll wrapper for tables on mobile */
+  .table-scroll-mobile {
+    @apply overflow-x-auto -mx-3 px-3;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-mobile table {
+    min-width: 640px;
+  }
+
+  /* Touch-friendly form inputs */
+  @media (max-width: 639px) {
+    input, select, textarea, button {
+      font-size: 16px !important; /* prevents iOS zoom on focus */
+    }
   }
 }
