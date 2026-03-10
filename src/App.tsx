@@ -97,6 +97,7 @@ const App = () => (
             {/* Client Portal - only for client role */}
             <Route element={<PortalGuard><PortalLayout /></PortalGuard>}>
               <Route path="/portal" element={<PortalHome />} />
+              <Route path="/portal/queries" element={<PortalQueries />} />
             </Route>
 
             {/* Superadmin platform */}
