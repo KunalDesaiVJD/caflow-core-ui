@@ -154,6 +154,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
 
   function applyAiSuggestions() {
     if (!aiSuggestions) return;
+    const prevSnap = [...rows];
     setRows(prev => prev.map((row, i) => {
       const sug = aiSuggestions.find((s: any) =>
         s.area?.toLowerCase() === row.area.toLowerCase()
@@ -167,8 +168,27 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
         notes: sug.reasoning || row.notes,
       };
     }));
+    prevRowsRef.current = prevSnap;
     toast.success("AI suggestions applied");
     setAiOpen(false);
+  }
+
+  async function saveWithTracking() {
+    // Track overrides where human changed AI-applied values
+    if (prevRowsRef.current.length > 0) {
+      rows.forEach((row, i) => {
+        const prev = prevRowsRef.current[i];
+        if (prev && (row.inherent !== prev.inherent || row.control !== prev.control)) {
+          track("risk_override", {
+            area: row.area,
+            ai_level: { inherent: riskLabel(prev.inherent), control: riskLabel(prev.control) },
+            human_level: { inherent: riskLabel(row.inherent), control: riskLabel(row.control) },
+            rationale: row.notes,
+          }, { humanOverride: true });
+        }
+      });
+    }
+    await save();
   }
 
   return (

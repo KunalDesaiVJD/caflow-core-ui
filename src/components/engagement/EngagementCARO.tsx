@@ -244,6 +244,20 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
   async function save() {
     setSaving(true);
+    // Track human edits on AI/auto-filled clauses
+    clauses.forEach((c, i) => {
+      const prev = prevClausesRef.current[i];
+      if (prev && (prev.source === "ai" || prev.source === "auto") && c.source === "manual" && prev.answer !== c.answer) {
+        track("caro_clause_edit", {
+          clause_no: c.para,
+          ai_text: prev.answer,
+          human_text: c.answer,
+          char_diff: c.answer.length - prev.answer.length,
+        }, { aiSuggestion: prev.answer, humanOverride: true });
+      }
+    });
+    prevClausesRef.current = [...clauses];
+
     const { error } = await supabase
       .from("audit_engagements")
       .update({ caro_responses: clauses as unknown as Json })

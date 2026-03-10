@@ -138,9 +138,20 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Prop
   async function save() {
     setSaving(true);
     const payload: Record<string, any> = {};
-    notes.forEach(n => {
+    notes.forEach((n, i) => {
+      // Track edits to AI drafts
+      const prev = prevNotesRef.current[i];
+      if (prev && prev.status === "ai_draft" && n.content !== prev.content) {
+        track("notes_edit", {
+          note_number: n.num,
+          note_title: n.title,
+          ai_text_length: prev.content.length,
+          human_text_length: n.content.length,
+        }, { aiSuggestion: prev.content.substring(0, 500), humanOverride: true });
+      }
       payload[String(n.num)] = { content: n.content, status: n.status, title: n.title };
     });
+    prevNotesRef.current = [...notes];
 
     const { error } = await supabase
       .from("audit_engagements")

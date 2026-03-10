@@ -188,9 +188,19 @@ export default function Form3CD() {
     setSaving(true);
     const form3cd: Record<string, any> = {};
     for (const clause of CLAUSES_3CD) {
+      const prev = prevAnswersRef.current[clause.no] || "";
+      const curr = answers[clause.no] || "";
+      if (prev && curr && prev !== curr) {
+        track("3cd_clause_edit", {
+          clause_no: clause.no,
+          ai_text: prev,
+          human_text: curr,
+          char_diff: curr.length - prev.length,
+        }, { aiSuggestion: prev, humanOverride: true });
+      }
       form3cd[clause.no] = {
-        answer: answers[clause.no] || "",
-        status: answers[clause.no]?.trim() ? (statuses[clause.no] || "Draft") : "Empty",
+        answer: curr,
+        status: curr.trim() ? (statuses[clause.no] || "Draft") : "Empty",
       };
     }
     const { error } = await supabase
@@ -198,6 +208,8 @@ export default function Form3CD() {
       .update({ form_3cd: form3cd } as any)
       .eq("id", engagement.id);
 
+    // Update ref for next diff
+    prevAnswersRef.current = { ...answers };
     setSaving(false);
     if (error) toast.error("Failed to save: " + error.message);
     else toast.success("Form 3CD draft saved");
