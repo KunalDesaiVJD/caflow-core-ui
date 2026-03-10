@@ -11,7 +11,7 @@ import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
-import { CheckCircle, Circle } from "lucide-react";
+import { CheckCircle, Circle, AlertTriangle } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
