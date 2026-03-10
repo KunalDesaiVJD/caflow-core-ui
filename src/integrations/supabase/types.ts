@@ -53,6 +53,39 @@ export type Database = {
           },
         ]
       }
+      app_themes: {
+        Row: {
+          active: boolean | null
+          color_scheme: string
+          created_at: string | null
+          css_vars: Json
+          id: string
+          is_default: boolean | null
+          layout_type: string
+          name: string
+        }
+        Insert: {
+          active?: boolean | null
+          color_scheme?: string
+          created_at?: string | null
+          css_vars?: Json
+          id?: string
+          is_default?: boolean | null
+          layout_type?: string
+          name: string
+        }
+        Update: {
+          active?: boolean | null
+          color_scheme?: string
+          created_at?: string | null
+          css_vars?: Json
+          id?: string
+          is_default?: boolean | null
+          layout_type?: string
+          name?: string
+        }
+        Relationships: []
+      }
       audit_ai_skills: {
         Row: {
           action_count: number | null

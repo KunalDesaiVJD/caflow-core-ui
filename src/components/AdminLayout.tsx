@@ -9,6 +9,8 @@ import {
   LogOut,
   Shield,
   Settings,
+  Brain,
+  Palette,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +19,8 @@ const navItems = [
   { title: "Firms Management", path: "/admin/firms", icon: Building2 },
   { title: "User Management", path: "/admin/users", icon: Users },
   { title: "System Logs", path: "/admin/logs", icon: ScrollText },
+  { title: "AI Skills", path: "/admin/ai-skills", icon: Brain },
+  { title: "Theme Studio", path: "/admin/theme-studio", icon: Palette },
   { title: "Settings", path: "/admin/settings", icon: Settings },
 ];
 
