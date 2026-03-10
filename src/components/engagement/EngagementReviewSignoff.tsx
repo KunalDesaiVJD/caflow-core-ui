@@ -30,6 +30,7 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
   const [checks, setChecks] = useState<CheckItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [generatingBundle, setGeneratingBundle] = useState(false);
   const [signing, setSigning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [declared, setDeclared] = useState(false);
