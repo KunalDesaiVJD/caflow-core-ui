@@ -8,13 +8,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EngagementRiskAssessment } from "@/components/engagement/EngagementRiskAssessment";
 import { EngagementAuditProgramme } from "@/components/engagement/EngagementAuditProgramme";
 import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork";
+import { EngagementCARO } from "@/components/engagement/EngagementCARO";
+import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { CheckCircle, Circle } from "lucide-react";
 
-const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "Review", "Sign-off"];
+const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
   "Risk Assessment": "risk",
   "Audit Programme": "programme",
   "Fieldwork": "fieldwork",
+  "CARO": "caro",
+  "Notes": "notes",
 };
 
 const statusColors: Record<string, string> = {
@@ -141,6 +145,8 @@ export default function EngagementDetail() {
           <TabsTrigger value="risk">Risk Assessment</TabsTrigger>
           <TabsTrigger value="programme">Audit Programme</TabsTrigger>
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
+          {engagement.caro_applicable && <TabsTrigger value="caro">CARO</TabsTrigger>}
+          <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
         </TabsList>
 
         <TabsContent value="risk">
@@ -165,6 +171,24 @@ export default function EngagementDetail() {
             client={client}
             teamUsers={teamUsers}
             currentUser={user}
+            onUpdate={fetchData}
+          />
+        </TabsContent>
+
+        {engagement.caro_applicable && (
+          <TabsContent value="caro">
+            <EngagementCARO
+              engagement={engagement}
+              client={client}
+              onUpdate={fetchData}
+            />
+          </TabsContent>
+        )}
+
+        <TabsContent value="notes">
+          <EngagementNotesToAccounts
+            engagement={engagement}
+            client={client}
             onUpdate={fetchData}
           />
         </TabsContent>
