@@ -22,6 +22,7 @@ import ErpLedger from "./pages/ErpLedger";
 import Timesheets from "./pages/Timesheets";
 import BankRecon from "./pages/BankRecon";
 import AuditIntelligence from "./pages/AuditIntelligence";
+import EngagementDetail from "./pages/EngagementDetail";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
