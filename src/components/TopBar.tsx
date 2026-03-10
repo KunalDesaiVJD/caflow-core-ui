@@ -58,7 +58,3 @@ export function TopBar({ onMenuClick }: TopBarProps) {
     </header>
   );
 }
-
-function cn(...classes: (string | false | undefined)[]) {
-  return classes.filter(Boolean).join(" ");
-}
