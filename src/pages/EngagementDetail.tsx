@@ -52,32 +52,22 @@ export default function EngagementDetail() {
     if (!eng) { setLoading(false); return; }
     setEngagement(eng);
 
-    const promises: Promise<any>[] = [];
-
     if (eng.client_id) {
-      promises.push(
-        supabase.from("clients").select("*").eq("id", eng.client_id).single().then(r => setClient(r.data))
-      );
+      const { data } = await supabase.from("clients").select("*").eq("id", eng.client_id).single();
+      setClient(data);
     }
     if (eng.partner_id) {
-      promises.push(
-        supabase.from("users").select("id, name, icai_reg_no").eq("id", eng.partner_id).single().then(r => setPartner(r.data))
-      );
+      const { data } = await supabase.from("users").select("id, name, icai_reg_no").eq("id", eng.partner_id).single();
+      setPartner(data);
     }
     if (eng.manager_id) {
-      promises.push(
-        supabase.from("users").select("id, name").eq("id", eng.manager_id).single().then(r => setManager(r.data))
-      );
+      const { data } = await supabase.from("users").select("id, name").eq("id", eng.manager_id).single();
+      setManager(data);
     }
-
-    // Fetch all firm users for team dropdowns
     if (user?.firm_id) {
-      promises.push(
-        supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id).then(r => setTeamUsers(r.data || []))
-      );
+      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id);
+      setTeamUsers(data || []);
     }
-
-    await Promise.all(promises);
     setLoading(false);
   }
 
