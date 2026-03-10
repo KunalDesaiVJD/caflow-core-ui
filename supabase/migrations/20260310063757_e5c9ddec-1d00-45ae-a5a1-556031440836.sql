@@ -1,0 +1,1 @@
+ALTER TABLE public.audit_engagements ADD COLUMN IF NOT EXISTS audit_programme jsonb DEFAULT '[]'::jsonb;
