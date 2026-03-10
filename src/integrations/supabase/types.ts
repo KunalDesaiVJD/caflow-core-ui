@@ -246,6 +246,61 @@ export type Database = {
           },
         ]
       }
+      audit_preliminary_answers: {
+        Row: {
+          activated_tabs: Json | null
+          answers: Json
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string
+          firm_id: string | null
+          id: string
+          updated_at: string | null
+        }
+        Insert: {
+          activated_tabs?: Json | null
+          answers?: Json
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id: string
+          firm_id?: string | null
+          id?: string
+          updated_at?: string | null
+        }
+        Update: {
+          activated_tabs?: Json | null
+          answers?: Json
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string
+          firm_id?: string | null
+          id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_preliminary_answers_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_preliminary_answers_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_preliminary_answers_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_workpapers: {
         Row: {
           conclusion: string | null
