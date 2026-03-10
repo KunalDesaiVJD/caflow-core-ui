@@ -661,9 +661,10 @@ const ItReturns = () => {
 };
 
 // ─── Table View ───
-function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
+function TableView({ profiles, demands, onEdit, onDelete, onNavigate, scrutinyAlerts, onScrutinyClick }: {
   profiles: ItrProfile[]; demands: any[]; onEdit: (p: ItrProfile) => void;
   onDelete: (p: ItrProfile) => void; onNavigate: (path: string) => void;
+  scrutinyAlerts?: Record<string, number>; onScrutinyClick?: (clientId: string, clientName: string) => void;
 }) {
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -677,6 +678,7 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
             <TableHead>Assigned To</TableHead>
             <TableHead>Date Recd</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Alerts</TableHead>
             <TableHead>Date Filed</TableHead>
             <TableHead>Ack No</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -684,7 +686,7 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate }: {
         </TableHeader>
         <TableBody>
           {profiles.length === 0 ? (
-            <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-8">No ITR profiles found.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No ITR profiles found.</TableCell></TableRow>
           ) : profiles.map((p) => (
             <TableRow key={p.id} className="hover:bg-muted/50">
               <TableCell className="font-medium cursor-pointer" onClick={() => onNavigate(`/itr/${p.client_id}`)}>{p.client_name}</TableCell>
