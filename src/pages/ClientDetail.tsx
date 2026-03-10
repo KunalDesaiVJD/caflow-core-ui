@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ArrowLeft, Pencil, Shield, FileText, Upload, Loader2 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { ClientAuditorsTab } from "@/components/client-detail/ClientAuditorsTab";
 
 interface Client {
   id: string;
