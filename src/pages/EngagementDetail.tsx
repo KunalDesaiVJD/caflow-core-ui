@@ -150,6 +150,7 @@ export default function EngagementDetail() {
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
           {engagement.caro_applicable && <TabsTrigger value="caro">CARO</TabsTrigger>}
           <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+          <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
 
         <TabsContent value="risk">
