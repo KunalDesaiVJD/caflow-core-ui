@@ -51,6 +51,8 @@ import AuditQueryTracker from "./pages/AuditQueryTracker";
 import AuditQueryDispatch from "./pages/AuditQueryDispatch";
 import AuditReportEngine from "./pages/AuditReportEngine";
 import PortalQueries from "./pages/PortalQueries";
+import NoticeTracker from "./pages/NoticeTracker";
+import NoticeDetail from "./pages/NoticeDetail";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
