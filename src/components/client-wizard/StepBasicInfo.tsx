@@ -220,6 +220,25 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
           {errors.cin && <p className="text-xs text-destructive">{errors.cin}</p>}
         </div>
       )}
+
+      {/* Assign to Groups */}
+      {groups.length > 0 && (
+        <div className="space-y-2">
+          <Label>Assign to Groups (optional)</Label>
+          <div className="grid grid-cols-2 gap-2">
+            {groups.map((g) => (
+              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                <Checkbox
+                  checked={selectedGroupIds.includes(g.id)}
+                  onCheckedChange={() => toggleGroup(g.id)}
+                />
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: g.color || "#6B7280" }} />
+                {g.name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
