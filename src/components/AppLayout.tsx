@@ -1,18 +1,31 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { AppSidebar } from "./AppSidebar";
 import { TopBar } from "./TopBar";
+import { MobileDrawer } from "./MobileDrawer";
+import { MobileBottomNav } from "./MobileBottomNav";
+import { MobileFAB } from "./MobileFAB";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 export function AppLayout() {
-  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
+  const isMobile = useIsMobile();
+  const [collapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const handler = (e: MediaQueryListEvent) => setCollapsed(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  if (isMobile) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <TopBar onMenuClick={() => setDrawerOpen(true)} />
+        <main className="flex-1 p-3 pb-24 overflow-x-hidden">
+          <Outlet />
+        </main>
+        <MobileFAB />
+        <MobileBottomNav />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">
