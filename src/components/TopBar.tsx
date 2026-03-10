@@ -1,5 +1,6 @@
 import { useLocation } from "react-router-dom";
 import { ChevronRight, Menu } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const routeLabels: Record<string, string> = {
   "/": "Dashboard",
