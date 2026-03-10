@@ -71,6 +71,7 @@ export default function AuditQueryTracker() {
   const [clientName, setClientName] = useState("");
   const [financialYear, setFinancialYear] = useState("2024-25");
   const [engagementId, setEngagementId] = useState<string | null>(null);
+  const { track } = useAuditTracker(engagementId);
 
   // Filters
   const [filterStatus, setFilterStatus] = useState("all");
