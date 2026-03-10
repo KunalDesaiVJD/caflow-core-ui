@@ -175,7 +175,6 @@ const ClientDetail = () => {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="filings">Filings</TabsTrigger>
-          <TabsTrigger value="audit">Audit</TabsTrigger>
           <TabsTrigger value="auditors">Auditors</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
