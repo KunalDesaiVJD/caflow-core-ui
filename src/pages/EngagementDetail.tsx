@@ -40,6 +40,7 @@ export default function EngagementDetail() {
   const [partner, setPartner] = useState<any>(null);
   const [manager, setManager] = useState<any>(null);
   const [teamUsers, setTeamUsers] = useState<any[]>([]);
+  const [auditorAssignment, setAuditorAssignment] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("risk");
 
