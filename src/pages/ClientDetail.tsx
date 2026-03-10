@@ -163,6 +163,13 @@ const ClientDetail = () => {
         </div>
       </div>
 
+      {/* Groups Section */}
+      <Card>
+        <CardContent className="p-4">
+          <ClientGroupsSection clientId={client.id} />
+        </CardContent>
+      </Card>
+
       {/* Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
         <TabsList>
