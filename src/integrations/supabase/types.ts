@@ -53,6 +53,97 @@ export type Database = {
           },
         ]
       }
+      audit_client_queries: {
+        Row: {
+          carry_forward_from_year: string | null
+          carry_forward_to_year: string | null
+          client_id: string | null
+          client_reply: string | null
+          created_at: string | null
+          due_date: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          internal_notes: string | null
+          priority: string
+          query_text: string
+          ref_number: string | null
+          replied_via: string | null
+          reply_method: string | null
+          source: string
+          source_ref_id: string | null
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          carry_forward_from_year?: string | null
+          carry_forward_to_year?: string | null
+          client_id?: string | null
+          client_reply?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          internal_notes?: string | null
+          priority?: string
+          query_text: string
+          ref_number?: string | null
+          replied_via?: string | null
+          reply_method?: string | null
+          source?: string
+          source_ref_id?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Update: {
+          carry_forward_from_year?: string | null
+          carry_forward_to_year?: string | null
+          client_id?: string | null
+          client_reply?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          internal_notes?: string | null
+          priority?: string
+          query_text?: string
+          ref_number?: string | null
+          replied_via?: string | null
+          reply_method?: string | null
+          source?: string
+          source_ref_id?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_client_queries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_client_queries_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_client_queries_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_engagements: {
         Row: {
           active_tabs: Json | null
@@ -294,6 +385,73 @@ export type Database = {
           },
           {
             foreignKeyName: "audit_preliminary_answers_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_query_dispatch_log: {
+        Row: {
+          body: string | null
+          channel: string
+          client_id: string | null
+          dispatch_ref: string | null
+          dispatched_at: string | null
+          dispatched_by: string | null
+          engagement_id: string | null
+          firm_id: string | null
+          id: string
+          query_ids: string[]
+          subject: string | null
+          template_used: string | null
+        }
+        Insert: {
+          body?: string | null
+          channel: string
+          client_id?: string | null
+          dispatch_ref?: string | null
+          dispatched_at?: string | null
+          dispatched_by?: string | null
+          engagement_id?: string | null
+          firm_id?: string | null
+          id?: string
+          query_ids?: string[]
+          subject?: string | null
+          template_used?: string | null
+        }
+        Update: {
+          body?: string | null
+          channel?: string
+          client_id?: string | null
+          dispatch_ref?: string | null
+          dispatched_at?: string | null
+          dispatched_by?: string | null
+          engagement_id?: string | null
+          firm_id?: string | null
+          id?: string
+          query_ids?: string[]
+          subject?: string | null
+          template_used?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_query_dispatch_log_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_query_dispatch_log_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_query_dispatch_log_firm_id_fkey"
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
