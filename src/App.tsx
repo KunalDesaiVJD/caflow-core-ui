@@ -134,6 +134,8 @@ const App = () => (
               <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/queries" element={<AuditQueryTracker />} />
               <Route path="/audit/:clientId/queries" element={<AuditQueryTracker />} />
+              <Route path="/audit/dispatch" element={<AuditQueryDispatch />} />
+              <Route path="/audit/:clientId/queries/dispatch" element={<AuditQueryDispatch />} />
               <Route path="/audit/report" element={<AuditReportEngine />} />
               <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
               <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
