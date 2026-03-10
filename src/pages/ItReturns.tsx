@@ -189,6 +189,42 @@ const ItReturns = () => {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Fetch scrutiny alert counts (HIGH severity) per client
+  useEffect(() => {
+    const clientIds = [...new Set(profiles.map((p) => p.client_id).filter(Boolean))] as string[];
+    if (clientIds.length === 0) return;
+    supabase
+      .from("scrutiny_findings")
+      .select("client_id, id")
+      .in("client_id", clientIds)
+      .eq("status", "open")
+      .eq("severity", "HIGH")
+      .then(({ data }) => {
+        const counts: Record<string, number> = {};
+        (data || []).forEach((f: any) => {
+          counts[f.client_id] = (counts[f.client_id] || 0) + 1;
+        });
+        setScrutinyAlerts(counts);
+      });
+  }, [profiles]);
+
+  const openScrutinyDrawer = async (clientId: string, clientName: string) => {
+    setScrutinyDrawerClient(clientName);
+    setScrutinyDrawerOpen(true);
+    const { data } = await supabase
+      .from("scrutiny_findings")
+      .select("*")
+      .eq("client_id", clientId)
+      .eq("status", "open")
+      .eq("severity", "HIGH")
+      .order("rule_id");
+    const relevant = (data || []).filter((f: any) => {
+      const ruleId = (f.rule_id || "").toUpperCase();
+      return ruleId.startsWith("T") || ruleId.startsWith("C");
+    });
+    setScrutinyFindings(relevant);
+  };
+
   // Filtering
   const filtered = useMemo(() => {
     return profiles.filter((p) => {
