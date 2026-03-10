@@ -29,6 +29,7 @@ import EngagementDetail from "./pages/EngagementDetail";
 import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
+import AuditFirms from "./pages/AuditFirms";
 import Form3CD from "./pages/Form3CD";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
