@@ -704,6 +704,21 @@ function TableView({ profiles, demands, onEdit, onDelete, onNavigate, scrutinyAl
                   {p.filing_status || "Not Started"}
                 </Badge>
               </TableCell>
+              <TableCell>
+                {p.client_id && (scrutinyAlerts?.[p.client_id] || 0) > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 gap-1 text-destructive hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); onScrutinyClick?.(p.client_id!, p.client_name || ""); }}
+                  >
+                    <ShieldAlert size={12} />
+                    <span className="text-xs font-bold">{scrutinyAlerts![p.client_id!]}</span>
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-sm text-muted-foreground">{p.date_filed || "—"}</TableCell>
               <TableCell className="text-sm text-muted-foreground">{p.acknowledgment_no || "—"}</TableCell>
               <TableCell className="text-right">
