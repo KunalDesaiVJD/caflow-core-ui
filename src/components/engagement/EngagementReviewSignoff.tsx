@@ -7,7 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Upload, FileText, Shield, Loader2, ExternalLink } from "lucide-react";
+import { CheckCircle, XCircle, Upload, FileText, Shield, Loader2, ExternalLink, Package, Download } from "lucide-react";
+import JSZip from "jszip";
+import * as XLSX from "xlsx";
 
 interface Props {
   engagement: any;
