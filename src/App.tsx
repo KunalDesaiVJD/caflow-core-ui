@@ -162,6 +162,8 @@ const App = () => (
               <Route path="/billing/timesheets" element={<Timesheets />} />
               <Route path="/erp-ledger" element={<ErpLedger />} />
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
+              <Route path="/notices" element={<NoticeTracker />} />
+              <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
