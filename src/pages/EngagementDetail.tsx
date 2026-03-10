@@ -35,6 +35,7 @@ const statusColors: Record<string, string> = {
 
 export default function EngagementDetail() {
   const { engagementId } = useParams<{ engagementId: string }>();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [engagement, setEngagement] = useState<any>(null);
   const [client, setClient] = useState<any>(null);
