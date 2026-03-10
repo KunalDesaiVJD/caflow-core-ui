@@ -30,6 +30,7 @@ import Documents from "./pages/Documents";
 import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
 import AuditFirms from "./pages/AuditFirms";
+import ClientGroups from "./pages/ClientGroups";
 import Form3CD from "./pages/Form3CD";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
@@ -105,6 +106,7 @@ const App = () => (
             <Route element={<ProtectedRoute><CAGuard><AppLayout /></CAGuard></ProtectedRoute>}>
               <Route path="/" element={<Index />} />
               <Route path="/clients" element={<Clients />} />
+              <Route path="/clients/groups" element={<ClientGroups />} />
               <Route path="/clients/new" element={<NewClientWizard />} />
               <Route path="/clients/edit/:clientId" element={<NewClientWizard />} />
               <Route path="/clients/:clientId/audit/import-trial-balance" element={<ImportTrialBalance />} />

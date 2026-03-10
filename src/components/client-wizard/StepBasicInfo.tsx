@@ -1,6 +1,10 @@
+import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -27,6 +31,7 @@ export interface BasicInfoData {
   business_nature: string;
   gstins: string[];
   cin: string;
+  selectedGroupIds?: string[];
 }
 
 const ENTITY_TYPES = [
@@ -45,6 +50,12 @@ const STATES = [
   "Ladakh", "Lakshadweep", "Puducherry",
 ];
 
+interface GroupOption {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 interface Props {
   data: BasicInfoData;
   onChange: (d: BasicInfoData) => void;
@@ -52,6 +63,23 @@ interface Props {
 }
 
 export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
+  const [groups, setGroups] = useState<GroupOption[]>([]);
+
+  useEffect(() => {
+    supabase.from("client_groups").select("id, name, color").order("name").then(({ data: g }) => {
+      setGroups((g as GroupOption[]) || []);
+    });
+  }, []);
+
+  const selectedGroupIds = data.selectedGroupIds || [];
+
+  const toggleGroup = (id: string) => {
+    const next = selectedGroupIds.includes(id)
+      ? selectedGroupIds.filter((g) => g !== id)
+      : [...selectedGroupIds, id];
+    onChange({ ...data, selectedGroupIds: next });
+  };
+
   const update = (field: keyof BasicInfoData, value: any) =>
     onChange({ ...data, [field]: value });
 
@@ -190,6 +218,25 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
             maxLength={21}
           />
           {errors.cin && <p className="text-xs text-destructive">{errors.cin}</p>}
+        </div>
+      )}
+
+      {/* Assign to Groups */}
+      {groups.length > 0 && (
+        <div className="space-y-2">
+          <Label>Assign to Groups (optional)</Label>
+          <div className="grid grid-cols-2 gap-2">
+            {groups.map((g) => (
+              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                <Checkbox
+                  checked={selectedGroupIds.includes(g.id)}
+                  onCheckedChange={() => toggleGroup(g.id)}
+                />
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: g.color || "#6B7280" }} />
+                {g.name}
+              </label>
+            ))}
+          </div>
         </div>
       )}
     </div>

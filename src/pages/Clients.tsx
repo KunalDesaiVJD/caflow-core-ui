@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2 } from "lucide-react";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen } from "lucide-react";
 
 interface Client {
   id: string;
@@ -26,6 +26,12 @@ interface Client {
   gstin: string[] | null;
   created_at: string | null;
   firm_id: string | null;
+}
+
+interface GroupInfo {
+  id: string;
+  name: string;
+  color: string | null;
 }
 
 const ENTITY_TYPES = [
@@ -40,20 +46,34 @@ const Clients = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useState("all");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  const fetchClients = async () => {
-    const { data } = await supabase
-      .from("clients")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(200);
-    setClients((data as Client[]) || []);
+  // Groups data
+  const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
+
+  const fetchData = async () => {
+    const [clientsRes, groupsRes, membershipsRes] = await Promise.all([
+      supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(200),
+      supabase.from("client_groups").select("id, name, color").order("name"),
+      supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
+    ]);
+
+    setClients((clientsRes.data as Client[]) || []);
+    setGroups((groupsRes.data as GroupInfo[]) || []);
+
+    const map: Record<string, GroupInfo[]> = {};
+    for (const m of (membershipsRes.data || []) as any[]) {
+      if (!map[m.client_id]) map[m.client_id] = [];
+      if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
+    }
+    setClientGroupMap(map);
     setLoading(false);
   };
 
-  useEffect(() => { fetchClients(); }, []);
+  useEffect(() => { fetchData(); }, []);
 
   const handleDeleteClient = async () => {
     if (!deleteClient) return;
@@ -67,7 +87,7 @@ const Clients = () => {
         toast({ title: "Client deleted" });
       }
       setDeleteClient(null);
-      fetchClients();
+      fetchData();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
@@ -82,7 +102,13 @@ const Clients = () => {
       (c.pan || "").toLowerCase().includes(search.toLowerCase());
     const matchesEntity =
       entityFilter === "all" || c.entity_type === entityFilter;
-    return matchesSearch && matchesEntity;
+    let matchesGroup = true;
+    if (groupFilter === "ungrouped") {
+      matchesGroup = !clientGroupMap[c.id] || clientGroupMap[c.id].length === 0;
+    } else if (groupFilter !== "all") {
+      matchesGroup = (clientGroupMap[c.id] || []).some((g) => g.id === groupFilter);
+    }
+    return matchesSearch && matchesEntity && matchesGroup;
   });
 
   return (
@@ -93,9 +119,14 @@ const Clients = () => {
           <h1 className="text-2xl font-display font-bold text-foreground mb-1">Clients</h1>
           <p className="text-sm text-muted-foreground">Manage your client directory.</p>
         </div>
-        <Button onClick={() => navigate("/clients/new")} className="gap-2">
-          <Plus className="h-4 w-4" /> Add Client
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2">
+            <FolderOpen className="h-4 w-4" /> Manage Groups
+          </Button>
+          <Button onClick={() => navigate("/clients/new")} className="gap-2">
+            <Plus className="h-4 w-4" /> Add Client
+          </Button>
+        </div>
       </div>
 
       {/* Search & Filter */}
@@ -120,6 +151,18 @@ const Clients = () => {
             ))}
           </SelectContent>
         </Select>
+        <Select value={groupFilter} onValueChange={setGroupFilter}>
+          <SelectTrigger className="w-full sm:w-[200px]">
+            <SelectValue placeholder="Group" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Groups</SelectItem>
+            <SelectItem value="ungrouped">Ungrouped</SelectItem>
+            {groups.map((g) => (
+              <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Card Grid */}
@@ -138,67 +181,64 @@ const Clients = () => {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((client) => (
-            <Card
-              key={client.id}
-              className="group cursor-pointer hover:border-primary/40 transition-colors"
-              onClick={() => navigate(`/clients/${client.id}`)}
-            >
-              <CardContent className="p-5 space-y-3">
-                <div className="flex items-start justify-between">
-                  <h3 className="text-lg font-semibold text-foreground leading-tight line-clamp-2">
-                    {client.name || "Unnamed Client"}
-                  </h3>
-                  {client.entity_type && (
-                    <Badge variant="outline" className="text-[10px] shrink-0 ml-2">
-                      {client.entity_type}
-                    </Badge>
+          {filtered.map((client) => {
+            const clientGroups = clientGroupMap[client.id] || [];
+            return (
+              <Card
+                key={client.id}
+                className="group cursor-pointer hover:border-primary/40 transition-colors"
+                onClick={() => navigate(`/clients/${client.id}`)}
+              >
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <h3 className="text-lg font-semibold text-foreground leading-tight line-clamp-2">
+                      {client.name || "Unnamed Client"}
+                    </h3>
+                    {client.entity_type && (
+                      <Badge variant="outline" className="text-[10px] shrink-0 ml-2">
+                        {client.entity_type}
+                      </Badge>
+                    )}
+                  </div>
+                  {client.pan && (
+                    <p className="text-xs font-mono text-muted-foreground">PAN: {client.pan}</p>
                   )}
-                </div>
-                {client.pan && (
-                  <p className="text-xs font-mono text-muted-foreground">PAN: {client.pan}</p>
-                )}
-                <div className="flex items-center gap-1 pt-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }}
-                    title="View"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/edit/${client.id}`); }}
-                    title="Edit"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}/audit/scrutiny`); }}
-                    title="Audit"
-                  >
-                    <ShieldCheck className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-destructive hover:text-destructive"
-                    onClick={(e) => { e.stopPropagation(); setDeleteClient(client); }}
-                    title="Delete"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                  {/* Group badges */}
+                  <div className="flex flex-wrap gap-1">
+                    {clientGroups.length > 0 ? (
+                      clientGroups.map((g) => (
+                        <Badge
+                          key={g.id}
+                          variant="outline"
+                          className="text-[10px] gap-1"
+                          style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: g.color || "#6B7280" }} />
+                          {g.name}
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">Ungrouped</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 pt-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}`); }} title="View">
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/edit/${client.id}`); }} title="Edit">
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); navigate(`/clients/${client.id}/audit/scrutiny`); }} title="Audit">
+                      <ShieldCheck className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteClient(client); }} title="Delete">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
