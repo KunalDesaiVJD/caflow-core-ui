@@ -144,7 +144,13 @@ export default function AuditScrutiny() {
 
   const handleResolve = async () => {
     if (!resolveId) return;
+    const finding = findings.find(f => f.id === resolveId);
     await supabase.from("scrutiny_findings").update({ status: "resolved" }).eq("id", resolveId);
+    track("finding_resolve", {
+      rule_id: finding?.rule_id,
+      resolution_note: actionNote,
+      severity: finding?.severity,
+    });
     toast({ title: "Finding resolved" });
     setResolveId(null);
     setActionNote("");
