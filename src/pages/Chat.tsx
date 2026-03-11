@@ -103,16 +103,16 @@ export default function Chat() {
 
   // Fetch conversations
   const { data: conversations = [] } = useQuery({
-    queryKey: ["chat_conversations", user?.firm_id],
+    queryKey: ["chat_conversations", user?.firm_id, user?.role],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("chat_conversations")
-        .select("*")
-        .eq("firm_id", user!.firm_id!)
-        .order("last_message_at", { ascending: false });
+      let q = supabase.from("chat_conversations").select("*").order("last_message_at", { ascending: false });
+      if (user?.firm_id && user?.role !== "superadmin") {
+        q = q.eq("firm_id", user.firm_id);
+      }
+      const { data } = await q;
       return (data || []) as Conversation[];
     },
-    enabled: !!user?.firm_id,
+    enabled: !!user,
   });
 
   // Fetch participants for active conversation
@@ -356,8 +356,11 @@ export default function Chat() {
       }
     }
 
+    // Get the other user's firm_id for the conversation
+    const otherUser = firmUsers.find(u => u.id === otherUserId);
+    const convFirmId = user.firm_id || (otherUser as any)?.firm_id || "";
     const { data: conv } = await supabase.from("chat_conversations").insert({
-      firm_id: user.firm_id!,
+      firm_id: convFirmId,
       type: "individual",
       created_by: user.id,
     }).select().single();
@@ -375,8 +378,9 @@ export default function Chat() {
 
   const createGroupChat = async () => {
     if (!user || !groupName.trim() || selectedUsers.length === 0) return;
+    const convFirmId = user.firm_id || "";
     const { data: conv } = await supabase.from("chat_conversations").insert({
-      firm_id: user.firm_id!,
+      firm_id: convFirmId,
       type: "group",
       name: groupName.trim(),
       created_by: user.id,

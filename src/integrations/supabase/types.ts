@@ -2624,36 +2624,54 @@ export type Database = {
           error_log: Json | null
           file_size_bytes: number | null
           file_url: string | null
+          firm_id: string | null
           id: string
+          import_type: string | null
           imported_at: string | null
           imported_by: string | null
+          leaf_rows: number | null
           original_filename: string | null
+          processed_rows: number | null
           processing_status: string | null
           row_count: number | null
+          status: string | null
+          total_rows: number | null
         }
         Insert: {
           engagement_id: string
           error_log?: Json | null
           file_size_bytes?: number | null
           file_url?: string | null
+          firm_id?: string | null
           id?: string
+          import_type?: string | null
           imported_at?: string | null
           imported_by?: string | null
+          leaf_rows?: number | null
           original_filename?: string | null
+          processed_rows?: number | null
           processing_status?: string | null
           row_count?: number | null
+          status?: string | null
+          total_rows?: number | null
         }
         Update: {
           engagement_id?: string
           error_log?: Json | null
           file_size_bytes?: number | null
           file_url?: string | null
+          firm_id?: string | null
           id?: string
+          import_type?: string | null
           imported_at?: string | null
           imported_by?: string | null
+          leaf_rows?: number | null
           original_filename?: string | null
+          processed_rows?: number | null
           processing_status?: string | null
           row_count?: number | null
+          status?: string | null
+          total_rows?: number | null
         }
         Relationships: [
           {
@@ -2661,6 +2679,13 @@ export type Database = {
             columns: ["engagement_id"]
             isOneToOne: false
             referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_import_batches_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
             referencedColumns: ["id"]
           },
         ]
@@ -3235,6 +3260,87 @@ export type Database = {
           },
         ]
       }
+      tb_hierarchy_nodes: {
+        Row: {
+          bs_pl_side: string | null
+          closing_balance: number | null
+          created_at: string | null
+          engagement_id: string | null
+          id: string
+          import_batch_id: string | null
+          indent_value: number | null
+          is_bold: boolean | null
+          is_leaf: boolean | null
+          level: number
+          node_id: string
+          normal_balance: string | null
+          opening_balance: number | null
+          parent_node_id: string | null
+          primary_group: string | null
+          row_number: number | null
+          tally_group_name: string
+          txn_credit: number | null
+          txn_debit: number | null
+        }
+        Insert: {
+          bs_pl_side?: string | null
+          closing_balance?: number | null
+          created_at?: string | null
+          engagement_id?: string | null
+          id?: string
+          import_batch_id?: string | null
+          indent_value?: number | null
+          is_bold?: boolean | null
+          is_leaf?: boolean | null
+          level: number
+          node_id: string
+          normal_balance?: string | null
+          opening_balance?: number | null
+          parent_node_id?: string | null
+          primary_group?: string | null
+          row_number?: number | null
+          tally_group_name: string
+          txn_credit?: number | null
+          txn_debit?: number | null
+        }
+        Update: {
+          bs_pl_side?: string | null
+          closing_balance?: number | null
+          created_at?: string | null
+          engagement_id?: string | null
+          id?: string
+          import_batch_id?: string | null
+          indent_value?: number | null
+          is_bold?: boolean | null
+          is_leaf?: boolean | null
+          level?: number
+          node_id?: string
+          normal_balance?: string | null
+          opening_balance?: number | null
+          parent_node_id?: string | null
+          primary_group?: string | null
+          row_number?: number | null
+          tally_group_name?: string
+          txn_credit?: number | null
+          txn_debit?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tb_hierarchy_nodes_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tb_hierarchy_nodes_import_batch_id_fkey"
+            columns: ["import_batch_id"]
+            isOneToOne: false
+            referencedRelation: "ledger_import_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tds_entries: {
         Row: {
           amount: number | null
@@ -3600,60 +3706,105 @@ export type Database = {
       }
       trial_balance_snapshots: {
         Row: {
+          bs_pl_side: string | null
           chunk_count: number | null
           chunks_processed: number | null
           client_id: string | null
+          closing_balance: number | null
           column_mapping: Json | null
           credit_total: number | null
           debit_total: number | null
           difference: number | null
           engagement_id: string | null
           financial_year: string | null
+          hierarchy_level: number | null
           id: string
+          import_batch_id: string | null
           import_format: string | null
           is_validated: boolean | null
+          ledger_name: string | null
+          matched_category_code: string | null
+          matched_keywords: string[] | null
+          node_id: string | null
+          normal_balance: string | null
           normalised_data: Json | null
+          opening_balance: number | null
+          parent_node_id: string | null
+          primary_group: string | null
           processing_status: string | null
           raw_data: Json | null
           source_format: string | null
+          tally_indent: number | null
+          txn_credit: number | null
+          txn_debit: number | null
           validation_status: string | null
         }
         Insert: {
+          bs_pl_side?: string | null
           chunk_count?: number | null
           chunks_processed?: number | null
           client_id?: string | null
+          closing_balance?: number | null
           column_mapping?: Json | null
           credit_total?: number | null
           debit_total?: number | null
           difference?: number | null
           engagement_id?: string | null
           financial_year?: string | null
+          hierarchy_level?: number | null
           id?: string
+          import_batch_id?: string | null
           import_format?: string | null
           is_validated?: boolean | null
+          ledger_name?: string | null
+          matched_category_code?: string | null
+          matched_keywords?: string[] | null
+          node_id?: string | null
+          normal_balance?: string | null
           normalised_data?: Json | null
+          opening_balance?: number | null
+          parent_node_id?: string | null
+          primary_group?: string | null
           processing_status?: string | null
           raw_data?: Json | null
           source_format?: string | null
+          tally_indent?: number | null
+          txn_credit?: number | null
+          txn_debit?: number | null
           validation_status?: string | null
         }
         Update: {
+          bs_pl_side?: string | null
           chunk_count?: number | null
           chunks_processed?: number | null
           client_id?: string | null
+          closing_balance?: number | null
           column_mapping?: Json | null
           credit_total?: number | null
           debit_total?: number | null
           difference?: number | null
           engagement_id?: string | null
           financial_year?: string | null
+          hierarchy_level?: number | null
           id?: string
+          import_batch_id?: string | null
           import_format?: string | null
           is_validated?: boolean | null
+          ledger_name?: string | null
+          matched_category_code?: string | null
+          matched_keywords?: string[] | null
+          node_id?: string | null
+          normal_balance?: string | null
           normalised_data?: Json | null
+          opening_balance?: number | null
+          parent_node_id?: string | null
+          primary_group?: string | null
           processing_status?: string | null
           raw_data?: Json | null
           source_format?: string | null
+          tally_indent?: number | null
+          txn_credit?: number | null
+          txn_debit?: number | null
           validation_status?: string | null
         }
         Relationships: [
