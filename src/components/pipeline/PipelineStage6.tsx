@@ -79,13 +79,12 @@ const CATEGORY_TO_AREA: Record<string, string> = {
 // ─── Workpaper ───
 interface Workpaper {
   id: string;
-  wp_ref: string;
+  wp_ref: string | null;
   section: string | null;
   objective: string | null;
-  procedure: string;
-  conclusion: string;
-  signed_by: string;
-  status: string;
+  procedure: string | null;
+  conclusion: string | null;
+  signed_by: string | null;
 }
 
 // ─── Physical Verification ───
