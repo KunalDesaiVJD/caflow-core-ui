@@ -59,7 +59,6 @@ const Clients = () => {
 
   // Service count data
   const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
-  const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
 
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
