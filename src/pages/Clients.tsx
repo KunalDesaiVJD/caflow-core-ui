@@ -57,8 +57,8 @@ const Clients = () => {
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
 
-  // ITR/TDS status data
-  const [itrStatusMap, setItrStatusMap] = useState<Record<string, any>>({});
+  // Service count data
+  const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
   const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
 
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
