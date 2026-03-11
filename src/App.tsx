@@ -118,6 +118,8 @@ const App = () => (
               <Route path="/admin" element={<AdminOverview />} />
               <Route path="/admin/firms" element={<AdminFirms />} />
               <Route path="/admin/users" element={<UserManagement />} />
+              <Route path="/admin/services" element={<ServiceMasters />} />
+              <Route path="/admin/roles" element={<RolesPermissions />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
               <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/theme-studio" element={<AdminThemeStudio />} />
