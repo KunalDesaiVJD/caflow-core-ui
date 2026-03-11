@@ -712,6 +712,14 @@ export default function AuditPipeline() {
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
+        ) : currentStage === 3 ? (
+          /* STAGE 3 */
+          <PipelineStage3
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : (
           /* Other stages placeholder */
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
