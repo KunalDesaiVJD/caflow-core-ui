@@ -39,6 +39,7 @@ const FirmSettings = () => {
   const [pan, setPan] = useState("");
   const [gstin, setGstin] = useState("");
   const [tan, setTan] = useState("");
+  const [msmeNo, setMsmeNo] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [website, setWebsite] = useState("");
@@ -114,6 +115,7 @@ const FirmSettings = () => {
       setPan((data as any).pan || "");
       setGstin((data as any).gstin || "");
       setTan((data as any).tan || "");
+      setMsmeNo((data as any).msme_no || ((data as any).settings as any)?.msme_no || "");
       setEmail((data as any).email || "");
       setPhone((data as any).phone || "");
       setWebsite((data as any).website || "");
@@ -214,6 +216,7 @@ const FirmSettings = () => {
           logo_url: logoUrl,
           signature_url: signatureUrl,
           address: addressLine,
+          msme_no: msmeNo,
         },
       } as any).eq("id", firmId);
 
@@ -279,6 +282,7 @@ const FirmSettings = () => {
                 <div className="space-y-2"><Label>PAN</Label><Input value={pan} onChange={e => setPan(e.target.value.toUpperCase())} disabled={!isAdmin} placeholder="AAACA1234A" maxLength={10} /></div>
                 <div className="space-y-2"><Label>GSTIN</Label><Input value={gstin} onChange={e => setGstin(e.target.value.toUpperCase())} disabled={!isAdmin} /></div>
                 <div className="space-y-2"><Label>TAN</Label><Input value={tan} onChange={e => setTan(e.target.value.toUpperCase())} disabled={!isAdmin} /></div>
+                <div className="space-y-2"><Label>MSME No</Label><Input value={msmeNo} onChange={e => setMsmeNo(e.target.value)} disabled={!isAdmin} placeholder="UDYAM-XX-00-0000000" /></div>
                 <div className="space-y-2"><Label>Email</Label><Input type="email" value={email} onChange={e => setEmail(e.target.value)} disabled={!isAdmin} /></div>
                 <div className="space-y-2"><Label>Phone</Label><Input value={phone} onChange={e => setPhone(e.target.value)} disabled={!isAdmin} /></div>
                 <div className="space-y-2"><Label>Website</Label><Input value={website} onChange={e => setWebsite(e.target.value)} disabled={!isAdmin} /></div>

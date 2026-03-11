@@ -116,10 +116,14 @@ export default function ImportTrialBalance() {
 
   // Load clients for selector when no route param
   useEffect(() => {
-    if (routeClientId || !firmId) return;
-    supabase.from("clients").select("id, name").eq("firm_id", firmId).order("name").then(({ data }) => {
+    if (routeClientId) return;
+    const loadClients = async () => {
+      let q = supabase.from("clients").select("id, name").order("name");
+      if (firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
       setClientsList(data || []);
-    });
+    };
+    loadClients();
   }, [firmId, routeClientId]);
 
   // Guard: clientId must be a valid UUID

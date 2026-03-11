@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Shield, RotateCcw, Loader2, Save, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -79,8 +80,21 @@ const RolesPermissions = () => {
   const [resetRole, setResetRole] = useState<string | null>(null);
   const [lastModified, setLastModified] = useState<Record<string, { by: string; at: string }>>({});
 
-  const firmId = user?.firm_id;
-  const canEdit = user?.role === "superadmin" || user?.role === "firm_admin";
+  // Firm selector for superadmin
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
+  const isSuperadmin = user?.role === "superadmin";
+  const firmId = isSuperadmin ? selectedFirmId : user?.firm_id;
+  const canEdit = isSuperadmin || user?.role === "firm_admin";
+
+  // Load firms for superadmin
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
+      setFirmsList(data || []);
+      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+    });
+  }, [isSuperadmin]);
 
   useEffect(() => {
     if (firmId) loadGrid();
@@ -237,6 +251,15 @@ const RolesPermissions = () => {
           </Button>
         )}
       </div>
+
+      {isSuperadmin && firmsList.length > 0 && (
+        <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+          <SelectTrigger className="w-64"><SelectValue placeholder="Select firm" /></SelectTrigger>
+          <SelectContent>
+            {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      )}
 
       <Card>
         <CardContent className="p-0">
