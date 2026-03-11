@@ -22,6 +22,7 @@ import {
   Building2, FileText, Calculator, ClipboardCheck, Layers,
   Eye, BarChart3, BookMarked, Shield, Award
 } from "lucide-react";
+import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 
 // ─── Constants ───
 const STAGES = [
