@@ -18,12 +18,23 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft, Upload, CheckCircle2, AlertTriangle, FileSpreadsheet, Loader2,
-  ChevronRight, ChevronDown, FolderTree, Layers,
+  ChevronRight, ChevronDown, FolderTree, Layers, Tag, Zap, AlertCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
 const FY_OPTIONS = ["2024-25", "2023-24", "2022-23", "2021-22"];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  PURCH: "Purchases & Expenses", SALES: "Sales & Revenue", CASH: "Cash & Bank",
+  BKR: "Bank Reconciliation", TAX: "Tax (TDS/GST)", TDS: "TDS", GST: "GST",
+  FA: "Fixed Assets", PAY: "Payroll", DEBT: "Debtors", CRED: "Creditors",
+  EXP: "General Expenses", LOAN: "Loans & Borrowings", INV: "Investments",
+  PROV: "Provisions", CAP: "Capital & Reserves", DEP: "Depreciation", INT: "Interest",
+};
 
 interface HierarchyNode {
   nodeId: string;
@@ -42,6 +53,15 @@ interface HierarchyNode {
   normalBal: string;
 }
 
+interface TaggingResult {
+  success: boolean;
+  totalLedgers: number;
+  tagged: number;
+  unmatched: number;
+  categoryBreakdown: Record<string, number>;
+  unmatchedLedgers: { id: string; name: string }[];
+}
+
 interface ImportStats {
   totalNodes: number;
   leafLedgers: number;
@@ -55,9 +75,10 @@ interface ImportStats {
   detectedFormat: string;
   batchId: string;
   hierarchy: HierarchyNode[];
+  tagging: TaggingResult | null;
 }
 
-// ─── Hierarchy Tree Component ───
+// ─── Tree Node ───
 function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: HierarchyNode[] }) {
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
@@ -80,13 +101,9 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
-        <div
-          className="flex items-center gap-2 py-1.5 px-2 hover:bg-muted/30 rounded cursor-pointer text-xs"
-          style={{ paddingLeft: `${(node.level - 1) * 20 + 12}px` }}
-        >
-          {hasChildren ? (
-            open ? <ChevronDown size={14} className="text-muted-foreground shrink-0" /> : <ChevronRight size={14} className="text-muted-foreground shrink-0" />
-          ) : <div className="w-[14px]" />}
+        <div className="flex items-center gap-2 py-1.5 px-2 hover:bg-muted/30 rounded cursor-pointer text-xs"
+          style={{ paddingLeft: `${(node.level - 1) * 20 + 12}px` }}>
+          {hasChildren ? (open ? <ChevronDown size={14} className="text-muted-foreground shrink-0" /> : <ChevronRight size={14} className="text-muted-foreground shrink-0" />) : <div className="w-[14px]" />}
           <span className="flex-1 font-semibold text-muted-foreground">{node.name}</span>
           <Badge variant="outline" className="text-[10px] h-4">{node.bsPlSide}</Badge>
           <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.opening)}</span>
@@ -96,9 +113,7 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
         </div>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        {children.map(child => (
-          <TreeNode key={child.nodeId} node={child} allNodes={allNodes} />
-        ))}
+        {children.map(child => <TreeNode key={child.nodeId} node={child} allNodes={allNodes} />)}
       </CollapsibleContent>
     </Collapsible>
   );
@@ -117,9 +132,7 @@ export default function ImportTrialBalance() {
   const clientId = routeClientId || selectedClientId;
   const fileRef = useRef<HTMLInputElement>(null);
   const firmId = user?.firm_id;
-  const isSuperadmin = user?.role === "superadmin";
 
-  // States
   const [fy, setFy] = useState("2024-25");
   const [fileName, setFileName] = useState("");
   const [fileBase64, setFileBase64] = useState("");
@@ -128,6 +141,15 @@ export default function ImportTrialBalance() {
   const [importStats, setImportStats] = useState<ImportStats | null>(null);
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [error, setError] = useState("");
+
+  // Re-import dialog
+  const [showReimportDialog, setShowReimportDialog] = useState(false);
+  const [existingImport, setExistingImport] = useState(false);
+  const [reimportAction, setReimportAction] = useState<"replace" | "prior_year" | null>(null);
+
+  // Unmatched ledger overrides
+  const [unmatchedOverrides, setUnmatchedOverrides] = useState<Record<string, string>>({});
+  const [savingOverrides, setSavingOverrides] = useState(false);
 
   // Load clients
   useEffect(() => {
@@ -141,12 +163,11 @@ export default function ImportTrialBalance() {
     load();
   }, [firmId, routeClientId]);
 
-  // Load engagements for selected client
+  // Load engagements
   useEffect(() => {
     if (!clientId) return;
     const load = async () => {
-      const { data } = await supabase
-        .from("audit_engagements")
+      const { data } = await supabase.from("audit_engagements")
         .select("id, financial_year, client_id")
         .eq("client_id", clientId)
         .order("financial_year", { ascending: false });
@@ -155,6 +176,18 @@ export default function ImportTrialBalance() {
     };
     load();
   }, [clientId]);
+
+  // Check for existing import when engagement changes
+  useEffect(() => {
+    if (!engagementId) return;
+    const check = async () => {
+      const { count } = await supabase.from("trial_balance_snapshots")
+        .select("id", { count: "exact", head: true })
+        .eq("engagement_id", engagementId);
+      setExistingImport((count || 0) > 0);
+    };
+    check();
+  }, [engagementId]);
 
   const isValidUuid = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
 
@@ -185,19 +218,31 @@ export default function ImportTrialBalance() {
     reader.readAsArrayBuffer(file);
   };
 
-  const handleParse = async () => {
+  const handleParseClick = () => {
     if (!fileBase64 || !engagementId) {
       toast({ title: "Select engagement and upload file first", variant: "destructive" });
       return;
     }
+    if (existingImport) {
+      setShowReimportDialog(true);
+    } else {
+      doParse();
+    }
+  };
+
+  const handleReimportConfirm = (action: "replace" | "prior_year") => {
+    setReimportAction(action);
+    setShowReimportDialog(false);
+    doParse(action);
+  };
+
+  const doParse = async (reimport?: "replace" | "prior_year") => {
     setParsing(true);
-    setParseProgress("Uploading file to parser...");
+    setParseProgress("Parsing file structure and detecting format...");
     setError("");
     setImportStats(null);
 
     try {
-      setParseProgress("Parsing file structure and detecting format...");
-
       const { data, error: fnError } = await supabase.functions.invoke("parse-tally-tb", {
         body: {
           engagementId,
@@ -205,15 +250,16 @@ export default function ImportTrialBalance() {
           fileBase64,
           fileName,
           financialYear: fy,
+          reimportAction: reimport || null,
         },
       });
 
       if (fnError) throw new Error(fnError.message || "Edge function error");
       if (!data?.success) throw new Error(data?.error || "Parse failed");
 
-      setParseProgress(`Detected ${data.totalNodes} rows, ${data.leafLedgers} leaf ledgers`);
+      setParseProgress("Tagging ledgers with scrutiny categories...");
       setImportStats(data as ImportStats);
-      toast({ title: `${data.leafLedgers} ledgers imported successfully` });
+      toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
     } catch (err: any) {
       setError(err.message);
       toast({ title: "Parse failed", description: err.message, variant: "destructive" });
@@ -222,17 +268,38 @@ export default function ImportTrialBalance() {
     }
   };
 
-  // Flat leaf view
-  const leafNodes = useMemo(() => {
-    if (!importStats?.hierarchy) return [];
-    return importStats.hierarchy.filter(n => n.isLeaf);
-  }, [importStats]);
+  const handleSaveOverrides = async () => {
+    setSavingOverrides(true);
+    try {
+      const entries = Object.entries(unmatchedOverrides).filter(([, v]) => v);
+      for (const [id, category] of entries) {
+        await supabase.from("trial_balance_snapshots")
+          .update({ matched_category_code: category })
+          .eq("id", id);
+      }
+      toast({ title: `${entries.length} ledger categories saved` });
+      // Update local tagging result
+      if (importStats?.tagging) {
+        const updated = { ...importStats.tagging };
+        updated.unmatched -= entries.length;
+        updated.tagged += entries.length;
+        for (const [, cat] of entries) {
+          updated.categoryBreakdown[cat] = (updated.categoryBreakdown[cat] || 0) + 1;
+        }
+        updated.unmatchedLedgers = updated.unmatchedLedgers.filter(l => !unmatchedOverrides[l.id]);
+        setImportStats({ ...importStats, tagging: updated });
+      }
+      setUnmatchedOverrides({});
+    } catch (err: any) {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingOverrides(false);
+    }
+  };
 
-  // Root nodes for tree
-  const rootNodes = useMemo(() => {
-    if (!importStats?.hierarchy) return [];
-    return importStats.hierarchy.filter(n => !n.parentNodeId);
-  }, [importStats]);
+  const leafNodes = useMemo(() => importStats?.hierarchy?.filter(n => n.isLeaf) || [], [importStats]);
+  const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
+  const tagging = importStats?.tagging;
 
   // Client selector
   if (!isValidUuid) {
@@ -268,7 +335,7 @@ export default function ImportTrialBalance() {
         </Button>
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Import Tally Trial Balance</h1>
-          <p className="text-muted-foreground text-sm">Intelligent parser with hierarchy detection for all Tally export formats</p>
+          <p className="text-muted-foreground text-sm">Intelligent parser with hierarchy detection, ledger tagging & scrutiny integration</p>
         </div>
       </div>
 
@@ -312,12 +379,22 @@ export default function ImportTrialBalance() {
             </div>
           </div>
 
+          {existingImport && fileName && !importStats && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle className="text-sm">Existing Import Detected</AlertTitle>
+              <AlertDescription className="text-xs">
+                A TB has already been imported for this engagement. You can replace it or add as prior year comparison.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {fileName && !importStats && (
-            <Button onClick={handleParse} disabled={parsing || !engagementId} className="w-full">
+            <Button onClick={handleParseClick} disabled={parsing || !engagementId} className="w-full">
               {parsing ? (
                 <><Loader2 size={16} className="mr-2 animate-spin" /> {parseProgress}</>
               ) : (
-                <><FileSpreadsheet size={16} className="mr-2" /> Parse & Import Trial Balance</>
+                <><FileSpreadsheet size={16} className="mr-2" /> Parse, Import & Tag Trial Balance</>
               )}
             </Button>
           )}
@@ -382,8 +459,8 @@ export default function ImportTrialBalance() {
             </Card>
           </div>
 
-          {/* Balance warning */}
-          {!importStats.isBalanced && (
+          {/* Balance warning / success */}
+          {!importStats.isBalanced ? (
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle className="text-sm">Trial Balance is NOT Balanced</AlertTitle>
@@ -392,9 +469,7 @@ export default function ImportTrialBalance() {
                 Check your Tally export settings. Scrutiny will run but results may be unreliable.
               </AlertDescription>
             </Alert>
-          )}
-
-          {importStats.isBalanced && (
+          ) : (
             <Alert>
               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
               <AlertTitle className="text-sm text-emerald-600">Trial Balance Verified ✓</AlertTitle>
@@ -402,6 +477,102 @@ export default function ImportTrialBalance() {
                 Dr: ₹{importStats.totalDr.toLocaleString("en-IN")} = Cr: ₹{importStats.totalCr.toLocaleString("en-IN")} | Format: {importStats.detectedFormat}
               </AlertDescription>
             </Alert>
+          )}
+
+          {/* ─── Ledger Matching Results ─── */}
+          {tagging && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Tag size={18} /> Ledger Matching Results
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-4 text-sm">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-600" />
+                    <span className="font-medium">{tagging.tagged}</span>
+                    <span className="text-muted-foreground">ledgers matched</span>
+                  </div>
+                  {tagging.unmatched > 0 && (
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle size={16} className="text-amber-500" />
+                      <span className="font-medium text-amber-600">{tagging.unmatched}</span>
+                      <span className="text-muted-foreground">unmatched</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Category breakdown */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {Object.entries(tagging.categoryBreakdown)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([cat, count]) => (
+                      <div key={cat} className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
+                        <span className="font-medium">{CATEGORY_LABELS[cat] || cat}</span>
+                        <Badge variant="secondary" className="text-[10px] h-5">{count}</Badge>
+                      </div>
+                    ))}
+                </div>
+
+                {/* Unmatched ledger overrides */}
+                {tagging.unmatchedLedgers.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-amber-600 flex items-center gap-1">
+                        <AlertTriangle size={14} /> Unmatched Ledgers — Assign Category Manually
+                      </p>
+                      {Object.values(unmatchedOverrides).some(v => v) && (
+                        <Button size="sm" onClick={handleSaveOverrides} disabled={savingOverrides}>
+                          {savingOverrides ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+                          Save Overrides
+                        </Button>
+                      )}
+                    </div>
+                    <div className="border rounded-lg overflow-auto max-h-[250px]">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-xs">Ledger Name</TableHead>
+                            <TableHead className="text-xs w-48">Assign Category</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {tagging.unmatchedLedgers.map(l => (
+                            <TableRow key={l.id}>
+                              <TableCell className="text-xs">{l.name}</TableCell>
+                              <TableCell>
+                                <Select
+                                  value={unmatchedOverrides[l.id] || ""}
+                                  onValueChange={v => setUnmatchedOverrides(prev => ({ ...prev, [l.id]: v }))}
+                                >
+                                  <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue placeholder="Select..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {Object.entries(CATEGORY_LABELS).map(([code, label]) => (
+                                      <SelectItem key={code} value={code} className="text-xs">{code} — {label}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      These ledgers had no keyword match — they will use TB-level rules only unless manually tagged.
+                    </p>
+                  </div>
+                )}
+
+                {/* Run Full Scrutiny button */}
+                <Button className="w-full" variant="default" onClick={() => navigate(`/audit-scrutiny?engagement=${engagementId}`)}>
+                  <Zap size={16} className="mr-2" /> Run Full Scrutiny Now →
+                </Button>
+              </CardContent>
+            </Card>
           )}
 
           {/* Hierarchy Tree / Flat View */}
@@ -412,18 +583,10 @@ export default function ImportTrialBalance() {
                   <FolderTree size={18} /> Hierarchy Tree
                 </CardTitle>
                 <div className="flex gap-1">
-                  <Button
-                    variant={viewMode === "tree" ? "default" : "outline"}
-                    size="sm" className="text-xs h-7 gap-1"
-                    onClick={() => setViewMode("tree")}
-                  >
+                  <Button variant={viewMode === "tree" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("tree")}>
                     <FolderTree size={12} /> Tree
                   </Button>
-                  <Button
-                    variant={viewMode === "flat" ? "default" : "outline"}
-                    size="sm" className="text-xs h-7 gap-1"
-                    onClick={() => setViewMode("flat")}
-                  >
+                  <Button variant={viewMode === "flat" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("flat")}>
                     <Layers size={12} /> Flat
                   </Button>
                 </div>
@@ -432,7 +595,6 @@ export default function ImportTrialBalance() {
             <CardContent>
               {viewMode === "tree" ? (
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
-                  {/* Tree header */}
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
                     <div className="w-4" />
                     <span className="flex-1">Account / Group</span>
@@ -491,6 +653,35 @@ export default function ImportTrialBalance() {
           </div>
         </>
       )}
+
+      {/* Re-import Dialog */}
+      <Dialog open={showReimportDialog} onOpenChange={setShowReimportDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Existing Import Found</DialogTitle>
+            <DialogDescription>
+              A Trial Balance has already been imported for this engagement. What would you like to do?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-4">
+            <Button variant="outline" className="w-full justify-start h-auto py-3" onClick={() => handleReimportConfirm("replace")}>
+              <div className="text-left">
+                <p className="font-medium">Replace Existing</p>
+                <p className="text-xs text-muted-foreground">Delete current TB data and import fresh. Previous data will be lost.</p>
+              </div>
+            </Button>
+            <Button variant="outline" className="w-full justify-start h-auto py-3" onClick={() => handleReimportConfirm("prior_year")}>
+              <div className="text-left">
+                <p className="font-medium">Add as Prior Year Comparison</p>
+                <p className="text-xs text-muted-foreground">Keep existing as current year, import this as prior year for YoY comparison in scrutiny.</p>
+              </div>
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowReimportDialog(false)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

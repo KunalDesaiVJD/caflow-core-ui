@@ -345,6 +345,27 @@ serve(async (req) => {
     const totalCr = leafNodes.reduce((s, n) => s + n.txnCredit, 0);
     const isBalanced = Math.abs(totalDr - totalCr) < 1;
 
+    // ─── Chain: Tag ledgers with scrutiny categories ───
+    let taggingResult: any = null;
+    try {
+      const tagUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/tag-tb-ledgers`;
+      const tagRes = await fetch(tagUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ engagementId, firmId }),
+      });
+      if (tagRes.ok) {
+        taggingResult = await tagRes.json();
+      } else {
+        console.error("tag-tb-ledgers failed:", await tagRes.text());
+      }
+    } catch (tagErr) {
+      console.error("tag-tb-ledgers chain error:", tagErr);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -359,6 +380,7 @@ serve(async (req) => {
         isBalanced,
         detectedFormat,
         batchId,
+        tagging: taggingResult,
         hierarchy: nodes.map(n => ({
           nodeId: n.nodeId,
           parentNodeId: n.parentNodeId,

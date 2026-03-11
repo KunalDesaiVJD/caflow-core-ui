@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.parse-tally-tb]
 verify_jwt = false
+
+[functions.tag-tb-ledgers]
+verify_jwt = false
