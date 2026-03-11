@@ -65,11 +65,10 @@ const Clients = () => {
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
   const fetchData = async () => {
-    const [clientsRes, groupsRes, membershipsRes, itrRes, servicesRes] = await Promise.all([
+    const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
       supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(500),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
-      supabase.from("itr_profiles").select("client_id, filing_status, financial_year").order("financial_year", { ascending: false }),
       supabase.from("client_services").select("client_id, is_active"),
     ]);
 
