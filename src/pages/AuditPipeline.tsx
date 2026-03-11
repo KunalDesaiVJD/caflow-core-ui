@@ -703,13 +703,21 @@ export default function AuditPipeline() {
               </Button>
             </div>
           </div>
+        ) : currentStage === 2 ? (
+          /* STAGE 2 */
+          <PipelineStage2
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : (
           /* Other stages placeholder */
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
             <CheckCircle2 size={48} className="text-primary opacity-40" />
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">Stage {currentStage} — {STAGES[currentStage - 1]?.label}</h2>
-              <p className="text-sm">This stage will be built in the next iteration. Stage 1 is complete.</p>
+              <p className="text-sm">This stage will be built in the next iteration.</p>
               <p className="text-xs mt-2">Navigate using the left stepper to review completed stages.</p>
             </div>
           </div>
