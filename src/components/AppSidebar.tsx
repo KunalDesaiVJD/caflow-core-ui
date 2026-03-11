@@ -51,7 +51,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 const topNavItems = [
   { title: "Dashboard", path: "/", icon: LayoutDashboard, module: "Dashboard" },
   { title: "Clients", path: "/clients", icon: Users, module: "Clients" },
-  { title: "TDS Filings", path: "/tds-filings", icon: Receipt, module: "TDS" },
+  { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
   { title: "Billing", path: "/billing", icon: CreditCard, module: "Billing" },
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock, module: "Billing" },
