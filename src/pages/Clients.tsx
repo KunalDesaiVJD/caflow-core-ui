@@ -170,11 +170,6 @@ const Clients = () => {
     });
   };
 
-  const getItrStatusColor = (status: string | undefined) => {
-    if (!status || status === "Pending" || status === "Not Filed") return "text-destructive";
-    if (status === "Filed") return "text-green-600";
-    return "text-amber-600";
-  };
 
   return (
     <div className="space-y-6">
