@@ -56,6 +56,7 @@ import NoticeTracker from "./pages/NoticeTracker";
 import NoticeDetail from "./pages/NoticeDetail";
 import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
+import ServiceMasters from "./pages/ServiceMasters";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
