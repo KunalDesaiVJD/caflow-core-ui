@@ -58,6 +58,7 @@ const topNavItems = [
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
   { title: "Chat", path: "/chat", icon: MessageSquare, module: "Dashboard" },
   { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
+  { title: "Depreciation", path: "/depreciation", icon: Calculator, module: "Audit Intelligence" },
 ];
 
 const auditSections = [
