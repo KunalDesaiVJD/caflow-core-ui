@@ -132,17 +132,15 @@ export default function Chat() {
 
   // Fetch firm users for user directory
   const { data: firmUsers = [] } = useQuery({
-    queryKey: ["firm_users_chat"],
+    queryKey: ["firm_users_chat", user?.firm_id, user?.role],
     queryFn: async () => {
-      if (!user?.firm_id) return [];
-      const { data } = await supabase
-        .from("users")
-        .select("id, name, email, role")
-        .eq("firm_id", user.firm_id)
-        .neq("id", user.id);
+      if (!user) return [];
+      let q = supabase.from("users").select("id, name, email, role").neq("id", user.id).eq("is_active", true);
+      if (user.firm_id && user.role !== "superadmin") q = q.eq("firm_id", user.firm_id);
+      const { data } = await q;
       return (data || []) as FirmUser[];
     },
-    enabled: !!user?.firm_id,
+    enabled: !!user,
   });
 
   // Fetch messages for active conversation
