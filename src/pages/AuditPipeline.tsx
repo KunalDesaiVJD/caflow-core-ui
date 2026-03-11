@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
+import PipelineStage4 from "@/components/pipeline/PipelineStage4";
+import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 
 // ─── Constants ───
 const STAGES = [
