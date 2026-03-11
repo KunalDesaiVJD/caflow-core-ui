@@ -178,6 +178,7 @@ const App = () => (
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />
+              <Route path="/depreciation" element={<Depreciation />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />

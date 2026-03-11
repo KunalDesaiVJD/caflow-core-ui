@@ -30,6 +30,7 @@ import {
   AlertTriangle,
   FileCheck,
   BookMarked,
+  Calculator,
   MessageSquare,
   BrainCircuit,
   FileOutput,

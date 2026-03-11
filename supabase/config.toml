@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.generate-audit-report]
 verify_jwt = false
+
+[functions.calculate-depreciation]
+verify_jwt = false
