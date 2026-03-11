@@ -60,6 +60,7 @@ import FirmSettings from "./pages/FirmSettings";
 import ServiceMasters from "./pages/ServiceMasters";
 import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
+import AuditPipeline from "./pages/AuditPipeline";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -134,6 +135,10 @@ const App = () => (
 
               {/* Old audit routes → redirect banner */}
               <Route path="/clients/:clientId/audit/*" element={<AuditRedirect />} />
+
+              {/* Audit Pipeline - 10-stage */}
+              <Route path="/audit/pipeline" element={<AuditPipeline />} />
+              <Route path="/audit/pipeline/:engagementId" element={<AuditPipeline />} />
 
               {/* Consolidated Audit Intelligence routes */}
               <Route path="/audit" element={<AuditIntelligence />} />

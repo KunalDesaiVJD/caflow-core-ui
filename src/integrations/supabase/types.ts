@@ -235,83 +235,140 @@ export type Database = {
         Row: {
           active_tabs: Json | null
           audit_firm_id: string | null
+          audit_period_type: string | null
           audit_programme: Json | null
           audit_type: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
+          cash_flow_method: string | null
           client_id: string | null
+          entity_type: string | null
           entity_type_logic: string | null
+          final_locked: boolean | null
           financial_year: string | null
           firm_id: string | null
           form_3cd: Json | null
+          fs_preparation_mode: string | null
           id: string
           manager_id: string | null
           materiality: Json | null
           notes_to_accounts: Json | null
+          parent_engagement_id: string | null
           partner_id: string | null
+          period_label: string | null
+          pipeline_stage: number | null
           planned_end: string | null
           planned_start: string | null
           preliminary_complete: boolean | null
+          questionnaire_answers: Json | null
+          requires_3ca: boolean | null
+          requires_3cb: boolean | null
+          requires_3cd: boolean | null
+          requires_caro: boolean | null
+          requires_cash_flow: boolean | null
           risk_assessment: Json | null
           risk_rating: string | null
+          schedule_iii_division: string | null
+          sign_off_by: string | null
+          sign_off_date: string | null
           signed_at: string | null
           signed_by: string | null
+          stage_statuses: Json | null
           status: string | null
           team_members: string[] | null
+          udin: string | null
         }
         Insert: {
           active_tabs?: Json | null
           audit_firm_id?: string | null
+          audit_period_type?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
+          cash_flow_method?: string | null
           client_id?: string | null
+          entity_type?: string | null
           entity_type_logic?: string | null
+          final_locked?: boolean | null
           financial_year?: string | null
           firm_id?: string | null
           form_3cd?: Json | null
+          fs_preparation_mode?: string | null
           id?: string
           manager_id?: string | null
           materiality?: Json | null
           notes_to_accounts?: Json | null
+          parent_engagement_id?: string | null
           partner_id?: string | null
+          period_label?: string | null
+          pipeline_stage?: number | null
           planned_end?: string | null
           planned_start?: string | null
           preliminary_complete?: boolean | null
+          questionnaire_answers?: Json | null
+          requires_3ca?: boolean | null
+          requires_3cb?: boolean | null
+          requires_3cd?: boolean | null
+          requires_caro?: boolean | null
+          requires_cash_flow?: boolean | null
           risk_assessment?: Json | null
           risk_rating?: string | null
+          schedule_iii_division?: string | null
+          sign_off_by?: string | null
+          sign_off_date?: string | null
           signed_at?: string | null
           signed_by?: string | null
+          stage_statuses?: Json | null
           status?: string | null
           team_members?: string[] | null
+          udin?: string | null
         }
         Update: {
           active_tabs?: Json | null
           audit_firm_id?: string | null
+          audit_period_type?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
+          cash_flow_method?: string | null
           client_id?: string | null
+          entity_type?: string | null
           entity_type_logic?: string | null
+          final_locked?: boolean | null
           financial_year?: string | null
           firm_id?: string | null
           form_3cd?: Json | null
+          fs_preparation_mode?: string | null
           id?: string
           manager_id?: string | null
           materiality?: Json | null
           notes_to_accounts?: Json | null
+          parent_engagement_id?: string | null
           partner_id?: string | null
+          period_label?: string | null
+          pipeline_stage?: number | null
           planned_end?: string | null
           planned_start?: string | null
           preliminary_complete?: boolean | null
+          questionnaire_answers?: Json | null
+          requires_3ca?: boolean | null
+          requires_3cb?: boolean | null
+          requires_3cd?: boolean | null
+          requires_caro?: boolean | null
+          requires_cash_flow?: boolean | null
           risk_assessment?: Json | null
           risk_rating?: string | null
+          schedule_iii_division?: string | null
+          sign_off_by?: string | null
+          sign_off_date?: string | null
           signed_at?: string | null
           signed_by?: string | null
+          stage_statuses?: Json | null
           status?: string | null
           team_members?: string[] | null
+          udin?: string | null
         }
         Relationships: [
           {
@@ -343,8 +400,22 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "audit_engagements_parent_engagement_id_fkey"
+            columns: ["parent_engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "audit_engagements_partner_id_fkey"
             columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_engagements_sign_off_by_fkey"
+            columns: ["sign_off_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]

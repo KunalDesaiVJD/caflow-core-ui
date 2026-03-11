@@ -84,6 +84,7 @@ const auditSections = [
   {
     label: "Engagements",
     items: [
+      { title: "10-Stage Pipeline", path: "/audit/pipeline", icon: ClipboardList },
       { title: "Engagements", path: "/audit", icon: FileText },
       { title: "Calendar", path: "/audit/calendar", icon: CalendarDays },
       { title: "Risk Assessment", path: "/audit/risk", icon: AlertTriangle },
