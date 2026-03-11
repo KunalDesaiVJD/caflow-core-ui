@@ -56,8 +56,8 @@ const topNavItems = [
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
+  { title: "Chat", path: "/chat", icon: MessageSquare, module: "Dashboard" },
   { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
-  
 ];
 
 const auditSections = [
