@@ -80,8 +80,8 @@ const CATEGORY_TO_AREA: Record<string, string> = {
 interface Workpaper {
   id: string;
   wp_ref: string;
-  section: string;
-  objective: string;
+  section: string | null;
+  objective: string | null;
   procedure: string;
   conclusion: string;
   signed_by: string;
