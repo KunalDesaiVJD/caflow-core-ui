@@ -260,7 +260,7 @@ export default function Depreciation() {
             </Button>
           )}
           {isLocked && (
-            <Badge variant="outline" className="gap-1 text-amber-600 border-amber-300 bg-amber-50">
+            <Badge variant="outline" className="gap-1 text-warning border-warning/30 bg-warning/10">
               <Lock size={14} /> Locked — Audit Completed
             </Badge>
           )}
