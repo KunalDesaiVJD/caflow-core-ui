@@ -29,20 +29,28 @@ import {
 import { format, addDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  ArrowLeft, Plus, Trash2, Save, Lock, Download, Send,
-  FileText, CheckCircle2, Sparkles,
+  ArrowLeft, Plus, Trash2, Save, Lock, Download,
+  FileText, Info,
 } from "lucide-react";
 
 // ─── Types ───
 interface LineItem {
   id?: string;
   description: string;
+  description_details: string;
   hsn_sac_code: string;
   quantity: number;
-  unit: string;
   rate: number;
-  amount: number;
+  discount_percent: number;
+  taxable_value: number;
+  cgst_percent: number;
+  cgst_amount: number;
+  sgst_percent: number;
+  sgst_amount: number;
+  cess: number;
+  total: number;
   sort_order: number;
+  showDetails: boolean;
 }
 
 interface Client {
@@ -66,24 +74,46 @@ interface Firm {
   primary_color: string | null;
   signature_url: string | null;
   state: string | null;
+  settings: any;
 }
 
-interface TimesheetForFetch {
-  id: string;
-  description: string | null;
-  hours: number | null;
-  work_date: string | null;
-  billable: boolean | null;
-  is_billable: boolean | null;
-}
+const EMPTY_ITEM = (): LineItem => ({
+  description: "", description_details: "", hsn_sac_code: "", quantity: 1, rate: 0,
+  discount_percent: 0, taxable_value: 0, cgst_percent: 9, cgst_amount: 0,
+  sgst_percent: 9, sgst_amount: 0, cess: 0, total: 0, sort_order: 0, showDetails: false,
+});
 
-const FORMATS = [
-  { id: "classic", label: "Classic", desc: "Traditional with navy header band" },
-  { id: "modern", label: "Modern", desc: "Colorful header, clean body" },
-  { id: "minimal", label: "Minimal", desc: "Clean white, no clutter" },
-  { id: "gst_detailed", label: "GST Detailed", desc: "Tax-prominent with SAC codes" },
-  { id: "retainer", label: "Retainer", desc: "Monthly with hours breakdown" },
-];
+// Amount in words helper
+function numberToWords(num: number): string {
+  if (num === 0) return "Zero Rupees Only";
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const scales = ["", "Thousand", "Lakh", "Crore"];
+
+  const toWords = (n: number): string => {
+    if (n === 0) return "";
+    if (n < 20) return ones[n];
+    if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
+    return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " " + toWords(n % 100) : "");
+  };
+
+  const intPart = Math.floor(Math.abs(num));
+  if (intPart === 0) return "Zero Rupees Only";
+
+  // Indian numbering: last 3 digits, then groups of 2
+  const groups: number[] = [];
+  let rem = intPart;
+  groups.push(rem % 1000); rem = Math.floor(rem / 1000);
+  while (rem > 0) { groups.push(rem % 100); rem = Math.floor(rem / 100); }
+
+  let result = "";
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (groups[i] === 0) continue;
+    result += toWords(groups[i]) + (scales[i] ? " " + scales[i] : "") + " ";
+  }
+  return result.trim() + " Rupees Only";
+}
 
 const NewInvoice = () => {
   const navigate = useNavigate();
@@ -100,41 +130,24 @@ const NewInvoice = () => {
   const [firm, setFirm] = useState<Firm | null>(null);
 
   // Invoice state
-  const [invoiceFormat, setInvoiceFormat] = useState("classic");
   const [clientId, setClientId] = useState("");
   const [invoiceNo, setInvoiceNo] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [dueDate, setDueDate] = useState(format(addDays(new Date(), 30), "yyyy-MM-dd"));
-  const [subject, setSubject] = useState("");
-  const [lineItems, setLineItems] = useState<LineItem[]>([{ description: "", hsn_sac_code: "", quantity: 1, unit: "", rate: 0, amount: 0, sort_order: 0 }]);
+  const [referenceNo, setReferenceNo] = useState("");
+  const [placeOfSupply, setPlaceOfSupply] = useState("");
+  const [lineItems, setLineItems] = useState<LineItem[]>([EMPTY_ITEM()]);
   const [isIntraState, setIsIntraState] = useState(true);
-  const [cgstRate, setCgstRate] = useState(9);
-  const [sgstRate, setSgstRate] = useState(9);
-  const [igstRate, setIgstRate] = useState(18);
-  const [paymentTerms, setPaymentTerms] = useState("Payment due within 30 days of invoice date.");
-  const [footerText, setFooterText] = useState("Thank you for your business.");
-  const [notes, setNotes] = useState("");
-  const [signatoryName, setSignatoryName] = useState("");
-  const [showLogo, setShowLogo] = useState(true);
   const [status, setStatus] = useState("draft");
+  const [showLogo, setShowLogo] = useState(true);
 
-  // From/To overrides
-  const [fromName, setFromName] = useState("");
-  const [fromAddress, setFromAddress] = useState("");
-  const [fromGstin, setFromGstin] = useState("");
-  const [fromPan, setFromPan] = useState("");
-  const [fromPhone, setFromPhone] = useState("");
-  const [fromEmail, setFromEmail] = useState("");
+  // Client address
   const [toName, setToName] = useState("");
-  const [toAddress, setToAddress] = useState("");
   const [toGstin, setToGstin] = useState("");
-  const [toPan, setToPan] = useState("");
-  const [bankSnapshot, setBankSnapshot] = useState<any>(null);
-
-  // Timesheet modal
-  const [tsModalOpen, setTsModalOpen] = useState(false);
-  const [tsEntries, setTsEntries] = useState<TimesheetForFetch[]>([]);
-  const [tsSelected, setTsSelected] = useState<string[]>([]);
+  const [toAddress, setToAddress] = useState("");
+  const [toCity, setToCity] = useState("");
+  const [toState, setToState] = useState("");
+  const [toPin, setToPin] = useState("");
 
   // Finalize dialog
   const [finalizeOpen, setFinalizeOpen] = useState(false);
@@ -143,81 +156,70 @@ const NewInvoice = () => {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      // Fetch clients
       let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type").order("name");
       if (!isSuperadmin && firmId) cq = cq.eq("firm_id", firmId);
       const { data: clientData } = await cq;
       setClients(clientData || []);
 
-      // Fetch firm
+      // Fetch firm - auto-populate from Firm Management
       if (firmId) {
-        const { data: firmData } = await supabase.from("firms").select("name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state").eq("id", firmId).single();
+        const { data: firmData } = await supabase.from("firms")
+          .select("name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings")
+          .eq("id", firmId).single();
         if (firmData) {
           setFirm(firmData);
-          setFromName(firmData.display_name || firmData.name);
-          const addr = firmData.address as any;
-          setFromAddress(addr ? [addr.line1, addr.line2, addr.city, addr.state, addr.pincode].filter(Boolean).join(", ") : "");
-          setFromGstin(firmData.gstin || "");
-          setFromPan(firmData.pan || "");
-          setFromPhone(firmData.phone || "");
-          setFromEmail(firmData.email || "");
-          setBankSnapshot(firmData.bank_details);
-          setSignatoryName(firmData.display_name || firmData.name);
+          setPlaceOfSupply(firmData.state ? `${firmData.state}` : "");
         }
       }
 
-      // Generate invoice number
+      // Generate invoice number in ###-FY format
       if (!isEdit) {
+        const now = new Date();
+        const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+        const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
         let invQ = supabase.from("invoices").select("invoice_no").order("invoice_no", { ascending: false }).limit(1);
         if (!isSuperadmin && firmId) invQ = invQ.eq("firm_id", firmId);
         const { data: lastInv } = await invQ;
         let nextNum = 1;
         if (lastInv?.[0]?.invoice_no) {
-          const match = lastInv[0].invoice_no.match(/(\d+)$/);
+          const match = lastInv[0].invoice_no.match(/^(\d+)/);
           if (match) nextNum = parseInt(match[1]) + 1;
         }
-        setInvoiceNo(`INV-${String(nextNum).padStart(4, "0")}`);
+        setInvoiceNo(`${nextNum}-${fy}`);
       }
 
-      // Load existing invoice if editing
+      // Load existing invoice
       if (isEdit && invoiceId) {
         const { data: inv } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
         if (inv) {
-          setInvoiceFormat(inv.invoice_format || "classic");
           setClientId(inv.client_id || "");
           setInvoiceNo(inv.invoice_no || "");
           setInvoiceDate(inv.invoice_date || "");
           setDueDate(inv.due_date || "");
-          setSubject(inv.subject || "");
-          setIsIntraState(inv.is_intra_state ?? true);
-          setPaymentTerms(inv.payment_terms || "");
-          setFooterText(inv.footer_text || "");
-          setNotes(inv.notes || "");
-          setSignatoryName(inv.signatory_name || "");
-          setShowLogo(inv.show_logo ?? true);
+          setReferenceNo((inv as any).reference_no || "");
           setStatus(inv.status || "draft");
-          setFromName(inv.from_firm_name || "");
-          setFromAddress(inv.from_address || "");
-          setFromGstin(inv.from_gstin || "");
-          setFromPan(inv.from_pan || "");
-          setFromPhone(inv.from_phone || "");
-          setFromEmail(inv.from_email || "");
+          setShowLogo(inv.show_logo ?? true);
           setToName(inv.to_name || "");
-          setToAddress(inv.to_address || "");
           setToGstin(inv.to_gstin || "");
-          setToPan(inv.to_pan || "");
-          setBankSnapshot(inv.bank_details_snapshot);
-
-          // Load line items from JSONB (legacy) or table
+          setToAddress(inv.to_address || "");
           if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
             setLineItems(inv.line_items.map((li: any, i: number) => ({
+              ...EMPTY_ITEM(),
               description: li.description || "",
-              hsn_sac_code: li.hsn_sac_code || "",
-              quantity: li.quantity || li.hours || 1,
-              unit: li.unit || "",
+              description_details: li.description_details || "",
+              hsn_sac_code: li.hsn_sac_code || li.hsn || "",
+              quantity: li.quantity || 1,
               rate: li.rate || 0,
-              amount: li.amount || 0,
+              discount_percent: li.discount_percent || 0,
+              taxable_value: li.taxable_value || li.amount || 0,
+              cgst_percent: li.cgst_percent ?? 9,
+              cgst_amount: li.cgst_amount || 0,
+              sgst_percent: li.sgst_percent ?? 9,
+              sgst_amount: li.sgst_amount || 0,
+              cess: li.cess || 0,
+              total: li.total || 0,
               sort_order: i,
+              showDetails: false,
             })));
           }
         }
@@ -232,64 +234,62 @@ const NewInvoice = () => {
     const client = clients.find(c => c.id === clientId);
     if (client) {
       setToName(client.name || "");
-      setToPan(client.pan || "");
       setToGstin(client.gstin?.[0] || "");
     }
   }, [clientId, clients]);
 
-  // Line item helpers
+  // Recalculate line item
+  const recalcItem = (item: LineItem): LineItem => {
+    const qty = Number(item.quantity) || 0;
+    const rate = Number(item.rate) || 0;
+    const disc = Number(item.discount_percent) || 0;
+    const baseAmt = qty * rate;
+    const discAmt = baseAmt * disc / 100;
+    const taxable = Math.round((baseAmt - discAmt) * 100) / 100;
+    const cgst = isIntraState ? Math.round(taxable * (Number(item.cgst_percent) || 0) / 100 * 100) / 100 : 0;
+    const sgst = isIntraState ? Math.round(taxable * (Number(item.sgst_percent) || 0) / 100 * 100) / 100 : 0;
+    const cess = Number(item.cess) || 0;
+    return { ...item, taxable_value: taxable, cgst_amount: cgst, sgst_amount: sgst, total: taxable + cgst + sgst + cess };
+  };
+
   const updateLine = (idx: number, field: keyof LineItem, value: any) => {
     setLineItems(prev => {
       const next = [...prev];
       const item = { ...next[idx], [field]: value };
-      if (field === "quantity" || field === "rate") {
-        item.amount = Math.round((Number(item.quantity) || 0) * (Number(item.rate) || 0) * 100) / 100;
-      }
-      next[idx] = item;
+      next[idx] = recalcItem(item);
       return next;
     });
   };
-  const addLine = () => setLineItems(prev => [...prev, { description: "", hsn_sac_code: "", quantity: 1, unit: "", rate: 0, amount: 0, sort_order: prev.length }]);
+  const addLine = () => setLineItems(prev => [...prev, { ...EMPTY_ITEM(), sort_order: prev.length }]);
   const removeLine = (idx: number) => { if (lineItems.length > 1) setLineItems(prev => prev.filter((_, i) => i !== idx)); };
+  const toggleDetails = (idx: number) => {
+    setLineItems(prev => prev.map((li, i) => i === idx ? { ...li, showDetails: !li.showDetails } : li));
+  };
+
+  // Recalc all items when intra-state changes
+  useEffect(() => {
+    setLineItems(prev => prev.map(li => recalcItem(li)));
+  }, [isIntraState]);
 
   // Totals
-  const subtotal = useMemo(() => lineItems.reduce((s, li) => s + li.amount, 0), [lineItems]);
-  const totalCgst = useMemo(() => isIntraState ? Math.round(subtotal * cgstRate / 100 * 100) / 100 : 0, [subtotal, cgstRate, isIntraState]);
-  const totalSgst = useMemo(() => isIntraState ? Math.round(subtotal * sgstRate / 100 * 100) / 100 : 0, [subtotal, sgstRate, isIntraState]);
-  const totalIgst = useMemo(() => !isIntraState ? Math.round(subtotal * igstRate / 100 * 100) / 100 : 0, [subtotal, igstRate, isIntraState]);
-  const grandTotal = useMemo(() => subtotal + totalCgst + totalSgst + totalIgst, [subtotal, totalCgst, totalSgst, totalIgst]);
+  const items = useMemo(() => lineItems.filter(li => li.description.trim()), [lineItems]);
+  const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
+  const totalCgst = useMemo(() => items.reduce((s, li) => s + li.cgst_amount, 0), [items]);
+  const totalSgst = useMemo(() => items.reduce((s, li) => s + li.sgst_amount, 0), [items]);
+  const totalCess = useMemo(() => items.reduce((s, li) => s + li.cess, 0), [items]);
+  const totalTax = totalCgst + totalSgst + totalCess;
+  const grandTotal = totalTaxable + totalTax;
 
-  // Fetch timesheets for client
-  const fetchTimesheets = async () => {
-    if (!clientId) return;
-    const { data } = await supabase.from("timesheets")
-      .select("id, description, hours, work_date, billable, is_billable")
-      .eq("client_id", clientId)
-      .eq("is_invoiced", false)
-      .order("work_date");
-    setTsEntries((data as TimesheetForFetch[]) || []);
-    setTsSelected([]);
-    setTsModalOpen(true);
-  };
-
-  const applyTimesheets = () => {
-    const selected = tsEntries.filter(t => tsSelected.includes(t.id));
-    const newItems: LineItem[] = selected.map((t, i) => ({
-      description: `${t.description || "Service"} (${t.work_date ? format(new Date(t.work_date), "dd/MM/yyyy") : ""})`,
-      hsn_sac_code: "998231",
-      quantity: t.hours || 1,
-      unit: "hrs",
-      rate: 0,
-      amount: 0,
-      sort_order: lineItems.length + i,
-    }));
-    setLineItems(prev => [...prev.filter(li => li.description), ...newItems]);
-    setTsModalOpen(false);
-  };
+  const firmName = firm?.display_name || firm?.name || "";
+  const firmAddr = firm?.address as any;
+  const firmFullAddress = firmAddr ? [firmAddr.line1, firmAddr.line2, firmAddr.city, firmAddr.state, firmAddr.pincode].filter(Boolean).join(", ") : "";
+  const bankDetails = firm?.bank_details as any;
+  const msmeNo = (firm?.settings as any)?.msme_no || "";
 
   // Save
   const handleSave = async (newStatus?: string) => {
     if (!clientId) { toast({ title: "Select a client", variant: "destructive" }); return; }
+    if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
@@ -299,34 +299,43 @@ const NewInvoice = () => {
         firm_id: firmId,
         invoice_date: invoiceDate,
         due_date: dueDate,
-        subject,
-        invoice_format: invoiceFormat,
-        amount: subtotal,
-        subtotal,
-        gst_amount: totalCgst + totalSgst + totalIgst,
+        reference_no: referenceNo,
+        invoice_format: "gst_tax_invoice",
+        amount: totalTaxable,
+        subtotal: totalTaxable,
+        gst_amount: totalTax,
         total_cgst: totalCgst,
         total_sgst: totalSgst,
-        total_igst: totalIgst,
         total_amount: grandTotal,
         is_intra_state: isIntraState,
-        payment_terms: paymentTerms,
-        footer_text: footerText,
-        notes,
-        signatory_name: signatoryName,
         show_logo: showLogo,
         status: effectiveStatus,
-        from_firm_name: fromName,
-        from_address: fromAddress,
-        from_gstin: fromGstin,
-        from_pan: fromPan,
-        from_phone: fromPhone,
-        from_email: fromEmail,
+        from_firm_name: firmName,
+        from_address: firmFullAddress,
+        from_gstin: firm?.gstin || "",
+        from_pan: firm?.pan || "",
+        from_phone: firm?.phone || "",
+        from_email: firm?.email || "",
         to_name: toName,
         to_address: toAddress,
         to_gstin: toGstin,
-        to_pan: toPan,
-        bank_details_snapshot: bankSnapshot,
-        line_items: lineItems.filter(li => li.description.trim()),
+        bank_details_snapshot: bankDetails,
+        line_items: items.map(li => ({
+          description: li.description,
+          description_details: li.description_details,
+          hsn_sac_code: li.hsn_sac_code,
+          quantity: li.quantity,
+          rate: li.rate,
+          discount_percent: li.discount_percent,
+          taxable_value: li.taxable_value,
+          cgst_percent: li.cgst_percent,
+          cgst_amount: li.cgst_amount,
+          sgst_percent: li.sgst_percent,
+          sgst_amount: li.sgst_amount,
+          cess: li.cess,
+          total: li.total,
+        })),
+        signatory_name: firmName,
         created_by: user?.id,
       };
 
@@ -352,213 +361,194 @@ const NewInvoice = () => {
   const handleDownloadPdf = () => {
     const html = generateInvoiceHtml();
     const blob = new Blob([html], { type: "text/html" });
-    window.open(URL.createObjectURL(blob), "_blank");
+    const w = window.open(URL.createObjectURL(blob), "_blank");
+    if (w) setTimeout(() => { w.print(); }, 500);
   };
 
-  const selectedClient = clients.find(c => c.id === clientId);
   const isLocked = status === "finalized" || status === "sent" || status === "paid" || status === "voided";
 
-  // Generate invoice HTML for preview/PDF
+  // Generate invoice HTML matching reference format exactly
   const generateInvoiceHtml = useCallback(() => {
-    const primaryColor = firm?.primary_color || "#1e3a5f";
-    const items = lineItems.filter(li => li.description.trim());
+    const validItems = lineItems.filter(li => li.description.trim());
+    const fmtINR = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const rows = items.map((item, i) => `
-      <tr style="${i % 2 === 0 ? '' : 'background:#f9fafb'}">
-        <td style="padding:8px;border-bottom:1px solid #eee">${i + 1}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee">${item.description}</td>
-        ${invoiceFormat === "gst_detailed" ? `<td style="padding:8px;border-bottom:1px solid #eee">${item.hsn_sac_code}</td>` : ""}
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right">${item.quantity}</td>
-        ${item.unit ? `<td style="padding:8px;border-bottom:1px solid #eee">${item.unit}</td>` : ""}
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right">₹${item.rate.toLocaleString("en-IN")}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right">₹${item.amount.toLocaleString("en-IN")}</td>
+    const itemRows = validItems.map((item, i) => `
+      <tr>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:center;font-size:12px">${i + 1}.</td>
+        <td style="border:1px solid #999;padding:6px 8px;font-size:12px">
+          ${item.description}
+          ${item.description_details ? `<div style="font-size:10px;color:#555;margin-top:2px;white-space:pre-line">${item.description_details}</div>` : ""}
+        </td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:center;font-size:12px">${item.hsn_sac_code}</td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${Number(item.quantity).toFixed(2)}</td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${fmtINR(item.rate)}</td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${item.discount_percent > 0 ? fmtINR(item.taxable_value * item.discount_percent / (100 - item.discount_percent)) : "0.00"}</td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${fmtINR(item.taxable_value)}</td>
+        ${isIntraState ? `
+          <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:11px">${item.cgst_percent}%<br/>${fmtINR(item.cgst_amount)}</td>
+          <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:11px">${item.sgst_percent}%<br/>${fmtINR(item.sgst_amount)}</td>
+        ` : `
+          <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:11px" colspan="2">${item.cgst_percent + item.sgst_percent}%<br/>${fmtINR(item.cgst_amount + item.sgst_amount)}</td>
+        `}
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${item.cess > 0 ? fmtINR(item.cess) : "0.00"}</td>
+        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px;font-weight:600">${fmtINR(item.total)}</td>
       </tr>
     `).join("");
 
-    const bankHtml = bankSnapshot ? `
-      <div style="margin-top:24px;padding:16px;background:#f9fafb;border-radius:8px;font-size:13px">
-        <p style="font-weight:600;margin:0 0 8px">Bank Details</p>
-        ${bankSnapshot.bank_name ? `<p style="margin:2px 0">Bank: ${bankSnapshot.bank_name}</p>` : ""}
-        ${bankSnapshot.account_no ? `<p style="margin:2px 0">A/C No: ${bankSnapshot.account_no}</p>` : ""}
-        ${bankSnapshot.ifsc ? `<p style="margin:2px 0">IFSC: ${bankSnapshot.ifsc}</p>` : ""}
-        ${bankSnapshot.branch ? `<p style="margin:2px 0">Branch: ${bankSnapshot.branch}</p>` : ""}
-      </div>
-    ` : "";
+    const totalRow = `
+      <tr style="background:#f5f5f5;font-weight:700">
+        <td style="border:1px solid #999;padding:8px" colspan="2">Total</td>
+        <td style="border:1px solid #999;padding:8px"></td>
+        <td style="border:1px solid #999;padding:8px"></td>
+        <td style="border:1px solid #999;padding:8px"></td>
+        <td style="border:1px solid #999;padding:8px"></td>
+        <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalTaxable)}</td>
+        ${isIntraState ? `
+          <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalCgst)}</td>
+          <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalSgst)}</td>
+        ` : `
+          <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px" colspan="2">${fmtINR(totalCgst + totalSgst)}</td>
+        `}
+        <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalCess)}</td>
+        <td style="border:1px solid #999;padding:8px;text-align:right;font-size:13px">${fmtINR(grandTotal)}</td>
+      </tr>
+    `;
 
-    if (invoiceFormat === "classic") {
-      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-        <style>body{font-family:system-ui,sans-serif;margin:0;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:10px}}</style></head><body>
-        <div style="background:${primaryColor};padding:24px 32px;color:white;display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <h1 style="margin:0;font-size:24px">${fromName}</h1>
-            <p style="margin:4px 0;font-size:13px;opacity:0.9">${fromAddress}</p>
-            ${fromGstin ? `<p style="margin:2px 0;font-size:12px">GSTIN: ${fromGstin}</p>` : ""}
-          </div>
+    const logoHtml = showLogo && firm?.logo_url 
+      ? `<img src="${firm.logo_url}" style="max-width:200px;max-height:80px;object-fit:contain" />`
+      : `<div style="font-size:20px;font-weight:800;color:#1a365d">${firmName}</div>`;
+
+    return `<!DOCTYPE html><html><head><title>Tax Invoice ${invoiceNo}</title>
+      <style>
+        body{font-family:'Segoe UI',system-ui,sans-serif;margin:0;padding:20px;color:#1a1a1a;font-size:13px}
+        table{width:100%;border-collapse:collapse}
+        @media print{body{margin:10px;padding:10px}@page{margin:10mm}}
+      </style></head><body>
+      <div style="max-width:900px;margin:0 auto">
+        <!-- Header -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div>${logoHtml}</div>
           <div style="text-align:right">
-            <h2 style="margin:0;font-size:20px">INVOICE</h2>
-            <p style="margin:4px 0;font-size:14px">${invoiceNo}</p>
+            <div style="border:2px dashed #333;padding:6px 16px;display:inline-block;font-size:13px;font-weight:700">ORIGINAL<br/><span style="font-size:11px;font-weight:400">For Recipient</span></div>
           </div>
         </div>
-        <div style="padding:24px 32px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:24px">
-            <div>
-              <p style="font-weight:600;margin:0 0 4px;color:#666;font-size:11px;text-transform:uppercase">Bill To</p>
-              <p style="margin:0;font-weight:600">${toName}</p>
-              ${toAddress ? `<p style="margin:2px 0;font-size:13px">${toAddress}</p>` : ""}
-              ${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}
-              ${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}
-            </div>
-            <div style="text-align:right;font-size:13px">
-              <p style="margin:2px 0"><strong>Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p>
-              <p style="margin:2px 0"><strong>Due:</strong> ${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</p>
-              ${subject ? `<p style="margin:2px 0"><strong>Subject:</strong> ${subject}</p>` : ""}
-            </div>
+
+        <!-- TAX INVOICE title -->
+        <div style="text-align:center;margin:12px 0;border-top:2px solid #333;border-bottom:2px solid #333;padding:8px 0">
+          <h1 style="margin:0;font-size:22px;font-weight:800;letter-spacing:2px">TAX INVOICE</h1>
+        </div>
+
+        <!-- Firm + Invoice details -->
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+          <div style="flex:1">
+            <p style="font-weight:700;margin:0 0 4px;font-size:15px">${firmName}</p>
+            <p style="margin:2px 0;font-size:12px">${firmFullAddress}</p>
+            ${firm?.gstin ? `<p style="margin:4px 0;font-size:12px"><strong>GSTIN:</strong> ${firm.gstin}</p>` : ""}
           </div>
-          <table>
-            <thead><tr style="background:#f3f4f6">
-              <th style="padding:8px;text-align:left">#</th>
-              <th style="padding:8px;text-align:left">Description</th>
-              <th style="padding:8px;text-align:right">Qty</th>
-              <th style="padding:8px;text-align:right">Rate</th>
-              <th style="padding:8px;text-align:right">Amount</th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <div style="display:flex;justify-content:flex-end;margin-top:16px">
-            <table style="width:280px">
-              <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <div style="text-align:right;font-size:12px;min-width:280px">
+            ${firm?.gstin ? `<p style="margin:2px 0"><strong>GSTIN:</strong> ${firm.gstin}</p>` : ""}
+            ${firm?.state ? `<p style="margin:2px 0"><strong>State:</strong> ${firm.state}</p>` : ""}
+            ${firm?.pan ? `<p style="margin:2px 0"><strong>PAN:</strong> ${firm.pan}</p>` : ""}
+            <p style="margin:2px 0"><strong>Invoice Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p>
+            <p style="margin:2px 0"><strong>Invoice No.:</strong> ${invoiceNo}</p>
+            ${referenceNo ? `<p style="margin:2px 0"><strong>Reference No.:</strong> ${referenceNo}</p>` : ""}
+          </div>
+        </div>
+
+        <!-- Customer details - 3 columns -->
+        <div style="border:1px solid #999;display:flex;margin-bottom:8px">
+          <div style="flex:1;padding:10px;border-right:1px solid #999">
+            <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Customer Name</p>
+            <p style="font-weight:600;margin:0">${toName}</p>
+            ${toGstin ? `<p style="margin:4px 0;font-size:11px">Customer GSTIN: ${toGstin}</p>` : ""}
+          </div>
+          <div style="flex:1;padding:10px;border-right:1px solid #999">
+            <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Billing Address</p>
+            <p style="font-weight:600;margin:0">${toName}</p>
+            <p style="margin:2px 0;font-size:11px">${toAddress}</p>
+            <p style="margin:2px 0;font-size:11px">${[toCity, toState, toPin].filter(Boolean).join(", ")}</p>
+            ${toGstin ? `<p style="margin:2px 0;font-size:11px">${toGstin}</p>` : ""}
+          </div>
+          <div style="flex:1;padding:10px">
+            <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Shipping Address</p>
+            <p style="font-weight:600;margin:0">${toName}</p>
+            <p style="margin:2px 0;font-size:11px">${toAddress}</p>
+            <p style="margin:2px 0;font-size:11px">${[toCity, toState, toPin].filter(Boolean).join(", ")}</p>
+          </div>
+        </div>
+
+        <!-- Place of Supply + Due Date -->
+        <div style="display:flex;border:1px solid #999;margin-bottom:12px">
+          <div style="flex:1;padding:6px 10px;border-right:1px solid #999;font-size:12px"><strong>Place of Supply:</strong> ${placeOfSupply || firm?.state || ""}</div>
+          <div style="flex:1;padding:6px 10px;font-size:12px"><strong>Due Date:</strong> ${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</div>
+        </div>
+
+        <!-- Items Table -->
+        <table>
+          <thead>
+            <tr style="background:#e8e8e8">
+              <th style="border:1px solid #999;padding:8px;font-size:11px;width:30px">#</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px;text-align:left">Item</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">HSN/SAC</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">Quantity</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">Rate / Item</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">Discount</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">Taxable Value</th>
               ${isIntraState ? `
-                <tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-                <tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+                <th style="border:1px solid #999;padding:8px;font-size:11px">CGST</th>
+                <th style="border:1px solid #999;padding:8px;font-size:11px">SGST/UTGST</th>
               ` : `
-                <tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+                <th style="border:1px solid #999;padding:8px;font-size:11px" colspan="2">IGST</th>
               `}
-              <tr style="font-weight:700;font-size:16px;border-top:2px solid ${primaryColor}">
-                <td style="padding:8px">Grand Total</td>
-                <td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-              </tr>
-            </table>
-          </div>
-          ${bankHtml}
-          ${paymentTerms ? `<p style="margin-top:16px;font-size:12px;color:#666"><strong>Payment Terms:</strong> ${paymentTerms}</p>` : ""}
-          ${notes ? `<p style="margin-top:8px;font-size:12px;color:#666"><strong>Notes:</strong> ${notes}</p>` : ""}
-          <div style="margin-top:40px;text-align:right">
-            <p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p>
-            <p style="margin:4px 0;font-weight:600">${signatoryName}</p>
-          </div>
-          ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999;border-top:1px solid #eee;padding-top:12px">${footerText}</p>` : ""}
-        </div></body></html>`;
-    }
+              <th style="border:1px solid #999;padding:8px;font-size:11px">CESS</th>
+              <th style="border:1px solid #999;padding:8px;font-size:11px">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemRows}
+            ${totalRow}
+          </tbody>
+        </table>
 
-    // Modern format
-    if (invoiceFormat === "modern") {
-      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-        <style>body{font-family:system-ui,sans-serif;margin:0;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:0}}</style></head><body>
-        <div style="background:linear-gradient(135deg,${primaryColor},${primaryColor}dd);padding:32px;color:white">
-          <h1 style="margin:0;font-size:28px;font-weight:800">${fromName}</h1>
-          <p style="margin:4px 0;font-size:13px;opacity:0.85">${fromAddress}</p>
-          ${fromGstin ? `<p style="margin:2px 0;font-size:12px;opacity:0.75">GSTIN: ${fromGstin}</p>` : ""}
-          <div style="margin-top:16px;display:flex;gap:32px">
-            <div><p style="font-size:11px;opacity:0.7;margin:0">INVOICE NO</p><p style="font-size:16px;font-weight:700;margin:4px 0">${invoiceNo}</p></div>
-            <div><p style="font-size:11px;opacity:0.7;margin:0">DATE</p><p style="font-size:16px;font-weight:700;margin:4px 0">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p></div>
-            <div><p style="font-size:11px;opacity:0.7;margin:0">DUE DATE</p><p style="font-size:16px;font-weight:700;margin:4px 0">${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</p></div>
+        <!-- Totals summary -->
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <table style="width:350px;font-size:13px">
+            <tr><td style="padding:4px 8px">Taxable Amount</td><td style="padding:4px 8px;text-align:right;font-weight:600">₹ ${fmtINR(totalTaxable)}</td></tr>
+            <tr><td style="padding:4px 8px">Total Tax</td><td style="padding:4px 8px;text-align:right">₹ ${fmtINR(totalTax)}</td></tr>
+            <tr style="font-weight:700;font-size:14px;border-top:2px solid #333"><td style="padding:8px">Total Value</td><td style="padding:8px;text-align:right">₹ ${fmtINR(grandTotal)}</td></tr>
+          </table>
+        </div>
+
+        <!-- Amount in words -->
+        <div style="margin:8px 0;padding:8px;background:#f9f9f9;border:1px solid #ddd;font-size:12px">
+          <strong>Total amount (in words):</strong> ${numberToWords(Math.round(grandTotal))}
+        </div>
+
+        <!-- Bank Details + Signatory -->
+        <div style="display:flex;justify-content:space-between;margin-top:16px">
+          <div style="border:1px solid #999;padding:12px;font-size:12px;min-width:320px">
+            <p style="font-weight:700;margin:0 0 6px;font-size:13px">Bank Details:</p>
+            ${bankDetails?.account_no ? `<p style="margin:2px 0"><strong>Account Number:</strong> ${bankDetails.account_no}</p>` : ""}
+            ${bankDetails?.ifsc ? `<p style="margin:2px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
+            ${bankDetails?.bank_name ? `<p style="margin:2px 0"><strong>Bank Name:</strong> ${bankDetails.bank_name}</p>` : ""}
+            ${bankDetails?.branch ? `<p style="margin:2px 0"><strong>Branch Name:</strong> ${bankDetails.branch}</p>` : ""}
+          </div>
+          <div style="text-align:right;padding-top:8px">
+            <p style="margin:0;font-size:13px;font-weight:600">For ${firmName}</p>
+            <div style="height:50px"></div>
+            <p style="margin:0;font-size:12px;border-top:1px solid #333;padding-top:4px">Authorised Signatory</p>
           </div>
         </div>
-        <div style="padding:24px 32px">
-          <div style="margin-bottom:24px"><p style="font-size:11px;text-transform:uppercase;color:#999;margin:0 0 4px">Bill To</p><p style="margin:0;font-weight:600;font-size:16px">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}</div>
-          <table><thead><tr style="background:#f3f4f6"><th style="padding:10px;text-align:left">#</th><th style="padding:10px;text-align:left">Description</th><th style="padding:10px;text-align:right">Qty</th><th style="padding:10px;text-align:right">Rate</th><th style="padding:10px;text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>
-          <div style="display:flex;justify-content:flex-end;margin-top:16px">
-            <div style="background:${primaryColor};color:white;padding:16px 24px;border-radius:8px"><table style="width:280px">
-              <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-              ${isIntraState ? `<tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
-              <tr style="font-weight:700;font-size:16px;border-top:2px solid rgba(255,255,255,0.3)"><td style="padding:8px">Total</td><td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            </table></div>
-          </div>
-          ${bankHtml}
-          <div style="margin-top:40px;text-align:right"><p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p><p style="margin:4px 0;font-weight:600">${signatoryName}</p></div>
-          ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999">${footerText}</p>` : ""}
-        </div></body></html>`;
-    }
 
-    // Minimal format
-    if (invoiceFormat === "minimal") {
-      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-        <style>body{font-family:'Helvetica Neue',sans-serif;margin:48px;color:#333}table{width:100%;border-collapse:collapse}@media print{body{margin:20px}}</style></head><body>
-        <div style="display:flex;justify-content:space-between;margin-bottom:48px">
-          <div><h1 style="margin:0;font-size:32px;font-weight:300;color:#999;letter-spacing:2px">INVOICE</h1></div>
-          <div style="text-align:right"><p style="margin:0;font-size:14px;color:#999">${invoiceNo}</p><p style="margin:4px 0;font-size:14px;color:#999">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : ""}</p></div>
+        <!-- Terms -->
+        <div style="margin-top:16px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#666">
+          <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
+          ${msmeNo ? `<p style="margin:2px 0">MSME/UDYAM NO: ${msmeNo}</p><p style="margin:2px 0">WE ARE REGISTERED UNDER MSME</p>` : ""}
         </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid #eee">
-          <div><p style="font-size:11px;text-transform:uppercase;color:#bbb;margin:0 0 4px;letter-spacing:1px">From</p><p style="margin:0;font-weight:500">${fromName}</p><p style="margin:2px 0;font-size:13px;color:#888">${fromAddress}</p></div>
-          <div style="text-align:right"><p style="font-size:11px;text-transform:uppercase;color:#bbb;margin:0 0 4px;letter-spacing:1px">To</p><p style="margin:0;font-weight:500">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#888">PAN: ${toPan}</p>` : ""}</div>
-        </div>
-        <table><thead><tr><th style="padding:8px 0;text-align:left;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">#</th><th style="padding:8px 0;text-align:left;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Description</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Qty</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Rate</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Amount</th></tr></thead><tbody>${rows}</tbody></table>
-        <div style="display:flex;justify-content:flex-end;margin-top:24px"><table style="width:240px">
-          <tr><td style="padding:4px 0;color:#888">Subtotal</td><td style="padding:4px 0;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          ${isIntraState ? `<tr><td style="padding:4px 0;color:#888">CGST @ ${cgstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 0;color:#888">SGST @ ${sgstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 0;color:#888">IGST @ ${igstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
-          <tr style="font-weight:700;font-size:18px;border-top:1px solid #eee"><td style="padding:12px 0">Total</td><td style="padding:12px 0;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-        </table></div>
-        ${bankHtml}${paymentTerms ? `<p style="margin-top:32px;font-size:12px;color:#999">${paymentTerms}</p>` : ""}
-        <div style="margin-top:48px;text-align:right"><p style="margin:0;font-size:12px;color:#bbb">Authorized Signatory</p><p style="margin:4px 0;font-weight:500">${signatoryName}</p></div>
-        </body></html>`;
-    }
-
-    // GST Detailed format
-    if (invoiceFormat === "gst_detailed") {
-      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-        <style>body{font-family:system-ui,sans-serif;margin:0;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:10px}}</style></head><body>
-        <div style="border:2px solid ${primaryColor};margin:16px">
-          <div style="text-align:center;padding:12px;background:${primaryColor}10;border-bottom:2px solid ${primaryColor}"><h2 style="margin:0;color:${primaryColor};font-size:18px">TAX INVOICE</h2></div>
-          <div style="padding:16px;display:flex;justify-content:space-between;border-bottom:1px solid #ddd">
-            <div><p style="font-weight:700;margin:0">${fromName}</p><p style="margin:2px 0;font-size:12px">${fromAddress}</p>${fromGstin ? `<p style="margin:2px 0;font-size:12px;font-weight:600">GSTIN: ${fromGstin}</p>` : ""}${fromPan ? `<p style="margin:2px 0;font-size:12px">PAN: ${fromPan}</p>` : ""}</div>
-            <div style="text-align:right"><p style="margin:2px 0;font-size:13px"><strong>Invoice No:</strong> ${invoiceNo}</p><p style="margin:2px 0;font-size:13px"><strong>Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p><p style="margin:2px 0;font-size:13px"><strong>Due:</strong> ${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</p></div>
-          </div>
-          <div style="padding:16px;border-bottom:1px solid #ddd"><p style="font-size:11px;text-transform:uppercase;color:#666;margin:0 0 4px">Bill To</p><p style="font-weight:600;margin:0">${toName}</p>${toGstin ? `<p style="margin:2px 0;font-size:12px;font-weight:600">GSTIN: ${toGstin}</p>` : ""}${toPan ? `<p style="margin:2px 0;font-size:12px">PAN: ${toPan}</p>` : ""}</div>
-          <table><thead><tr style="background:${primaryColor}15"><th style="padding:8px;text-align:left;border:1px solid #ddd;font-size:12px">#</th><th style="padding:8px;text-align:left;border:1px solid #ddd;font-size:12px">Description</th><th style="padding:8px;text-align:center;border:1px solid #ddd;font-size:12px">SAC/HSN</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Qty</th><th style="padding:8px;border:1px solid #ddd;font-size:12px">Unit</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Rate</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Amount</th></tr></thead><tbody>${items.map((item, i) => `<tr><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${i+1}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${item.description}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:center">${item.hsn_sac_code}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">${item.quantity}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${item.unit}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">₹${item.rate.toLocaleString("en-IN")}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">₹${item.amount.toLocaleString("en-IN")}</td></tr>`).join("")}</tbody></table>
-          <div style="display:flex;justify-content:flex-end;padding:16px"><table style="width:300px;border:1px solid #ddd">
-            <tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">Taxable Value</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd;font-weight:600">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            ${isIntraState ? `<tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">CGST @ ${cgstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">SGST @ ${sgstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">IGST @ ${igstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
-            <tr style="background:${primaryColor}10;font-weight:700;font-size:15px"><td style="padding:10px 12px">Grand Total</td><td style="padding:10px 12px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          </table></div>
-          ${bankHtml}
-          <div style="padding:16px;border-top:1px solid #ddd;display:flex;justify-content:space-between;align-items:flex-end">
-            <div style="font-size:11px;color:#888">${paymentTerms || ""}</div>
-            <div style="text-align:right"><p style="margin:0;font-size:11px;color:#999">For ${fromName}</p><div style="height:40px"></div><p style="margin:0;font-weight:600;font-size:13px">${signatoryName}</p><p style="margin:0;font-size:11px;color:#999">Authorized Signatory</p></div>
-          </div>
-        </div></body></html>`;
-    }
-
-    // Retainer format — with hours breakdown
-    return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-      <style>body{font-family:system-ui,sans-serif;margin:32px;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:20px}}</style></head><body>
-      <div style="display:flex;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid ${primaryColor}">
-        <div><h1 style="margin:0;font-size:22px;color:${primaryColor}">${fromName}</h1><p style="margin:4px 0;font-size:13px;color:#666">${fromAddress}</p>${fromGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${fromGstin}</p>` : ""}</div>
-        <div style="text-align:right"><div style="background:${primaryColor};color:white;padding:8px 16px;border-radius:4px;display:inline-block;margin-bottom:8px"><p style="margin:0;font-size:11px;opacity:0.8">RETAINER INVOICE</p><p style="margin:2px 0;font-size:16px;font-weight:700">${invoiceNo}</p></div><p style="margin:4px 0;font-size:13px">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : ""}</p></div>
-      </div>
-      <div style="margin-bottom:24px"><p style="font-size:11px;text-transform:uppercase;color:#999;margin:0 0 4px">Bill To</p><p style="margin:0;font-weight:600">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}</div>
-      ${subject ? `<div style="background:#f0f4ff;border-left:3px solid ${primaryColor};padding:8px 16px;margin-bottom:16px;font-size:13px"><strong>Subject:</strong> ${subject}</div>` : ""}
-      <table>
-        <thead><tr style="background:#f3f4f6">
-          <th style="padding:8px;text-align:left;font-size:12px">#</th>
-          <th style="padding:8px;text-align:left;font-size:12px">Service Description</th>
-          <th style="padding:8px;text-align:right;font-size:12px">Hours</th>
-          <th style="padding:8px;font-size:12px">Unit</th>
-          <th style="padding:8px;text-align:right;font-size:12px">Rate/Hr</th>
-          <th style="padding:8px;text-align:right;font-size:12px">Amount</th>
-        </tr></thead>
-        <tbody>${items.map((item, i) => `<tr style="${i % 2 === 0 ? '' : 'background:#f9fafb'}"><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${i+1}</td><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${item.description}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">${item.quantity}</td><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${item.unit || 'hrs'}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">₹${item.rate.toLocaleString("en-IN")}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">₹${item.amount.toLocaleString("en-IN")}</td></tr>`).join("")}</tbody>
-        <tfoot><tr style="background:#f3f4f6;font-weight:600"><td colspan="2" style="padding:8px;font-size:12px">Total</td><td style="padding:8px;text-align:right;font-size:12px">${items.reduce((s, i) => s + i.quantity, 0)} hrs</td><td></td><td></td><td style="padding:8px;text-align:right;font-size:12px">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr></tfoot>
-      </table>
-      <div style="display:flex;justify-content:flex-end;margin-top:16px"><table style="width:280px">
-        <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-        ${isIntraState ? `<tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
-        <tr style="font-weight:700;font-size:16px;border-top:2px solid ${primaryColor}"><td style="padding:8px">Grand Total</td><td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-      </table></div>
-      ${bankHtml}${paymentTerms ? `<p style="margin-top:16px;font-size:12px;color:#666"><strong>Payment Terms:</strong> ${paymentTerms}</p>` : ""}
-      <div style="margin-top:40px;text-align:right"><p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p><p style="margin:4px 0;font-weight:600">${signatoryName}</p></div>
-      ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999;border-top:1px solid #eee;padding-top:12px">${footerText}</p>` : ""}
-      </body></html>`;
-  }, [invoiceFormat, fromName, fromAddress, fromGstin, toName, toAddress, toPan, toGstin, invoiceNo, invoiceDate, dueDate, subject, lineItems, subtotal, totalCgst, totalSgst, totalIgst, grandTotal, cgstRate, sgstRate, igstRate, isIntraState, bankSnapshot, paymentTerms, notes, footerText, signatoryName, firm]);
+      </div></body></html>`;
+  }, [lineItems, invoiceNo, invoiceDate, dueDate, referenceNo, placeOfSupply, isIntraState,
+    firm, firmName, firmFullAddress, bankDetails, msmeNo, showLogo, toName, toGstin, toAddress, toCity, toState, toPin,
+    totalTaxable, totalCgst, totalSgst, totalCess, totalTax, grandTotal]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -568,7 +558,7 @@ const NewInvoice = () => {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background shrink-0">
         <Button variant="ghost" size="icon" onClick={() => navigate("/billing")}><ArrowLeft size={18} /></Button>
         <div className="flex-1">
-          <h1 className="text-lg font-bold text-foreground">{isEdit ? "Edit Invoice" : "New Invoice"}</h1>
+          <h1 className="text-lg font-bold text-foreground">{isEdit ? "Edit Invoice" : "New Tax Invoice"}</h1>
           {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : "")}>{status}</Badge>}
         </div>
         <div className="flex gap-2">
@@ -587,82 +577,59 @@ const NewInvoice = () => {
       {/* Split screen */}
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT PANEL — Form */}
-        <div className="w-[45%] overflow-y-auto border-r border-border p-4 space-y-5">
-          {/* Format selector */}
+        <div className="w-[45%] overflow-y-auto border-r border-border p-4 space-y-4">
+          {/* Client */}
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase">Invoice Format</Label>
-            <div className="grid grid-cols-5 gap-2 mt-2">
-              {FORMATS.map(f => (
-                <button
-                  key={f.id}
-                  disabled={isLocked}
-                  onClick={() => setInvoiceFormat(f.id)}
-                  className={cn(
-                    "rounded-lg border-2 p-2 text-center transition-all text-xs",
-                    invoiceFormat === f.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
-                  )}
-                >
-                  <FileText size={20} className="mx-auto mb-1 text-muted-foreground" />
-                  <p className="font-medium text-foreground">{f.label}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* From */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <Label className="text-xs font-semibold text-muted-foreground uppercase">From (Firm Details)</Label>
-              <div className="flex items-center gap-2">
-                <Label className="text-xs">Show Logo</Label>
-                <Switch checked={showLogo} onCheckedChange={setShowLogo} disabled={isLocked} />
-              </div>
-            </div>
-            <p className="text-[10px] text-muted-foreground mb-2">Changes here only affect this invoice, not firm settings.</p>
-            <div className="grid grid-cols-2 gap-2">
-              <Input value={fromName} onChange={e => setFromName(e.target.value)} placeholder="Firm Name" disabled={isLocked} />
-              <Input value={fromGstin} onChange={e => setFromGstin(e.target.value)} placeholder="GSTIN" disabled={isLocked} />
-              <Input value={fromPan} onChange={e => setFromPan(e.target.value)} placeholder="PAN" disabled={isLocked} />
-              <Input value={fromPhone} onChange={e => setFromPhone(e.target.value)} placeholder="Phone" disabled={isLocked} />
-              <Input value={fromEmail} onChange={e => setFromEmail(e.target.value)} placeholder="Email" disabled={isLocked} className="col-span-2" />
-              <Input value={fromAddress} onChange={e => setFromAddress(e.target.value)} placeholder="Address" disabled={isLocked} className="col-span-2" />
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* To */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">To (Client)</Label>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Client</Label>
             <Select value={clientId} onValueChange={setClientId} disabled={isLocked}>
               <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
               <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.pan})</SelectItem>)}</SelectContent>
             </Select>
             {clientId && (
               <div className="grid grid-cols-2 gap-2 mt-2">
-                <Input value={toName} onChange={e => setToName(e.target.value)} placeholder="Name" disabled={isLocked} />
-                <Input value={toPan} onChange={e => setToPan(e.target.value)} placeholder="PAN" disabled={isLocked} />
+                <Input value={toName} onChange={e => setToName(e.target.value)} placeholder="Customer Name" disabled={isLocked} />
                 <Input value={toGstin} onChange={e => setToGstin(e.target.value)} placeholder="GSTIN" disabled={isLocked} />
                 <Input value={toAddress} onChange={e => setToAddress(e.target.value)} placeholder="Address" disabled={isLocked} />
+                <Input value={toCity} onChange={e => setToCity(e.target.value)} placeholder="City" disabled={isLocked} />
+                <Input value={toState} onChange={e => setToState(e.target.value)} placeholder="State" disabled={isLocked} />
+                <Input value={toPin} onChange={e => setToPin(e.target.value)} placeholder="PIN" disabled={isLocked} />
               </div>
             )}
           </div>
 
           <Separator />
 
-          {/* Meta */}
+          {/* Firm details (read-only from Firm Management) */}
+          <div>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">
+              From (Auto-fetched from Firm Management)
+            </Label>
+            <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md">
+              <p className="font-medium text-foreground">{firmName}</p>
+              <p>{firmFullAddress}</p>
+              {firm?.gstin && <p>GSTIN: {firm.gstin}</p>}
+              {firm?.pan && <p>PAN: {firm.pan}</p>}
+              {bankDetails?.bank_name && <p>Bank: {bankDetails.bank_name} | A/C: {bankDetails.account_no}</p>}
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <Switch checked={showLogo} onCheckedChange={setShowLogo} disabled={isLocked} />
+              <Label className="text-xs">Show Logo</Label>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Invoice Details */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Invoice Details</Label>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs">Invoice No</Label>
-                <Input value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} disabled={isLocked} />
+                <Input value={invoiceNo} readOnly className="bg-muted" />
               </div>
               <div>
-                <Label className="text-xs">Subject</Label>
-                <Input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Professional fees" disabled={isLocked} />
+                <Label className="text-xs">Reference No</Label>
+                <Input value={referenceNo} onChange={e => setReferenceNo(e.target.value)} placeholder="Optional" disabled={isLocked} />
               </div>
               <div>
                 <Label className="text-xs">Invoice Date</Label>
@@ -671,6 +638,14 @@ const NewInvoice = () => {
               <div>
                 <Label className="text-xs">Due Date</Label>
                 <Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} disabled={isLocked} />
+              </div>
+              <div>
+                <Label className="text-xs">Place of Supply</Label>
+                <Input value={placeOfSupply} onChange={e => setPlaceOfSupply(e.target.value)} disabled={isLocked} />
+              </div>
+              <div className="flex items-end gap-2 pb-1">
+                <Switch checked={isIntraState} onCheckedChange={setIsIntraState} disabled={isLocked} />
+                <Label className="text-xs">{isIntraState ? "Intra-State (CGST+SGST)" : "Inter-State (IGST)"}</Label>
               </div>
             </div>
           </div>
@@ -681,35 +656,57 @@ const NewInvoice = () => {
           <div>
             <div className="flex items-center justify-between mb-2">
               <Label className="text-xs font-semibold text-muted-foreground uppercase">Line Items</Label>
-              <div className="flex gap-1">
-                {clientId && !isLocked && (
-                  <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={fetchTimesheets}>
-                    <Clock size={12} /> From Timesheet
-                  </Button>
-                )}
-                {!isLocked && <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={addLine}><Plus size={12} /> Add Row</Button>}
-              </div>
+              {!isLocked && <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={addLine}><Plus size={12} /> Add Row</Button>}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {lineItems.map((item, idx) => (
-                <div key={idx} className="flex gap-2 items-start">
-                  <div className="flex-1 space-y-1">
-                    <Input value={item.description} onChange={e => updateLine(idx, "description", e.target.value)} placeholder="Description" className="text-sm" disabled={isLocked} />
-                    <div className="flex gap-1">
-                      {(invoiceFormat === "gst_detailed") && (
-                        <Input value={item.hsn_sac_code} onChange={e => updateLine(idx, "hsn_sac_code", e.target.value)} placeholder="SAC" className="text-xs w-20" disabled={isLocked} />
-                      )}
-                      <Input type="number" value={item.quantity || ""} onChange={e => updateLine(idx, "quantity", e.target.value)} placeholder="Qty" className="text-xs w-16" disabled={isLocked} />
-                      <Input value={item.unit} onChange={e => updateLine(idx, "unit", e.target.value)} placeholder="Unit" className="text-xs w-16" disabled={isLocked} />
-                      <Input type="number" value={item.rate || ""} onChange={e => updateLine(idx, "rate", e.target.value)} placeholder="Rate" className="text-xs w-24" disabled={isLocked} />
-                      <div className="text-xs text-right font-semibold w-24 pt-2">₹{item.amount.toLocaleString("en-IN")}</div>
+                <div key={idx} className="border border-border rounded-md p-3 space-y-2">
+                  <div className="flex gap-2">
+                    <Input value={item.description} onChange={e => updateLine(idx, "description", e.target.value)} placeholder="Item description" className="flex-1 text-sm" disabled={isLocked} />
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => toggleDetails(idx)} title="Add details">
+                      <Info size={14} className={item.showDetails ? "text-primary" : "text-muted-foreground"} />
+                    </Button>
+                    {!isLocked && lineItems.length > 1 && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeLine(idx)}>
+                        <Trash2 size={14} className="text-destructive" />
+                      </Button>
+                    )}
+                  </div>
+                  {item.showDetails && (
+                    <Textarea
+                      value={item.description_details}
+                      onChange={e => updateLine(idx, "description_details", e.target.value)}
+                      placeholder="Detailed description (appears in PDF)"
+                      className="text-xs h-16"
+                      disabled={isLocked}
+                    />
+                  )}
+                  <div className="grid grid-cols-6 gap-1">
+                    <div>
+                      <Label className="text-[10px]">HSN/SAC</Label>
+                      <Input value={item.hsn_sac_code} onChange={e => updateLine(idx, "hsn_sac_code", e.target.value)} className="text-xs h-8" disabled={isLocked} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Qty</Label>
+                      <Input type="number" value={item.quantity || ""} onChange={e => updateLine(idx, "quantity", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Rate</Label>
+                      <Input type="number" value={item.rate || ""} onChange={e => updateLine(idx, "rate", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Disc %</Label>
+                      <Input type="number" value={item.discount_percent || ""} onChange={e => updateLine(idx, "discount_percent", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">{isIntraState ? "CGST %" : "IGST %"}</Label>
+                      <Input type="number" value={item.cgst_percent || ""} onChange={e => { updateLine(idx, "cgst_percent", Number(e.target.value)); updateLine(idx, "sgst_percent", Number(e.target.value)); }} className="text-xs h-8" disabled={isLocked} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Total</Label>
+                      <div className="text-xs font-semibold pt-2 text-right">₹{item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
                     </div>
                   </div>
-                  {!isLocked && lineItems.length > 1 && (
-                    <Button variant="ghost" size="icon" className="h-7 w-7 mt-1" onClick={() => removeLine(idx)}>
-                      <Trash2 size={14} className="text-destructive" />
-                    </Button>
-                  )}
                 </div>
               ))}
             </div>
@@ -717,69 +714,19 @@ const NewInvoice = () => {
 
           <Separator />
 
-          {/* Tax */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Tax</Label>
-            <div className="flex items-center gap-3 mb-3">
-              <Switch checked={isIntraState} onCheckedChange={setIsIntraState} disabled={isLocked} />
-              <Label className="text-sm">{isIntraState ? "Intra-State (CGST + SGST)" : "Inter-State (IGST)"}</Label>
-            </div>
-            <div className="flex gap-2">
-              {isIntraState ? (
-                <>
-                  <div>
-                    <Label className="text-xs">CGST %</Label>
-                    <Input type="number" value={cgstRate} onChange={e => setCgstRate(Number(e.target.value))} className="w-20" disabled={isLocked} />
-                  </div>
-                  <div>
-                    <Label className="text-xs">SGST %</Label>
-                    <Input type="number" value={sgstRate} onChange={e => setSgstRate(Number(e.target.value))} className="w-20" disabled={isLocked} />
-                  </div>
-                </>
-              ) : (
-                <div>
-                  <Label className="text-xs">IGST %</Label>
-                  <Input type="number" value={igstRate} onChange={e => setIgstRate(Number(e.target.value))} className="w-20" disabled={isLocked} />
-                </div>
-              )}
-            </div>
-            <div className="mt-3 text-sm space-y-1 text-right">
-              <p>Subtotal: <strong>₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
-              {isIntraState ? (
-                <>
-                  <p>CGST @ {cgstRate}%: <strong>₹{totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
-                  <p>SGST @ {sgstRate}%: <strong>₹{totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
-                </>
-              ) : (
-                <p>IGST @ {igstRate}%: <strong>₹{totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
-              )}
-              <p className="text-lg font-bold">Grand Total: ₹{grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</p>
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Payment & Footer */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Payment & Footer</Label>
-            <div className="space-y-2">
-              <div>
-                <Label className="text-xs">Payment Terms</Label>
-                <Textarea value={paymentTerms} onChange={e => setPaymentTerms(e.target.value)} className="h-16 text-sm" disabled={isLocked} />
-              </div>
-              <div>
-                <Label className="text-xs">Notes</Label>
-                <Textarea value={notes} onChange={e => setNotes(e.target.value)} className="h-12 text-sm" placeholder="Internal notes..." disabled={isLocked} />
-              </div>
-              <div>
-                <Label className="text-xs">Footer Text</Label>
-                <Input value={footerText} onChange={e => setFooterText(e.target.value)} disabled={isLocked} />
-              </div>
-              <div>
-                <Label className="text-xs">Authorized Signatory</Label>
-                <Input value={signatoryName} onChange={e => setSignatoryName(e.target.value)} disabled={isLocked} />
-              </div>
-            </div>
+          {/* Totals */}
+          <div className="text-sm space-y-1 text-right">
+            <p>Taxable Amount: <strong>₹{totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
+            {isIntraState ? (
+              <>
+                <p>Total CGST: <strong>₹{totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
+                <p>Total SGST: <strong>₹{totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
+              </>
+            ) : (
+              <p>Total IGST: <strong>₹{(totalCgst + totalSgst).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong></p>
+            )}
+            <p className="text-lg font-bold text-foreground">Grand Total: ₹{grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</p>
+            <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(grandTotal))}</p>
           </div>
         </div>
 
@@ -788,58 +735,19 @@ const NewInvoice = () => {
           <div className="bg-background rounded-lg shadow-lg max-w-[700px] mx-auto">
             <iframe
               srcDoc={generateInvoiceHtml()}
-              className="w-full min-h-[800px] border-0 rounded-lg"
+              className="w-full min-h-[900px] border-0 rounded-lg"
               title="Invoice Preview"
             />
           </div>
         </div>
       </div>
 
-      {/* Timesheet modal */}
-      <Dialog open={tsModalOpen} onOpenChange={setTsModalOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Select Timesheet Entries</DialogTitle></DialogHeader>
-          <div className="max-h-[300px] overflow-y-auto">
-            {tsEntries.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No unbilled timesheet entries for this client.</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10"></TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Hours</TableHead>
-                    <TableHead>Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tsEntries.map(t => (
-                    <TableRow key={t.id} className="cursor-pointer" onClick={() => {
-                      setTsSelected(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id]);
-                    }}>
-                      <TableCell><input type="checkbox" checked={tsSelected.includes(t.id)} readOnly /></TableCell>
-                      <TableCell className="text-sm">{t.description}</TableCell>
-                      <TableCell className="text-right">{t.hours}h</TableCell>
-                      <TableCell className="text-sm">{t.work_date ? format(new Date(t.work_date), "dd/MM/yyyy") : ""}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTsModalOpen(false)}>Cancel</Button>
-            <Button onClick={applyTimesheets} disabled={tsSelected.length === 0}>Add {tsSelected.length} Entries</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Finalize confirmation */}
       <AlertDialog open={finalizeOpen} onOpenChange={setFinalizeOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Finalize Invoice?</AlertDialogTitle>
-            <AlertDialogDescription>Once finalized, the invoice cannot be edited. You can still send it, download PDF, or void it.</AlertDialogDescription>
+            <AlertDialogDescription>Once finalized, the invoice cannot be edited.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

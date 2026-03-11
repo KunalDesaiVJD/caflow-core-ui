@@ -1121,7 +1121,42 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           </Select>
         </div>
         <div className="flex-1" />
-        <Button variant="outline" size="sm" className="gap-1"><Download size={14} /> Download Filing Sheet (PDF)</Button>
+        <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+          // Generate filing sheet as printable HTML
+          const rows = filings.map(f => `
+            <tr>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${clients.find(c => c.id === f.client_id)?.name || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${clients.find(c => c.id === f.client_id)?.pan || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.tan || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.tds_forms?.join(", ") || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.quarter}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.financial_year}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.work_status}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.date_of_filing ? format(new Date(f.date_of_filing), "dd/MM/yyyy") : "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.acknowledgment_number || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.prn_no || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${users.find(u => u.id === f.assigned_staff)?.name || "—"}</td>
+              <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.remarks || ""}</td>
+            </tr>
+          `).join("");
+          const html = `<!DOCTYPE html><html><head><title>TDS Filing Sheet</title>
+            <style>body{font-family:system-ui,sans-serif;margin:20px;font-size:13px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;font-size:11px;text-transform:uppercase}@media print{body{margin:5mm}@page{size:landscape}}</style></head><body>
+            <h2 style="margin:0 0 4px">TDS Filing Sheet</h2>
+            <p style="margin:0 0 12px;color:#666;font-size:12px">FY: ${fyFilter} | Quarter: ${quarterFilter} | Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}</p>
+            <table><thead><tr>
+              <th style="border:1px solid #ccc;padding:6px">Client</th><th style="border:1px solid #ccc;padding:6px">PAN</th>
+              <th style="border:1px solid #ccc;padding:6px">TAN</th><th style="border:1px solid #ccc;padding:6px">Form</th>
+              <th style="border:1px solid #ccc;padding:6px">Qtr</th><th style="border:1px solid #ccc;padding:6px">FY</th>
+              <th style="border:1px solid #ccc;padding:6px">Status</th><th style="border:1px solid #ccc;padding:6px">Filing Date</th>
+              <th style="border:1px solid #ccc;padding:6px">Ack No</th><th style="border:1px solid #ccc;padding:6px">PRN</th>
+              <th style="border:1px solid #ccc;padding:6px">Due Date</th><th style="border:1px solid #ccc;padding:6px">Assigned</th>
+              <th style="border:1px solid #ccc;padding:6px">Remarks</th>
+            </tr></thead><tbody>${rows}</tbody></table></body></html>`;
+          const blob = new Blob([html], { type: "text/html" });
+          const w = window.open(URL.createObjectURL(blob), "_blank");
+          if (w) setTimeout(() => w.print(), 500);
+        }}><Download size={14} /> Download Filing Sheet (PDF)</Button>
       </div>
 
       {/* Filings grid */}
