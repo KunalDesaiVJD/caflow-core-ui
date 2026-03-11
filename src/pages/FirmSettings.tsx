@@ -115,6 +115,7 @@ const FirmSettings = () => {
       setPan((data as any).pan || "");
       setGstin((data as any).gstin || "");
       setTan((data as any).tan || "");
+      setMsmeNo((data as any).msme_no || ((data as any).settings as any)?.msme_no || "");
       setEmail((data as any).email || "");
       setPhone((data as any).phone || "");
       setWebsite((data as any).website || "");
