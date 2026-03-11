@@ -97,6 +97,10 @@ const ServiceMasters = () => {
   const [editing, setEditing] = useState<ServiceCategory | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Firm selector for superadmin
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
+
   // Form state
   const [form, setForm] = useState({
     name: "", description: "", frequency: "annual", default_due_day: "",
@@ -108,14 +112,24 @@ const ServiceMasters = () => {
   const [tplForm, setTplForm] = useState({ template_name: "", default_description: "", default_rate: "", hsn_sac_code: "", tax_rate: "18", is_default: false });
   const [editingTpl, setEditingTpl] = useState<ServiceTemplate | null>(null);
 
-  const firmId = user?.firm_id;
+  const isSuperadmin = user?.role === "superadmin";
+  const firmId = isSuperadmin ? selectedFirmId : user?.firm_id;
+
+  // Load firms list for superadmin
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
+      setFirmsList(data || []);
+      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+    });
+  }, [isSuperadmin]);
 
   useEffect(() => { if (firmId) loadData(); }, [firmId]);
 
   async function loadData() {
     setLoading(true);
     const [catRes, tplRes] = await Promise.all([
-      supabase.from("service_categories").select("*").order("sort_order"),
+      supabase.from("service_categories").select("*").eq("firm_id", firmId!).order("sort_order"),
       supabase.from("service_templates").select("*"),
     ]);
     const cats = (catRes.data || []) as any as ServiceCategory[];
