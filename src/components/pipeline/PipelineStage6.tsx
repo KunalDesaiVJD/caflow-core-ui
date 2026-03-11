@@ -188,7 +188,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
         .select("*")
         .eq("engagement_id", engagementId)
         .order("wp_ref");
-      return (data || []) as Workpaper[];
+      return (data || []) as unknown as Workpaper[];
     },
     enabled: !!engagementId,
   });
