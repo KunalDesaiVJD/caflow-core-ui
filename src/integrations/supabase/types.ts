@@ -3086,6 +3086,7 @@ export type Database = {
           detection_logic: Json | null
           id: string
           is_active: boolean | null
+          keywords_ledger_synonyms: string | null
           legal_reference: string | null
           prior_year_needed: boolean | null
           root_cause: string | null
@@ -3106,6 +3107,7 @@ export type Database = {
           detection_logic?: Json | null
           id?: string
           is_active?: boolean | null
+          keywords_ledger_synonyms?: string | null
           legal_reference?: string | null
           prior_year_needed?: boolean | null
           root_cause?: string | null
@@ -3126,6 +3128,7 @@ export type Database = {
           detection_logic?: Json | null
           id?: string
           is_active?: boolean | null
+          keywords_ledger_synonyms?: string | null
           legal_reference?: string | null
           prior_year_needed?: boolean | null
           root_cause?: string | null
@@ -3706,11 +3709,13 @@ export type Database = {
       }
       trial_balance_snapshots: {
         Row: {
+          account_type: string | null
           bs_pl_side: string | null
           chunk_count: number | null
           chunks_processed: number | null
           client_id: string | null
           closing_balance: number | null
+          closing_balance_signed: number | null
           column_mapping: Json | null
           credit_total: number | null
           debit_total: number | null
@@ -3740,11 +3745,13 @@ export type Database = {
           validation_status: string | null
         }
         Insert: {
+          account_type?: string | null
           bs_pl_side?: string | null
           chunk_count?: number | null
           chunks_processed?: number | null
           client_id?: string | null
           closing_balance?: number | null
+          closing_balance_signed?: number | null
           column_mapping?: Json | null
           credit_total?: number | null
           debit_total?: number | null
@@ -3774,11 +3781,13 @@ export type Database = {
           validation_status?: string | null
         }
         Update: {
+          account_type?: string | null
           bs_pl_side?: string | null
           chunk_count?: number | null
           chunks_processed?: number | null
           client_id?: string | null
           closing_balance?: number | null
+          closing_balance_signed?: number | null
           column_mapping?: Json | null
           credit_total?: number | null
           debit_total?: number | null
