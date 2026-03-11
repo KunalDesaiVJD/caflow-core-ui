@@ -1263,33 +1263,125 @@ export type Database = {
       }
       firms: {
         Row: {
+          address: Json | null
+          bank_details: Json | null
           created_at: string | null
+          default_theme_id: string | null
+          display_name: string | null
+          email: string | null
+          features_enabled: Json | null
+          gstin: string | null
+          icai_firm_reg_no: string | null
           icai_reg_no: string | null
           id: string
+          invoice_template_id: string | null
           is_active: boolean | null
+          is_audit_firm: boolean | null
+          letterhead_url: string | null
+          logo_url: string | null
+          max_clients: number | null
+          max_users: number | null
+          membership_numbers: Json | null
           name: string
+          pan: string | null
+          peer_review_certificate_no: string | null
+          peer_review_valid_till: string | null
+          phone: string | null
+          pincode: string | null
           plan: string | null
+          plan_expires_at: string | null
+          plan_type: string | null
+          primary_color: string | null
+          secondary_color: string | null
           settings: Json | null
+          signature_url: string | null
+          state: string | null
+          tan: string | null
+          website: string | null
         }
         Insert: {
+          address?: Json | null
+          bank_details?: Json | null
           created_at?: string | null
+          default_theme_id?: string | null
+          display_name?: string | null
+          email?: string | null
+          features_enabled?: Json | null
+          gstin?: string | null
+          icai_firm_reg_no?: string | null
           icai_reg_no?: string | null
           id?: string
+          invoice_template_id?: string | null
           is_active?: boolean | null
+          is_audit_firm?: boolean | null
+          letterhead_url?: string | null
+          logo_url?: string | null
+          max_clients?: number | null
+          max_users?: number | null
+          membership_numbers?: Json | null
           name: string
+          pan?: string | null
+          peer_review_certificate_no?: string | null
+          peer_review_valid_till?: string | null
+          phone?: string | null
+          pincode?: string | null
           plan?: string | null
+          plan_expires_at?: string | null
+          plan_type?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
           settings?: Json | null
+          signature_url?: string | null
+          state?: string | null
+          tan?: string | null
+          website?: string | null
         }
         Update: {
+          address?: Json | null
+          bank_details?: Json | null
           created_at?: string | null
+          default_theme_id?: string | null
+          display_name?: string | null
+          email?: string | null
+          features_enabled?: Json | null
+          gstin?: string | null
+          icai_firm_reg_no?: string | null
           icai_reg_no?: string | null
           id?: string
+          invoice_template_id?: string | null
           is_active?: boolean | null
+          is_audit_firm?: boolean | null
+          letterhead_url?: string | null
+          logo_url?: string | null
+          max_clients?: number | null
+          max_users?: number | null
+          membership_numbers?: Json | null
           name?: string
+          pan?: string | null
+          peer_review_certificate_no?: string | null
+          peer_review_valid_till?: string | null
+          phone?: string | null
+          pincode?: string | null
           plan?: string | null
+          plan_expires_at?: string | null
+          plan_type?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
           settings?: Json | null
+          signature_url?: string | null
+          state?: string | null
+          tan?: string | null
+          website?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "firms_default_theme_id_fkey"
+            columns: ["default_theme_id"]
+            isOneToOne: false
+            referencedRelation: "app_themes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       invoices: {
         Row: {
@@ -1614,6 +1706,117 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      role_permission_audit_log: {
+        Row: {
+          changed_at: string | null
+          changed_by: string | null
+          field_changed: string
+          firm_id: string | null
+          id: string
+          module: string
+          new_value: string | null
+          old_value: string | null
+          role: string
+        }
+        Insert: {
+          changed_at?: string | null
+          changed_by?: string | null
+          field_changed: string
+          firm_id?: string | null
+          id?: string
+          module: string
+          new_value?: string | null
+          old_value?: string | null
+          role: string
+        }
+        Update: {
+          changed_at?: string | null
+          changed_by?: string | null
+          field_changed?: string
+          firm_id?: string | null
+          id?: string
+          module?: string
+          new_value?: string | null
+          old_value?: string | null
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "role_permission_audit_log_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "role_permission_audit_log_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      role_permissions: {
+        Row: {
+          can_create: boolean | null
+          can_delete: boolean | null
+          can_edit: boolean | null
+          can_export: boolean | null
+          can_view: boolean | null
+          custom_restrictions: Json | null
+          firm_id: string
+          id: string
+          module: string
+          role: string
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          can_create?: boolean | null
+          can_delete?: boolean | null
+          can_edit?: boolean | null
+          can_export?: boolean | null
+          can_view?: boolean | null
+          custom_restrictions?: Json | null
+          firm_id: string
+          id?: string
+          module: string
+          role: string
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          can_create?: boolean | null
+          can_delete?: boolean | null
+          can_edit?: boolean | null
+          can_export?: boolean | null
+          can_view?: boolean | null
+          custom_restrictions?: Json | null
+          firm_id?: string
+          id?: string
+          module?: string
+          role?: string
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "role_permissions_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "role_permissions_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]

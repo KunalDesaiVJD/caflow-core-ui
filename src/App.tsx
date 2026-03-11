@@ -9,6 +9,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PortalLayout } from "./components/PortalLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FeedbackWidget } from "./components/FeedbackWidget";
+import { PermissionsProvider } from "./hooks/usePermissions";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
 import ImportTrialBalance from "./pages/ImportTrialBalance";
@@ -53,6 +54,8 @@ import AuditReportEngine from "./pages/AuditReportEngine";
 import PortalQueries from "./pages/PortalQueries";
 import NoticeTracker from "./pages/NoticeTracker";
 import NoticeDetail from "./pages/NoticeDetail";
+import RolesPermissions from "./pages/RolesPermissions";
+import FirmSettings from "./pages/FirmSettings";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -89,6 +92,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <PermissionsProvider>
           <Routes>
             {/* Public auth routes */}
             <Route path="/login" element={<Login />} />
@@ -162,6 +166,8 @@ const App = () => (
               <Route path="/billing/timesheets" element={<Timesheets />} />
               <Route path="/erp-ledger" element={<ErpLedger />} />
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
+              <Route path="/settings/firm" element={<FirmSettings />} />
+              <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/notices" element={<NoticeTracker />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/documents" element={<Documents />} />
@@ -173,6 +179,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           <FeedbackWidget />
+          </PermissionsProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

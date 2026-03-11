@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { supabase } from "@/integrations/supabase/client";
 import {
   LayoutDashboard,
@@ -47,16 +48,16 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 const topNavItems = [
-  { title: "Dashboard", path: "/", icon: LayoutDashboard },
-  { title: "Clients", path: "/clients", icon: Users },
-  { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
-  { title: "IT Returns", path: "/itr", icon: FileText },
-  { title: "Billing", path: "/billing", icon: CreditCard },
-  { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
-  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
-  { title: "Documents", path: "/documents", icon: FolderOpen },
-  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark },
-  { title: "Notice Tracker", path: "/notices", icon: AlertTriangle },
+  { title: "Dashboard", path: "/", icon: LayoutDashboard, module: "Dashboard" },
+  { title: "Clients", path: "/clients", icon: Users, module: "Clients" },
+  { title: "TDS Filings", path: "/tds-filings", icon: Receipt, module: "TDS" },
+  { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
+  { title: "Billing", path: "/billing", icon: CreditCard, module: "Billing" },
+  { title: "Timesheets", path: "/billing/timesheets", icon: Clock, module: "Billing" },
+  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
+  { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
+  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
+  { title: "Notice Tracker", path: "/notices", icon: AlertTriangle, module: "Clients" },
 ];
 
 const auditSections = [
@@ -112,6 +113,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const { can } = usePermissions();
   const [firmLogo, setFirmLogo] = useState<string | null>(null);
   const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -197,7 +199,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 flex flex-col gap-0.5 px-2 overflow-y-auto overflow-x-hidden">
-        {topNavItems.map((item) => (
+        {topNavItems.filter(item => can(item.module, "can_view")).map((item) => (
           <Link
             key={item.path}
             to={item.path}
@@ -213,72 +215,74 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         ))}
 
-        {/* Audit Intelligence - Collapsible */}
-        {collapsed ? (
-          <Link
-            to="/audit"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isAuditActive
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-            )}
-          >
-            <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
-          </Link>
-        ) : (
-          <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
-            <CollapsibleTrigger className="w-full">
-              <div
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
-                  isAuditActive
-                    ? "bg-sidebar-gold/15 text-sidebar-gold"
-                    : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-                )}
-              >
-                <Search size={20} className="shrink-0 text-sidebar-gold" />
-                <span className="truncate flex-1 text-left">
-                  Audit Intelligence
-                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
-                    Pro
+        {/* Audit Intelligence - Collapsible - only if can view */}
+        {can("Audit Intelligence", "can_view") && (
+          collapsed ? (
+            <Link
+              to="/audit"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                isAuditActive
+                  ? "bg-sidebar-gold/15 text-sidebar-gold"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+              )}
+            >
+              <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
+            </Link>
+          ) : (
+            <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
+              <CollapsibleTrigger className="w-full">
+                <div
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
+                    isAuditActive
+                      ? "bg-sidebar-gold/15 text-sidebar-gold"
+                      : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                  )}
+                >
+                  <Search size={20} className="shrink-0 text-sidebar-gold" />
+                  <span className="truncate flex-1 text-left">
+                    Audit Intelligence
+                    <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
+                      Pro
+                    </span>
                   </span>
-                </span>
-                {auditOpen ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-              </div>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
-                {auditSections.map((section) => (
-                  <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
-                    <CollapsibleTrigger className="w-full">
-                      <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
-                        <span>{section.label}</span>
-                        {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      </div>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      {section.items.map((item) => (
-                        <Link
-                          key={item.path}
-                          to={item.path}
-                          className={cn(
-                            "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
-                            isActive(item.path)
-                              ? "bg-sidebar-gold/10 text-sidebar-gold"
-                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                          )}
-                        >
-                          <item.icon size={14} className="shrink-0" />
-                          <span className="truncate">{item.title}</span>
-                        </Link>
-                      ))}
-                    </CollapsibleContent>
-                  </Collapsible>
-                ))}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+                  {auditOpen ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                </div>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
+                  {auditSections.map((section) => (
+                    <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
+                      <CollapsibleTrigger className="w-full">
+                        <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
+                          <span>{section.label}</span>
+                          {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </div>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        {section.items.map((item) => (
+                          <Link
+                            key={item.path}
+                            to={item.path}
+                            className={cn(
+                              "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                              isActive(item.path)
+                                ? "bg-sidebar-gold/10 text-sidebar-gold"
+                                : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                            )}
+                          >
+                            <item.icon size={14} className="shrink-0" />
+                            <span className="truncate">{item.title}</span>
+                          </Link>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )
         )}
 
         <div className="flex-1" />
@@ -343,19 +347,53 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         )}
 
+        {/* Firm Settings */}
+        {can("Settings", "can_view") && (
+          <Link
+            to="/settings/firm"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/firm")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Building2 size={20} className="shrink-0" />
+            {!collapsed && <span>Firm Settings</span>}
+          </Link>
+        )}
+
+        {/* Roles & Permissions */}
+        {can("Roles", "can_view") && (
+          <Link
+            to="/settings/roles"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/roles")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Shield size={20} className="shrink-0" />
+            {!collapsed && <span>Roles</span>}
+          </Link>
+        )}
+
         {/* Settings */}
-        <Link
-          to={settingsItem.path}
-          className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-            isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms")
-              ? "bg-sidebar-gold/15 text-sidebar-gold"
-              : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-          )}
-        >
-          <settingsItem.icon size={20} className="shrink-0" />
-          {!collapsed && <span>Settings</span>}
-        </Link>
+        {can("Settings", "can_view") && (
+          <Link
+            to={settingsItem.path}
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms") && !isActive("/settings/firm") && !isActive("/settings/roles")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <settingsItem.icon size={20} className="shrink-0" />
+            {!collapsed && <span>Settings</span>}
+          </Link>
+        )}
       </nav>
 
       {/* User section with dropdown */}
