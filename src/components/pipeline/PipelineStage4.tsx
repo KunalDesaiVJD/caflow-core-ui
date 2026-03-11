@@ -79,7 +79,7 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
     queryKey: ["scrutiny-findings", engagementId],
     queryFn: async () => {
       const { data } = await supabase
-        .from("scrutiny_findings")
+        .from("scrutiny_findings" as any)
         .select("*")
         .eq("engagement_id", engagementId)
         .order("created_at", { ascending: false });
