@@ -9,6 +9,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PortalLayout } from "./components/PortalLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FeedbackWidget } from "./components/FeedbackWidget";
+import { ChatFloatingWidget } from "./components/ChatFloatingWidget";
 import { PermissionsProvider } from "./hooks/usePermissions";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
@@ -57,6 +58,7 @@ import NoticeDetail from "./pages/NoticeDetail";
 import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
 import ServiceMasters from "./pages/ServiceMasters";
+import Chat from "./pages/Chat";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -174,6 +176,7 @@ const App = () => (
               {/* Notice Tracker merged into IT Returns compliance tab */}
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
+              <Route path="/chat" element={<Chat />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
@@ -183,6 +186,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           <FeedbackWidget />
+          <ChatFloatingWidget />
           </PermissionsProvider>
         </BrowserRouter>
       </TooltipProvider>
