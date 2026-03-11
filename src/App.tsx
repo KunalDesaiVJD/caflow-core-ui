@@ -92,6 +92,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <PermissionsProvider>
           <Routes>
             {/* Public auth routes */}
             <Route path="/login" element={<Login />} />
