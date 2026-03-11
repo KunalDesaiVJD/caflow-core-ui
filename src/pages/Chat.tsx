@@ -356,8 +356,11 @@ export default function Chat() {
       }
     }
 
+    // Get the other user's firm_id for the conversation
+    const otherUser = firmUsers.find(u => u.id === otherUserId);
+    const convFirmId = user.firm_id || (otherUser as any)?.firm_id || "";
     const { data: conv } = await supabase.from("chat_conversations").insert({
-      firm_id: user.firm_id!,
+      firm_id: convFirmId,
       type: "individual",
       created_by: user.id,
     }).select().single();

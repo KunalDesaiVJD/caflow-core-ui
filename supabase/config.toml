@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.calculate-depreciation]
 verify_jwt = false
+
+[functions.parse-tally-tb]
+verify_jwt = false
