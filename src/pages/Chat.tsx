@@ -103,15 +103,16 @@ export default function Chat() {
 
   // Fetch conversations
   const { data: conversations = [] } = useQuery({
-    queryKey: ["chat_conversations"],
+    queryKey: ["chat_conversations", user?.firm_id],
     queryFn: async () => {
       const { data } = await supabase
         .from("chat_conversations")
         .select("*")
+        .eq("firm_id", user!.firm_id!)
         .order("last_message_at", { ascending: false });
       return (data || []) as Conversation[];
     },
-    enabled: !!user,
+    enabled: !!user?.firm_id,
   });
 
   // Fetch participants for active conversation
