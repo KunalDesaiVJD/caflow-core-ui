@@ -5,16 +5,19 @@ import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { VersionHistoryPanel } from "@/components/VersionHistoryPanel";
+import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSection";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
-import { ArrowLeft, Pencil, Shield, FileText, Upload, Loader2 } from "lucide-react";
+import { ArrowLeft, Pencil, Shield, Loader2, Save } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
-import { ClientAuditorsTab } from "@/components/client-detail/ClientAuditorsTab";
-import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSection";
 
 interface Client {
   id: string;
@@ -26,6 +29,33 @@ interface Client {
   created_at: string | null;
   compliance_flags: any;
   firm_id: string | null;
+  statutory_audit_applicable: boolean | null;
+  tax_audit_type: string | null;
+  caro_applicable: boolean | null;
+  internal_audit_applicable: boolean | null;
+  stock_audit_applicable: boolean | null;
+  audit_config: any;
+}
+
+interface ServiceCategory {
+  id: string;
+  name: string;
+  category_code: string;
+  frequency: string;
+  linked_module: string | null;
+  is_active: boolean;
+}
+
+interface ClientService {
+  id: string;
+  client_id: string;
+  service_category_id: string;
+  is_active: boolean;
+  frequency_override: string | null;
+  due_date_override: number | null;
+  assigned_staff: any;
+  fee_override: number | null;
+  notes: string | null;
 }
 
 const SEVERITY_COLORS: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#9ca3af" };
@@ -36,6 +66,14 @@ const FLAG_LABELS: Record<string, string> = {
   msme_suppliers: "MSME",
 };
 
+const FREQUENCIES = [
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "half_yearly", label: "Half Yearly" },
+  { value: "annual", label: "Annual" },
+  { value: "event_based", label: "Event Based" },
+];
+
 const ClientDetail = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
@@ -44,25 +82,34 @@ const ClientDetail = () => {
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Scrutiny data
+  // Scrutiny
   const [findings, setFindings] = useState<any[]>([]);
   const [scrutinyRunning, setScrutinyRunning] = useState(false);
 
-  // Filings
-  const [tdsEntries, setTdsEntries] = useState<any[]>([]);
-  const [itrProfiles, setItrProfiles] = useState<any[]>([]);
-
-  // Audit
-  const [engagements, setEngagements] = useState<any[]>([]);
-
-  // Documents
-  const [docCounts, setDocCounts] = useState<Record<string, number>>({});
-
-  // Activity
-  const [activity, setActivity] = useState<any[]>([]);
-
   // Banking
   const [bankingData, setBankingData] = useState<any>(null);
+
+  // Services
+  const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([]);
+  const [clientServices, setClientServices] = useState<ClientService[]>([]);
+  const [svcSaving, setSvcSaving] = useState<string | null>(null);
+
+  // Audit setup
+  const [auditForm, setAuditForm] = useState({
+    statutory_audit_applicable: false,
+    tax_audit_type: "" as string,
+    caro_applicable: false,
+    internal_audit_applicable: false,
+    stock_audit_applicable: false,
+  });
+  const [auditSaving, setAuditSaving] = useState(false);
+
+  // Work groups
+  const [itrWorkGroups, setItrWorkGroups] = useState<any[]>([]);
+  const [clientItrProfile, setClientItrProfile] = useState<any>(null);
+
+  // Staff list
+  const [staffList, setStaffList] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
     if (!clientId) return;
@@ -71,32 +118,36 @@ const ClientDetail = () => {
 
   async function loadAllData() {
     setLoading(true);
-    const [clientRes, findingsRes, tdsRes, itrRes, engRes, docsRes, activityRes, profileRes] = await Promise.all([
+    const [clientRes, findingsRes, profileRes, catRes, csRes, staffRes, wgRes, itrRes] = await Promise.all([
       supabase.from("clients").select("*").eq("id", clientId!).single(),
       supabase.from("scrutiny_findings").select("*").eq("client_id", clientId!),
-      supabase.from("tds_entries").select("*").eq("client_id", clientId!).order("date", { ascending: false }).limit(10),
-      supabase.from("itr_profiles").select("*").eq("client_id", clientId!),
-      supabase.from("audit_engagements").select("*").eq("client_id", clientId!),
-      supabase.from("documents").select("category").eq("client_id", clientId!),
-      supabase.from("version_history").select("*").eq("record_id", clientId!).order("created_at", { ascending: false }).limit(20),
       supabase.from("client_profiles").select("banking_data, loan_data").eq("client_id", clientId!).limit(1),
+      supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("sort_order"),
+      supabase.from("client_services").select("*").eq("client_id", clientId!),
+      supabase.from("users").select("id, name").order("name"),
+      supabase.from("itr_work_groups").select("*").order("code"),
+      supabase.from("itr_profiles").select("*").eq("client_id", clientId!).limit(1),
     ]);
 
-    setClient(clientRes.data as Client | null);
+    const c = clientRes.data as Client | null;
+    setClient(c);
     setFindings(findingsRes.data || []);
-    setTdsEntries(tdsRes.data || []);
-    setItrProfiles(itrRes.data || []);
-    setEngagements(engRes.data || []);
-    setActivity(activityRes.data || []);
     if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
+    setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
+    setClientServices((csRes.data || []) as any as ClientService[]);
+    setStaffList((staffRes.data || []) as any[]);
+    setItrWorkGroups(wgRes.data || []);
+    setClientItrProfile(itrRes.data?.[0] || null);
 
-    // Doc counts by category
-    const counts: Record<string, number> = {};
-    for (const d of docsRes.data || []) {
-      const cat = (d as any).category || "Other";
-      counts[cat] = (counts[cat] || 0) + 1;
+    if (c) {
+      setAuditForm({
+        statutory_audit_applicable: c.statutory_audit_applicable || false,
+        tax_audit_type: c.tax_audit_type || "",
+        caro_applicable: c.caro_applicable || false,
+        internal_audit_applicable: c.internal_audit_applicable || false,
+        stock_audit_applicable: c.stock_audit_applicable || false,
+      });
     }
-    setDocCounts(counts);
     setLoading(false);
   }
 
@@ -109,13 +160,64 @@ const ClientDetail = () => {
       });
       if (error) throw error;
       toast({ title: "Scrutiny complete" });
-      // Refresh findings
       const { data } = await supabase.from("scrutiny_findings").select("*").eq("client_id", clientId);
       setFindings(data || []);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setScrutinyRunning(false);
+    }
+  }
+
+  // Service toggle
+  async function toggleService(catId: string, currentlyActive: boolean) {
+    setSvcSaving(catId);
+    try {
+      const existing = clientServices.find(s => s.service_category_id === catId);
+      if (existing) {
+        await supabase.from("client_services").update({
+          is_active: !currentlyActive,
+          ...(currentlyActive ? { deactivated_at: new Date().toISOString() } : { activated_at: new Date().toISOString(), deactivated_at: null }),
+        } as any).eq("id", existing.id);
+      } else {
+        await supabase.from("client_services").insert({
+          client_id: clientId!,
+          service_category_id: catId,
+          is_active: true,
+          activated_at: new Date().toISOString(),
+        } as any);
+      }
+      const { data } = await supabase.from("client_services").select("*").eq("client_id", clientId!);
+      setClientServices((data || []) as any as ClientService[]);
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setSvcSaving(null);
+    }
+  }
+
+  async function updateServiceField(csId: string, field: string, value: any) {
+    await supabase.from("client_services").update({ [field]: value } as any).eq("id", csId);
+    setClientServices(prev => prev.map(s => s.id === csId ? { ...s, [field]: value } : s));
+  }
+
+  // Audit setup save
+  async function saveAuditSetup() {
+    if (!clientId) return;
+    setAuditSaving(true);
+    try {
+      await supabase.from("clients").update({
+        statutory_audit_applicable: auditForm.statutory_audit_applicable,
+        tax_audit_type: auditForm.tax_audit_type || null,
+        caro_applicable: auditForm.caro_applicable,
+        internal_audit_applicable: auditForm.internal_audit_applicable,
+        stock_audit_applicable: auditForm.stock_audit_applicable,
+      } as any).eq("id", clientId);
+      toast({ title: "Audit setup saved" });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setAuditSaving(false);
     }
   }
 
@@ -135,75 +237,69 @@ const ClientDetail = () => {
   ].filter(d => d.value > 0);
 
   const banking = bankingData?.banking_data as any;
-  const loans = bankingData?.loan_data as any;
   const bankAccounts = Array.isArray(banking?.bank_accounts) ? banking.bank_accounts : [];
-  const securedTotal = Array.isArray(loans?.secured_loans) ? loans.secured_loans.reduce((s: number, l: any) => s + (Number(l.amount) || 0), 0) : 0;
-  const unsecuredTotal = Array.isArray(loans?.unsecured_loans) ? loans.unsecured_loans.reduce((s: number, l: any) => s + (Number(l.amount) || 0), 0) : 0;
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <Button variant="ghost" size="sm" className="mb-2 -ml-2 text-xs gap-1" onClick={() => navigate("/clients")}>
-            <ArrowLeft className="h-3 w-3" /> Back to Clients
-          </Button>
+          <Button variant="ghost" size="sm" className="mb-2 -ml-2 text-xs gap-1" onClick={() => navigate("/clients")}><ArrowLeft className="h-3 w-3" /> Back to Clients</Button>
           <h1 className="text-2xl font-display font-bold text-foreground">{client.name || "Unnamed Client"}</h1>
           <div className="flex items-center gap-2 mt-1">
             {client.entity_type && <Badge variant="outline">{client.entity_type}</Badge>}
             {client.pan && <span className="text-sm font-mono text-muted-foreground">{client.pan}</span>}
-            <Badge variant="secondary" className="text-[10px]">Active</Badge>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => navigate(`/clients/edit/${client.id}`)}>
-            <Pencil className="h-3 w-3" /> Edit
-          </Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-3 w-3" /> Edit</Button>
           <VersionHistoryPanel table_name="clients" record_id={client.id} />
         </div>
       </div>
 
-      {/* Groups Section */}
-      <Card>
-        <CardContent className="p-4">
-          <ClientGroupsSection clientId={client.id} />
-        </CardContent>
-      </Card>
-
-      {/* Tabs */}
-      <Tabs defaultValue="overview" className="space-y-4">
+      {/* 4-Tab Layout */}
+      <Tabs defaultValue="basic" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="filings">Filings</TabsTrigger>
-          <TabsTrigger value="auditors">Auditors</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="basic">Basic Info</TabsTrigger>
+          <TabsTrigger value="services">Service Activation</TabsTrigger>
+          <TabsTrigger value="audit">Audit Setup</TabsTrigger>
+          <TabsTrigger value="groups">Work Groups</TabsTrigger>
         </TabsList>
 
-        {/* Overview */}
-        <TabsContent value="overview">
+        {/* Tab 1: Basic Info */}
+        <TabsContent value="basic">
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
             <div className="lg:col-span-3 space-y-4">
+              {/* Client Details */}
+              <Card>
+                <CardHeader><CardTitle className="text-sm">Client Details</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{client.name || "—"}</span></div>
+                    <div><span className="text-muted-foreground">PAN:</span> <span className="font-mono">{client.pan || "—"}</span></div>
+                    <div><span className="text-muted-foreground">Entity Type:</span> <span>{client.entity_type || "—"}</span></div>
+                    <div><span className="text-muted-foreground">CIN:</span> <span className="font-mono">{client.cin || "—"}</span></div>
+                    <div className="col-span-2"><span className="text-muted-foreground">GSTIN:</span> <span className="font-mono">{(client.gstin || []).join(", ") || "—"}</span></div>
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Compliance Flags */}
               <Card>
                 <CardHeader><CardTitle className="text-sm">Compliance Flags</CardTitle></CardHeader>
                 <CardContent>
                   {activeFlags.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {activeFlags.map(([key, label]) => (
-                        <Badge key={key} className="text-xs bg-primary/10 text-primary border-primary/20">{label}</Badge>
-                      ))}
+                      {activeFlags.map(([key, label]) => <Badge key={key} className="text-xs bg-primary/10 text-primary border-primary/20">{label}</Badge>)}
                     </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No compliance flags set</p>
-                  )}
+                  ) : <p className="text-sm text-muted-foreground">No compliance flags set</p>}
                 </CardContent>
               </Card>
 
               {/* Banking Summary */}
               <Card>
-                <CardHeader><CardTitle className="text-sm">Banking Summary</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
+                <CardHeader><CardTitle className="text-sm">Banking Details</CardTitle></CardHeader>
+                <CardContent>
                   {bankAccounts.length > 0 ? (
                     <div className="space-y-1">
                       {bankAccounts.map((b: any, i: number) => (
@@ -213,18 +309,17 @@ const ClientDetail = () => {
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No bank accounts recorded</p>
-                  )}
-                  <div className="flex gap-6 pt-2 border-t border-border text-sm">
-                    <div><span className="text-muted-foreground">Secured Loans:</span> <span className="font-mono">₹{securedTotal.toLocaleString("en-IN")}</span></div>
-                    <div><span className="text-muted-foreground">Unsecured Loans:</span> <span className="font-mono">₹{unsecuredTotal.toLocaleString("en-IN")}</span></div>
-                  </div>
+                  ) : <p className="text-sm text-muted-foreground">No bank accounts recorded</p>}
                 </CardContent>
+              </Card>
+
+              {/* Groups */}
+              <Card>
+                <CardContent className="p-4"><ClientGroupsSection clientId={client.id} /></CardContent>
               </Card>
             </div>
 
-            {/* Scrutiny Health Widget */}
+            {/* Scrutiny Widget */}
             <div className="lg:col-span-2">
               <Card>
                 <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Shield className="h-4 w-4" /> Scrutiny Health</CardTitle></CardHeader>
@@ -232,27 +327,18 @@ const ClientDetail = () => {
                   {donutData.length > 0 ? (
                     <div className="relative w-32 h-32">
                       <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie data={donutData} dataKey="value" innerRadius={35} outerRadius={55} paddingAngle={2}>
-                            {donutData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                          </Pie>
-                        </PieChart>
+                        <PieChart><Pie data={donutData} dataKey="value" innerRadius={35} outerRadius={55} paddingAngle={2}>{donutData.map((d, i) => <Cell key={i} fill={d.color} />)}</Pie></PieChart>
                       </ResponsiveContainer>
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-xl font-bold text-foreground">{unresolvedFindings.length}</span>
-                      </div>
+                      <div className="absolute inset-0 flex items-center justify-center"><span className="text-xl font-bold text-foreground">{unresolvedFindings.length}</span></div>
                     </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground py-4">No unresolved findings</p>
-                  )}
+                  ) : <p className="text-sm text-muted-foreground py-4">No unresolved findings</p>}
                   <div className="flex gap-3 text-xs">
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-destructive" />{highCount} HIGH</span>
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400" />{medCount} MED</span>
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-muted-foreground" />{lowCount} LOW</span>
                   </div>
                   <Button size="sm" className="gap-1" onClick={runScrutiny} disabled={scrutinyRunning}>
-                    {scrutinyRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Shield className="h-3 w-3" />}
-                    Run Scrutiny
+                    {scrutinyRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Shield className="h-3 w-3" />} Run Scrutiny
                   </Button>
                 </CardContent>
               </Card>
@@ -260,136 +346,166 @@ const ClientDetail = () => {
           </div>
         </TabsContent>
 
-        {/* Filings */}
-        <TabsContent value="filings">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Tab 2: Service Activation */}
+        <TabsContent value="services">
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Service Activation</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              {serviceCategories.map(cat => {
+                const cs = clientServices.find(s => s.service_category_id === cat.id);
+                const isActive = cs?.is_active || false;
+                return (
+                  <div key={cat.id} className="border border-border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Switch
+                          checked={isActive}
+                          onCheckedChange={() => toggleService(cat.id, isActive)}
+                          disabled={svcSaving === cat.id}
+                        />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">{cat.name}</p>
+                          <div className="flex gap-1.5 mt-0.5">
+                            <Badge variant="outline" className="text-[10px]">{cat.frequency}</Badge>
+                            {cat.linked_module && <Badge variant="secondary" className="text-[10px]">{cat.linked_module}</Badge>}
+                          </div>
+                        </div>
+                      </div>
+                      {svcSaving === cat.id && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                    </div>
+                    {isActive && cs && (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pl-12">
+                        <div className="space-y-1">
+                          <Label className="text-[11px]">Frequency Override</Label>
+                          <Select value={cs.frequency_override || ""} onValueChange={v => updateServiceField(cs.id, "frequency_override", v || null)}>
+                            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Default" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="">Default</SelectItem>
+                              {FREQUENCIES.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[11px]">Due Day Override</Label>
+                          <Input type="number" min={1} max={31} className="h-8 text-xs" value={cs.due_date_override || ""} onChange={e => updateServiceField(cs.id, "due_date_override", e.target.value ? parseInt(e.target.value) : null)} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[11px]">Fee Override (₹)</Label>
+                          <Input type="number" className="h-8 text-xs" value={cs.fee_override || ""} onChange={e => updateServiceField(cs.id, "fee_override", e.target.value ? parseFloat(e.target.value) : null)} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[11px]">Notes</Label>
+                          <Input className="h-8 text-xs" value={cs.notes || ""} onChange={e => updateServiceField(cs.id, "notes", e.target.value || null)} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 3: Audit Setup */}
+        <TabsContent value="audit">
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Audit Configuration</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border border-border rounded-lg p-4">
+                  <div>
+                    <p className="text-sm font-medium">Statutory Audit Applicable</p>
+                    <p className="text-xs text-muted-foreground">Companies Act 2013 requirements</p>
+                  </div>
+                  <Switch checked={auditForm.statutory_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, statutory_audit_applicable: v }))} />
+                </div>
+
+                <div className="border border-border rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Tax Audit Applicable</p>
+                      <p className="text-xs text-muted-foreground">Section 44AB — 3CA/3CB/3CD</p>
+                    </div>
+                    <Switch checked={!!auditForm.tax_audit_type} onCheckedChange={v => setAuditForm(p => ({ ...p, tax_audit_type: v ? "3CB-3CD" : "" }))} />
+                  </div>
+                  {auditForm.tax_audit_type && (
+                    <Select value={auditForm.tax_audit_type} onValueChange={v => setAuditForm(p => ({ ...p, tax_audit_type: v }))}>
+                      <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="3CA-3CD">3CA + 3CD (Company)</SelectItem>
+                        <SelectItem value="3CB-3CD">3CB + 3CD (Non-Company)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between border border-border rounded-lg p-4">
+                  <div>
+                    <p className="text-sm font-medium">CARO Applicable</p>
+                    <p className="text-xs text-muted-foreground">Companies (Auditor's Report) Order</p>
+                  </div>
+                  <Switch checked={auditForm.caro_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, caro_applicable: v }))} />
+                </div>
+
+                <div className="flex items-center justify-between border border-border rounded-lg p-4">
+                  <div>
+                    <p className="text-sm font-medium">Internal Audit Applicable</p>
+                    <p className="text-xs text-muted-foreground">Section 138 / voluntary</p>
+                  </div>
+                  <Switch checked={auditForm.internal_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, internal_audit_applicable: v }))} />
+                </div>
+
+                <div className="flex items-center justify-between border border-border rounded-lg p-4">
+                  <div>
+                    <p className="text-sm font-medium">Stock Audit Applicable</p>
+                    <p className="text-xs text-muted-foreground">Bank-mandated or voluntary</p>
+                  </div>
+                  <Switch checked={auditForm.stock_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, stock_audit_applicable: v }))} />
+                </div>
+              </div>
+
+              <Button onClick={saveAuditSetup} disabled={auditSaving} className="gap-2">
+                {auditSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Audit Setup
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 4: Work Groups */}
+        <TabsContent value="groups">
+          <div className="space-y-4">
             <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-sm">TDS Entries (Recent 10)</CardTitle>
-                <Button variant="link" size="sm" className="text-xs" onClick={() => navigate("/tds-filings")}>View All</Button>
-              </CardHeader>
-              <CardContent>
-                {tdsEntries.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Party</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {tdsEntries.map(e => (
-                        <TableRow key={e.id}>
-                          <TableCell className="text-xs">{e.date ? format(new Date(e.date), "dd MMM yy") : "—"}</TableCell>
-                          <TableCell className="text-xs">{e.party_name || "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono">₹{(e.amount || 0).toLocaleString("en-IN")}</TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{e.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <p className="text-sm text-muted-foreground py-4 text-center">No TDS entries</p>
-                )}
-              </CardContent>
+              <CardHeader><CardTitle className="text-sm">Client Groups</CardTitle></CardHeader>
+              <CardContent><ClientGroupsSection clientId={client.id} /></CardContent>
             </Card>
 
             <Card>
-              <CardHeader><CardTitle className="text-sm">ITR Profiles</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-sm">ITR Work Group</CardTitle></CardHeader>
               <CardContent>
-                {itrProfiles.length > 0 ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>FY</TableHead>
-                        <TableHead>Form</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {itrProfiles.map(p => (
-                        <TableRow key={p.id}>
-                          <TableCell className="text-xs">{p.financial_year}</TableCell>
-                          <TableCell className="text-xs">{p.itr_form || "—"}</TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{p.filing_status || "Pending"}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                {clientItrProfile ? (
+                  <div className="space-y-2">
+                    <p className="text-sm"><span className="text-muted-foreground">Current Group:</span> <span className="font-medium">{itrWorkGroups.find(g => g.id === clientItrProfile.itr_work_group_id)?.name || "Unassigned"}</span></p>
+                    <Select
+                      value={clientItrProfile.itr_work_group_id || ""}
+                      onValueChange={async v => {
+                        await supabase.from("itr_profiles").update({ itr_work_group_id: v || null } as any).eq("id", clientItrProfile.id);
+                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: v || null }));
+                        toast({ title: "Work group updated" });
+                      }}
+                    >
+                      <SelectTrigger className="w-64"><SelectValue placeholder="Select work group" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Unassigned</SelectItem>
+                        {itrWorkGroups.map(g => <SelectItem key={g.id} value={g.id}>{g.code} — {g.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground py-4 text-center">No ITR profiles</p>
+                  <p className="text-sm text-muted-foreground">No ITR profile exists for this client. Create an ITR filing first.</p>
                 )}
               </CardContent>
             </Card>
           </div>
-        </TabsContent>
-
-        {/* Auditors */}
-        <TabsContent value="auditors">
-          <ClientAuditorsTab clientId={clientId!} />
-        </TabsContent>
-
-        {/* Documents */}
-        <TabsContent value="documents">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-sm">Documents</CardTitle>
-              <Button size="sm" variant="outline" className="gap-1" onClick={() => navigate("/documents")}>
-                <Upload className="h-3 w-3" /> Upload
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {Object.keys(docCounts).length > 0 ? (
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                  {Object.entries(docCounts).map(([cat, count]) => (
-                    <div key={cat} className="border border-border rounded-lg p-3 text-center">
-                      <p className="text-lg font-bold text-foreground">{count}</p>
-                      <p className="text-xs text-muted-foreground">{cat}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground py-4 text-center">No documents uploaded</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Activity */}
-        <TabsContent value="activity">
-          <Card>
-            <CardHeader><CardTitle className="text-sm">Recent Activity</CardTitle></CardHeader>
-            <CardContent>
-              {activity.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Table</TableHead>
-                      <TableHead>Operation</TableHead>
-                      <TableHead>Changed Fields</TableHead>
-                      <TableHead>User</TableHead>
-                      <TableHead>When</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {activity.map(a => (
-                      <TableRow key={a.id}>
-                        <TableCell className="text-xs font-mono">{a.table_name}</TableCell>
-                        <TableCell><Badge variant="outline" className="text-[10px]">{a.operation}</Badge></TableCell>
-                        <TableCell className="text-xs">{(a.changed_fields || []).join(", ")}</TableCell>
-                        <TableCell className="text-xs">{a.user_name || "System"}</TableCell>
-                        <TableCell className="text-xs">{a.created_at ? format(new Date(a.created_at), "dd MMM yy HH:mm") : "—"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <p className="text-sm text-muted-foreground py-4 text-center">No activity recorded</p>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

@@ -11,25 +11,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface Client {
@@ -49,10 +35,11 @@ interface GroupInfo {
   color: string | null;
 }
 
-const ENTITY_TYPES = [
-  "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd",
-  "HUF", "Trust", "AOP", "BOI",
-];
+const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
+
+type ViewMode = "it" | "table" | "card";
+
+const VIEW_KEY = "caflow_client_view";
 
 const Clients = () => {
   const navigate = useNavigate();
@@ -65,20 +52,25 @@ const Clients = () => {
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
 
-  // Groups data
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
 
-  // Manage groups dialog
+  // ITR/TDS status data
+  const [itrStatusMap, setItrStatusMap] = useState<Record<string, any>>({});
+  const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
+
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
   const fetchData = async () => {
-    const [clientsRes, groupsRes, membershipsRes] = await Promise.all([
-      supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(200),
+    const [clientsRes, groupsRes, membershipsRes, itrRes, servicesRes] = await Promise.all([
+      supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(500),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
+      supabase.from("itr_profiles").select("client_id, filing_status, financial_year").order("financial_year", { ascending: false }),
+      supabase.from("client_services").select("client_id, is_active"),
     ]);
 
     setClients((clientsRes.data as Client[]) || []);
@@ -90,10 +82,27 @@ const Clients = () => {
       if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
     }
     setClientGroupMap(map);
+
+    // Build ITR status map (latest per client)
+    const itrMap: Record<string, any> = {};
+    for (const p of (itrRes.data || []) as any[]) {
+      if (!itrMap[p.client_id]) itrMap[p.client_id] = p;
+    }
+    setItrStatusMap(itrMap);
+
+    // Build service count map
+    const svcMap: Record<string, number> = {};
+    for (const s of (servicesRes.data || []) as any[]) {
+      if (s.is_active) svcMap[s.client_id] = (svcMap[s.client_id] || 0) + 1;
+    }
+    setServiceCountMap(svcMap);
+
     setLoading(false);
   };
 
   useEffect(() => { fetchData(); }, []);
+
+  useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
   const handleDeleteClient = async () => {
     if (!deleteClient) return;
@@ -102,7 +111,7 @@ const Clients = () => {
       const { error, count } = await supabase.from("clients").delete({ count: "exact" }).eq("id", deleteClient.id);
       if (error) throw error;
       if (count === 0) {
-        toast({ title: "Delete failed", description: "You may not have permission to delete this client.", variant: "destructive" });
+        toast({ title: "Delete failed", description: "You may not have permission.", variant: "destructive" });
       } else {
         toast({ title: "Client deleted" });
       }
@@ -119,17 +128,9 @@ const Clients = () => {
     setManageGroupsSaving(true);
     try {
       if (isMember) {
-        const { error } = await supabase
-          .from("client_group_memberships")
-          .delete()
-          .eq("client_id", clientId)
-          .eq("group_id", groupId);
-        if (error) throw error;
+        await supabase.from("client_group_memberships").delete().eq("client_id", clientId).eq("group_id", groupId);
       } else {
-        const { error } = await supabase
-          .from("client_group_memberships")
-          .insert({ client_id: clientId, group_id: groupId, added_by: user?.id || null });
-        if (error) throw error;
+        await supabase.from("client_group_memberships").insert({ client_id: clientId, group_id: groupId, added_by: user?.id || null });
       }
       await fetchData();
     } catch (e: any) {
@@ -140,17 +141,16 @@ const Clients = () => {
   };
 
   const handleExportExcel = () => {
-    const rows = filtered.map((c) => {
-      const clientGroups = clientGroupMap[c.id] || [];
-      return {
-        Name: c.name || "",
-        PAN: c.pan || "",
-        "Entity Type": c.entity_type || "",
-        CIN: c.cin || "",
-        GSTIN: (c.gstin || []).join(", "),
-        Groups: clientGroups.map((g) => g.name).join(", ") || "Ungrouped",
-      };
-    });
+    const rows = filtered.map((c) => ({
+      Name: c.name || "",
+      PAN: c.pan || "",
+      "Entity Type": c.entity_type || "",
+      CIN: c.cin || "",
+      GSTIN: (c.gstin || []).join(", "),
+      Groups: (clientGroupMap[c.id] || []).map(g => g.name).join(", ") || "Ungrouped",
+      "Active Services": serviceCountMap[c.id] || 0,
+      "ITR Status": itrStatusMap[c.id]?.filing_status || "—",
+    }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Clients");
@@ -159,30 +159,30 @@ const Clients = () => {
   };
 
   const filtered = clients.filter((c) => {
-    const matchesSearch =
-      !search ||
-      (c.name || "").toLowerCase().includes(search.toLowerCase()) ||
-      (c.pan || "").toLowerCase().includes(search.toLowerCase());
-    const matchesEntity =
-      entityFilter === "all" || c.entity_type === entityFilter;
+    const matchesSearch = !search || (c.name || "").toLowerCase().includes(search.toLowerCase()) || (c.pan || "").toLowerCase().includes(search.toLowerCase());
+    const matchesEntity = entityFilter === "all" || c.entity_type === entityFilter;
     let matchesGroup = true;
     if (groupFilter.includes("ungrouped")) {
       matchesGroup = !clientGroupMap[c.id] || clientGroupMap[c.id].length === 0;
     } else if (groupFilter.length > 0) {
-      const cGroups = (clientGroupMap[c.id] || []).map((g) => g.id);
-      matchesGroup = groupFilter.every((gId) => cGroups.includes(gId));
+      const cGroups = (clientGroupMap[c.id] || []).map(g => g.id);
+      matchesGroup = groupFilter.every(gId => cGroups.includes(gId));
     }
     return matchesSearch && matchesEntity && matchesGroup;
   });
 
   const toggleGroupFilter = (id: string) => {
-    setGroupFilter((prev) => {
-      if (id === "ungrouped") {
-        return prev.includes("ungrouped") ? prev.filter((x) => x !== "ungrouped") : ["ungrouped"];
-      }
-      const without = prev.filter((x) => x !== "ungrouped");
-      return without.includes(id) ? without.filter((x) => x !== id) : [...without, id];
+    setGroupFilter(prev => {
+      if (id === "ungrouped") return prev.includes("ungrouped") ? prev.filter(x => x !== "ungrouped") : ["ungrouped"];
+      const without = prev.filter(x => x !== "ungrouped");
+      return without.includes(id) ? without.filter(x => x !== id) : [...without, id];
     });
+  };
+
+  const getItrStatusColor = (status: string | undefined) => {
+    if (!status || status === "Pending" || status === "Not Filed") return "text-destructive";
+    if (status === "Filed") return "text-green-600";
+    return "text-amber-600";
   };
 
   return (
@@ -194,15 +194,21 @@ const Clients = () => {
           <p className="text-sm text-muted-foreground">Manage your client directory.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5">
-            <Download className="h-4 w-4" /> Export
-          </Button>
-          <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2">
-            <FolderOpen className="h-4 w-4" /> Manage Groups
-          </Button>
-          <Button onClick={() => navigate("/clients/new")} className="gap-2">
-            <Plus className="h-4 w-4" /> Add Client
-          </Button>
+          {/* View toggle */}
+          <div className="flex items-center border border-border rounded-md">
+            <button onClick={() => setViewMode("it")} className={`px-2.5 py-1.5 text-xs font-medium rounded-l-md transition-colors ${viewMode === "it" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              <FileText className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => setViewMode("table")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              <List className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
+          <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
+          <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>
         </div>
       </div>
 
@@ -210,51 +216,28 @@ const Clients = () => {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by name or PAN..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
+          <Input placeholder="Search by name or PAN..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={entityFilter} onValueChange={setEntityFilter}>
-          <SelectTrigger className="w-full sm:w-[200px]">
-            <SelectValue placeholder="Entity Type" />
-          </SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[200px]"><SelectValue placeholder="Entity Type" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Entity Types</SelectItem>
-            {ENTITY_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>{t}</SelectItem>
-            ))}
+            {ENTITY_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
           </SelectContent>
         </Select>
-
-        {/* Multi-select group filter */}
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" className="w-full sm:w-[200px] justify-between">
-              <span className="truncate">
-                {groupFilter.length === 0 ? "All Groups" : `${groupFilter.length} group${groupFilter.length > 1 ? "s" : ""}`}
-              </span>
-              {groupFilter.length > 0 && (
-                <X className="h-3 w-3 ml-1 shrink-0" onClick={(e) => { e.stopPropagation(); setGroupFilter([]); }} />
-              )}
+              <span className="truncate">{groupFilter.length === 0 ? "All Groups" : `${groupFilter.length} group${groupFilter.length > 1 ? "s" : ""}`}</span>
+              {groupFilter.length > 0 && <X className="h-3 w-3 ml-1 shrink-0" onClick={e => { e.stopPropagation(); setGroupFilter([]); }} />}
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-56 p-2" align="end">
-            <button
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left"
-              onClick={() => toggleGroupFilter("ungrouped")}
-            >
-              <Checkbox checked={groupFilter.includes("ungrouped")} />
-              <span>Ungrouped</span>
+            <button className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter("ungrouped")}>
+              <Checkbox checked={groupFilter.includes("ungrouped")} /> <span>Ungrouped</span>
             </button>
-            {groups.map((g) => (
-              <button
-                key={g.id}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left"
-                onClick={() => toggleGroupFilter(g.id)}
-              >
+            {groups.map(g => (
+              <button key={g.id} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter(g.id)}>
                 <Checkbox checked={groupFilter.includes(g.id)} />
                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
                 {g.name}
@@ -264,87 +247,142 @@ const Clients = () => {
         </Popover>
       </div>
 
-      {/* Card Grid */}
+      {/* Content */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-40 rounded-xl" />
-          ))}
-        </div>
+        <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : filtered.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Users className="h-10 w-10 mb-3 opacity-40" />
-            <p>No clients found</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((client) => {
-            const clientGroups = clientGroupMap[client.id] || [];
-            return (
-              <Card
-                key={client.id}
-                className="group cursor-pointer hover:border-primary/40 transition-colors"
-                onClick={() => navigate(`/clients/${client.id}`)}
-              >
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <h3 className="text-lg font-semibold text-foreground leading-tight line-clamp-2">
-                      {client.name || "Unnamed Client"}
-                    </h3>
-                    <div className="flex items-center gap-1 shrink-0 ml-2">
-                      {client.entity_type && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {client.entity_type}
-                        </Badge>
-                      )}
+        <Card><CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground"><Users className="h-10 w-10 mb-3 opacity-40" /><p>No clients found</p></CardContent></Card>
+      ) : viewMode === "it" ? (
+        /* IT VIEW */
+        <div className="rounded-md border border-border overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Client Name</TableHead>
+                <TableHead className="text-xs">PAN</TableHead>
+                <TableHead className="text-xs">Constitution</TableHead>
+                <TableHead className="text-xs">Active Services</TableHead>
+                <TableHead className="text-xs">ITR Status</TableHead>
+                <TableHead className="text-xs w-12"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map(client => {
+                const itr = itrStatusMap[client.id];
+                const svcCount = serviceCountMap[client.id] || 0;
+                return (
+                  <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
+                    <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                    <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
+                    <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
+                    <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
+                    <TableCell><span className={`text-xs font-medium ${getItrStatusColor(itr?.filing_status)}`}>{itr?.filing_status || "Not Filed"}</span></TableCell>
+                    <TableCell>
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                          <Button variant="ghost" size="icon" className="h-7 w-7">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
+                        <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}>
-                            <Eye className="h-4 w-4 mr-2" /> View
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}>
-                            <Pencil className="h-4 w-4 mr-2" /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setManageGroupsClient(client)}>
-                            <Tags className="h-4 w-4 mr-2" /> Manage Groups
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}/audit/scrutiny`)}>
-                            <ShieldCheck className="h-4 w-4 mr-2" /> Audit Scrutiny
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}>
-                            <Trash2 className="h-4 w-4 mr-2" /> Delete
-                          </DropdownMenuItem>
+                        <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      ) : viewMode === "table" ? (
+        /* TABLE VIEW */
+        <div className="rounded-md border border-border overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Name</TableHead>
+                <TableHead className="text-xs">PAN</TableHead>
+                <TableHead className="text-xs">Entity Type</TableHead>
+                <TableHead className="text-xs">CIN</TableHead>
+                <TableHead className="text-xs">GSTIN</TableHead>
+                <TableHead className="text-xs">Groups</TableHead>
+                <TableHead className="text-xs w-12"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map(client => {
+                const clientGroups = clientGroupMap[client.id] || [];
+                return (
+                  <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
+                    <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                    <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
+                    <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
+                    <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
+                    <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {clientGroups.length > 0 ? clientGroups.map(g => (
+                          <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>{g.name}</Badge>
+                        )) : <span className="text-[10px] text-muted-foreground">—</span>}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        /* CARD VIEW */
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map(client => {
+            const clientGroups = clientGroupMap[client.id] || [];
+            const svcCount = serviceCountMap[client.id] || 0;
+            const initial = (client.name || "?")[0].toUpperCase();
+            return (
+              <Card key={client.id} className="group cursor-pointer hover:border-primary/40 transition-colors" onClick={() => navigate(`/clients/${client.id}`)}>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg shrink-0">{initial}</div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground truncate">{client.name || "Unnamed"}</h3>
+                      {client.pan && <p className="text-[11px] font-mono text-muted-foreground">{client.pan}</p>}
                     </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                        <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                  {client.pan && (
-                    <p className="text-xs font-mono text-muted-foreground">PAN: {client.pan}</p>
-                  )}
-                  {/* Group badges */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}
+                    {svcCount > 0 && <Badge variant="secondary" className="text-[10px]">{svcCount} services</Badge>}
+                  </div>
                   <div className="flex flex-wrap gap-1">
-                    {clientGroups.length > 0 ? (
-                      clientGroups.map((g) => (
-                        <Badge
-                          key={g.id}
-                          variant="outline"
-                          className="text-[10px] gap-1"
-                          style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: g.color || "#6B7280" }} />
-                          {g.name}
-                        </Badge>
-                      ))
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">Ungrouped</span>
-                    )}
+                    {clientGroups.length > 0 ? clientGroups.map(g => (
+                      <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>
+                        <span className="w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: g.color || "#6B7280" }} />{g.name}
+                      </Badge>
+                    )) : <span className="text-[10px] text-muted-foreground">Ungrouped</span>}
                   </div>
                 </CardContent>
               </Card>
@@ -353,50 +391,37 @@ const Clients = () => {
         </div>
       )}
 
-      {/* Delete Client Confirmation */}
+      {/* Delete Confirmation */}
       <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Client</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteClient?.name}</strong>? This action cannot be undone. All related data (trial balances, profiles, etc.) may also be removed.
-            </AlertDialogDescription>
+            <AlertDialogDescription>Are you sure you want to delete <strong>{deleteClient?.name}</strong>? This cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              {deleteLoading ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteLoading ? "Deleting…" : "Delete"}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       {/* Manage Groups Dialog */}
-      <Dialog open={!!manageGroupsClient} onOpenChange={(open) => { if (!open) setManageGroupsClient(null); }}>
-        <DialogContent onClick={(e) => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle>Manage Groups — {manageGroupsClient?.name}</DialogTitle>
-          </DialogHeader>
+      <Dialog open={!!manageGroupsClient} onOpenChange={open => { if (!open) setManageGroupsClient(null); }}>
+        <DialogContent onClick={e => e.stopPropagation()}>
+          <DialogHeader><DialogTitle>Manage Groups — {manageGroupsClient?.name}</DialogTitle></DialogHeader>
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {groups.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">No groups created yet.</p>
-            ) : (
-              groups.map((g) => {
-                const isMember = (clientGroupMap[manageGroupsClient?.id || ""] || []).some((cg) => cg.id === g.id);
-                return (
-                  <button
-                    key={g.id}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md hover:bg-accent text-left"
-                    disabled={manageGroupsSaving}
-                    onClick={() => manageGroupsClient && toggleGroupForClient(manageGroupsClient.id, g.id, isMember)}
-                  >
-                    <Checkbox checked={isMember} />
-                    <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
-                    <span>{g.name}</span>
-                  </button>
-                );
-              })
-            )}
+            ) : groups.map(g => {
+              const isMember = (clientGroupMap[manageGroupsClient?.id || ""] || []).some(cg => cg.id === g.id);
+              return (
+                <button key={g.id} className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md hover:bg-accent text-left" disabled={manageGroupsSaving} onClick={() => manageGroupsClient && toggleGroupForClient(manageGroupsClient.id, g.id, isMember)}>
+                  <Checkbox checked={isMember} />
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
+                  <span>{g.name}</span>
+                </button>
+              );
+            })}
           </div>
         </DialogContent>
       </Dialog>

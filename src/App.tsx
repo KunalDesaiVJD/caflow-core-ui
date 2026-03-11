@@ -56,6 +56,7 @@ import NoticeTracker from "./pages/NoticeTracker";
 import NoticeDetail from "./pages/NoticeDetail";
 import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
+import ServiceMasters from "./pages/ServiceMasters";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -168,6 +169,7 @@ const App = () => (
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
+              <Route path="/settings/services" element={<ServiceMasters />} />
               <Route path="/notices" element={<NoticeTracker />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/documents" element={<Documents />} />

@@ -857,8 +857,67 @@ export type Database = {
           },
         ]
       }
+      client_services: {
+        Row: {
+          activated_at: string | null
+          assigned_staff: Json | null
+          client_id: string
+          deactivated_at: string | null
+          due_date_override: number | null
+          fee_override: number | null
+          frequency_override: string | null
+          id: string
+          is_active: boolean
+          notes: string | null
+          service_category_id: string
+        }
+        Insert: {
+          activated_at?: string | null
+          assigned_staff?: Json | null
+          client_id: string
+          deactivated_at?: string | null
+          due_date_override?: number | null
+          fee_override?: number | null
+          frequency_override?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          service_category_id: string
+        }
+        Update: {
+          activated_at?: string | null
+          assigned_staff?: Json | null
+          client_id?: string
+          deactivated_at?: string | null
+          due_date_override?: number | null
+          fee_override?: number | null
+          frequency_override?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          service_category_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_services_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_services_service_category_id_fkey"
+            columns: ["service_category_id"]
+            isOneToOne: false
+            referencedRelation: "service_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       clients: {
         Row: {
+          audit_config: Json | null
+          caro_applicable: boolean | null
           cin: string | null
           compliance_flags: Json | null
           created_at: string | null
@@ -866,11 +925,17 @@ export type Database = {
           firm_id: string | null
           gstin: string[] | null
           id: string
+          internal_audit_applicable: boolean | null
           name: string | null
           pan: string | null
+          statutory_audit_applicable: boolean | null
+          stock_audit_applicable: boolean | null
+          tax_audit_type: string | null
           user_id: string | null
         }
         Insert: {
+          audit_config?: Json | null
+          caro_applicable?: boolean | null
           cin?: string | null
           compliance_flags?: Json | null
           created_at?: string | null
@@ -878,11 +943,17 @@ export type Database = {
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
+          internal_audit_applicable?: boolean | null
           name?: string | null
           pan?: string | null
+          statutory_audit_applicable?: boolean | null
+          stock_audit_applicable?: boolean | null
+          tax_audit_type?: string | null
           user_id?: string | null
         }
         Update: {
+          audit_config?: Json | null
+          caro_applicable?: boolean | null
           cin?: string | null
           compliance_flags?: Json | null
           created_at?: string | null
@@ -890,8 +961,12 @@ export type Database = {
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
+          internal_audit_applicable?: boolean | null
           name?: string | null
           pan?: string | null
+          statutory_audit_applicable?: boolean | null
+          stock_audit_applicable?: boolean | null
+          tax_audit_type?: string | null
           user_id?: string | null
         }
         Relationships: [
@@ -1864,6 +1939,119 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      service_categories: {
+        Row: {
+          applicable_entity_types: Json | null
+          category_code: string
+          created_at: string | null
+          created_by: string | null
+          default_due_day: number | null
+          default_fee_template: Json | null
+          description: string | null
+          firm_id: string
+          frequency: string
+          id: string
+          is_active: boolean
+          linked_module: string | null
+          name: string
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          applicable_entity_types?: Json | null
+          category_code: string
+          created_at?: string | null
+          created_by?: string | null
+          default_due_day?: number | null
+          default_fee_template?: Json | null
+          description?: string | null
+          firm_id: string
+          frequency?: string
+          id?: string
+          is_active?: boolean
+          linked_module?: string | null
+          name: string
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          applicable_entity_types?: Json | null
+          category_code?: string
+          created_at?: string | null
+          created_by?: string | null
+          default_due_day?: number | null
+          default_fee_template?: Json | null
+          description?: string | null
+          firm_id?: string
+          frequency?: string
+          id?: string
+          is_active?: boolean
+          linked_module?: string | null
+          name?: string
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_categories_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_categories_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      service_templates: {
+        Row: {
+          created_at: string | null
+          default_description: string | null
+          default_rate: number | null
+          hsn_sac_code: string | null
+          id: string
+          is_default: boolean | null
+          service_category_id: string
+          tax_rate: number | null
+          template_name: string
+        }
+        Insert: {
+          created_at?: string | null
+          default_description?: string | null
+          default_rate?: number | null
+          hsn_sac_code?: string | null
+          id?: string
+          is_default?: boolean | null
+          service_category_id: string
+          tax_rate?: number | null
+          template_name: string
+        }
+        Update: {
+          created_at?: string | null
+          default_description?: string | null
+          default_rate?: number | null
+          hsn_sac_code?: string | null
+          id?: string
+          is_default?: boolean | null
+          service_category_id?: string
+          tax_rate?: number | null
+          template_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_templates_service_category_id_fkey"
+            columns: ["service_category_id"]
+            isOneToOne: false
+            referencedRelation: "service_categories"
             referencedColumns: ["id"]
           },
         ]
