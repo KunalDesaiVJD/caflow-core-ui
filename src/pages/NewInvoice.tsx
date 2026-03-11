@@ -12,13 +12,9 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Clock } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -41,13 +37,11 @@ interface LineItem {
   hsn_sac_code: string;
   quantity: number;
   rate: number;
-  discount_percent: number;
   taxable_value: number;
   cgst_percent: number;
   cgst_amount: number;
   sgst_percent: number;
   sgst_amount: number;
-  cess: number;
   total: number;
   sort_order: number;
   showDetails: boolean;
@@ -62,6 +56,7 @@ interface Client {
 }
 
 interface Firm {
+  id: string;
   name: string;
   display_name: string | null;
   logo_url: string | null;
@@ -79,8 +74,8 @@ interface Firm {
 
 const EMPTY_ITEM = (): LineItem => ({
   description: "", description_details: "", hsn_sac_code: "", quantity: 1, rate: 0,
-  discount_percent: 0, taxable_value: 0, cgst_percent: 9, cgst_amount: 0,
-  sgst_percent: 9, sgst_amount: 0, cess: 0, total: 0, sort_order: 0, showDetails: false,
+  taxable_value: 0, cgst_percent: 9, cgst_amount: 0,
+  sgst_percent: 9, sgst_amount: 0, total: 0, sort_order: 0, showDetails: false,
 });
 
 // Amount in words helper
@@ -101,7 +96,6 @@ function numberToWords(num: number): string {
   const intPart = Math.floor(Math.abs(num));
   if (intPart === 0) return "Zero Rupees Only";
 
-  // Indian numbering: last 3 digits, then groups of 2
   const groups: number[] = [];
   let rem = intPart;
   groups.push(rem % 1000); rem = Math.floor(rem / 1000);
@@ -120,13 +114,14 @@ const NewInvoice = () => {
   const { invoiceId } = useParams<{ invoiceId?: string }>();
   const { user } = useAuth();
   const { toast } = useToast();
-  const firmId = user?.firm_id;
   const isSuperadmin = user?.role === "superadmin";
   const isEdit = !!invoiceId;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
+  const [firmsList, setFirmsList] = useState<Firm[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string>("");
   const [firm, setFirm] = useState<Firm | null>(null);
 
   // Invoice state
@@ -152,25 +147,39 @@ const NewInvoice = () => {
   // Finalize dialog
   const [finalizeOpen, setFinalizeOpen] = useState(false);
 
-  // Fetch initial data
+  // Fetch firms list
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("firms").select("id, name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings").order("name");
+      const firms = (data || []) as Firm[];
+      setFirmsList(firms);
+      // Auto-select user's firm or first firm
+      if (user?.firm_id) {
+        setSelectedFirmId(user.firm_id);
+      } else if (firms.length > 0) {
+        setSelectedFirmId(firms[0].id);
+      }
+    })();
+  }, [user?.firm_id]);
+
+  // When selected firm changes, update firm data
+  useEffect(() => {
+    if (!selectedFirmId) return;
+    const f = firmsList.find(f => f.id === selectedFirmId);
+    if (f) {
+      setFirm(f);
+      setPlaceOfSupply(f.state || "");
+    }
+  }, [selectedFirmId, firmsList]);
+
+  // Fetch clients & invoice number
   useEffect(() => {
     (async () => {
       setLoading(true);
       let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type").order("name");
-      if (!isSuperadmin && firmId) cq = cq.eq("firm_id", firmId);
+      if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
-
-      // Fetch firm - auto-populate from Firm Management
-      if (firmId) {
-        const { data: firmData } = await supabase.from("firms")
-          .select("name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings")
-          .eq("id", firmId).single();
-        if (firmData) {
-          setFirm(firmData);
-          setPlaceOfSupply(firmData.state ? `${firmData.state}` : "");
-        }
-      }
 
       // Generate invoice number in ###-FY format
       if (!isEdit) {
@@ -178,7 +187,7 @@ const NewInvoice = () => {
         const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
         const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
         let invQ = supabase.from("invoices").select("invoice_no").order("invoice_no", { ascending: false }).limit(1);
-        if (!isSuperadmin && firmId) invQ = invQ.eq("firm_id", firmId);
+        if (!isSuperadmin && user?.firm_id) invQ = invQ.eq("firm_id", user.firm_id);
         const { data: lastInv } = await invQ;
         let nextNum = 1;
         if (lastInv?.[0]?.invoice_no) {
@@ -202,6 +211,7 @@ const NewInvoice = () => {
           setToName(inv.to_name || "");
           setToGstin(inv.to_gstin || "");
           setToAddress(inv.to_address || "");
+          if (inv.firm_id) setSelectedFirmId(inv.firm_id);
           if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
             setLineItems(inv.line_items.map((li: any, i: number) => ({
               ...EMPTY_ITEM(),
@@ -210,13 +220,11 @@ const NewInvoice = () => {
               hsn_sac_code: li.hsn_sac_code || li.hsn || "",
               quantity: li.quantity || 1,
               rate: li.rate || 0,
-              discount_percent: li.discount_percent || 0,
               taxable_value: li.taxable_value || li.amount || 0,
               cgst_percent: li.cgst_percent ?? 9,
               cgst_amount: li.cgst_amount || 0,
               sgst_percent: li.sgst_percent ?? 9,
               sgst_amount: li.sgst_amount || 0,
-              cess: li.cess || 0,
               total: li.total || 0,
               sort_order: i,
               showDetails: false,
@@ -226,7 +234,7 @@ const NewInvoice = () => {
       }
       setLoading(false);
     })();
-  }, [firmId, isSuperadmin, isEdit, invoiceId]);
+  }, [isSuperadmin, isEdit, invoiceId, user?.firm_id]);
 
   // Auto-fill client details
   useEffect(() => {
@@ -238,18 +246,14 @@ const NewInvoice = () => {
     }
   }, [clientId, clients]);
 
-  // Recalculate line item
+  // Recalculate line item (no discount, no cess)
   const recalcItem = (item: LineItem): LineItem => {
     const qty = Number(item.quantity) || 0;
     const rate = Number(item.rate) || 0;
-    const disc = Number(item.discount_percent) || 0;
-    const baseAmt = qty * rate;
-    const discAmt = baseAmt * disc / 100;
-    const taxable = Math.round((baseAmt - discAmt) * 100) / 100;
+    const taxable = Math.round(qty * rate * 100) / 100;
     const cgst = isIntraState ? Math.round(taxable * (Number(item.cgst_percent) || 0) / 100 * 100) / 100 : 0;
     const sgst = isIntraState ? Math.round(taxable * (Number(item.sgst_percent) || 0) / 100 * 100) / 100 : 0;
-    const cess = Number(item.cess) || 0;
-    return { ...item, taxable_value: taxable, cgst_amount: cgst, sgst_amount: sgst, total: taxable + cgst + sgst + cess };
+    return { ...item, taxable_value: taxable, cgst_amount: cgst, sgst_amount: sgst, total: taxable + cgst + sgst };
   };
 
   const updateLine = (idx: number, field: keyof LineItem, value: any) => {
@@ -276,13 +280,12 @@ const NewInvoice = () => {
   const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
   const totalCgst = useMemo(() => items.reduce((s, li) => s + li.cgst_amount, 0), [items]);
   const totalSgst = useMemo(() => items.reduce((s, li) => s + li.sgst_amount, 0), [items]);
-  const totalCess = useMemo(() => items.reduce((s, li) => s + li.cess, 0), [items]);
-  const totalTax = totalCgst + totalSgst + totalCess;
+  const totalTax = totalCgst + totalSgst;
   const grandTotal = totalTaxable + totalTax;
 
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
-  const firmFullAddress = firmAddr ? [firmAddr.line1, firmAddr.line2, firmAddr.city, firmAddr.state, firmAddr.pincode].filter(Boolean).join(", ") : "";
+  const firmFullAddress = firmAddr ? [firmAddr.line || firmAddr.line1, firmAddr.line2, firmAddr.city, firmAddr.state || firm?.state, firmAddr.pincode].filter(Boolean).join(", ") : "";
   const bankDetails = firm?.bank_details as any;
   const msmeNo = (firm?.settings as any)?.msme_no || "";
 
@@ -296,7 +299,7 @@ const NewInvoice = () => {
       const payload: any = {
         invoice_no: invoiceNo,
         client_id: clientId,
-        firm_id: firmId,
+        firm_id: selectedFirmId || user?.firm_id,
         invoice_date: invoiceDate,
         due_date: dueDate,
         reference_no: referenceNo,
@@ -326,13 +329,11 @@ const NewInvoice = () => {
           hsn_sac_code: li.hsn_sac_code,
           quantity: li.quantity,
           rate: li.rate,
-          discount_percent: li.discount_percent,
           taxable_value: li.taxable_value,
           cgst_percent: li.cgst_percent,
           cgst_amount: li.cgst_amount,
           sgst_percent: li.sgst_percent,
           sgst_amount: li.sgst_amount,
-          cess: li.cess,
           total: li.total,
         })),
         signatory_name: firmName,
@@ -382,7 +383,6 @@ const NewInvoice = () => {
         <td style="border:1px solid #999;padding:6px 8px;text-align:center;font-size:12px">${item.hsn_sac_code}</td>
         <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${Number(item.quantity).toFixed(2)}</td>
         <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${fmtINR(item.rate)}</td>
-        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${item.discount_percent > 0 ? fmtINR(item.taxable_value * item.discount_percent / (100 - item.discount_percent)) : "0.00"}</td>
         <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${fmtINR(item.taxable_value)}</td>
         ${isIntraState ? `
           <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:11px">${item.cgst_percent}%<br/>${fmtINR(item.cgst_amount)}</td>
@@ -390,7 +390,6 @@ const NewInvoice = () => {
         ` : `
           <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:11px" colspan="2">${item.cgst_percent + item.sgst_percent}%<br/>${fmtINR(item.cgst_amount + item.sgst_amount)}</td>
         `}
-        <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px">${item.cess > 0 ? fmtINR(item.cess) : "0.00"}</td>
         <td style="border:1px solid #999;padding:6px 8px;text-align:right;font-size:12px;font-weight:600">${fmtINR(item.total)}</td>
       </tr>
     `).join("");
@@ -401,7 +400,6 @@ const NewInvoice = () => {
         <td style="border:1px solid #999;padding:8px"></td>
         <td style="border:1px solid #999;padding:8px"></td>
         <td style="border:1px solid #999;padding:8px"></td>
-        <td style="border:1px solid #999;padding:8px"></td>
         <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalTaxable)}</td>
         ${isIntraState ? `
           <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalCgst)}</td>
@@ -409,7 +407,6 @@ const NewInvoice = () => {
         ` : `
           <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px" colspan="2">${fmtINR(totalCgst + totalSgst)}</td>
         `}
-        <td style="border:1px solid #999;padding:8px;text-align:right;font-size:12px">${fmtINR(totalCess)}</td>
         <td style="border:1px solid #999;padding:8px;text-align:right;font-size:13px">${fmtINR(grandTotal)}</td>
       </tr>
     `;
@@ -444,6 +441,7 @@ const NewInvoice = () => {
             <p style="font-weight:700;margin:0 0 4px;font-size:15px">${firmName}</p>
             <p style="margin:2px 0;font-size:12px">${firmFullAddress}</p>
             ${firm?.gstin ? `<p style="margin:4px 0;font-size:12px"><strong>GSTIN:</strong> ${firm.gstin}</p>` : ""}
+            ${firm?.pan ? `<p style="margin:2px 0;font-size:12px"><strong>PAN:</strong> ${firm.pan}</p>` : ""}
           </div>
           <div style="text-align:right;font-size:12px;min-width:280px">
             ${firm?.gstin ? `<p style="margin:2px 0"><strong>GSTIN:</strong> ${firm.gstin}</p>` : ""}
@@ -451,29 +449,24 @@ const NewInvoice = () => {
             ${firm?.pan ? `<p style="margin:2px 0"><strong>PAN:</strong> ${firm.pan}</p>` : ""}
             <p style="margin:2px 0"><strong>Invoice Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p>
             <p style="margin:2px 0"><strong>Invoice No.:</strong> ${invoiceNo}</p>
+            ${msmeNo ? `<p style="margin:2px 0"><strong>MSME/UDYAM No.:</strong> ${msmeNo}</p>` : ""}
             ${referenceNo ? `<p style="margin:2px 0"><strong>Reference No.:</strong> ${referenceNo}</p>` : ""}
           </div>
         </div>
 
-        <!-- Customer details - 3 columns -->
+        <!-- Customer details - 2 columns (no shipping) -->
         <div style="border:1px solid #999;display:flex;margin-bottom:8px">
           <div style="flex:1;padding:10px;border-right:1px solid #999">
             <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Customer Name</p>
             <p style="font-weight:600;margin:0">${toName}</p>
             ${toGstin ? `<p style="margin:4px 0;font-size:11px">Customer GSTIN: ${toGstin}</p>` : ""}
           </div>
-          <div style="flex:1;padding:10px;border-right:1px solid #999">
+          <div style="flex:1;padding:10px">
             <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Billing Address</p>
             <p style="font-weight:600;margin:0">${toName}</p>
             <p style="margin:2px 0;font-size:11px">${toAddress}</p>
             <p style="margin:2px 0;font-size:11px">${[toCity, toState, toPin].filter(Boolean).join(", ")}</p>
             ${toGstin ? `<p style="margin:2px 0;font-size:11px">${toGstin}</p>` : ""}
-          </div>
-          <div style="flex:1;padding:10px">
-            <p style="font-size:11px;font-weight:700;color:#666;margin:0 0 4px;text-transform:uppercase">Shipping Address</p>
-            <p style="font-weight:600;margin:0">${toName}</p>
-            <p style="margin:2px 0;font-size:11px">${toAddress}</p>
-            <p style="margin:2px 0;font-size:11px">${[toCity, toState, toPin].filter(Boolean).join(", ")}</p>
           </div>
         </div>
 
@@ -483,7 +476,7 @@ const NewInvoice = () => {
           <div style="flex:1;padding:6px 10px;font-size:12px"><strong>Due Date:</strong> ${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</div>
         </div>
 
-        <!-- Items Table -->
+        <!-- Items Table (no Discount, no Cess columns) -->
         <table>
           <thead>
             <tr style="background:#e8e8e8">
@@ -492,7 +485,6 @@ const NewInvoice = () => {
               <th style="border:1px solid #999;padding:8px;font-size:11px">HSN/SAC</th>
               <th style="border:1px solid #999;padding:8px;font-size:11px">Quantity</th>
               <th style="border:1px solid #999;padding:8px;font-size:11px">Rate / Item</th>
-              <th style="border:1px solid #999;padding:8px;font-size:11px">Discount</th>
               <th style="border:1px solid #999;padding:8px;font-size:11px">Taxable Value</th>
               ${isIntraState ? `
                 <th style="border:1px solid #999;padding:8px;font-size:11px">CGST</th>
@@ -500,7 +492,6 @@ const NewInvoice = () => {
               ` : `
                 <th style="border:1px solid #999;padding:8px;font-size:11px" colspan="2">IGST</th>
               `}
-              <th style="border:1px solid #999;padding:8px;font-size:11px">CESS</th>
               <th style="border:1px solid #999;padding:8px;font-size:11px">Total</th>
             </tr>
           </thead>
@@ -528,7 +519,7 @@ const NewInvoice = () => {
         <div style="display:flex;justify-content:space-between;margin-top:16px">
           <div style="border:1px solid #999;padding:12px;font-size:12px;min-width:320px">
             <p style="font-weight:700;margin:0 0 6px;font-size:13px">Bank Details:</p>
-            ${bankDetails?.account_no ? `<p style="margin:2px 0"><strong>Account Number:</strong> ${bankDetails.account_no}</p>` : ""}
+            ${bankDetails?.account_number || bankDetails?.account_no ? `<p style="margin:2px 0"><strong>Account Number:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>` : ""}
             ${bankDetails?.ifsc ? `<p style="margin:2px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
             ${bankDetails?.bank_name ? `<p style="margin:2px 0"><strong>Bank Name:</strong> ${bankDetails.bank_name}</p>` : ""}
             ${bankDetails?.branch ? `<p style="margin:2px 0"><strong>Branch Name:</strong> ${bankDetails.branch}</p>` : ""}
@@ -543,12 +534,12 @@ const NewInvoice = () => {
         <!-- Terms -->
         <div style="margin-top:16px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#666">
           <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
-          ${msmeNo ? `<p style="margin:2px 0">MSME/UDYAM NO: ${msmeNo}</p><p style="margin:2px 0">WE ARE REGISTERED UNDER MSME</p>` : ""}
+          ${msmeNo ? `<p style="margin:2px 0">MSME/UDYAM NO: ${msmeNo}</p><p style="margin:2px 0;font-weight:700">WE ARE REGISTERED UNDER MSME</p>` : ""}
         </div>
       </div></body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, dueDate, referenceNo, placeOfSupply, isIntraState,
     firm, firmName, firmFullAddress, bankDetails, msmeNo, showLogo, toName, toGstin, toAddress, toCity, toState, toPin,
-    totalTaxable, totalCgst, totalSgst, totalCess, totalTax, grandTotal]);
+    totalTaxable, totalCgst, totalSgst, totalTax, grandTotal]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -578,9 +569,42 @@ const NewInvoice = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT PANEL — Form */}
         <div className="w-[45%] overflow-y-auto border-r border-border p-4 space-y-4">
+          {/* Firm Selection Dropdown */}
+          <div>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">
+              Billing From (Select Firm)
+            </Label>
+            <Select value={selectedFirmId} onValueChange={setSelectedFirmId} disabled={isLocked}>
+              <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+              <SelectContent>
+                {firmsList.map(f => (
+                  <SelectItem key={f.id} value={f.id}>
+                    {f.display_name || f.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {firm && (
+              <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md mt-2">
+                <p className="font-medium text-foreground">{firmName}</p>
+                <p>{firmFullAddress}</p>
+                {firm.gstin && <p>GSTIN: {firm.gstin}</p>}
+                {firm.pan && <p>PAN: {firm.pan}</p>}
+                {bankDetails?.bank_name && <p>Bank: {bankDetails.bank_name} | A/C: {bankDetails.account_number || bankDetails.account_no}</p>}
+                {msmeNo && <p>MSME No: {msmeNo}</p>}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mt-2">
+              <Switch checked={showLogo} onCheckedChange={setShowLogo} disabled={isLocked} />
+              <Label className="text-xs">Show Logo</Label>
+            </div>
+          </div>
+
+          <Separator />
+
           {/* Client */}
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Client</Label>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Bill To (Client)</Label>
             <Select value={clientId} onValueChange={setClientId} disabled={isLocked}>
               <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
               <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.pan})</SelectItem>)}</SelectContent>
@@ -599,26 +623,6 @@ const NewInvoice = () => {
 
           <Separator />
 
-          {/* Firm details (read-only from Firm Management) */}
-          <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">
-              From (Auto-fetched from Firm Management)
-            </Label>
-            <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md">
-              <p className="font-medium text-foreground">{firmName}</p>
-              <p>{firmFullAddress}</p>
-              {firm?.gstin && <p>GSTIN: {firm.gstin}</p>}
-              {firm?.pan && <p>PAN: {firm.pan}</p>}
-              {bankDetails?.bank_name && <p>Bank: {bankDetails.bank_name} | A/C: {bankDetails.account_no}</p>}
-            </div>
-            <div className="flex items-center gap-2 mt-2">
-              <Switch checked={showLogo} onCheckedChange={setShowLogo} disabled={isLocked} />
-              <Label className="text-xs">Show Logo</Label>
-            </div>
-          </div>
-
-          <Separator />
-
           {/* Invoice Details */}
           <div>
             <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Invoice Details</Label>
@@ -626,6 +630,10 @@ const NewInvoice = () => {
               <div>
                 <Label className="text-xs">Invoice No</Label>
                 <Input value={invoiceNo} readOnly className="bg-muted" />
+              </div>
+              <div>
+                <Label className="text-xs">MSME/UDYAM No</Label>
+                <Input value={msmeNo} readOnly className="bg-muted text-xs" placeholder="Set in Firm Management" />
               </div>
               <div>
                 <Label className="text-xs">Reference No</Label>
@@ -652,7 +660,7 @@ const NewInvoice = () => {
 
           <Separator />
 
-          {/* Line Items */}
+          {/* Line Items (no Discount %, no Cess) */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <Label className="text-xs font-semibold text-muted-foreground uppercase">Line Items</Label>
@@ -681,7 +689,7 @@ const NewInvoice = () => {
                       disabled={isLocked}
                     />
                   )}
-                  <div className="grid grid-cols-6 gap-1">
+                  <div className="grid grid-cols-5 gap-1">
                     <div>
                       <Label className="text-[10px]">HSN/SAC</Label>
                       <Input value={item.hsn_sac_code} onChange={e => updateLine(idx, "hsn_sac_code", e.target.value)} className="text-xs h-8" disabled={isLocked} />
@@ -693,10 +701,6 @@ const NewInvoice = () => {
                     <div>
                       <Label className="text-[10px]">Rate</Label>
                       <Input type="number" value={item.rate || ""} onChange={e => updateLine(idx, "rate", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
-                    </div>
-                    <div>
-                      <Label className="text-[10px]">Disc %</Label>
-                      <Input type="number" value={item.discount_percent || ""} onChange={e => updateLine(idx, "discount_percent", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
                     </div>
                     <div>
                       <Label className="text-[10px]">{isIntraState ? "CGST %" : "IGST %"}</Label>

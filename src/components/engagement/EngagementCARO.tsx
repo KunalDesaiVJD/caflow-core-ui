@@ -1,44 +1,50 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, FileText } from "lucide-react";
-import { Json } from "@/integrations/supabase/types";
+import { Sparkles, Loader2, Save, Lock, Download, CheckCircle2 } from "lucide-react";
 
 const CARO_CLAUSES = [
-  { para: "3(i)", topic: "Property, Plant and Equipment" },
-  { para: "3(ii)", topic: "Physical Verification of Inventory" },
-  { para: "3(iii)", topic: "Loans Granted by the Company" },
-  { para: "3(iv)", topic: "Compliance with Section 185 & 186" },
-  { para: "3(v)", topic: "Deposits under Sections 73-76" },
-  { para: "3(vi)", topic: "Maintenance of Cost Records (Section 148)" },
-  { para: "3(vii)(a)", topic: "Regularity in Payment of Statutory Dues" },
-  { para: "3(vii)(b)", topic: "Disputed Statutory Dues" },
-  { para: "3(viii)", topic: "Undisclosed Transactions / Income" },
-  { para: "3(ix)", topic: "Default in Repayment of Loans" },
-  { para: "3(x)", topic: "Fraud / Accommodation Entries" },
-  { para: "3(xi)", topic: "Managerial Remuneration (Section 197)" },
-  { para: "3(xii)", topic: "Nidhi Company Compliance" },
-  { para: "3(xiii)", topic: "Related Party Transactions (Section 188 & 177)" },
-  { para: "3(xiv)", topic: "Internal Audit System" },
-  { para: "3(xv)", topic: "Non-Cash Transactions with Directors" },
-  { para: "3(xvi)", topic: "Registration under Section 45-IA of RBI Act" },
-  { para: "3(xvii)", topic: "Cash Losses" },
-  { para: "3(xviii)", topic: "Resignation of Statutory Auditor" },
-  { para: "3(xix)", topic: "Material Uncertainty — Going Concern" },
-  { para: "3(xx)", topic: "Transfer to Investor Education & Protection Fund" },
+  { number: 1, title: "Immovable Properties" },
+  { number: 2, title: "Inventory Physical Verification" },
+  { number: 3, title: "Investments/Guarantees/Security" },
+  { number: 4, title: "Loans, Advances, Guarantees Compliance (Sec 185/186)" },
+  { number: 5, title: "Deposits Compliance" },
+  { number: 6, title: "Cost Records" },
+  { number: 7, title: "Statutory Dues (TDS/ESI/PF/IT/GST)" },
+  { number: 8, title: "Unrecorded Income/Surrendered" },
+  { number: 9, title: "Default on Loans/Debentures" },
+  { number: 10, title: "IPO/FPO Fund Utilization" },
+  { number: 11, title: "Fraud Reported" },
+  { number: 12, title: "Nidhi Company Compliance" },
+  { number: 13, title: "Related Party Transactions" },
+  { number: 14, title: "Internal Audit" },
+  { number: 15, title: "Non-Cash Transactions with Directors" },
+  { number: 16, title: "RBI Registration if NBFC" },
+  { number: 17, title: "Cash Losses" },
+  { number: 18, title: "Resignation of Auditors" },
+  { number: 19, title: "Going Concern Doubt" },
+  { number: 20, title: "Qualifications in Group Audit" },
+  { number: 21, title: "CSR Compliance" },
 ];
 
-interface CaroAnswer {
-  para: string;
-  topic: string;
-  answer: string;
-  source: "auto" | "ai" | "manual" | "";
-  status: "filled" | "partial" | "manual_required" | "empty";
+interface CaroRow {
+  id?: string;
+  clause_number: number;
+  clause_title: string;
+  auto_draft: string;
+  user_response: string;
+  status: string;
+  is_applicable: boolean;
+  inapplicability_reason: string;
+  is_locked: boolean;
 }
 
 interface Props {
@@ -48,296 +54,272 @@ interface Props {
 }
 
 export function EngagementCARO({ engagement, client, onUpdate }: Props) {
-  const [clauses, setClauses] = useState<CaroAnswer[]>([]);
+  const { user } = useAuth();
+  const { track } = useAuditTracker(engagement?.id);
+  const [rows, setRows] = useState<CaroRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [autoFilling, setAutoFilling] = useState(false);
   const [saving, setSaving] = useState(false);
-  const prevClausesRef = useRef<CaroAnswer[]>([]);
-  const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
-    const saved = engagement.caro_responses as CaroAnswer[] | null;
-    if (saved && Array.isArray(saved) && saved.length > 0) {
-      // Merge saved with template to handle any new clauses
-      const merged = CARO_CLAUSES.map(c => {
-        const existing = (saved as any[]).find((s: any) => s.para === c.para);
-        return existing || { ...c, answer: "", source: "", status: "empty" };
-      });
-      setClauses(merged);
-    } else {
-      setClauses(CARO_CLAUSES.map(c => ({ ...c, answer: "", source: "" as const, status: "empty" as const })));
-    }
-  }, [engagement.caro_responses]);
+    loadRows();
+  }, [engagement?.id]);
 
-  const updateClause = (idx: number, answer: string) => {
-    setClauses(prev => prev.map((c, i) => i === idx ? {
-      ...c, answer, source: "manual" as const,
-      status: answer.trim() ? "filled" as const : "empty" as const
-    } : c));
-  };
+  async function loadRows() {
+    setLoading(true);
+    const { data } = await supabase
+      .from("audit_caro_responses")
+      .select("*")
+      .eq("engagement_id", engagement.id)
+      .order("clause_number");
+
+    if (data && data.length > 0) {
+      setRows(data.map((d: any) => ({
+        id: d.id,
+        clause_number: d.clause_number,
+        clause_title: d.clause_title,
+        auto_draft: d.auto_draft || "",
+        user_response: d.user_response || "",
+        status: d.status || "not_started",
+        is_applicable: d.is_applicable ?? true,
+        inapplicability_reason: d.inapplicability_reason || "",
+        is_locked: d.is_locked || false,
+      })));
+    } else {
+      // Seed all 21 clauses
+      const seeds = CARO_CLAUSES.map(c => ({
+        engagement_id: engagement.id,
+        clause_number: c.number,
+        clause_title: c.title,
+        status: "not_started",
+        is_applicable: true,
+        is_locked: false,
+      }));
+      await supabase.from("audit_caro_responses").insert(seeds as any);
+      await loadRows();
+      return;
+    }
+    setLoading(false);
+  }
+
+  function updateRow(idx: number, field: keyof CaroRow, value: any) {
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+  }
 
   const counts = {
-    filled: clauses.filter(c => c.status === "filled").length,
-    partial: clauses.filter(c => c.status === "partial").length,
-    manual: clauses.filter(c => c.status === "manual_required" || c.status === "empty").length,
+    approved: rows.filter(r => r.status === "approved" || r.status === "locked").length,
+    drafted: rows.filter(r => r.status === "drafted" || r.status === "reviewed").length,
+    pending: rows.filter(r => r.status === "not_started").length,
+    na: rows.filter(r => !r.is_applicable).length,
   };
 
   async function autoFillAll() {
     setAutoFilling(true);
     try {
-      // Fetch supporting data
-      const [findingsRes, tdsRes, rpRes, profileRes] = await Promise.all([
+      const [findingsRes, tdsRes] = await Promise.all([
         supabase.from("scrutiny_findings").select("*").eq("client_id", client?.id),
         supabase.from("tds_entries").select("*").eq("client_id", client?.id),
-        supabase.from("related_parties").select("*").eq("client_id", client?.id),
-        supabase.from("client_profiles").select("*").eq("client_id", client?.id).maybeSingle(),
       ]);
-
       const findings = findingsRes.data || [];
       const tdsEntries = tdsRes.data || [];
-      const relatedParties = rpRes.data || [];
-      const profile = profileRes.data;
-      const flags = client?.compliance_flags || {};
 
-      const updated = clauses.map(c => {
-        let answer = c.answer;
-        let source: CaroAnswer["source"] = "";
-        let status: CaroAnswer["status"] = "manual_required";
+      // Send to AI for drafting
+      const clausesForAI = rows.filter(r => r.is_applicable && !r.is_locked && r.status !== "approved").map(r => ({
+        clause_number: r.clause_number,
+        clause_title: r.clause_title,
+        current_response: r.user_response || r.auto_draft,
+      }));
 
-        switch (c.para) {
-          case "3(i)": {
-            const faFindings = findings.filter(f => f.rule_id?.startsWith("D0"));
-            if (faFindings.length === 0) {
-              answer = "The company has maintained proper records showing full particulars, including quantitative details and situation of Property, Plant and Equipment. The company has maintained proper records showing full particulars of intangible assets. The fixed assets have been physically verified by the management at reasonable intervals and no material discrepancies were noticed.";
-              source = "auto"; status = "filled";
-            } else {
-              answer = `Fixed asset scrutiny found ${faFindings.length} observation(s): ${faFindings.map(f => f.flag_message).join("; ")}. Further review required.`;
-              source = "auto"; status = "partial";
-            }
-            break;
-          }
-          case "3(ii)": {
-            if (flags.fixed_assets) {
-              answer = "Physical verification of inventories has been conducted at reasonable intervals by the management during the year. The discrepancies noticed on physical verification of inventories as compared to book records were not material.";
-              source = "auto"; status = "partial";
-            }
-            break;
-          }
-          case "3(iii)": {
-            const loanFindings = findings.filter(f => f.rule_id === "C08" || f.rule_id === "C09");
-            const rpLoans = relatedParties.filter(rp => rp.transaction_types?.includes("loan"));
-            answer = `Loan-related findings: ${loanFindings.length}. Related party loans: ${rpLoans.length}.`;
-            if (rpLoans.length > 0) answer += ` Parties: ${rpLoans.map(r => r.party_name).join(", ")}.`;
-            source = "auto"; status = loanFindings.length > 0 ? "partial" : "filled";
-            break;
-          }
-          case "3(vii)(a)": {
-            const pendingChallans = tdsEntries.filter(t => !t.challan_no);
-            const overdueTds = tdsEntries.filter(t => t.due_date && !t.filed_at && new Date(t.due_date) < new Date());
-            answer = `TDS challans pending: ${pendingChallans.length}. Overdue filings: ${overdueTds.length}.`;
-            if (pendingChallans.length === 0 && overdueTds.length === 0) {
-              answer = "According to the information and explanations given to us, the company has been regular in depositing undisputed statutory dues including provident fund, income-tax, sales-tax, service tax, goods and services tax, customs duty, excise duty, cess and any other material statutory dues with the appropriate authorities.";
-              status = "filled";
-            } else { status = "partial"; }
-            source = "auto";
-            break;
-          }
-          case "3(vii)(b)": {
-            const auditQs = profile?.audit_questions as any;
-            if (auditQs?.pending_litigation) {
-              answer = `Disputed dues as reported by management: ${auditQs.pending_litigation}`;
-              source = "auto"; status = "partial";
-            }
-            break;
-          }
-          case "3(x)": {
-            const fraudFindings = findings.filter(f =>
-              f.rule_id?.includes("NAR_AI") &&
-              (f.flag_message?.toLowerCase().includes("accommodation") || f.flag_message?.toLowerCase().includes("circular"))
-            );
-            if (fraudFindings.length === 0) {
-              answer = "Based on our audit procedures and according to the information and explanations given to us, no fraud by the company or on the company has been noticed or reported during the year.";
-              source = "auto"; status = "filled";
-            } else {
-              answer = `${fraudFindings.length} potential fraud/accommodation entries identified: ${fraudFindings.map(f => f.flag_message).join("; ")}`;
-              source = "auto"; status = "partial";
-            }
-            break;
-          }
-          case "3(xiv)": {
-            if (flags.internal_audit !== undefined) {
-              answer = flags.internal_audit
-                ? "The company has an internal audit system commensurate with the size and nature of its business."
-                : "The company does not have an internal audit system. This is required to be established as per the applicable provisions.";
-              source = "auto"; status = flags.internal_audit ? "filled" : "partial";
-            }
-            break;
-          }
-          case "3(xi)":
-          case "3(xix)": {
-            const dirRemuneration = relatedParties.filter(rp =>
-              rp.is_director && rp.transaction_types?.includes("remuneration")
-            );
-            if (c.para === "3(xi)" && dirRemuneration.length > 0) {
-              answer = `Director remuneration paid to: ${dirRemuneration.map(d => d.party_name).join(", ")}. Verify compliance with Section 197.`;
-              source = "auto"; status = "partial";
-            }
-            break;
-          }
-          default:
-            break;
-        }
-
-        // If we already had a filled answer from user, keep it
-        if (c.status === "filled" && c.source === "manual") return c;
-        return { ...c, answer, source, status };
+      const res = await supabase.functions.invoke("claude-gateway", {
+        body: {
+          request_type: "caro_answers",
+          user_message: JSON.stringify({
+            partial_clauses: clausesForAI.map(c => ({ para: `Clause ${c.clause_number}`, topic: c.clause_title, current_answer: c.current_response })),
+            entity_type: client?.entity_type,
+            client_name: client?.name,
+            financial_year: engagement.financial_year,
+            findings_count: findings.length,
+            tds_entries_count: tdsEntries.length,
+          }),
+        },
       });
 
-      setClauses(updated);
-
-      // Now send partial/manual_required clauses to AI
-      const needsAI = updated.filter(c => c.status === "partial" || c.status === "manual_required" || c.status === "empty");
-      if (needsAI.length > 0) {
-        toast.info(`Auto-fill complete. Sending ${needsAI.length} clauses to AI for completion...`);
+      if (res.data?.reply) {
         try {
-          const { data: { session } } = await supabase.auth.getSession();
-          const res = await supabase.functions.invoke("claude-gateway", {
-            body: {
-              request_type: "caro_answers",
-              user_message: JSON.stringify({
-                partial_clauses: needsAI.map(c => ({ para: c.para, topic: c.topic, current_answer: c.answer })),
-                entity_type: client?.entity_type,
-                client_name: client?.name,
-                financial_year: engagement.financial_year,
-              }),
-            },
-          });
-
-          if (res.data?.reply) {
-            try {
-              const aiAnswers = JSON.parse(res.data.reply);
-              if (Array.isArray(aiAnswers)) {
-                setClauses(prev => prev.map(c => {
-                  const aiMatch = aiAnswers.find((a: any) => a.para === c.para);
-                  if (aiMatch && (c.status !== "filled" || c.source !== "manual")) {
-                    return { ...c, answer: aiMatch.answer || c.answer, source: "ai" as const, status: "filled" as const };
-                  }
-                  return c;
-                }));
+          const aiAnswers = JSON.parse(res.data.reply);
+          if (Array.isArray(aiAnswers)) {
+            setRows(prev => prev.map(r => {
+              const match = aiAnswers.find((a: any) => {
+                const num = parseInt(String(a.para || a.clause_number || "").replace(/\D/g, ""));
+                return num === r.clause_number;
+              });
+              if (match && !r.is_locked && r.status !== "approved") {
+                return { ...r, auto_draft: match.answer || match.response || r.auto_draft, status: "drafted" };
               }
-            } catch {
-              // AI returned non-JSON, apply as general text
-              toast.info("AI provided general guidance. Please review individual clauses.");
-            }
+              return r;
+            }));
           }
-        } catch (e) {
-          toast.error("AI assist failed. Please fill remaining clauses manually.");
+        } catch {
+          toast.info("AI returned guidance. Review individual clauses.");
         }
       }
-
       toast.success("Auto-fill complete!");
-    } catch (e) {
-      toast.error("Auto-fill failed");
-    } finally {
-      setAutoFilling(false);
+    } catch {
+      toast.error("Auto-fill failed. Fill clauses manually.");
     }
+    setAutoFilling(false);
   }
 
-  async function save() {
+  async function saveAll() {
     setSaving(true);
-    // Track human edits on AI/auto-filled clauses
-    clauses.forEach((c, i) => {
-      const prev = prevClausesRef.current[i];
-      if (prev && (prev.source === "ai" || prev.source === "auto") && c.source === "manual" && prev.answer !== c.answer) {
-        track("caro_clause_edit", {
-          clause_no: c.para,
-          ai_text: prev.answer,
-          human_text: c.answer,
-          char_diff: c.answer.length - prev.answer.length,
-        }, { aiSuggestion: prev.answer, humanOverride: true });
+    try {
+      for (const r of rows) {
+        const payload: any = {
+          auto_draft: r.auto_draft,
+          user_response: r.user_response,
+          status: r.status,
+          is_applicable: r.is_applicable,
+          inapplicability_reason: r.inapplicability_reason,
+          is_locked: r.is_locked,
+          last_updated_by: user?.id,
+          last_updated_at: new Date().toISOString(),
+        };
+        if (r.id) {
+          await supabase.from("audit_caro_responses").update(payload).eq("id", r.id);
+        }
       }
-    });
-    prevClausesRef.current = [...clauses];
-
-    const { error } = await supabase
-      .from("audit_engagements")
-      .update({ caro_responses: clauses as unknown as Json })
-      .eq("id", engagement.id);
-
-    if (error) toast.error("Save failed");
-    else { toast.success("CARO responses saved"); onUpdate(); }
+      toast.success("CARO responses saved");
+      onUpdate();
+    } catch {
+      toast.error("Save failed");
+    }
     setSaving(false);
   }
 
-  const sourceBadge = (source: string) => {
-    if (source === "auto") return <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-300">Auto</Badge>;
-    if (source === "ai") return <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-700 border-purple-300">AI</Badge>;
-    if (source === "manual") return <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">Manual</Badge>;
-    return <span className="text-xs text-muted-foreground">—</span>;
-  };
+  function approveClause(idx: number) {
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, status: "approved", is_locked: true } : r));
+    track("caro_clause_approve", { clause_number: rows[idx].clause_number });
+  }
+
+  function approveAll() {
+    setRows(prev => prev.map(r => r.is_applicable && r.user_response.trim() ? { ...r, status: "approved", is_locked: true } : r));
+    track("caro_approve_all", {});
+  }
 
   const statusBadge = (status: string) => {
-    if (status === "filled") return <Badge className="bg-green-500/15 text-green-700 border-green-300 text-[10px]">Filled</Badge>;
-    if (status === "partial") return <Badge className="bg-amber-500/15 text-amber-700 border-amber-300 text-[10px]">Partial</Badge>;
-    return <Badge variant="outline" className="text-[10px] text-muted-foreground">Required</Badge>;
+    const map: Record<string, string> = {
+      not_started: "bg-muted text-muted-foreground",
+      drafted: "bg-blue-500/15 text-blue-700",
+      reviewed: "bg-amber-500/15 text-amber-700",
+      approved: "bg-green-500/15 text-green-700",
+      locked: "bg-green-500/15 text-green-700",
+    };
+    return <Badge className={`text-[10px] ${map[status] || ""}`}>{status.replace("_", " ")}</Badge>;
   };
+
+  if (loading) return <div className="py-8 text-center text-muted-foreground">Loading CARO clauses...</div>;
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-foreground">Companies Auditor's Report Order 2020 (CARO 2020)</h2>
+          <h2 className="text-lg font-semibold text-foreground">CARO 2020 — 21 Clauses</h2>
           <div className="flex gap-2 mt-1">
-            <Badge className="bg-green-500/15 text-green-700 text-xs">{counts.filled} Filled</Badge>
-            <Badge className="bg-amber-500/15 text-amber-700 text-xs">{counts.partial} Partial</Badge>
-            <Badge variant="outline" className="text-xs text-muted-foreground">{counts.manual} Required</Badge>
+            <Badge className="bg-green-500/15 text-green-700 text-xs">{counts.approved} Approved</Badge>
+            <Badge className="bg-blue-500/15 text-blue-700 text-xs">{counts.drafted} Drafted</Badge>
+            <Badge variant="outline" className="text-xs">{counts.pending} Pending</Badge>
+            {counts.na > 0 && <Badge variant="secondary" className="text-xs">{counts.na} N/A</Badge>}
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={autoFillAll} disabled={autoFilling} className="bg-sidebar-gold hover:bg-sidebar-gold/90 text-sidebar-gold-foreground">
-            {autoFilling ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Sparkles className="w-4 h-4 mr-1" />}
-            Auto-Fill All CARO Clauses
+        <div className="flex gap-2 flex-wrap">
+          <Button onClick={autoFillAll} disabled={autoFilling} variant="outline" className="gap-1">
+            {autoFilling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            Auto-Fill All
           </Button>
-          <Button onClick={save} disabled={saving} variant="default">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Save className="w-4 h-4 mr-1" />}
+          <Button onClick={approveAll} variant="outline" className="gap-1">
+            <CheckCircle2 className="w-4 h-4" /> Approve All
+          </Button>
+          <Button onClick={saveAll} disabled={saving} className="gap-1">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Save CARO
           </Button>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="border rounded-lg overflow-auto max-h-[65vh]">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[80px]">Para</TableHead>
-              <TableHead className="w-[200px]">Topic</TableHead>
-              <TableHead>Current Answer</TableHead>
-              <TableHead className="w-[70px]">Source</TableHead>
-              <TableHead className="w-[80px]">Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {clauses.map((c, i) => (
-              <TableRow key={c.para}>
-                <TableCell className="text-xs font-mono font-medium">{c.para}</TableCell>
-                <TableCell className="text-xs">{c.topic}</TableCell>
-                <TableCell>
+      <Accordion type="multiple" className="space-y-2">
+        {rows.map((row, idx) => (
+          <AccordionItem key={row.clause_number} value={`clause-${row.clause_number}`} className="border rounded-lg">
+            <AccordionTrigger className="px-4 py-3 hover:no-underline">
+              <div className="flex items-center gap-3 w-full">
+                <span className="text-sm font-mono font-bold text-primary min-w-[30px]">{row.clause_number}</span>
+                <span className="text-sm font-medium flex-1 text-left">{row.clause_title}</span>
+                {!row.is_applicable && <Badge variant="secondary" className="text-[10px]">N/A</Badge>}
+                {statusBadge(row.status)}
+                {row.is_locked && <Lock className="w-3.5 h-3.5 text-muted-foreground" />}
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="px-4 pb-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={row.is_applicable}
+                  onCheckedChange={v => updateRow(idx, "is_applicable", v)}
+                  disabled={row.is_locked}
+                />
+                <Label className="text-xs">Applicable</Label>
+              </div>
+
+              {!row.is_applicable && (
+                <Textarea
+                  value={row.inapplicability_reason}
+                  onChange={e => updateRow(idx, "inapplicability_reason", e.target.value)}
+                  placeholder="Reason for inapplicability..."
+                  className="text-xs h-16"
+                  disabled={row.is_locked}
+                />
+              )}
+
+              {row.is_applicable && (
+                <>
+                  {row.auto_draft && (
+                    <div className="bg-blue-50 dark:bg-blue-950/20 rounded-md p-3 text-xs">
+                      <p className="font-semibold text-blue-700 mb-1">AI Draft:</p>
+                      <p className="whitespace-pre-wrap text-muted-foreground">{row.auto_draft}</p>
+                      {!row.is_locked && !row.user_response && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 text-xs h-7"
+                          onClick={() => updateRow(idx, "user_response", row.auto_draft)}
+                        >
+                          Use AI Draft
+                        </Button>
+                      )}
+                    </div>
+                  )}
                   <Textarea
-                    value={c.answer}
-                    onChange={e => updateClause(i, e.target.value)}
-                    rows={4}
-                    className="text-xs min-h-[80px]"
-                    placeholder="Enter CARO response..."
+                    value={row.user_response}
+                    onChange={e => updateRow(idx, "user_response", e.target.value)}
+                    placeholder="Enter your CARO response..."
+                    className="text-xs min-h-[100px]"
+                    disabled={row.is_locked}
                   />
-                </TableCell>
-                <TableCell>{sourceBadge(c.source)}</TableCell>
-                <TableCell>{statusBadge(c.status)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+                  {!row.is_locked && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1 text-xs"
+                      onClick={() => approveClause(idx)}
+                      disabled={!row.user_response.trim()}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Lock
+                    </Button>
+                  )}
+                </>
+              )}
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
     </div>
   );
 }
