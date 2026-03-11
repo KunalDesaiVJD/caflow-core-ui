@@ -166,6 +166,8 @@ const App = () => (
               <Route path="/billing/timesheets" element={<Timesheets />} />
               <Route path="/erp-ledger" element={<ErpLedger />} />
               <Route path="/erp/:clientId/bank-recon" element={<BankRecon />} />
+              <Route path="/settings/firm" element={<FirmSettings />} />
+              <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/notices" element={<NoticeTracker />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/documents" element={<Documents />} />
