@@ -23,6 +23,7 @@ import {
   Eye, BarChart3, BookMarked, Shield, Award
 } from "lucide-react";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
+import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 
 // ─── Constants ───
 const STAGES = [
