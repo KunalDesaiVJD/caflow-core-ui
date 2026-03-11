@@ -22,6 +22,7 @@ import {
   Building2, FileText, Calculator, ClipboardCheck, Layers,
   Eye, BarChart3, BookMarked, Shield, Award
 } from "lucide-react";
+import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 
 // ─── Constants ───
 const STAGES = [
@@ -359,8 +360,9 @@ export default function AuditPipeline() {
               <button
                 key={s.num}
                 onClick={() => {
-                  if (status === "complete" || status === "in_progress") {
-                    // For now only stage 1 is built
+                  if ((status === "complete" || status === "in_progress") && selectedEngId) {
+                    // Navigate to that stage by updating pipeline_stage
+                    supabase.from("audit_engagements").update({ pipeline_stage: s.num } as any).eq("id", selectedEngId).then(() => refetchEng());
                   }
                 }}
                 className={cn(
@@ -701,13 +703,21 @@ export default function AuditPipeline() {
               </Button>
             </div>
           </div>
+        ) : currentStage === 2 ? (
+          /* STAGE 2 */
+          <PipelineStage2
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : (
           /* Other stages placeholder */
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
             <CheckCircle2 size={48} className="text-primary opacity-40" />
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">Stage {currentStage} — {STAGES[currentStage - 1]?.label}</h2>
-              <p className="text-sm">This stage will be built in the next iteration. Stage 1 is complete.</p>
+              <p className="text-sm">This stage will be built in the next iteration.</p>
               <p className="text-xs mt-2">Navigate using the left stepper to review completed stages.</p>
             </div>
           </div>
