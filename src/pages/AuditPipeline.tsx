@@ -23,6 +23,7 @@ import {
   Eye, BarChart3, BookMarked, Shield, Award
 } from "lucide-react";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
+import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 
 // ─── Constants ───
 const STAGES = [
@@ -706,6 +707,14 @@ export default function AuditPipeline() {
         ) : currentStage === 2 ? (
           /* STAGE 2 */
           <PipelineStage2
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
+        ) : currentStage === 3 ? (
+          /* STAGE 3 */
+          <PipelineStage3
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
