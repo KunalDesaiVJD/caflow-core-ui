@@ -1,19 +1,17 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Drawer, DrawerContent, DrawerHeader, DrawerTitle,
-} from "@/components/ui/drawer";
-import { Card, CardContent } from "@/components/ui/card";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -23,25 +21,55 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import {
-  FileText, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, Pencil, Trash2,
-  TableIcon, LayoutGrid, Columns3, BarChart3, Filter, X, ChevronRight, ShieldAlert,
+  FileText, Plus, Download, Search, Filter, X, Eye,
+  AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight,
+  CalendarDays, Sparkles, Copy, Send, Mail,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
+
+// ─── Constants ───
+const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
+const FILING_STATUSES = ["Not Started", "Data Collection", "In Progress", "Ready for Review", "Pending Approval", "Filed", "Verified"];
+const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
+const DEFAULT_AY = "2025-26";
+
+const STATUS_COLORS: Record<string, string> = {
+  "Not Started": "bg-muted text-muted-foreground",
+  "Data Collection": "bg-blue-500/15 text-blue-600",
+  "In Progress": "bg-amber-500/15 text-amber-600",
+  "Ready for Review": "bg-purple-500/15 text-purple-600",
+  "Pending Approval": "bg-orange-500/15 text-orange-600",
+  "Filed": "bg-teal-500/15 text-teal-600",
+  "Verified": "bg-emerald-500/15 text-emerald-600",
+};
+
+// ─── Notice Tracker Constants ───
+const NOTICE_TYPES = [
+  { value: "143_1", label: "143(1)" },
+  { value: "148", label: "148" },
+  { value: "139_9", label: "139(9)" },
+  { value: "245", label: "245" },
+  { value: "156", label: "156" },
+  { value: "36B", label: "36B" },
+  { value: "scrutiny", label: "Scrutiny Assessment" },
+];
+
+const NOTICE_STATUSES = [
+  "Notice Received", "Under Review", "Reply Drafted", "Reply Filed",
+  "Hearing Scheduled", "Order Received", "Closed/Appeal Filed",
+] as const;
 
 // ─── Types ───
-interface WorkGroup {
-  id: string;
-  firm_id: string;
-  code: string;
-  name: string;
-  description: string | null;
-  color: string | null;
-}
-
 interface ItrProfile {
   id: string;
   client_id: string | null;
@@ -49,846 +77,946 @@ interface ItrProfile {
   financial_year: string | null;
   itr_form: string | null;
   filing_status: string | null;
-  ais_recon_data: any;
   itr_work_group_id: string | null;
   assigned_to: string | null;
   date_data_received: string | null;
   date_filed: string | null;
   acknowledgment_no: string | null;
   assessment_year: string | null;
+  // enriched
   client_name?: string;
+  client_pan?: string;
   entity_type?: string;
-  group_code?: string;
-  group_color?: string;
   group_name?: string;
   assigned_name?: string;
+  remarks?: string;
 }
 
-interface Client { id: string; name: string | null; entity_type: string | null; }
 interface StaffUser { id: string; name: string | null; role: string | null; }
 
-const STATUS_COLORS: Record<string, string> = {
-  "Not Started": "bg-muted text-muted-foreground",
-  "In Progress": "bg-amber-500/15 text-amber-600",
-  "Ready to File": "bg-purple-500/15 text-purple-600",
-  Filed: "bg-emerald-500/15 text-emerald-600",
-  Revised: "bg-blue-500/15 text-blue-600",
-  Defective: "bg-destructive/15 text-destructive",
-};
-
-const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
-const FILING_STATUSES = ["Not Started", "In Progress", "Ready to File", "Filed", "Revised"];
-const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
-const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
-
-type ViewMode = "table" | "card" | "kanban" | "summary";
-
-function suggestItrForm(entityType: string | null): string {
-  if (!entityType) return "ITR-3";
-  const t = entityType.toLowerCase();
-  if (t.includes("private") || t.includes("public") || t.includes("company") || t.includes("ltd")) return "ITR-6";
-  if (t.includes("llp") || t.includes("partnership")) return "ITR-5";
-  if (t === "firm" || t.includes("partner")) return "ITR-5";
-  if (t.includes("huf")) return "ITR-2";
-  if (t.includes("trust") || t.includes("aop") || t.includes("boi")) return "ITR-5";
-  if (t.includes("individual") || t.includes("proprietor")) return "ITR-3";
-  return "ITR-3";
+function formatDateDDMMYYYY(dateStr: string | null): string {
+  if (!dateStr) return "";
+  try {
+    return format(new Date(dateStr), "dd/MM/yyyy");
+  } catch { return dateStr; }
 }
 
+// ─── Main Component ───
 const ItReturns = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const isSuperadmin = user?.role === "superadmin";
-
-  const [profiles, setProfiles] = useState<ItrProfile[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([]);
-  const [workGroups, setWorkGroups] = useState<WorkGroup[]>([]);
-  const [demands, setDemands] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  // Scrutiny alerts
-  const [scrutinyAlerts, setScrutinyAlerts] = useState<Record<string, number>>({});
-  const [scrutinyDrawerOpen, setScrutinyDrawerOpen] = useState(false);
-  const [scrutinyFindings, setScrutinyFindings] = useState<any[]>([]);
-  const [scrutinyDrawerClient, setScrutinyDrawerClient] = useState<string>("");
-
-  // View & filters
-  const [viewMode, setViewMode] = useState<ViewMode>("table");
-  const [activeGroup, setActiveGroup] = useState<string>("all");
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterStaff, setFilterStaff] = useState<string[]>([]);
-  const [filterStatus, setFilterStatus] = useState("");
-  const [filterForm, setFilterForm] = useState("");
-  const [filterAY, setFilterAY] = useState("");
-  const [search, setSearch] = useState("");
-
-  // Form state
-  const [formClientId, setFormClientId] = useState("");
-  const [formFY, setFormFY] = useState("2024-25");
-  const [formAY, setFormAY] = useState("2025-26");
-  const [formItrForm, setFormItrForm] = useState("ITR-3");
-  const [formStatus, setFormStatus] = useState("Not Started");
-  const [formGroupId, setFormGroupId] = useState("");
-  const [formAssignedTo, setFormAssignedTo] = useState("");
-  const [formDateReceived, setFormDateReceived] = useState("");
-  const [formDateFiled, setFormDateFiled] = useState("");
-  const [formAckNo, setFormAckNo] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [deleteProfile, setDeleteProfile] = useState<ItrProfile | null>(null);
-
   const firmId = user?.firm_id;
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [pRes, cRes, dRes, wgRes, uRes] = await Promise.all([
-        (() => { let q = supabase.from("itr_profiles").select("*"); if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId); return q; })(),
-        (() => { let q = supabase.from("clients").select("id, name, entity_type"); if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId); return q; })(),
-        supabase.from("itr_demands").select("*"),
-        (() => { let q = supabase.from("itr_work_groups" as any).select("*"); if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId); return q; })(),
-        (() => { let q = supabase.from("users").select("id, name, role"); if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId); return q; })(),
-      ]);
+  const [activeTab, setActiveTab] = useState("filing");
+  const [selectedAY, setSelectedAY] = useState(DEFAULT_AY);
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterForm, setFilterForm] = useState("");
+  const [filterStaff, setFilterStaff] = useState("");
 
-      const clientMap = new Map<string, Client>();
-      (cRes.data || []).forEach((c: any) => clientMap.set(c.id, c));
+  // ─── Fetch ITR-activated clients ───
+  const { data: itrClientIds = [] } = useQuery({
+    queryKey: ["itr_client_ids", firmId],
+    queryFn: async () => {
+      // Get service_category where linked_module = 'itr'
+      const { data: cats } = await supabase
+        .from("service_categories")
+        .select("id")
+        .eq("linked_module", "itr");
+      if (!cats?.length) return [];
+      const catIds = cats.map(c => c.id);
+      // Get active client_services for those categories
+      const { data: cs } = await supabase
+        .from("client_services")
+        .select("client_id")
+        .in("service_category_id", catIds)
+        .eq("is_active", true);
+      return [...new Set((cs || []).map(c => c.client_id))];
+    },
+  });
 
-      const wgMap = new Map<string, WorkGroup>();
-      (wgRes.data || []).forEach((g: any) => wgMap.set(g.id, g));
+  // ─── Fetch staff ───
+  const { data: staffUsers = [] } = useQuery({
+    queryKey: ["staff_users", firmId],
+    queryFn: async () => {
+      let q = supabase.from("users").select("id, name, role");
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      return (data || []) as StaffUser[];
+    },
+  });
 
-      const userMap = new Map<string, string>();
-      (uRes.data || []).forEach((u: any) => userMap.set(u.id, u.name || u.id));
+  // ─── Fetch work groups ───
+  const { data: workGroups = [] } = useQuery({
+    queryKey: ["itr_work_groups", firmId],
+    queryFn: async () => {
+      let q = supabase.from("itr_work_groups").select("*");
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      return (data || []) as any[];
+    },
+  });
 
-      const enriched = (pRes.data || []).map((p: any) => {
+  // ─── Fetch profiles with enrichment ───
+  const { data: profiles = [], isLoading } = useQuery({
+    queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds],
+    queryFn: async () => {
+      if (itrClientIds.length === 0) return [];
+      let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      q = q.in("client_id", itrClientIds);
+      const { data: pData } = await q;
+
+      // Fetch client details
+      const { data: cData } = await supabase
+        .from("clients")
+        .select("id, name, pan, entity_type")
+        .in("id", itrClientIds);
+      const clientMap = new Map((cData || []).map(c => [c.id, c]));
+
+      // Fetch users for assigned_to
+      const { data: uData } = await supabase.from("users").select("id, name");
+      const userMap = new Map((uData || []).map(u => [u.id, u.name]));
+
+      // Work group map
+      const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
+
+      // For clients that have ITR service active but no profile for this AY, create placeholder
+      const existingClientIds = new Set((pData || []).map(p => p.client_id));
+      const enriched: ItrProfile[] = [];
+
+      // Existing profiles
+      for (const p of (pData || [])) {
+        const cl = clientMap.get(p.client_id || "");
         const wg = wgMap.get(p.itr_work_group_id || "");
-        return {
+        enriched.push({
           ...p,
-          client_name: clientMap.get(p.client_id || "")?.name || "Unknown",
-          entity_type: clientMap.get(p.client_id || "")?.entity_type || "",
-          group_code: wg?.code || null,
-          group_color: wg?.color || null,
-          group_name: wg?.name || null,
-          assigned_name: userMap.get(p.assigned_to || "") || null,
-        };
-      });
-
-      setProfiles(enriched);
-      setClients(cRes.data || []);
-      setDemands(dRes.data || []);
-      setWorkGroups((wgRes.data || []) as any);
-      setStaffUsers((uRes.data || []) as any);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [firmId, isSuperadmin]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  // Fetch scrutiny alert counts (HIGH severity) per client
-  useEffect(() => {
-    const clientIds = [...new Set(profiles.map((p) => p.client_id).filter(Boolean))] as string[];
-    if (clientIds.length === 0) return;
-    supabase
-      .from("scrutiny_findings")
-      .select("client_id, id")
-      .in("client_id", clientIds)
-      .eq("status", "open")
-      .eq("severity", "HIGH")
-      .then(({ data }) => {
-        const counts: Record<string, number> = {};
-        (data || []).forEach((f: any) => {
-          counts[f.client_id] = (counts[f.client_id] || 0) + 1;
+          client_name: cl?.name || "Unknown",
+          client_pan: cl?.pan || "",
+          entity_type: cl?.entity_type || "",
+          group_name: (wg as any)?.name || "",
+          assigned_name: userMap.get(p.assigned_to || "") || "",
         });
-        setScrutinyAlerts(counts);
-      });
-  }, [profiles]);
+      }
 
-  const openScrutinyDrawer = async (clientId: string, clientName: string) => {
-    setScrutinyDrawerClient(clientName);
-    setScrutinyDrawerOpen(true);
-    const { data } = await supabase
-      .from("scrutiny_findings")
-      .select("*")
-      .eq("client_id", clientId)
-      .eq("status", "open")
-      .eq("severity", "HIGH")
-      .order("rule_id");
-    const relevant = (data || []).filter((f: any) => {
-      const ruleId = (f.rule_id || "").toUpperCase();
-      return ruleId.startsWith("T") || ruleId.startsWith("C");
-    });
-    setScrutinyFindings(relevant);
-  };
+      // Missing clients → auto-create profiles
+      for (const cid of itrClientIds) {
+        if (!existingClientIds.has(cid)) {
+          const cl = clientMap.get(cid);
+          if (!cl) continue;
+          enriched.push({
+            id: `new_${cid}`,
+            client_id: cid,
+            firm_id: firmId || null,
+            financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
+            itr_form: null,
+            filing_status: "Not Started",
+            itr_work_group_id: null,
+            assigned_to: null,
+            date_data_received: null,
+            date_filed: null,
+            acknowledgment_no: null,
+            assessment_year: selectedAY,
+            client_name: cl.name || "Unknown",
+            client_pan: cl.pan || "",
+            entity_type: cl.entity_type || "",
+            group_name: "",
+            assigned_name: "",
+          });
+        }
+      }
 
-  // Filtering
+      return enriched;
+    },
+    enabled: itrClientIds.length > 0,
+  });
+
+  // ─── Filtered profiles ───
   const filtered = useMemo(() => {
-    return profiles.filter((p) => {
-      if (activeGroup !== "all" && p.group_code !== activeGroup) return false;
-      if (search && !(p.client_name || "").toLowerCase().includes(search.toLowerCase())) return false;
+    return profiles.filter(p => {
+      if (search && !(p.client_name || "").toLowerCase().includes(search.toLowerCase()) && !(p.client_pan || "").toLowerCase().includes(search.toLowerCase())) return false;
       if (filterStatus && (p.filing_status || "Not Started") !== filterStatus) return false;
       if (filterForm && p.itr_form !== filterForm) return false;
-      if (filterAY && p.assessment_year !== filterAY) return false;
-      if (filterStaff.length > 0 && !filterStaff.includes(p.assigned_to || "")) return false;
+      if (filterStaff && p.assigned_to !== filterStaff) return false;
       return true;
     });
-  }, [profiles, activeGroup, search, filterStatus, filterForm, filterAY, filterStaff]);
+  }, [profiles, search, filterStatus, filterForm, filterStaff]);
 
-  // Stats
-  const total = profiles.length;
-  const filed = profiles.filter((p) => p.filing_status === "Filed" || p.filing_status === "Revised").length;
-  const inProgress = profiles.filter((p) => p.filing_status === "In Progress").length;
-  const notStarted = profiles.filter((p) => p.filing_status === "Not Started" || !p.filing_status).length;
-  const demandTotal = demands.reduce((s, d) => s + (d.demand_amount || 0), 0);
-  const demandPending = demands.filter((d) => d.status !== "resolved").length;
-
-  // Group counts
-  const groupCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: profiles.length };
-    workGroups.forEach((g) => { counts[g.code] = 0; });
-    profiles.forEach((p) => { if (p.group_code) counts[p.group_code] = (counts[p.group_code] || 0) + 1; });
+  // ─── Status counts ───
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    FILING_STATUSES.forEach(s => { counts[s] = 0; });
+    profiles.forEach(p => { const s = p.filing_status || "Not Started"; counts[s] = (counts[s] || 0) + 1; });
     return counts;
-  }, [profiles, workGroups]);
+  }, [profiles]);
 
-  const handleClientChange = (clientId: string) => {
-    setFormClientId(clientId);
-    const client = clients.find((c) => c.id === clientId);
-    setFormItrForm(suggestItrForm(client?.entity_type || null));
-  };
-
-  const clearFilters = () => {
-    setFilterStaff([]);
-    setFilterStatus("");
-    setFilterForm("");
-    setFilterAY("");
-    setSearch("");
-  };
-
-  const hasActiveFilters = filterStaff.length > 0 || filterStatus || filterForm || filterAY || search;
-
-  const openNew = () => {
-    setEditingId(null);
-    setFormClientId("");
-    setFormFY("2024-25");
-    setFormAY("2025-26");
-    setFormItrForm("ITR-3");
-    setFormStatus("Not Started");
-    setFormGroupId("");
-    setFormAssignedTo("");
-    setFormDateReceived("");
-    setFormDateFiled("");
-    setFormAckNo("");
-    setSheetOpen(true);
-  };
-
-  const handleEdit = (p: ItrProfile) => {
-    setEditingId(p.id);
-    setFormClientId(p.client_id || "");
-    setFormFY(p.financial_year || "2024-25");
-    setFormAY(p.assessment_year || "2025-26");
-    setFormItrForm(p.itr_form || "ITR-3");
-    setFormStatus(p.filing_status || "Not Started");
-    setFormGroupId(p.itr_work_group_id || "");
-    setFormAssignedTo(p.assigned_to || "");
-    setFormDateReceived(p.date_data_received || "");
-    setFormDateFiled(p.date_filed || "");
-    setFormAckNo(p.acknowledgment_no || "");
-    setSheetOpen(true);
-  };
-
-  const handleSave = async () => {
-    if (!formClientId) { toast({ title: "Select a client", variant: "destructive" }); return; }
-    setSaving(true);
+  // ─── Inline update handler ───
+  const handleInlineUpdate = async (profile: ItrProfile, field: string, value: any) => {
+    const isNew = profile.id.startsWith("new_");
     try {
-      const payload: any = {
-        client_id: formClientId,
-        financial_year: formFY,
-        assessment_year: formAY,
-        itr_form: formItrForm,
-        filing_status: formStatus,
-        itr_work_group_id: formGroupId || null,
-        assigned_to: formAssignedTo || null,
-        date_data_received: formDateReceived || null,
-        date_filed: formDateFiled || null,
-        acknowledgment_no: formAckNo || null,
-      };
-      if (editingId) {
-        const { error } = await supabase.from("itr_profiles").update(payload).eq("id", editingId);
-        if (error) throw error;
-        toast({ title: "ITR profile updated" });
-      } else {
-        payload.firm_id = firmId || null;
+      if (isNew) {
+        // Create the profile first
+        const payload: any = {
+          client_id: profile.client_id,
+          firm_id: firmId,
+          assessment_year: selectedAY,
+          financial_year: profile.financial_year,
+          filing_status: "Not Started",
+          [field]: value || null,
+        };
         const { error } = await supabase.from("itr_profiles").insert(payload);
         if (error) throw error;
-        toast({ title: "ITR profile created" });
+      } else {
+        const { error } = await supabase.from("itr_profiles").update({ [field]: value || null } as any).eq("id", profile.id);
+        if (error) throw error;
       }
-      setSheetOpen(false);
-      setEditingId(null);
-      fetchData();
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleteProfile) return;
-    try {
-      const { error } = await supabase.from("itr_profiles").delete().eq("id", deleteProfile.id);
-      if (error) throw error;
-      toast({ title: "ITR profile deleted" });
-      setDeleteProfile(null);
-      fetchData();
+      queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
   };
 
-  const handleStatusChange = async (profileId: string, newStatus: string) => {
-    try {
-      const { error } = await supabase.from("itr_profiles").update({ filing_status: newStatus } as any).eq("id", profileId);
-      if (error) throw error;
-      toast({ title: `Status updated to ${newStatus}` });
-      fetchData();
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    }
+  // ─── Export ───
+  const handleExport = () => {
+    import("xlsx").then(XLSX => {
+      const rows = filtered.map(p => ({
+        "Client Name": p.client_name,
+        "PAN": p.client_pan,
+        "Constitution": p.entity_type,
+        "Work Group": p.group_name,
+        "ITR Form": p.itr_form || "",
+        "Status": p.filing_status || "Not Started",
+        "Due Date": "",
+        "Filed Date": formatDateDDMMYYYY(p.date_filed),
+        "Ack No": p.acknowledgment_no || "",
+        "Assigned To": p.assigned_name || "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "ITR Filings");
+      XLSX.writeFile(wb, `ITR_Filings_${selectedAY}_${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+    });
   };
-
-  const stats = [
-    { label: "Total Profiles", value: total, icon: FileText, color: "text-foreground" },
-    { label: "Filed", value: filed, icon: CheckCircle2, color: "text-emerald-600" },
-    { label: "In Progress", value: inProgress, icon: Clock, color: "text-amber-600" },
-    { label: "Not Started", value: notStarted, icon: XCircle, color: "text-muted-foreground" },
-    { label: "Demand Pending", value: demandPending, icon: AlertTriangle, color: "text-destructive", sub: `₹${demandTotal.toLocaleString("en-IN")}` },
-  ];
-
-  const GROUP_TABS = [
-    { code: "all", label: "All" },
-    ...workGroups.map((g) => ({ code: g.code, label: `${g.code} - ${g.name}` })),
-  ];
 
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">IT Returns</h1>
-          <p className="text-muted-foreground text-sm">Income tax return filing and tracking</p>
+          <p className="text-muted-foreground text-sm">Income tax return filing, tracking & compliance</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate("/itr/demands")}>
-            <AlertTriangle size={16} className="mr-2" /> Demands
-          </Button>
-          <Button onClick={openNew}>
-            <Plus size={16} className="mr-2" /> Add ITR Profile
-          </Button>
-        </div>
-      </div>
-
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        {stats.map((s) => (
-          <Card key={s.label} className={s.label === "Demand Pending" ? "border-destructive/30" : ""}>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <s.icon size={16} className={s.color} />
-                <span className="text-xs text-muted-foreground">{s.label}</span>
-              </div>
-              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-              {s.sub && <p className="text-xs text-destructive mt-1">{s.sub}</p>}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Group tabs + view toggle + filter */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-1 overflow-x-auto">
-          {GROUP_TABS.map((tab) => (
-            <Button
-              key={tab.code}
-              variant={activeGroup === tab.code ? "default" : "outline"}
-              size="sm"
-              onClick={() => setActiveGroup(tab.code)}
-              className="whitespace-nowrap"
-            >
-              {tab.label}
-              <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">
-                {groupCounts[tab.code] || 0}
-              </Badge>
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={showFilters ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter size={14} className="mr-1" /> Filters
-            {hasActiveFilters && <Badge variant="destructive" className="ml-1 text-[10px] px-1">!</Badge>}
-          </Button>
-          <div className="flex border rounded-md">
-            {([
-              { mode: "table" as ViewMode, icon: TableIcon, label: "Table" },
-              { mode: "card" as ViewMode, icon: LayoutGrid, label: "Cards" },
-              { mode: "kanban" as ViewMode, icon: Columns3, label: "Kanban" },
-              { mode: "summary" as ViewMode, icon: BarChart3, label: "Summary" },
-            ]).map(({ mode, icon: Icon, label }) => (
-              <Button
-                key={mode}
-                variant={viewMode === mode ? "default" : "ghost"}
-                size="sm"
-                className="rounded-none first:rounded-l-md last:rounded-r-md px-2"
-                onClick={() => setViewMode(mode)}
-                title={label}
-              >
-                <Icon size={14} />
-              </Button>
-            ))}
-          </div>
+        <div className="flex items-center gap-3">
+          <Select value={selectedAY} onValueChange={setSelectedAY}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ASSESSMENT_YEARS.map(ay => <SelectItem key={ay} value={ay}>AY {ay}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
-      {/* Filter bar */}
-      {showFilters && (
-        <div className="flex flex-wrap items-end gap-3 mb-4 p-3 border rounded-lg bg-muted/30">
-          <div className="min-w-[160px]">
-            <label className="text-xs text-muted-foreground mb-1 block">Search</label>
-            <Input placeholder="Client name..." value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 text-sm" />
-          </div>
-          <div className="min-w-[140px]">
-            <label className="text-xs text-muted-foreground mb-1 block">Status</label>
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all_statuses">All</SelectItem>
-                {FILING_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="min-w-[120px]">
-            <label className="text-xs text-muted-foreground mb-1 block">ITR Form</label>
-            <Select value={filterForm} onValueChange={setFilterForm}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all_forms">All</SelectItem>
-                {ITR_FORMS.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="min-w-[120px]">
-            <label className="text-xs text-muted-foreground mb-1 block">Assessment Year</label>
-            <Select value={filterAY} onValueChange={setFilterAY}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all_ay">All</SelectItem>
-                {ASSESSMENT_YEARS.map((ay) => <SelectItem key={ay} value={ay}>{ay}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="min-w-[140px]">
-            <label className="text-xs text-muted-foreground mb-1 block">Assigned Staff</label>
-            <Select value={filterStaff[0] || ""} onValueChange={(v) => setFilterStaff(v ? [v] : [])}>
-              <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all_staff">All</SelectItem>
-                {staffUsers.map((u) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          {hasActiveFilters && (
-            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8">
-              <X size={14} className="mr-1" /> Clear
-            </Button>
-          )}
-        </div>
-      )}
+      {/* Tabs: Filing | Compliance */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="mb-4">
+          <TabsTrigger value="filing" className="gap-1.5">
+            <FileText size={14} /> Filing
+          </TabsTrigger>
+          <TabsTrigger value="compliance" className="gap-1.5">
+            <AlertTriangle size={14} /> Compliance
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Content */}
-      {loading ? (
-        <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
-      ) : (
-        <>
-          {viewMode === "table" && <TableView profiles={filtered} demands={demands} onEdit={handleEdit} onDelete={setDeleteProfile} onNavigate={navigate} scrutinyAlerts={scrutinyAlerts} onScrutinyClick={openScrutinyDrawer} />}
-          {viewMode === "card" && <CardView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
-          {viewMode === "kanban" && <KanbanView profiles={filtered} onEdit={handleEdit} onStatusChange={handleStatusChange} />}
-          {viewMode === "summary" && <SummaryView profiles={profiles} workGroups={workGroups} />}
-        </>
-      )}
+        <TabsContent value="filing">
+          <FilingTab
+            profiles={filtered}
+            allProfiles={profiles}
+            statusCounts={statusCounts}
+            staffUsers={staffUsers}
+            workGroups={workGroups}
+            search={search}
+            setSearch={setSearch}
+            filterStatus={filterStatus}
+            setFilterStatus={setFilterStatus}
+            filterForm={filterForm}
+            setFilterForm={setFilterForm}
+            filterStaff={filterStaff}
+            setFilterStaff={setFilterStaff}
+            isLoading={isLoading}
+            onInlineUpdate={handleInlineUpdate}
+            onExport={handleExport}
+            navigate={navigate}
+            selectedAY={selectedAY}
+          />
+        </TabsContent>
 
-      {/* Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={(open) => { if (!open) { setSheetOpen(false); setEditingId(null); } else setSheetOpen(true); }}>
-        <SheetContent className="overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>{editingId ? "Edit ITR Profile" : "Add ITR Profile"}</SheetTitle>
-          </SheetHeader>
-          <div className="space-y-4 py-4">
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">Client *</label>
-              <Select value={formClientId} onValueChange={handleClientChange}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>{clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} ({c.entity_type})</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">Financial Year</label>
-                <Select value={formFY} onValueChange={setFormFY}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{FY_OPTIONS.map((fy) => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">Assessment Year</label>
-                <Select value={formAY} onValueChange={setFormAY}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{ASSESSMENT_YEARS.map((ay) => <SelectItem key={ay} value={ay}>{ay}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">ITR Form</label>
-                <Select value={formItrForm} onValueChange={setFormItrForm}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{ITR_FORMS.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-                </Select>
-                {formClientId && <p className="text-xs text-muted-foreground mt-1">Auto-suggested based on entity type</p>}
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">Filing Status</label>
-                <Select value={formStatus} onValueChange={setFormStatus}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{FILING_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">Work Group</label>
-              <Select value={formGroupId} onValueChange={setFormGroupId}>
-                <SelectTrigger><SelectValue placeholder="Select group" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None</SelectItem>
-                  {workGroups.map((g) => <SelectItem key={g.id} value={g.id}>{g.code} - {g.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">Assigned To</label>
-              <Select value={formAssignedTo} onValueChange={setFormAssignedTo}>
-                <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {staffUsers.map((u) => <SelectItem key={u.id} value={u.id}>{u.name} ({u.role})</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">Date Data Received</label>
-                <Input type="date" value={formDateReceived} onChange={(e) => setFormDateReceived(e.target.value)} />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground mb-1 block">Date Filed</label>
-                <Input type="date" value={formDateFiled} onChange={(e) => setFormDateFiled(e.target.value)} />
-              </div>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">Acknowledgment No</label>
-              <Input value={formAckNo} onChange={(e) => setFormAckNo(e.target.value)} placeholder="e.g. 1234567890" />
-            </div>
-          </div>
-          <SheetFooter>
-            <Button onClick={handleSave} disabled={saving} className="w-full">
-              {saving ? "Saving..." : editingId ? "Update Profile" : "Create Profile"}
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
-
-      {/* Delete Confirmation */}
-      <AlertDialog open={!!deleteProfile} onOpenChange={(open) => { if (!open) setDeleteProfile(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete ITR Profile</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete the ITR profile for <strong>{deleteProfile?.client_name}</strong>?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Scrutiny Alerts Drawer */}
-      <Drawer open={scrutinyDrawerOpen} onOpenChange={setScrutinyDrawerOpen}>
-        <DrawerContent>
-          <DrawerHeader>
-            <DrawerTitle>Scrutiny Alerts — {scrutinyDrawerClient}</DrawerTitle>
-          </DrawerHeader>
-          <div className="px-4 pb-6 max-h-[60vh] overflow-y-auto">
-            {scrutinyFindings.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No relevant HIGH severity findings.</p>
-            ) : (
-              <div className="space-y-2">
-                {scrutinyFindings.map((f: any) => (
-                  <div key={f.id} className="border rounded-lg p-3 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="destructive" className="text-[10px]">HIGH</Badge>
-                      <span className="text-xs font-mono text-muted-foreground">{f.rule_id}</span>
-                    </div>
-                    <p className="text-sm text-foreground">{f.flag_message}</p>
-                    {f.narration && <p className="text-xs text-muted-foreground truncate">{f.narration}</p>}
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground text-center mt-4">Read-only view. Edit findings in Scrutiny module.</p>
-          </div>
-        </DrawerContent>
-      </Drawer>
+        <TabsContent value="compliance">
+          <ComplianceTab navigate={navigate} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
 
-// ─── Table View ───
-function TableView({ profiles, demands, onEdit, onDelete, onNavigate, scrutinyAlerts, onScrutinyClick }: {
-  profiles: ItrProfile[]; demands: any[]; onEdit: (p: ItrProfile) => void;
-  onDelete: (p: ItrProfile) => void; onNavigate: (path: string) => void;
-  scrutinyAlerts?: Record<string, number>; onScrutinyClick?: (clientId: string, clientName: string) => void;
-}) {
+export default ItReturns;
+
+// ─── Filing Tab ───
+function FilingTab({
+  profiles, allProfiles, statusCounts, staffUsers, workGroups,
+  search, setSearch, filterStatus, setFilterStatus,
+  filterForm, setFilterForm, filterStaff, setFilterStaff,
+  isLoading, onInlineUpdate, onExport, navigate, selectedAY,
+}: any) {
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Client</TableHead>
-            <TableHead>Group</TableHead>
-            <TableHead>ITR Form</TableHead>
-            <TableHead>AY</TableHead>
-            <TableHead>Assigned To</TableHead>
-            <TableHead>Date Recd</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Alerts</TableHead>
-            <TableHead>Date Filed</TableHead>
-            <TableHead>Ack No</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {profiles.length === 0 ? (
-            <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No ITR profiles found.</TableCell></TableRow>
-          ) : profiles.map((p) => (
-            <TableRow key={p.id} className="hover:bg-muted/50">
-              <TableCell className="font-medium cursor-pointer" onClick={() => onNavigate(`/itr/${p.client_id}`)}>{p.client_name}</TableCell>
-              <TableCell>
-                {p.group_code ? (
-                  <Badge className="text-[10px]" style={{ backgroundColor: `${p.group_color}20`, color: p.group_color || undefined, borderColor: `${p.group_color}40` }}>{p.group_code}</Badge>
-                ) : <span className="text-muted-foreground text-xs">—</span>}
-              </TableCell>
-              <TableCell>{p.itr_form || "—"}</TableCell>
-              <TableCell className="text-muted-foreground">{p.assessment_year || "—"}</TableCell>
-              <TableCell className="text-sm">{p.assigned_name || <span className="text-muted-foreground">—</span>}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{p.date_data_received || "—"}</TableCell>
-              <TableCell>
-                <Badge className={STATUS_COLORS[p.filing_status || "Not Started"] || STATUS_COLORS["Not Started"]}>
-                  {p.filing_status || "Not Started"}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                {p.client_id && (scrutinyAlerts?.[p.client_id] || 0) > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 gap-1 text-destructive hover:text-destructive"
-                    onClick={(e) => { e.stopPropagation(); onScrutinyClick?.(p.client_id!, p.client_name || ""); }}
-                  >
-                    <ShieldAlert size={12} />
-                    <span className="text-xs font-bold">{scrutinyAlerts![p.client_id!]}</span>
-                  </Button>
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">{p.date_filed || "—"}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{p.acknowledgment_no || "—"}</TableCell>
-              <TableCell className="text-right">
-                <div className="flex justify-end gap-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(p)}><Pencil size={14} /></Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => onDelete(p)}><Trash2 size={14} /></Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="space-y-4">
+      {/* Status count strip */}
+      <div className="flex flex-wrap gap-2">
+        {FILING_STATUSES.map(s => (
+          <Badge
+            key={s}
+            className={cn("cursor-pointer text-xs px-3 py-1", STATUS_COLORS[s], filterStatus === s && "ring-2 ring-primary")}
+            onClick={() => setFilterStatus(filterStatus === s ? "" : s)}
+          >
+            {s}: {statusCounts[s] || 0}
+          </Badge>
+        ))}
+        <Badge variant="outline" className="text-xs px-3 py-1">
+          Total: {allProfiles.length}
+        </Badge>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search client or PAN..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-9 h-9"
+          />
+        </div>
+        <Select value={filterForm} onValueChange={v => setFilterForm(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="ITR Form" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Forms</SelectItem>
+            {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filterStaff} onValueChange={v => setFilterStaff(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[140px] h-9 text-xs"><SelectValue placeholder="Staff" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Staff</SelectItem>
+            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {(search || filterStatus || filterForm || filterStaff) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterStaff(""); }}>
+            <X size={14} className="mr-1" /> Clear
+          </Button>
+        )}
+        <div className="flex-1" />
+        <Button variant="outline" size="sm" onClick={onExport}>
+          <Download size={14} className="mr-1.5" /> Export
+        </Button>
+      </div>
+
+      {/* Inline Editable Table */}
+      {isLoading ? (
+        <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : (
+        <div className="border rounded-lg overflow-auto">
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-background">
+              <TableRow>
+                <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
+                <TableHead className="min-w-[100px]">PAN</TableHead>
+                <TableHead className="min-w-[100px]">Constitution</TableHead>
+                <TableHead className="min-w-[120px]">Work Group</TableHead>
+                <TableHead className="min-w-[100px]">ITR Form</TableHead>
+                <TableHead className="min-w-[150px]">Status</TableHead>
+                <TableHead className="min-w-[130px]">Filed Date</TableHead>
+                <TableHead className="min-w-[140px]">Ack No</TableHead>
+                <TableHead className="min-w-[140px]">Assigned Staff</TableHead>
+                <TableHead className="min-w-[120px]">Remarks</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {profiles.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                    {search || filterStatus || filterForm || filterStaff
+                      ? "No matching profiles found."
+                      : "No clients with ITR service activated. Activate 'Income Tax Returns' service on clients first."}
+                  </TableCell>
+                </TableRow>
+              ) : profiles.map((p: ItrProfile) => (
+                <InlineEditableRow
+                  key={p.id}
+                  profile={p}
+                  staffUsers={staffUsers}
+                  workGroups={workGroups}
+                  onUpdate={onInlineUpdate}
+                  navigate={navigate}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── Card View ───
-function CardView({ profiles, onEdit, onStatusChange }: {
-  profiles: ItrProfile[]; onEdit: (p: ItrProfile) => void;
-  onStatusChange: (id: string, status: string) => void;
+// ─── Inline Editable Row ───
+function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, navigate }: {
+  profile: ItrProfile; staffUsers: StaffUser[]; workGroups: any[];
+  onUpdate: (p: ItrProfile, field: string, value: any) => void;
+  navigate: (path: string) => void;
 }) {
+  const p = profile;
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {profiles.length === 0 ? (
-        <p className="col-span-full text-center text-muted-foreground py-8">No profiles found.</p>
-      ) : profiles.map((p) => (
-        <Card key={p.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => onEdit(p)}>
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between mb-2">
-              <h3 className="font-semibold text-foreground text-sm truncate">{p.client_name}</h3>
-              {p.group_code && (
-                <Badge className="text-[10px] ml-2 shrink-0" style={{ backgroundColor: `${p.group_color}20`, color: p.group_color || undefined }}>{p.group_code} - {p.group_name}</Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-2 mb-3">
-              <Badge className={STATUS_COLORS[p.filing_status || "Not Started"]}>{p.filing_status || "Not Started"}</Badge>
-              {p.itr_form && <Badge variant="outline" className="text-[10px]">{p.itr_form}</Badge>}
-            </div>
-            <div className="text-xs text-muted-foreground space-y-1">
-              {p.assigned_name && <p>Assigned: {p.assigned_name}</p>}
-              {p.assessment_year && <p>AY: {p.assessment_year}</p>}
-              {p.date_data_received && <p>Data received: {p.date_data_received}</p>}
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    <TableRow className="hover:bg-muted/30">
+      {/* Client Name - non-editable, clickable */}
+      <TableCell className="sticky left-0 z-10 bg-background font-medium">
+        <button
+          className="text-left text-primary hover:underline truncate max-w-[170px] block"
+          onClick={() => navigate(`/clients/${p.client_id}`)}
+        >
+          {p.client_name}
+        </button>
+      </TableCell>
+
+      {/* PAN - non-editable */}
+      <TableCell className="font-mono text-xs text-muted-foreground">{p.client_pan || "—"}</TableCell>
+
+      {/* Constitution - non-editable */}
+      <TableCell className="text-xs">{p.entity_type || "—"}</TableCell>
+
+      {/* Work Group - dropdown */}
+      <TableCell>
+        <Select
+          value={p.itr_work_group_id || "none"}
+          onValueChange={v => onUpdate(p, "itr_work_group_id", v === "none" ? null : v)}
+        >
+          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+            <SelectValue placeholder="—" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">—</SelectItem>
+            {workGroups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </TableCell>
+
+      {/* ITR Form - dropdown */}
+      <TableCell>
+        <Select
+          value={p.itr_form || "none"}
+          onValueChange={v => onUpdate(p, "itr_form", v === "none" ? null : v)}
+        >
+          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+            <SelectValue placeholder="—" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">—</SelectItem>
+            {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </TableCell>
+
+      {/* Status - color-coded dropdown */}
+      <TableCell>
+        <Select
+          value={p.filing_status || "Not Started"}
+          onValueChange={v => onUpdate(p, "filing_status", v)}
+        >
+          <SelectTrigger className={cn("h-7 text-xs border-none shadow-none px-1 rounded-full", STATUS_COLORS[p.filing_status || "Not Started"])}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FILING_STATUSES.map(s => (
+              <SelectItem key={s} value={s}>
+                <span className={cn("inline-block w-2 h-2 rounded-full mr-1.5", STATUS_COLORS[s].split(" ")[0])} />
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </TableCell>
+
+      {/* Filed Date - date picker */}
+      <TableCell>
+        <InlineDatePicker
+          value={p.date_filed}
+          onChange={v => onUpdate(p, "date_filed", v)}
+        />
+      </TableCell>
+
+      {/* Ack No - text */}
+      <TableCell>
+        <InlineTextInput
+          value={p.acknowledgment_no || ""}
+          placeholder="—"
+          onSave={v => onUpdate(p, "acknowledgment_no", v)}
+        />
+      </TableCell>
+
+      {/* Assigned Staff - dropdown */}
+      <TableCell>
+        <Select
+          value={p.assigned_to || "none"}
+          onValueChange={v => onUpdate(p, "assigned_to", v === "none" ? null : v)}
+        >
+          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+            <SelectValue placeholder="—" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">—</SelectItem>
+            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </TableCell>
+
+      {/* Remarks - inline text */}
+      <TableCell>
+        <InlineTextInput
+          value={(p as any).remarks || ""}
+          placeholder="—"
+          onSave={v => {/* remarks not in schema yet - could use acknowledgment or a JSONB field */}}
+        />
+      </TableCell>
+    </TableRow>
   );
 }
 
-// ─── Kanban View ───
-function KanbanView({ profiles, onEdit, onStatusChange }: {
-  profiles: ItrProfile[]; onEdit: (p: ItrProfile) => void;
-  onStatusChange: (id: string, status: string) => void;
-}) {
-  const columns = FILING_STATUSES;
-  const getByStatus = (status: string) => profiles.filter((p) => (p.filing_status || "Not Started") === status);
+// ─── Inline Text Input ───
+function InlineTextInput({ value, placeholder, onSave }: { value: string; placeholder: string; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value);
+  const ref = useRef<HTMLInputElement>(null);
 
-  return (
-    <div className="flex gap-4 overflow-x-auto pb-4">
-      {columns.map((status) => {
-        const items = getByStatus(status);
-        return (
-          <div key={status} className="min-w-[250px] flex-shrink-0">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-foreground">{status}</h3>
-              <Badge variant="secondary" className="text-[10px]">{items.length}</Badge>
-            </div>
-            <div className="space-y-2">
-              {items.map((p) => {
-                const statusIdx = columns.indexOf(p.filing_status || "Not Started");
-                const nextStatus = statusIdx < columns.length - 1 ? columns[statusIdx + 1] : null;
-                return (
-                  <Card key={p.id} className="cursor-pointer hover:shadow-md transition-shadow">
-                    <CardContent className="p-3">
-                      <p className="font-medium text-sm text-foreground truncate mb-1">{p.client_name}</p>
-                      <div className="flex items-center gap-1.5 mb-2">
-                        {p.group_code && <Badge className="text-[9px] px-1" style={{ backgroundColor: `${p.group_color}20`, color: p.group_color || undefined }}>{p.group_code}</Badge>}
-                        {p.itr_form && <Badge variant="outline" className="text-[9px] px-1">{p.itr_form}</Badge>}
-                      </div>
-                      {p.assigned_name && <p className="text-[11px] text-muted-foreground">→ {p.assigned_name}</p>}
-                      <div className="flex items-center justify-between mt-2">
-                        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={(e) => { e.stopPropagation(); onEdit(p); }}>
-                          <Pencil size={10} className="mr-1" /> Edit
-                        </Button>
-                        {nextStatus && (
-                          <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={(e) => { e.stopPropagation(); onStatusChange(p.id, nextStatus); }}>
-                            <ChevronRight size={10} className="mr-1" /> {nextStatus}
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-              {items.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No items</p>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+  useEffect(() => { setVal(value); }, [value]);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
 
-// ─── Summary View ───
-function SummaryView({ profiles, workGroups }: { profiles: ItrProfile[]; workGroups: WorkGroup[] }) {
-  const rows = workGroups.map((g) => {
-    const items = profiles.filter((p) => p.group_code === g.code);
-    const totalCount = items.length;
-    const filedCount = items.filter((p) => p.filing_status === "Filed" || p.filing_status === "Revised").length;
-    const pendingCount = items.filter((p) => !p.filing_status || p.filing_status === "Not Started").length;
-    const inProgressCount = items.filter((p) => p.filing_status === "In Progress" || p.filing_status === "Ready to File").length;
-    const pct = totalCount > 0 ? Math.round((filedCount / totalCount) * 100) : 0;
-    return { ...g, totalCount, filedCount, pendingCount, inProgressCount, pct };
-  });
-
-  // Ungrouped
-  const ungrouped = profiles.filter((p) => !p.group_code);
-  if (ungrouped.length > 0) {
-    const filedCount = ungrouped.filter((p) => p.filing_status === "Filed" || p.filing_status === "Revised").length;
-    const pendingCount = ungrouped.filter((p) => !p.filing_status || p.filing_status === "Not Started").length;
-    const inProgressCount = ungrouped.filter((p) => p.filing_status === "In Progress" || p.filing_status === "Ready to File").length;
-    rows.push({
-      id: "ungrouped", firm_id: "", code: "—", name: "Ungrouped", description: null, color: "#6B7280",
-      totalCount: ungrouped.length, filedCount, pendingCount, inProgressCount,
-      pct: ungrouped.length > 0 ? Math.round((filedCount / ungrouped.length) * 100) : 0,
-    });
+  if (!editing) {
+    return (
+      <button
+        className="text-xs text-left w-full truncate text-muted-foreground hover:text-foreground"
+        onClick={() => setEditing(true)}
+      >
+        {value || placeholder}
+      </button>
+    );
   }
 
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Group</TableHead>
-            <TableHead className="text-center">Total</TableHead>
-            <TableHead className="text-center">Filed</TableHead>
-            <TableHead className="text-center">In Progress</TableHead>
-            <TableHead className="text-center">Pending</TableHead>
-            <TableHead>% Complete</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: r.color || "#6B7280" }} />
-                  <span className="font-medium">{r.code} - {r.name}</span>
-                </div>
-              </TableCell>
-              <TableCell className="text-center font-semibold">{r.totalCount}</TableCell>
-              <TableCell className="text-center text-emerald-600 font-medium">{r.filedCount}</TableCell>
-              <TableCell className="text-center text-amber-600 font-medium">{r.inProgressCount}</TableCell>
-              <TableCell className="text-center text-muted-foreground font-medium">{r.pendingCount}</TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <Progress value={r.pct} className="h-2 flex-1" />
-                  <span className="text-sm font-medium text-foreground w-10 text-right">{r.pct}%</span>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-          {rows.length === 0 && (
-            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No work groups configured. Create groups in Settings.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </div>
+    <Input
+      ref={ref}
+      value={val}
+      onChange={e => setVal(e.target.value)}
+      onBlur={() => { setEditing(false); if (val !== value) onSave(val); }}
+      onKeyDown={e => { if (e.key === "Enter") { setEditing(false); if (val !== value) onSave(val); } if (e.key === "Escape") { setEditing(false); setVal(value); } }}
+      className="h-7 text-xs border-none shadow-none bg-transparent px-1"
+    />
   );
 }
 
-export default ItReturns;
+// ─── Inline Date Picker ───
+function InlineDatePicker({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const date = value ? new Date(value) : undefined;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="text-xs text-left w-full truncate text-muted-foreground hover:text-foreground flex items-center gap-1">
+          <CalendarDays size={12} />
+          {value ? formatDateDDMMYYYY(value) : "—"}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={date}
+          onSelect={d => {
+            onChange(d ? format(d, "yyyy-MM-dd") : null);
+            setOpen(false);
+          }}
+          className="p-3 pointer-events-auto"
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ═══════════════════════════════════════════
+// COMPLIANCE TAB (merged Notice Tracker)
+// ═══════════════════════════════════════════
+function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [addOpen, setAddOpen] = useState(false);
+  const [filters, setFilters] = useState({ type: "all", status: "all", client: "all", search: "" });
+  const [statusDialogNotice, setStatusDialogNotice] = useState<any>(null);
+  const [changeNote, setChangeNote] = useState("");
+
+  const [form, setForm] = useState({
+    client_id: "", notice_type: "143_1",
+    notice_ref_no: "", assessment_year: "", section: "", department: "",
+    notice_date: "", date_received: "", amount_demanded: "", amount_disputed: "",
+    reply_due_date: "", assigned_to: "", priority: "Medium", remarks: "",
+  });
+
+  const { data: notices = [], isLoading } = useQuery({
+    queryKey: ["compliance_notices"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("demand_notices")
+        .select("*, clients(name, pan), users!demand_notices_assigned_to_fkey(name)")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const { data: clients = [] } = useQuery({
+    queryKey: ["compliance_clients"],
+    queryFn: async () => {
+      const { data } = await supabase.from("clients").select("id, name").order("name");
+      return data || [];
+    },
+  });
+
+  const { data: staff = [] } = useQuery({
+    queryKey: ["compliance_staff"],
+    queryFn: async () => {
+      const { data } = await supabase.from("users").select("id, name").order("name");
+      return data || [];
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (values: typeof form) => {
+      const { error } = await supabase.from("demand_notices").insert({
+        client_id: values.client_id,
+        firm_id: user?.firm_id,
+        notice_type: values.notice_type,
+        notice_ref_no: values.notice_ref_no || null,
+        assessment_year: values.assessment_year || null,
+        section: values.section || null,
+        department: values.department || null,
+        notice_date: values.notice_date || null,
+        date_received: values.date_received || null,
+        amount_demanded: values.amount_demanded ? parseFloat(values.amount_demanded) : null,
+        amount_disputed: values.amount_disputed ? parseFloat(values.amount_disputed) : null,
+        reply_due_date: values.reply_due_date || null,
+        assigned_to: values.assigned_to || null,
+        priority: values.priority,
+        remarks: values.remarks || null,
+        created_by: user?.id,
+        status: "Received",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["compliance_notices"] });
+      setAddOpen(false);
+      setForm({ client_id: "", notice_type: "143_1", notice_ref_no: "", assessment_year: "", section: "", department: "", notice_date: "", date_received: "", amount_demanded: "", amount_disputed: "", reply_due_date: "", assigned_to: "", priority: "Medium", remarks: "" });
+      toast({ title: "Notice added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: async ({ noticeId, currentStatus, nextStatus }: { noticeId: string; currentStatus: string; nextStatus: string }) => {
+      const { error } = await supabase.from("demand_notices").update({ status: nextStatus }).eq("id", noticeId);
+      if (error) throw error;
+      if (changeNote.trim()) {
+        await supabase.from("demand_notice_status_history").insert({
+          notice_id: noticeId, from_status: currentStatus, to_status: nextStatus,
+          changed_by: user?.id, change_note: changeNote.trim(),
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["compliance_notices"] });
+      setStatusDialogNotice(null);
+      setChangeNote("");
+      toast({ title: "Status updated" });
+    },
+  });
+
+  const filtered = useMemo(() => {
+    return notices.filter((n: any) => {
+      if (filters.type !== "all" && n.notice_type !== filters.type) return false;
+      if (filters.status !== "all" && n.status !== filters.status) return false;
+      if (filters.client !== "all" && n.client_id !== filters.client) return false;
+      if (filters.search && !(n.clients?.name || "").toLowerCase().includes(filters.search.toLowerCase())) return false;
+      return true;
+    });
+  }, [notices, filters]);
+
+  // Demand reconciliation
+  const demandStats = useMemo(() => {
+    const total = notices.reduce((s: number, n: any) => s + (Number(n.amount_demanded) || 0), 0);
+    const disputed = notices.reduce((s: number, n: any) => s + (Number(n.amount_disputed) || 0), 0);
+    const outstanding = total - disputed;
+    return { total, disputed, outstanding };
+  }, [notices]);
+
+  // Stats
+  const openCount = notices.filter((n: any) => n.status !== "Closed/Appeal Filed" && n.status !== "Closed/Dropped").length;
+  const overdueCount = notices.filter((n: any) => {
+    const d = n.extended_due_date || n.reply_due_date;
+    return d && isBefore(new Date(d), new Date()) && n.status !== "Closed/Appeal Filed" && n.status !== "Closed/Dropped";
+  }).length;
+
+  const handleExport = () => {
+    import("xlsx").then(XLSX => {
+      const rows = filtered.map((n: any) => ({
+        "Client": n.clients?.name || "-",
+        "PAN": n.clients?.pan || "-",
+        "Notice Type": n.notice_type,
+        "Notice Date": n.notice_date || "",
+        "Reply Deadline": n.reply_due_date || "",
+        "Status": n.status,
+        "Demand Amount": n.amount_demanded ?? "",
+        "Disputed": n.amount_disputed ?? "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Compliance");
+      XLSX.writeFile(wb, `Compliance_Notices_${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Open Notices</p><p className="text-2xl font-bold text-foreground">{openCount}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Overdue</p><p className="text-2xl font-bold text-destructive">{overdueCount}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Total Demand</p><p className="text-2xl font-bold text-foreground">₹{demandStats.total.toLocaleString("en-IN")}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-sm text-muted-foreground">Outstanding</p><p className="text-2xl font-bold text-amber-600">₹{demandStats.outstanding.toLocaleString("en-IN")}</p></CardContent></Card>
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="flex-1 min-w-[200px] max-w-sm">
+          <Input placeholder="Search client..." value={filters.search} onChange={e => setFilters(p => ({ ...p, search: e.target.value }))} className="h-9" />
+        </div>
+        <Select value={filters.type} onValueChange={v => setFilters(p => ({ ...p, type: v }))}>
+          <SelectTrigger className="w-[140px] h-9 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            {NOTICE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filters.status} onValueChange={v => setFilters(p => ({ ...p, status: v }))}>
+          <SelectTrigger className="w-[160px] h-9 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Statuses</SelectItem>
+            {NOTICE_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <div className="flex-1" />
+        <Button variant="outline" size="sm" onClick={handleExport}>
+          <Download size={14} className="mr-1.5" /> Export
+        </Button>
+        <Sheet open={addOpen} onOpenChange={setAddOpen}>
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus size={14} className="mr-1.5" /> Add Notice
+          </Button>
+          <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
+            <SheetHeader><SheetTitle>Add New Notice</SheetTitle></SheetHeader>
+            <div className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Client *</Label>
+                  <Select value={form.client_id} onValueChange={v => setForm(p => ({ ...p, client_id: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
+                    <SelectContent>
+                      {clients.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Notice Type</Label>
+                  <Select value={form.notice_type} onValueChange={v => setForm(p => ({ ...p, notice_type: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {NOTICE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Notice Ref No</Label><Input value={form.notice_ref_no} onChange={e => setForm(p => ({ ...p, notice_ref_no: e.target.value }))} /></div>
+                <div><Label>Assessment Year</Label><Input placeholder="2024-25" value={form.assessment_year} onChange={e => setForm(p => ({ ...p, assessment_year: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Section</Label><Input value={form.section} onChange={e => setForm(p => ({ ...p, section: e.target.value }))} /></div>
+                <div><Label>Department</Label><Input value={form.department} onChange={e => setForm(p => ({ ...p, department: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Notice Date</Label><Input type="date" value={form.notice_date} onChange={e => setForm(p => ({ ...p, notice_date: e.target.value }))} /></div>
+                <div><Label>Date Received</Label><Input type="date" value={form.date_received} onChange={e => setForm(p => ({ ...p, date_received: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Demand Amount</Label><Input type="number" value={form.amount_demanded} onChange={e => setForm(p => ({ ...p, amount_demanded: e.target.value }))} /></div>
+                <div><Label>Disputed Amount</Label><Input type="number" value={form.amount_disputed} onChange={e => setForm(p => ({ ...p, amount_disputed: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Reply Due Date</Label><Input type="date" value={form.reply_due_date} onChange={e => setForm(p => ({ ...p, reply_due_date: e.target.value }))} /></div>
+                <div>
+                  <Label>Assigned To</Label>
+                  <Select value={form.assigned_to} onValueChange={v => setForm(p => ({ ...p, assigned_to: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>{staff.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div><Label>Remarks</Label><Textarea value={form.remarks} onChange={e => setForm(p => ({ ...p, remarks: e.target.value }))} rows={3} /></div>
+              <Button className="w-full" disabled={!form.client_id || createMutation.isPending} onClick={() => createMutation.mutate(form)}>
+                {createMutation.isPending ? "Saving..." : "Save Notice"}
+              </Button>
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      {/* Table */}
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Client</TableHead>
+              <TableHead>PAN</TableHead>
+              <TableHead>Notice Type</TableHead>
+              <TableHead>Notice Date</TableHead>
+              <TableHead>Reply Deadline</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Days Remaining</TableHead>
+              <TableHead className="text-right">Demand</TableHead>
+              <TableHead className="text-right">Disputed</TableHead>
+              <TableHead className="w-[100px]">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
+            ) : filtered.length === 0 ? (
+              <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No notices found</TableCell></TableRow>
+            ) : filtered.map((n: any) => {
+              const dueDate = n.extended_due_date || n.reply_due_date;
+              const daysRemaining = dueDate ? differenceInDays(new Date(dueDate), new Date()) : null;
+              const daysColor = daysRemaining === null ? "" : daysRemaining < 0 ? "text-destructive font-bold" : daysRemaining <= 3 ? "text-destructive" : daysRemaining <= 7 ? "text-amber-600" : "text-emerald-600";
+
+              const currentIdx = [...NOTICE_STATUSES, "Received", "Awaiting Order", "Closed/Dropped"].indexOf(n.status);
+              const mappedIdx = NOTICE_STATUSES.indexOf(n.status as any);
+              const nextStatus = mappedIdx >= 0 && mappedIdx < NOTICE_STATUSES.length - 1 ? NOTICE_STATUSES[mappedIdx + 1] : null;
+
+              return (
+                <TableRow key={n.id} className="hover:bg-muted/50">
+                  <TableCell className="font-medium">{n.clients?.name || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{n.clients?.pan || "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-[10px]">
+                      {NOTICE_TYPES.find(t => t.value === n.notice_type)?.label || n.notice_type}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">{n.notice_date ? formatDateDDMMYYYY(n.notice_date) : "—"}</TableCell>
+                  <TableCell className="text-xs">{dueDate ? formatDateDDMMYYYY(dueDate) : "—"}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-[10px]">{n.status}</Badge></TableCell>
+                  <TableCell className={cn("text-xs font-medium", daysColor)}>
+                    {daysRemaining !== null ? (daysRemaining < 0 ? `${Math.abs(daysRemaining)}d overdue` : `${daysRemaining}d`) : "—"}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {n.amount_demanded != null ? `₹${Number(n.amount_demanded).toLocaleString("en-IN")}` : "—"}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {n.amount_disputed != null ? `₹${Number(n.amount_disputed).toLocaleString("en-IN")}` : "—"}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => navigate(`/notices/${n.id}`)}>
+                        <Eye size={14} />
+                      </Button>
+                      {nextStatus && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title={`Move to: ${nextStatus}`}
+                          onClick={() => setStatusDialogNotice(n)}
+                        >
+                          <ChevronRight size={14} />
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
+
+      {/* Demand Reconciliation Panel */}
+      <Card>
+        <CardHeader><CardTitle className="text-sm">Demand Reconciliation</CardTitle></CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-xs text-muted-foreground">Total Demand</p>
+              <p className="text-lg font-bold font-mono">₹{demandStats.total.toLocaleString("en-IN")}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Disputed Amount</p>
+              <p className="text-lg font-bold font-mono text-amber-600">₹{demandStats.disputed.toLocaleString("en-IN")}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Outstanding Balance</p>
+              <p className="text-lg font-bold font-mono text-destructive">₹{demandStats.outstanding.toLocaleString("en-IN")}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Status Change Dialog */}
+      {statusDialogNotice && (() => {
+        const mappedIdx = NOTICE_STATUSES.indexOf(statusDialogNotice.status as any);
+        const nextStatus = mappedIdx >= 0 && mappedIdx < NOTICE_STATUSES.length - 1 ? NOTICE_STATUSES[mappedIdx + 1] : null;
+        if (!nextStatus) return null;
+        return (
+          <Dialog open={!!statusDialogNotice} onOpenChange={open => { if (!open) setStatusDialogNotice(null); }}>
+            <DialogContent>
+              <DialogHeader><DialogTitle>Move to "{nextStatus}"</DialogTitle></DialogHeader>
+              <div>
+                <Label>Note (optional)</Label>
+                <Textarea value={changeNote} onChange={e => setChangeNote(e.target.value)} rows={3} placeholder="Reason..." />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setStatusDialogNotice(null)}>Cancel</Button>
+                <Button
+                  onClick={() => statusMutation.mutate({ noticeId: statusDialogNotice.id, currentStatus: statusDialogNotice.status, nextStatus })}
+                  disabled={statusMutation.isPending}
+                >
+                  {statusMutation.isPending ? "Updating..." : "Confirm"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
+    </div>
+  );
+}
