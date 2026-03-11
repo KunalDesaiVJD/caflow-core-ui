@@ -19,6 +19,8 @@ const navItems = [
   { title: "Platform Overview", path: "/admin", icon: LayoutDashboard },
   { title: "Firms Management", path: "/admin/firms", icon: Building2 },
   { title: "User Management", path: "/admin/users", icon: Users },
+  { title: "Service Masters", path: "/admin/services", icon: Building2 },
+  { title: "Roles & Permissions", path: "/admin/roles", icon: Shield },
   { title: "System Logs", path: "/admin/logs", icon: ScrollText },
   { title: "AI Skills", path: "/admin/ai-skills", icon: Brain },
   { title: "Theme Studio", path: "/admin/theme-studio", icon: Palette },

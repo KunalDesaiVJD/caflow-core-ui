@@ -77,10 +77,14 @@ function autoDetectMapping(headers: string[]): Record<string, string> {
 }
 
 export default function ImportTrialBalance() {
-  const { clientId } = useParams<{ clientId: string }>();
+  const { clientId: routeClientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const [clientsList, setClientsList] = useState<{ id: string; name: string | null }[]>([]);
+
+  const clientId = routeClientId || selectedClientId;
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -109,6 +113,14 @@ export default function ImportTrialBalance() {
   const [comparativeAvailable, setComparativeAvailable] = useState(false);
 
   const firmId = user?.firm_id;
+
+  // Load clients for selector when no route param
+  useEffect(() => {
+    if (routeClientId || !firmId) return;
+    supabase.from("clients").select("id, name").eq("firm_id", firmId).order("name").then(({ data }) => {
+      setClientsList(data || []);
+    });
+  }, [firmId, routeClientId]);
 
   // Guard: clientId must be a valid UUID
   const isValidUuid = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
@@ -292,10 +304,27 @@ export default function ImportTrialBalance() {
 
   if (!isValidUuid) {
     return (
-      <div className="p-8 text-center space-y-4">
-        <h2 className="text-xl font-semibold">Invalid Client</h2>
-        <p className="text-muted-foreground">No valid client ID provided. Please navigate from a client page.</p>
-        <Button onClick={() => navigate("/clients")}>Go to Clients</Button>
+      <div className="max-w-lg mx-auto p-8 space-y-6">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-foreground mb-1">Import Trial Balance</h1>
+          <p className="text-muted-foreground text-sm">Select a client to begin importing trial balance data.</p>
+        </div>
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            <Label>Select Client</Label>
+            <Select value={selectedClientId} onValueChange={setSelectedClientId}>
+              <SelectTrigger><SelectValue placeholder="Choose a client..." /></SelectTrigger>
+              <SelectContent>
+                {clientsList.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name || "Unnamed"}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {clientsList.length === 0 && (
+              <p className="text-xs text-muted-foreground">No clients found. <Button variant="link" className="p-0 h-auto text-xs" onClick={() => navigate("/clients/new")}>Add a client</Button></p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }

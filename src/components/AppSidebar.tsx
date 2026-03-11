@@ -57,8 +57,6 @@ const topNavItems = [
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
-  { title: "Chat", path: "/chat", icon: MessageSquare, module: "Dashboard" },
-  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
   { title: "Depreciation", path: "/depreciation", icon: Calculator, module: "Audit Intelligence" },
 ];
 
@@ -404,7 +402,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             to={settingsItem.path}
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms") && !isActive("/settings/firm") && !isActive("/settings/roles")
+              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/services")
                 ? "bg-sidebar-gold/15 text-sidebar-gold"
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}

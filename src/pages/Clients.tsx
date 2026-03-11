@@ -57,19 +57,17 @@ const Clients = () => {
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
 
-  // ITR/TDS status data
-  const [itrStatusMap, setItrStatusMap] = useState<Record<string, any>>({});
+  // Service count data
   const [serviceCountMap, setServiceCountMap] = useState<Record<string, number>>({});
 
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
   const fetchData = async () => {
-    const [clientsRes, groupsRes, membershipsRes, itrRes, servicesRes] = await Promise.all([
+    const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
       supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(500),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
-      supabase.from("itr_profiles").select("client_id, filing_status, financial_year").order("financial_year", { ascending: false }),
       supabase.from("client_services").select("client_id, is_active"),
     ]);
 
@@ -82,13 +80,6 @@ const Clients = () => {
       if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
     }
     setClientGroupMap(map);
-
-    // Build ITR status map (latest per client)
-    const itrMap: Record<string, any> = {};
-    for (const p of (itrRes.data || []) as any[]) {
-      if (!itrMap[p.client_id]) itrMap[p.client_id] = p;
-    }
-    setItrStatusMap(itrMap);
 
     // Build service count map
     const svcMap: Record<string, number> = {};
@@ -149,7 +140,6 @@ const Clients = () => {
       GSTIN: (c.gstin || []).join(", "),
       Groups: (clientGroupMap[c.id] || []).map(g => g.name).join(", ") || "Ungrouped",
       "Active Services": serviceCountMap[c.id] || 0,
-      "ITR Status": itrStatusMap[c.id]?.filing_status || "—",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -179,11 +169,6 @@ const Clients = () => {
     });
   };
 
-  const getItrStatusColor = (status: string | undefined) => {
-    if (!status || status === "Pending" || status === "Not Filed") return "text-destructive";
-    if (status === "Filed") return "text-green-600";
-    return "text-amber-600";
-  };
 
   return (
     <div className="space-y-6">
@@ -262,13 +247,11 @@ const Clients = () => {
                 <TableHead className="text-xs">PAN</TableHead>
                 <TableHead className="text-xs">Constitution</TableHead>
                 <TableHead className="text-xs">Active Services</TableHead>
-                <TableHead className="text-xs">ITR Status</TableHead>
                 <TableHead className="text-xs w-12"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map(client => {
-                const itr = itrStatusMap[client.id];
                 const svcCount = serviceCountMap[client.id] || 0;
                 return (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
@@ -276,7 +259,6 @@ const Clients = () => {
                     <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                     <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                     <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
-                    <TableCell><span className={`text-xs font-medium ${getItrStatusColor(itr?.filing_status)}`}>{itr?.filing_status || "Not Filed"}</span></TableCell>
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>

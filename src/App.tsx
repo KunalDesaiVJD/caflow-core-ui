@@ -118,6 +118,8 @@ const App = () => (
               <Route path="/admin" element={<AdminOverview />} />
               <Route path="/admin/firms" element={<AdminFirms />} />
               <Route path="/admin/users" element={<UserManagement />} />
+              <Route path="/admin/services" element={<ServiceMasters />} />
+              <Route path="/admin/roles" element={<RolesPermissions />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
               <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/theme-studio" element={<AdminThemeStudio />} />
@@ -188,7 +190,7 @@ const App = () => (
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
               <Route path="/settings/users" element={<UserManagement />} />
-              <Route path="/settings/audit-firms" element={<AuditFirms />} />
+              <Route path="/settings/audit-firms" element={<Navigate to="/settings/firm" replace />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
