@@ -26,6 +26,8 @@ import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
+import PipelineStage6 from "@/components/pipeline/PipelineStage6";
+import PipelineStage7 from "@/components/pipeline/PipelineStage7";
 
 // ─── Constants ───
 const STAGES = [
@@ -34,10 +36,10 @@ const STAGES = [
   { num: 3, label: "COA & Financial Statements", icon: Calculator },
   { num: 4, label: "Scrutiny Engine", icon: Eye },
   { num: 5, label: "Query Tracker", icon: ClipboardCheck },
-  { num: 6, label: "Fieldwork", icon: Layers },
-  { num: 7, label: "CARO / 3CD Reports", icon: BookMarked },
-  { num: 8, label: "FS & Notes", icon: FileText },
-  { num: 9, label: "Review & QC", icon: Shield },
+  { num: 6, label: "Workpapers & Risk", icon: Shield },
+  { num: 7, label: "Notes to Accounts", icon: BookMarked },
+  { num: 8, label: "CARO / 3CD Reports", icon: FileText },
+  { num: 9, label: "Review & QC", icon: Layers },
   { num: 10, label: "Sign-off & UDIN", icon: Award },
 ];
 
@@ -731,6 +733,20 @@ export default function AuditPipeline() {
           />
         ) : currentStage === 5 ? (
           <PipelineStage5
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
+        ) : currentStage === 6 ? (
+          <PipelineStage6
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
+        ) : currentStage === 7 ? (
+          <PipelineStage7
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}

@@ -555,6 +555,74 @@ export type Database = {
           },
         ]
       }
+      audit_notes: {
+        Row: {
+          ai_suggested: boolean | null
+          created_at: string | null
+          engagement_id: string
+          id: string
+          is_locked: boolean | null
+          is_mandatory: boolean | null
+          is_selected: boolean | null
+          linked_accounts: Json | null
+          note_content_auto: string | null
+          note_content_user: string | null
+          note_number: number
+          note_source: string | null
+          note_sub_sections: Json | null
+          note_title: string
+          table_data: Json | null
+          user_overrides: Json | null
+          xlsx_row_data: Json | null
+        }
+        Insert: {
+          ai_suggested?: boolean | null
+          created_at?: string | null
+          engagement_id: string
+          id?: string
+          is_locked?: boolean | null
+          is_mandatory?: boolean | null
+          is_selected?: boolean | null
+          linked_accounts?: Json | null
+          note_content_auto?: string | null
+          note_content_user?: string | null
+          note_number: number
+          note_source?: string | null
+          note_sub_sections?: Json | null
+          note_title: string
+          table_data?: Json | null
+          user_overrides?: Json | null
+          xlsx_row_data?: Json | null
+        }
+        Update: {
+          ai_suggested?: boolean | null
+          created_at?: string | null
+          engagement_id?: string
+          id?: string
+          is_locked?: boolean | null
+          is_mandatory?: boolean | null
+          is_selected?: boolean | null
+          linked_accounts?: Json | null
+          note_content_auto?: string | null
+          note_content_user?: string | null
+          note_number?: number
+          note_source?: string | null
+          note_sub_sections?: Json | null
+          note_title?: string
+          table_data?: Json | null
+          user_overrides?: Json | null
+          xlsx_row_data?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_notes_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_preliminary_answers: {
         Row: {
           activated_tabs: Json | null
@@ -2606,6 +2674,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      note_templates: {
+        Row: {
+          applicable_when: Json | null
+          created_at: string | null
+          id: string
+          is_mandatory: boolean | null
+          note_number: number
+          note_title: string
+          note_type: string | null
+          template_content: Json | null
+          xlsx_rows: Json | null
+        }
+        Insert: {
+          applicable_when?: Json | null
+          created_at?: string | null
+          id?: string
+          is_mandatory?: boolean | null
+          note_number: number
+          note_title: string
+          note_type?: string | null
+          template_content?: Json | null
+          xlsx_rows?: Json | null
+        }
+        Update: {
+          applicable_when?: Json | null
+          created_at?: string | null
+          id?: string
+          is_mandatory?: boolean | null
+          note_number?: number
+          note_title?: string
+          note_type?: string | null
+          template_content?: Json | null
+          xlsx_rows?: Json | null
+        }
+        Relationships: []
       }
       notification_log: {
         Row: {
