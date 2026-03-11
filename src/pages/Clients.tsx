@@ -247,13 +247,11 @@ const Clients = () => {
                 <TableHead className="text-xs">PAN</TableHead>
                 <TableHead className="text-xs">Constitution</TableHead>
                 <TableHead className="text-xs">Active Services</TableHead>
-                <TableHead className="text-xs">ITR Status</TableHead>
                 <TableHead className="text-xs w-12"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map(client => {
-                const itr = itrStatusMap[client.id];
                 const svcCount = serviceCountMap[client.id] || 0;
                 return (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
@@ -261,7 +259,6 @@ const Clients = () => {
                     <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                     <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                     <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
-                    <TableCell><span className={`text-xs font-medium ${getItrStatusColor(itr?.filing_status)}`}>{itr?.filing_status || "Not Filed"}</span></TableCell>
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
