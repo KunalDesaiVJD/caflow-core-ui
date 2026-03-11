@@ -380,6 +380,7 @@ serve(async (req) => {
         isBalanced,
         detectedFormat,
         batchId,
+        tagging: taggingResult,
         hierarchy: nodes.map(n => ({
           nodeId: n.nodeId,
           parentNodeId: n.parentNodeId,
