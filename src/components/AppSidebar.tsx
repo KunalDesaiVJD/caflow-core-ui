@@ -34,6 +34,7 @@ import {
   BrainCircuit,
   FileOutput,
   HelpCircle,
+  Package,
   Send,
   Layers,
 } from "lucide-react";
