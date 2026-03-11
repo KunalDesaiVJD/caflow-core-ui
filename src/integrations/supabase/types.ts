@@ -262,6 +262,7 @@ export type Database = {
           planned_start: string | null
           preliminary_complete: boolean | null
           questionnaire_answers: Json | null
+          re_evaluate_scrutiny: boolean | null
           requires_3ca: boolean | null
           requires_3cb: boolean | null
           requires_3cd: boolean | null
@@ -309,6 +310,7 @@ export type Database = {
           planned_start?: string | null
           preliminary_complete?: boolean | null
           questionnaire_answers?: Json | null
+          re_evaluate_scrutiny?: boolean | null
           requires_3ca?: boolean | null
           requires_3cb?: boolean | null
           requires_3cd?: boolean | null
@@ -356,6 +358,7 @@ export type Database = {
           planned_start?: string | null
           preliminary_complete?: boolean | null
           questionnaire_answers?: Json | null
+          re_evaluate_scrutiny?: boolean | null
           requires_3ca?: boolean | null
           requires_3cb?: boolean | null
           requires_3cd?: boolean | null
@@ -749,6 +752,52 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      carry_forward_queries: {
+        Row: {
+          carried_at: string | null
+          carried_by: string | null
+          id: string
+          source_query_id: string
+          target_engagement_id: string
+        }
+        Insert: {
+          carried_at?: string | null
+          carried_by?: string | null
+          id?: string
+          source_query_id: string
+          target_engagement_id: string
+        }
+        Update: {
+          carried_at?: string | null
+          carried_by?: string | null
+          id?: string
+          source_query_id?: string
+          target_engagement_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "carry_forward_queries_carried_by_fkey"
+            columns: ["carried_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "carry_forward_queries_source_query_id_fkey"
+            columns: ["source_query_id"]
+            isOneToOne: false
+            referencedRelation: "audit_client_queries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "carry_forward_queries_target_engagement_id_fkey"
+            columns: ["target_engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
             referencedColumns: ["id"]
           },
         ]
@@ -2794,6 +2843,77 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scrutiny_rules: {
+        Row: {
+          applicable_to: Json | null
+          audit_query_template: string | null
+          category: string
+          created_by: string | null
+          detection_level: string
+          detection_logic: Json | null
+          id: string
+          is_active: boolean | null
+          legal_reference: string | null
+          prior_year_needed: boolean | null
+          root_cause: string | null
+          rule_id: string
+          rule_name: string
+          rules_version: string | null
+          severity: string
+          threshold_type: string
+          threshold_value: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          applicable_to?: Json | null
+          audit_query_template?: string | null
+          category: string
+          created_by?: string | null
+          detection_level?: string
+          detection_logic?: Json | null
+          id?: string
+          is_active?: boolean | null
+          legal_reference?: string | null
+          prior_year_needed?: boolean | null
+          root_cause?: string | null
+          rule_id: string
+          rule_name: string
+          rules_version?: string | null
+          severity?: string
+          threshold_type?: string
+          threshold_value?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          applicable_to?: Json | null
+          audit_query_template?: string | null
+          category?: string
+          created_by?: string | null
+          detection_level?: string
+          detection_logic?: Json | null
+          id?: string
+          is_active?: boolean | null
+          legal_reference?: string | null
+          prior_year_needed?: boolean | null
+          root_cause?: string | null
+          rule_id?: string
+          rule_name?: string
+          rules_version?: string | null
+          severity?: string
+          threshold_type?: string
+          threshold_value?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scrutiny_rules_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
