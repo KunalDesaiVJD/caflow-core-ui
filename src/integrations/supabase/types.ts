@@ -1466,6 +1466,297 @@ export type Database = {
           },
         ]
       }
+      fa_asset_disposals: {
+        Row: {
+          accumulated_dep_reversed: number
+          asset_id: string
+          created_at: string | null
+          created_by: string | null
+          disposal_date: string
+          disposal_proceeds: number
+          entry_narration: string | null
+          gross_block_reversed: number
+          id: string
+          net_book_value_at_disposal: number
+          profit_loss_on_disposal: number
+        }
+        Insert: {
+          accumulated_dep_reversed?: number
+          asset_id: string
+          created_at?: string | null
+          created_by?: string | null
+          disposal_date: string
+          disposal_proceeds?: number
+          entry_narration?: string | null
+          gross_block_reversed?: number
+          id?: string
+          net_book_value_at_disposal?: number
+          profit_loss_on_disposal?: number
+        }
+        Update: {
+          accumulated_dep_reversed?: number
+          asset_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          disposal_date?: string
+          disposal_proceeds?: number
+          entry_narration?: string | null
+          gross_block_reversed?: number
+          id?: string
+          net_book_value_at_disposal?: number
+          profit_loss_on_disposal?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_asset_disposals_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "fa_assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_asset_disposals_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fa_assets: {
+        Row: {
+          accumulated_dep_opening: number
+          addition_date: string | null
+          additions_during_year: number
+          asset_code: string | null
+          asset_name: string
+          category_id: string
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          date_of_purchase: string
+          depreciation_for_year: number | null
+          disposal_date: string | null
+          disposal_proceeds: number
+          disposals_during_year: number
+          engagement_id: string | null
+          fy: string | null
+          gross_block_opening: number
+          id: string
+          is_carried_forward: boolean
+          is_locked: boolean
+          location: string | null
+        }
+        Insert: {
+          accumulated_dep_opening?: number
+          addition_date?: string | null
+          additions_during_year?: number
+          asset_code?: string | null
+          asset_name: string
+          category_id: string
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          date_of_purchase: string
+          depreciation_for_year?: number | null
+          disposal_date?: string | null
+          disposal_proceeds?: number
+          disposals_during_year?: number
+          engagement_id?: string | null
+          fy?: string | null
+          gross_block_opening?: number
+          id?: string
+          is_carried_forward?: boolean
+          is_locked?: boolean
+          location?: string | null
+        }
+        Update: {
+          accumulated_dep_opening?: number
+          addition_date?: string | null
+          additions_during_year?: number
+          asset_code?: string | null
+          asset_name?: string
+          category_id?: string
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          date_of_purchase?: string
+          depreciation_for_year?: number | null
+          disposal_date?: string | null
+          disposal_proceeds?: number
+          disposals_during_year?: number
+          engagement_id?: string | null
+          fy?: string | null
+          gross_block_opening?: number
+          id?: string
+          is_carried_forward?: boolean
+          is_locked?: boolean
+          location?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_assets_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "fa_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_assets_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_assets_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_assets_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fa_categories: {
+        Row: {
+          created_at: string | null
+          depreciation_method: string
+          firm_id: string | null
+          id: string
+          name: string
+          residual_value_pct: number
+          useful_life_years: number
+        }
+        Insert: {
+          created_at?: string | null
+          depreciation_method?: string
+          firm_id?: string | null
+          id?: string
+          name: string
+          residual_value_pct?: number
+          useful_life_years: number
+        }
+        Update: {
+          created_at?: string | null
+          depreciation_method?: string
+          firm_id?: string | null
+          id?: string
+          name?: string
+          residual_value_pct?: number
+          useful_life_years?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_categories_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fa_depreciation_schedule: {
+        Row: {
+          asset_id: string
+          created_at: string | null
+          depreciation_amount: number
+          depreciation_rate: number
+          fy: string
+          id: string
+          wdv_closing: number
+          wdv_opening: number
+        }
+        Insert: {
+          asset_id: string
+          created_at?: string | null
+          depreciation_amount: number
+          depreciation_rate: number
+          fy: string
+          id?: string
+          wdv_closing: number
+          wdv_opening: number
+        }
+        Update: {
+          asset_id?: string
+          created_at?: string | null
+          depreciation_amount?: number
+          depreciation_rate?: number
+          fy?: string
+          id?: string
+          wdv_closing?: number
+          wdv_opening?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_depreciation_schedule_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "fa_assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fa_import_batches: {
+        Row: {
+          client_id: string
+          error_count: number | null
+          file_url: string | null
+          fy: string
+          id: string
+          imported_at: string | null
+          imported_by: string | null
+          processed_count: number | null
+          row_count: number | null
+          status: string | null
+        }
+        Insert: {
+          client_id: string
+          error_count?: number | null
+          file_url?: string | null
+          fy: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          processed_count?: number | null
+          row_count?: number | null
+          status?: string | null
+        }
+        Update: {
+          client_id?: string
+          error_count?: number | null
+          file_url?: string | null
+          fy?: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          processed_count?: number | null
+          row_count?: number | null
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_import_batches_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_import_batches_imported_by_fkey"
+            columns: ["imported_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       feedback: {
         Row: {
           created_at: string | null
@@ -2863,7 +3154,31 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      fa_summary_by_fy: {
+        Row: {
+          acc_dep_closing: number | null
+          acc_dep_opening: number | null
+          additions: number | null
+          category_name: string | null
+          client_id: string | null
+          depreciation: number | null
+          disposals: number | null
+          fy: string | null
+          gross_block_closing: number | null
+          gross_block_opening: number | null
+          net_block: number | null
+          useful_life_years: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_assets_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       current_user_firm_id: { Args: never; Returns: string }
