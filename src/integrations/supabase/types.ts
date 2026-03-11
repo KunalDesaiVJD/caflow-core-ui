@@ -86,6 +86,53 @@ export type Database = {
         }
         Relationships: []
       }
+      audit_3cd_responses: {
+        Row: {
+          auto_value: string | null
+          clause_number: number
+          clause_sub: string | null
+          engagement_id: string
+          id: string
+          is_applicable: boolean
+          is_locked: boolean
+          last_updated_by: string | null
+          updated_at: string | null
+          user_value: string | null
+        }
+        Insert: {
+          auto_value?: string | null
+          clause_number: number
+          clause_sub?: string | null
+          engagement_id: string
+          id?: string
+          is_applicable?: boolean
+          is_locked?: boolean
+          last_updated_by?: string | null
+          updated_at?: string | null
+          user_value?: string | null
+        }
+        Update: {
+          auto_value?: string | null
+          clause_number?: number
+          clause_sub?: string | null
+          engagement_id?: string
+          id?: string
+          is_applicable?: boolean
+          is_locked?: boolean
+          last_updated_by?: string | null
+          updated_at?: string | null
+          user_value?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_3cd_responses_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_ai_skills: {
         Row: {
           action_count: number | null
@@ -139,6 +186,59 @@ export type Database = {
           skill_data?: Json
         }
         Relationships: []
+      }
+      audit_caro_responses: {
+        Row: {
+          auto_draft: string | null
+          clause_number: number
+          clause_title: string
+          engagement_id: string
+          id: string
+          inapplicability_reason: string | null
+          is_applicable: boolean
+          is_locked: boolean
+          last_updated_at: string | null
+          last_updated_by: string | null
+          status: string
+          user_response: string | null
+        }
+        Insert: {
+          auto_draft?: string | null
+          clause_number: number
+          clause_title: string
+          engagement_id: string
+          id?: string
+          inapplicability_reason?: string | null
+          is_applicable?: boolean
+          is_locked?: boolean
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          status?: string
+          user_response?: string | null
+        }
+        Update: {
+          auto_draft?: string | null
+          clause_number?: number
+          clause_title?: string
+          engagement_id?: string
+          id?: string
+          inapplicability_reason?: string | null
+          is_applicable?: boolean
+          is_locked?: boolean
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          status?: string
+          user_response?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_caro_responses_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       audit_client_queries: {
         Row: {
