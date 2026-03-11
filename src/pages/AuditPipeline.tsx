@@ -24,14 +24,16 @@ import {
 } from "lucide-react";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
+import PipelineStage4 from "@/components/pipeline/PipelineStage4";
+import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 
 // ─── Constants ───
 const STAGES = [
   { num: 1, label: "Engagement Setup", icon: Building2 },
   { num: 2, label: "Trial Balance Import", icon: FileText },
-  { num: 3, label: "Scrutiny & Analysis", icon: Eye },
-  { num: 4, label: "Risk Assessment", icon: BarChart3 },
-  { num: 5, label: "Audit Programme", icon: ClipboardCheck },
+  { num: 3, label: "COA & Financial Statements", icon: Calculator },
+  { num: 4, label: "Scrutiny Engine", icon: Eye },
+  { num: 5, label: "Query Tracker", icon: ClipboardCheck },
   { num: 6, label: "Fieldwork", icon: Layers },
   { num: 7, label: "CARO / 3CD Reports", icon: BookMarked },
   { num: 8, label: "FS & Notes", icon: FileText },
@@ -720,14 +722,26 @@ export default function AuditPipeline() {
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
+        ) : currentStage === 4 ? (
+          <PipelineStage4
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
+        ) : currentStage === 5 ? (
+          <PipelineStage5
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : (
-          /* Other stages placeholder */
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
             <CheckCircle2 size={48} className="text-primary opacity-40" />
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">Stage {currentStage} — {STAGES[currentStage - 1]?.label}</h2>
               <p className="text-sm">This stage will be built in the next iteration.</p>
-              <p className="text-xs mt-2">Navigate using the left stepper to review completed stages.</p>
             </div>
           </div>
         )}
