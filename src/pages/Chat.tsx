@@ -378,8 +378,9 @@ export default function Chat() {
 
   const createGroupChat = async () => {
     if (!user || !groupName.trim() || selectedUsers.length === 0) return;
+    const convFirmId = user.firm_id || "";
     const { data: conv } = await supabase.from("chat_conversations").insert({
-      firm_id: user.firm_id!,
+      firm_id: convFirmId,
       type: "group",
       name: groupName.trim(),
       created_by: user.id,
