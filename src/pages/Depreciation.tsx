@@ -428,7 +428,7 @@ export default function Depreciation() {
                           <TableCell className="text-right tabular-nums">{fmt(parseFloat(d.accumulated_dep_reversed as any))}</TableCell>
                           <TableCell className="text-right tabular-nums">{fmt(parseFloat(d.net_book_value_at_disposal as any))}</TableCell>
                           <TableCell className="text-right tabular-nums">{fmt(parseFloat(d.disposal_proceeds as any))}</TableCell>
-                          <TableCell className={cn("text-right tabular-nums font-medium", pl >= 0 ? "text-green-600" : "text-destructive")}>
+                          <TableCell className={cn("text-right tabular-nums font-medium", pl >= 0 ? "text-primary" : "text-destructive")}>
                             {pl >= 0 ? "+" : ""}{fmt(pl)}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{d.entry_narration}</TableCell>
