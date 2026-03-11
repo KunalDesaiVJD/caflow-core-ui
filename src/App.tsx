@@ -170,7 +170,8 @@ const App = () => (
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
-              <Route path="/notices" element={<NoticeTracker />} />
+              {/* Notice Tracker merged into IT Returns compliance tab */}
+              <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />

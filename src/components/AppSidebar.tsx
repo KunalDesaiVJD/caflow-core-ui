@@ -58,7 +58,7 @@ const topNavItems = [
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
   { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
-  { title: "Notice Tracker", path: "/notices", icon: AlertTriangle, module: "Clients" },
+  
 ];
 
 const auditSections = [
