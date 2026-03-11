@@ -159,6 +159,7 @@ const App = () => (
               <Route path="/audit-intelligence" element={<Navigate to="/audit" replace />} />
 
               <Route path="/tds-filings" element={<TdsFilings />} />
+              <Route path="/billing/edit/:invoiceId" element={<NewInvoice />} />
               <Route path="/itr" element={<ItReturns />} />
               <Route path="/itr/demands" element={<ItrDemands />} />
               <Route path="/itr/:clientId" element={<ItrAisRecon />} />

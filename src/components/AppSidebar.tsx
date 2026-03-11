@@ -54,8 +54,6 @@ const topNavItems = [
   { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
-  { title: "Billing", path: "/billing", icon: CreditCard, module: "Billing" },
-  { title: "Timesheets", path: "/billing/timesheets", icon: Clock, module: "Billing" },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
   { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
