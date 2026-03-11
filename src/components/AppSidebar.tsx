@@ -215,72 +215,74 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         ))}
 
-        {/* Audit Intelligence - Collapsible */}
-        {collapsed ? (
-          <Link
-            to="/audit"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isAuditActive
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-            )}
-          >
-            <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
-          </Link>
-        ) : (
-          <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
-            <CollapsibleTrigger className="w-full">
-              <div
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
-                  isAuditActive
-                    ? "bg-sidebar-gold/15 text-sidebar-gold"
-                    : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-                )}
-              >
-                <Search size={20} className="shrink-0 text-sidebar-gold" />
-                <span className="truncate flex-1 text-left">
-                  Audit Intelligence
-                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
-                    Pro
+        {/* Audit Intelligence - Collapsible - only if can view */}
+        {can("Audit Intelligence", "can_view") && (
+          collapsed ? (
+            <Link
+              to="/audit"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                isAuditActive
+                  ? "bg-sidebar-gold/15 text-sidebar-gold"
+                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+              )}
+            >
+              <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
+            </Link>
+          ) : (
+            <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
+              <CollapsibleTrigger className="w-full">
+                <div
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
+                    isAuditActive
+                      ? "bg-sidebar-gold/15 text-sidebar-gold"
+                      : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                  )}
+                >
+                  <Search size={20} className="shrink-0 text-sidebar-gold" />
+                  <span className="truncate flex-1 text-left">
+                    Audit Intelligence
+                    <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
+                      Pro
+                    </span>
                   </span>
-                </span>
-                {auditOpen ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-              </div>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
-                {auditSections.map((section) => (
-                  <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
-                    <CollapsibleTrigger className="w-full">
-                      <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
-                        <span>{section.label}</span>
-                        {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      </div>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      {section.items.map((item) => (
-                        <Link
-                          key={item.path}
-                          to={item.path}
-                          className={cn(
-                            "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
-                            isActive(item.path)
-                              ? "bg-sidebar-gold/10 text-sidebar-gold"
-                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                          )}
-                        >
-                          <item.icon size={14} className="shrink-0" />
-                          <span className="truncate">{item.title}</span>
-                        </Link>
-                      ))}
-                    </CollapsibleContent>
-                  </Collapsible>
-                ))}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+                  {auditOpen ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                </div>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
+                  {auditSections.map((section) => (
+                    <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
+                      <CollapsibleTrigger className="w-full">
+                        <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
+                          <span>{section.label}</span>
+                          {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </div>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        {section.items.map((item) => (
+                          <Link
+                            key={item.path}
+                            to={item.path}
+                            className={cn(
+                              "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                              isActive(item.path)
+                                ? "bg-sidebar-gold/10 text-sidebar-gold"
+                                : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                            )}
+                          >
+                            <item.icon size={14} className="shrink-0" />
+                            <span className="truncate">{item.title}</span>
+                          </Link>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )
         )}
 
         <div className="flex-1" />
