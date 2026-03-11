@@ -347,19 +347,53 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         )}
 
+        {/* Firm Settings */}
+        {can("Settings", "can_view") && (
+          <Link
+            to="/settings/firm"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/firm")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Building2 size={20} className="shrink-0" />
+            {!collapsed && <span>Firm Settings</span>}
+          </Link>
+        )}
+
+        {/* Roles & Permissions */}
+        {can("Roles", "can_view") && (
+          <Link
+            to="/settings/roles"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/roles")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Shield size={20} className="shrink-0" />
+            {!collapsed && <span>Roles</span>}
+          </Link>
+        )}
+
         {/* Settings */}
-        <Link
-          to={settingsItem.path}
-          className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-            isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms")
-              ? "bg-sidebar-gold/15 text-sidebar-gold"
-              : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
-          )}
-        >
-          <settingsItem.icon size={20} className="shrink-0" />
-          {!collapsed && <span>Settings</span>}
-        </Link>
+        {can("Settings", "can_view") && (
+          <Link
+            to={settingsItem.path}
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/audit-firms") && !isActive("/settings/firm") && !isActive("/settings/roles")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <settingsItem.icon size={20} className="shrink-0" />
+            {!collapsed && <span>Settings</span>}
+          </Link>
+        )}
       </nav>
 
       {/* User section with dropdown */}
