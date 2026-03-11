@@ -738,6 +738,20 @@ export default function AuditPipeline() {
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
+        ) : currentStage === 6 ? (
+          <PipelineStage6
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
+        ) : currentStage === 7 ? (
+          <PipelineStage7
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
             <CheckCircle2 size={48} className="text-primary opacity-40" />
