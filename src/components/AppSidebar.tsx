@@ -48,16 +48,16 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 const topNavItems = [
-  { title: "Dashboard", path: "/", icon: LayoutDashboard },
-  { title: "Clients", path: "/clients", icon: Users },
-  { title: "TDS Filings", path: "/tds-filings", icon: Receipt },
-  { title: "IT Returns", path: "/itr", icon: FileText },
-  { title: "Billing", path: "/billing", icon: CreditCard },
-  { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
-  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
-  { title: "Documents", path: "/documents", icon: FolderOpen },
-  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark },
-  { title: "Notice Tracker", path: "/notices", icon: AlertTriangle },
+  { title: "Dashboard", path: "/", icon: LayoutDashboard, module: "Dashboard" },
+  { title: "Clients", path: "/clients", icon: Users, module: "Clients" },
+  { title: "TDS Filings", path: "/tds-filings", icon: Receipt, module: "TDS" },
+  { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
+  { title: "Billing", path: "/billing", icon: CreditCard, module: "Billing" },
+  { title: "Timesheets", path: "/billing/timesheets", icon: Clock, module: "Billing" },
+  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
+  { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
+  { title: "Audit Firms", path: "/settings/audit-firms", icon: Landmark, module: "Settings" },
+  { title: "Notice Tracker", path: "/notices", icon: AlertTriangle, module: "Clients" },
 ];
 
 const auditSections = [
