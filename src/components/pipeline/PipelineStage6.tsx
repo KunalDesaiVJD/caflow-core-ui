@@ -130,10 +130,10 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
     queryKey: ["scrutiny-findings-for-risk", engagementId],
     queryFn: async () => {
       const { data } = await supabase
-        .from("scrutiny_findings")
+        .from("scrutiny_findings" as any)
         .select("rule_id, severity, category")
         .eq("engagement_id", engagementId);
-      return data || [];
+      return (data || []) as any[];
     },
     enabled: !!engagementId,
   });
