@@ -179,6 +179,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           <FeedbackWidget />
+          </PermissionsProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
