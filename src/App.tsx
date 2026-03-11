@@ -59,6 +59,7 @@ import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
 import ServiceMasters from "./pages/ServiceMasters";
 import Chat from "./pages/Chat";
+import Depreciation from "./pages/Depreciation";
 import { useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -177,6 +178,7 @@ const App = () => (
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />
+              <Route path="/depreciation" element={<Depreciation />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
