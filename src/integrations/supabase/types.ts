@@ -242,6 +242,7 @@ export type Database = {
           caro_responses: Json | null
           cash_flow_method: string | null
           client_id: string | null
+          coa_mapping: Json | null
           entity_type: string | null
           entity_type_logic: string | null
           final_locked: boolean | null
@@ -288,6 +289,7 @@ export type Database = {
           caro_responses?: Json | null
           cash_flow_method?: string | null
           client_id?: string | null
+          coa_mapping?: Json | null
           entity_type?: string | null
           entity_type_logic?: string | null
           final_locked?: boolean | null
@@ -334,6 +336,7 @@ export type Database = {
           caro_responses?: Json | null
           cash_flow_method?: string | null
           client_id?: string | null
+          coa_mapping?: Json | null
           entity_type?: string | null
           entity_type_logic?: string | null
           final_locked?: boolean | null
@@ -1770,6 +1773,65 @@ export type Database = {
             columns: ["asset_id"]
             isOneToOne: false
             referencedRelation: "fa_assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fa_financial_statements: {
+        Row: {
+          amount_cy: number | null
+          amount_py: number | null
+          created_at: string | null
+          engagement_id: string
+          id: string
+          is_manual: boolean | null
+          line_item_code: string | null
+          line_item_name: string
+          note_ref: number | null
+          override_reason: string | null
+          schedule_ref: string | null
+          section: string
+          sort_order: number | null
+          source: string | null
+        }
+        Insert: {
+          amount_cy?: number | null
+          amount_py?: number | null
+          created_at?: string | null
+          engagement_id: string
+          id?: string
+          is_manual?: boolean | null
+          line_item_code?: string | null
+          line_item_name: string
+          note_ref?: number | null
+          override_reason?: string | null
+          schedule_ref?: string | null
+          section: string
+          sort_order?: number | null
+          source?: string | null
+        }
+        Update: {
+          amount_cy?: number | null
+          amount_py?: number | null
+          created_at?: string | null
+          engagement_id?: string
+          id?: string
+          is_manual?: boolean | null
+          line_item_code?: string | null
+          line_item_name?: string
+          note_ref?: number | null
+          override_reason?: string | null
+          schedule_ref?: string | null
+          section?: string
+          sort_order?: number | null
+          source?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_financial_statements_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
             referencedColumns: ["id"]
           },
         ]
