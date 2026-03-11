@@ -147,7 +147,7 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
     try {
       // Delete existing open findings first
       await supabase
-        .from("scrutiny_findings")
+        .from("scrutiny_findings" as any)
         .delete()
         .eq("engagement_id", engagementId)
         .eq("status", "open");
