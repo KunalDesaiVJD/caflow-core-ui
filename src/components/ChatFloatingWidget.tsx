@@ -12,7 +12,7 @@ export function ChatFloatingWidget() {
   const [unreadCount, setUnreadCount] = useState(0);
 
   // Don't show on chat page itself or login/portal
-  if (!user || location.pathname === "/chat" || location.pathname.startsWith("/login") || location.pathname.startsWith("/portal") || location.pathname.startsWith("/admin")) {
+  if (!user || location.pathname === "/chat" || location.pathname.startsWith("/login") || location.pathname.startsWith("/portal")) {
     return null;
   }
 

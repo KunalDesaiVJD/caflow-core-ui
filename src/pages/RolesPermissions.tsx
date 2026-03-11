@@ -278,7 +278,7 @@ const RolesPermissions = () => {
                 {ALL_MODULES.map(mod => (
                   <tr key={mod} className="border-t border-border hover:bg-muted/50">
                     <td className="sticky left-0 z-10 bg-background px-4 py-3 font-medium text-foreground whitespace-nowrap">
-                      {mod}
+                      {MODULE_LABELS[mod] || mod}
                     </td>
                     {ALL_ROLES.filter(r => r !== "superadmin").map(role => {
                       const row = grid[role]?.[mod];

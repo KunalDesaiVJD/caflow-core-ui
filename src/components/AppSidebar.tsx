@@ -349,7 +349,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Firm Settings */}
-        {can("Settings", "can_view") && (
+        {can("Firm Management", "can_view") && (
           <Link
             to="/settings/firm"
             className={cn(
@@ -365,7 +365,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Service Masters */}
-        {can("Settings", "can_view") && (
+        {can("Service Masters", "can_view") && (
           <Link
             to="/settings/services"
             className={cn(
@@ -381,7 +381,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Roles & Permissions */}
-        {can("Roles", "can_view") && (
+        {can("Settings", "can_view") && (
           <Link
             to="/settings/roles"
             className={cn(

@@ -450,62 +450,113 @@ const NewInvoice = () => {
         </div></body></html>`;
     }
 
-    // For other formats, use a simplified version
+    // Modern format
+    if (invoiceFormat === "modern") {
+      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
+        <style>body{font-family:system-ui,sans-serif;margin:0;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:0}}</style></head><body>
+        <div style="background:linear-gradient(135deg,${primaryColor},${primaryColor}dd);padding:32px;color:white">
+          <h1 style="margin:0;font-size:28px;font-weight:800">${fromName}</h1>
+          <p style="margin:4px 0;font-size:13px;opacity:0.85">${fromAddress}</p>
+          ${fromGstin ? `<p style="margin:2px 0;font-size:12px;opacity:0.75">GSTIN: ${fromGstin}</p>` : ""}
+          <div style="margin-top:16px;display:flex;gap:32px">
+            <div><p style="font-size:11px;opacity:0.7;margin:0">INVOICE NO</p><p style="font-size:16px;font-weight:700;margin:4px 0">${invoiceNo}</p></div>
+            <div><p style="font-size:11px;opacity:0.7;margin:0">DATE</p><p style="font-size:16px;font-weight:700;margin:4px 0">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p></div>
+            <div><p style="font-size:11px;opacity:0.7;margin:0">DUE DATE</p><p style="font-size:16px;font-weight:700;margin:4px 0">${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</p></div>
+          </div>
+        </div>
+        <div style="padding:24px 32px">
+          <div style="margin-bottom:24px"><p style="font-size:11px;text-transform:uppercase;color:#999;margin:0 0 4px">Bill To</p><p style="margin:0;font-weight:600;font-size:16px">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}</div>
+          <table><thead><tr style="background:#f3f4f6"><th style="padding:10px;text-align:left">#</th><th style="padding:10px;text-align:left">Description</th><th style="padding:10px;text-align:right">Qty</th><th style="padding:10px;text-align:right">Rate</th><th style="padding:10px;text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+          <div style="display:flex;justify-content:flex-end;margin-top:16px">
+            <div style="background:${primaryColor};color:white;padding:16px 24px;border-radius:8px"><table style="width:280px">
+              <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+              ${isIntraState ? `<tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
+              <tr style="font-weight:700;font-size:16px;border-top:2px solid rgba(255,255,255,0.3)"><td style="padding:8px">Total</td><td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+            </table></div>
+          </div>
+          ${bankHtml}
+          <div style="margin-top:40px;text-align:right"><p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p><p style="margin:4px 0;font-weight:600">${signatoryName}</p></div>
+          ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999">${footerText}</p>` : ""}
+        </div></body></html>`;
+    }
+
+    // Minimal format
+    if (invoiceFormat === "minimal") {
+      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
+        <style>body{font-family:'Helvetica Neue',sans-serif;margin:48px;color:#333}table{width:100%;border-collapse:collapse}@media print{body{margin:20px}}</style></head><body>
+        <div style="display:flex;justify-content:space-between;margin-bottom:48px">
+          <div><h1 style="margin:0;font-size:32px;font-weight:300;color:#999;letter-spacing:2px">INVOICE</h1></div>
+          <div style="text-align:right"><p style="margin:0;font-size:14px;color:#999">${invoiceNo}</p><p style="margin:4px 0;font-size:14px;color:#999">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : ""}</p></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid #eee">
+          <div><p style="font-size:11px;text-transform:uppercase;color:#bbb;margin:0 0 4px;letter-spacing:1px">From</p><p style="margin:0;font-weight:500">${fromName}</p><p style="margin:2px 0;font-size:13px;color:#888">${fromAddress}</p></div>
+          <div style="text-align:right"><p style="font-size:11px;text-transform:uppercase;color:#bbb;margin:0 0 4px;letter-spacing:1px">To</p><p style="margin:0;font-weight:500">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#888">PAN: ${toPan}</p>` : ""}</div>
+        </div>
+        <table><thead><tr><th style="padding:8px 0;text-align:left;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">#</th><th style="padding:8px 0;text-align:left;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Description</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Qty</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Rate</th><th style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:400;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:1px">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+        <div style="display:flex;justify-content:flex-end;margin-top:24px"><table style="width:240px">
+          <tr><td style="padding:4px 0;color:#888">Subtotal</td><td style="padding:4px 0;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          ${isIntraState ? `<tr><td style="padding:4px 0;color:#888">CGST @ ${cgstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 0;color:#888">SGST @ ${sgstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 0;color:#888">IGST @ ${igstRate}%</td><td style="padding:4px 0;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
+          <tr style="font-weight:700;font-size:18px;border-top:1px solid #eee"><td style="padding:12px 0">Total</td><td style="padding:12px 0;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+        </table></div>
+        ${bankHtml}${paymentTerms ? `<p style="margin-top:32px;font-size:12px;color:#999">${paymentTerms}</p>` : ""}
+        <div style="margin-top:48px;text-align:right"><p style="margin:0;font-size:12px;color:#bbb">Authorized Signatory</p><p style="margin:4px 0;font-weight:500">${signatoryName}</p></div>
+        </body></html>`;
+    }
+
+    // GST Detailed format
+    if (invoiceFormat === "gst_detailed") {
+      return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
+        <style>body{font-family:system-ui,sans-serif;margin:0;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:10px}}</style></head><body>
+        <div style="border:2px solid ${primaryColor};margin:16px">
+          <div style="text-align:center;padding:12px;background:${primaryColor}10;border-bottom:2px solid ${primaryColor}"><h2 style="margin:0;color:${primaryColor};font-size:18px">TAX INVOICE</h2></div>
+          <div style="padding:16px;display:flex;justify-content:space-between;border-bottom:1px solid #ddd">
+            <div><p style="font-weight:700;margin:0">${fromName}</p><p style="margin:2px 0;font-size:12px">${fromAddress}</p>${fromGstin ? `<p style="margin:2px 0;font-size:12px;font-weight:600">GSTIN: ${fromGstin}</p>` : ""}${fromPan ? `<p style="margin:2px 0;font-size:12px">PAN: ${fromPan}</p>` : ""}</div>
+            <div style="text-align:right"><p style="margin:2px 0;font-size:13px"><strong>Invoice No:</strong> ${invoiceNo}</p><p style="margin:2px 0;font-size:13px"><strong>Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "—"}</p><p style="margin:2px 0;font-size:13px"><strong>Due:</strong> ${dueDate ? format(new Date(dueDate), "dd/MM/yyyy") : "—"}</p></div>
+          </div>
+          <div style="padding:16px;border-bottom:1px solid #ddd"><p style="font-size:11px;text-transform:uppercase;color:#666;margin:0 0 4px">Bill To</p><p style="font-weight:600;margin:0">${toName}</p>${toGstin ? `<p style="margin:2px 0;font-size:12px;font-weight:600">GSTIN: ${toGstin}</p>` : ""}${toPan ? `<p style="margin:2px 0;font-size:12px">PAN: ${toPan}</p>` : ""}</div>
+          <table><thead><tr style="background:${primaryColor}15"><th style="padding:8px;text-align:left;border:1px solid #ddd;font-size:12px">#</th><th style="padding:8px;text-align:left;border:1px solid #ddd;font-size:12px">Description</th><th style="padding:8px;text-align:center;border:1px solid #ddd;font-size:12px">SAC/HSN</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Qty</th><th style="padding:8px;border:1px solid #ddd;font-size:12px">Unit</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Rate</th><th style="padding:8px;text-align:right;border:1px solid #ddd;font-size:12px">Amount</th></tr></thead><tbody>${items.map((item, i) => `<tr><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${i+1}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${item.description}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:center">${item.hsn_sac_code}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">${item.quantity}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px">${item.unit}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">₹${item.rate.toLocaleString("en-IN")}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:12px;text-align:right">₹${item.amount.toLocaleString("en-IN")}</td></tr>`).join("")}</tbody></table>
+          <div style="display:flex;justify-content:flex-end;padding:16px"><table style="width:300px;border:1px solid #ddd">
+            <tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">Taxable Value</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd;font-weight:600">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+            ${isIntraState ? `<tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">CGST @ ${cgstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">SGST @ ${sgstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:6px 12px;border-bottom:1px solid #ddd">IGST @ ${igstRate}%</td><td style="padding:6px 12px;text-align:right;border-bottom:1px solid #ddd">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
+            <tr style="background:${primaryColor}10;font-weight:700;font-size:15px"><td style="padding:10px 12px">Grand Total</td><td style="padding:10px 12px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          </table></div>
+          ${bankHtml}
+          <div style="padding:16px;border-top:1px solid #ddd;display:flex;justify-content:space-between;align-items:flex-end">
+            <div style="font-size:11px;color:#888">${paymentTerms || ""}</div>
+            <div style="text-align:right"><p style="margin:0;font-size:11px;color:#999">For ${fromName}</p><div style="height:40px"></div><p style="margin:0;font-weight:600;font-size:13px">${signatoryName}</p><p style="margin:0;font-size:11px;color:#999">Authorized Signatory</p></div>
+          </div>
+        </div></body></html>`;
+    }
+
+    // Retainer format — with hours breakdown
     return `<!DOCTYPE html><html><head><title>Invoice ${invoiceNo}</title>
-      <style>body{font-family:system-ui,sans-serif;margin:40px;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:20px}}</style></head><body>
-      ${invoiceFormat === "gst_detailed" ? `<h2 style="text-align:center;color:${primaryColor};margin:0">TAX INVOICE</h2>` : ""}
-      <div style="display:flex;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:${invoiceFormat === "minimal" ? "1px solid #eee" : `3px solid ${primaryColor}`}">
-        <div>
-          <h1 style="margin:0;font-size:${invoiceFormat === "modern" ? "28px" : "22px"};color:${invoiceFormat === "minimal" ? "#999" : primaryColor}">${fromName}</h1>
-          <p style="margin:4px 0;font-size:13px;color:#666">${fromAddress}</p>
-          ${fromGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${fromGstin}</p>` : ""}
-        </div>
-        <div style="text-align:right">
-          <h2 style="margin:0;font-size:18px">INVOICE</h2>
-          <p style="margin:4px 0;font-size:14px">${invoiceNo}</p>
-          <p style="margin:2px 0;font-size:13px">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : ""}</p>
-        </div>
+      <style>body{font-family:system-ui,sans-serif;margin:32px;color:#1a1a1a}table{width:100%;border-collapse:collapse}@media print{body{margin:20px}}</style></head><body>
+      <div style="display:flex;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid ${primaryColor}">
+        <div><h1 style="margin:0;font-size:22px;color:${primaryColor}">${fromName}</h1><p style="margin:4px 0;font-size:13px;color:#666">${fromAddress}</p>${fromGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${fromGstin}</p>` : ""}</div>
+        <div style="text-align:right"><div style="background:${primaryColor};color:white;padding:8px 16px;border-radius:4px;display:inline-block;margin-bottom:8px"><p style="margin:0;font-size:11px;opacity:0.8">RETAINER INVOICE</p><p style="margin:2px 0;font-size:16px;font-weight:700">${invoiceNo}</p></div><p style="margin:4px 0;font-size:13px">${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : ""}</p></div>
       </div>
-      <div style="margin-bottom:24px">
-        <p style="font-size:11px;text-transform:uppercase;color:#999;margin:0 0 4px">Bill To</p>
-        <p style="margin:0;font-weight:600">${toName}</p>
-        ${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}
-        ${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}
-      </div>
+      <div style="margin-bottom:24px"><p style="font-size:11px;text-transform:uppercase;color:#999;margin:0 0 4px">Bill To</p><p style="margin:0;font-weight:600">${toName}</p>${toPan ? `<p style="margin:2px 0;font-size:12px;color:#666">PAN: ${toPan}</p>` : ""}${toGstin ? `<p style="margin:2px 0;font-size:12px;color:#666">GSTIN: ${toGstin}</p>` : ""}</div>
+      ${subject ? `<div style="background:#f0f4ff;border-left:3px solid ${primaryColor};padding:8px 16px;margin-bottom:16px;font-size:13px"><strong>Subject:</strong> ${subject}</div>` : ""}
       <table>
         <thead><tr style="background:#f3f4f6">
-          <th style="padding:8px;text-align:left">#</th>
-          <th style="padding:8px;text-align:left">Description</th>
-          ${invoiceFormat === "gst_detailed" ? '<th style="padding:8px">SAC</th>' : ""}
-          <th style="padding:8px;text-align:right">Qty</th>
-          <th style="padding:8px;text-align:right">Rate</th>
-          <th style="padding:8px;text-align:right">Amount</th>
+          <th style="padding:8px;text-align:left;font-size:12px">#</th>
+          <th style="padding:8px;text-align:left;font-size:12px">Service Description</th>
+          <th style="padding:8px;text-align:right;font-size:12px">Hours</th>
+          <th style="padding:8px;font-size:12px">Unit</th>
+          <th style="padding:8px;text-align:right;font-size:12px">Rate/Hr</th>
+          <th style="padding:8px;text-align:right;font-size:12px">Amount</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${items.map((item, i) => `<tr style="${i % 2 === 0 ? '' : 'background:#f9fafb'}"><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${i+1}</td><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${item.description}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">${item.quantity}</td><td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${item.unit || 'hrs'}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">₹${item.rate.toLocaleString("en-IN")}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-size:12px">₹${item.amount.toLocaleString("en-IN")}</td></tr>`).join("")}</tbody>
+        <tfoot><tr style="background:#f3f4f6;font-weight:600"><td colspan="2" style="padding:8px;font-size:12px">Total</td><td style="padding:8px;text-align:right;font-size:12px">${items.reduce((s, i) => s + i.quantity, 0)} hrs</td><td></td><td></td><td style="padding:8px;text-align:right;font-size:12px">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr></tfoot>
       </table>
-      <div style="display:flex;justify-content:flex-end;margin-top:16px">
-        <div style="${invoiceFormat === "modern" ? `background:${primaryColor};color:white;padding:16px 24px;border-radius:8px` : ""}">
-          <table style="width:280px">
-            <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            ${isIntraState ? `
-              <tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-              <tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            ` : `
-              <tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            `}
-            <tr style="font-weight:700;font-size:16px;border-top:2px solid ${invoiceFormat === "modern" ? "rgba(255,255,255,0.3)" : primaryColor}">
-              <td style="padding:8px">Total</td>
-              <td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-            </tr>
-          </table>
-        </div>
-      </div>
-      ${bankHtml}
-      <div style="margin-top:40px;text-align:right">
-        <p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p>
-        <p style="margin:4px 0;font-weight:600">${signatoryName}</p>
-      </div>
-      ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999">${footerText}</p>` : ""}
+      <div style="display:flex;justify-content:flex-end;margin-top:16px"><table style="width:280px">
+        <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+        ${isIntraState ? `<tr><td style="padding:4px 8px">CGST @ ${cgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalCgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr><tr><td style="padding:4px 8px">SGST @ ${sgstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalSgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>` : `<tr><td style="padding:4px 8px">IGST @ ${igstRate}%</td><td style="padding:4px 8px;text-align:right">₹${totalIgst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`}
+        <tr style="font-weight:700;font-size:16px;border-top:2px solid ${primaryColor}"><td style="padding:8px">Grand Total</td><td style="padding:8px;text-align:right">₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+      </table></div>
+      ${bankHtml}${paymentTerms ? `<p style="margin-top:16px;font-size:12px;color:#666"><strong>Payment Terms:</strong> ${paymentTerms}</p>` : ""}
+      <div style="margin-top:40px;text-align:right"><p style="margin:0;font-size:12px;color:#999">Authorized Signatory</p><p style="margin:4px 0;font-weight:600">${signatoryName}</p></div>
+      ${footerText ? `<p style="margin-top:24px;text-align:center;font-size:12px;color:#999;border-top:1px solid #eee;padding-top:12px">${footerText}</p>` : ""}
       </body></html>`;
   }, [invoiceFormat, fromName, fromAddress, fromGstin, toName, toAddress, toPan, toGstin, invoiceNo, invoiceDate, dueDate, subject, lineItems, subtotal, totalCgst, totalSgst, totalIgst, grandTotal, cgstRate, sgstRate, igstRate, isIntraState, bankSnapshot, paymentTerms, notes, footerText, signatoryName, firm]);
 

@@ -118,9 +118,8 @@ export default function AuditPipeline() {
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
         .eq("firm_id", user!.firm_id!)
-        .or("statutory_audit_applicable.eq.true,tax_audit_type.neq.")
         .order("name");
-      return (data || []).filter((c: any) => c.statutory_audit_applicable || (c.tax_audit_type && c.tax_audit_type !== ""));
+      return (data || []).filter((c: any) => c.statutory_audit_applicable || (c.tax_audit_type && c.tax_audit_type !== "" && c.tax_audit_type !== null));
     },
     enabled: !!user?.firm_id,
   });
