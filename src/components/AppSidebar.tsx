@@ -364,6 +364,22 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         )}
 
+        {/* Service Masters */}
+        {can("Settings", "can_view") && (
+          <Link
+            to="/settings/services"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              isActive("/settings/services")
+                ? "bg-sidebar-gold/15 text-sidebar-gold"
+                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+            )}
+          >
+            <Package size={20} className="shrink-0" />
+            {!collapsed && <span>Service Masters</span>}
+          </Link>
+        )}
+
         {/* Roles & Permissions */}
         {can("Roles", "can_view") && (
           <Link
