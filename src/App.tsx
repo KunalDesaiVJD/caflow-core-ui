@@ -9,6 +9,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PortalLayout } from "./components/PortalLayout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FeedbackWidget } from "./components/FeedbackWidget";
+import { ChatFloatingWidget } from "./components/ChatFloatingWidget";
 import { PermissionsProvider } from "./hooks/usePermissions";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
