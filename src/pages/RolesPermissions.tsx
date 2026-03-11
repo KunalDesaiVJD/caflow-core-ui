@@ -45,6 +45,20 @@ const ROLE_LABELS: Record<string, string> = {
   client: "Client",
 };
 
+const MODULE_LABELS: Record<string, string> = {
+  "Firm Management": "Firm Management",
+  "Client Management": "Client Management",
+  "Service Masters": "Service Masters",
+  "IT Returns": "IT Returns + Compliance",
+  "TDS": "TDS Management",
+  "Billing": "Billing & Timesheet",
+  "Depreciation": "Depreciation Module",
+  "Audit Intelligence": "Audit Intelligence (1-10)",
+  "Chat": "Chat & Collaboration",
+  "Settings": "Settings / Roles & Permissions",
+  "Theme Studio": "Theme Studio",
+};
+
 const ROLE_COLORS: Record<string, string> = {
   superadmin: "bg-destructive/15 text-destructive",
   firm_admin: "bg-primary/15 text-primary",
