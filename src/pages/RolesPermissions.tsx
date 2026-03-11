@@ -79,8 +79,21 @@ const RolesPermissions = () => {
   const [resetRole, setResetRole] = useState<string | null>(null);
   const [lastModified, setLastModified] = useState<Record<string, { by: string; at: string }>>({});
 
-  const firmId = user?.firm_id;
-  const canEdit = user?.role === "superadmin" || user?.role === "firm_admin";
+  // Firm selector for superadmin
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
+  const isSuperadmin = user?.role === "superadmin";
+  const firmId = isSuperadmin ? selectedFirmId : user?.firm_id;
+  const canEdit = isSuperadmin || user?.role === "firm_admin";
+
+  // Load firms for superadmin
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
+      setFirmsList(data || []);
+      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+    });
+  }, [isSuperadmin]);
 
   useEffect(() => {
     if (firmId) loadGrid();
