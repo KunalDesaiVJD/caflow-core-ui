@@ -199,7 +199,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 flex flex-col gap-0.5 px-2 overflow-y-auto overflow-x-hidden">
-        {topNavItems.map((item) => (
+        {topNavItems.filter(item => can(item.module, "can_view")).map((item) => (
           <Link
             key={item.path}
             to={item.path}
