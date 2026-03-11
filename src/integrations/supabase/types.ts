@@ -2339,6 +2339,122 @@ export type Database = {
           },
         ]
       }
+      ledger_import_batches: {
+        Row: {
+          engagement_id: string
+          error_log: Json | null
+          file_size_bytes: number | null
+          file_url: string | null
+          id: string
+          imported_at: string | null
+          imported_by: string | null
+          original_filename: string | null
+          processing_status: string | null
+          row_count: number | null
+        }
+        Insert: {
+          engagement_id: string
+          error_log?: Json | null
+          file_size_bytes?: number | null
+          file_url?: string | null
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          original_filename?: string | null
+          processing_status?: string | null
+          row_count?: number | null
+        }
+        Update: {
+          engagement_id?: string
+          error_log?: Json | null
+          file_size_bytes?: number | null
+          file_url?: string | null
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          original_filename?: string | null
+          processing_status?: string | null
+          row_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_import_batches_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ledger_transactions: {
+        Row: {
+          account_group: string | null
+          account_name: string
+          created_at: string | null
+          credit: number | null
+          date: string | null
+          debit: number | null
+          engagement_id: string
+          flag_reason: string | null
+          id: string
+          import_batch_id: string | null
+          narration: string | null
+          running_balance: number | null
+          scrutiny_flag: boolean | null
+          voucher_no: string | null
+          voucher_type: string | null
+        }
+        Insert: {
+          account_group?: string | null
+          account_name: string
+          created_at?: string | null
+          credit?: number | null
+          date?: string | null
+          debit?: number | null
+          engagement_id: string
+          flag_reason?: string | null
+          id?: string
+          import_batch_id?: string | null
+          narration?: string | null
+          running_balance?: number | null
+          scrutiny_flag?: boolean | null
+          voucher_no?: string | null
+          voucher_type?: string | null
+        }
+        Update: {
+          account_group?: string | null
+          account_name?: string
+          created_at?: string | null
+          credit?: number | null
+          date?: string | null
+          debit?: number | null
+          engagement_id?: string
+          flag_reason?: string | null
+          id?: string
+          import_batch_id?: string | null
+          narration?: string | null
+          running_balance?: number | null
+          scrutiny_flag?: boolean | null
+          voucher_no?: string | null
+          voucher_type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_transactions_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_transactions_import_batch_id_fkey"
+            columns: ["import_batch_id"]
+            isOneToOne: false
+            referencedRelation: "ledger_import_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       narration_rules: {
         Row: {
           action: string | null
@@ -3098,28 +3214,61 @@ export type Database = {
       }
       trial_balance_snapshots: {
         Row: {
+          chunk_count: number | null
+          chunks_processed: number | null
           client_id: string | null
+          column_mapping: Json | null
+          credit_total: number | null
+          debit_total: number | null
+          difference: number | null
+          engagement_id: string | null
           financial_year: string | null
           id: string
+          import_format: string | null
+          is_validated: boolean | null
           normalised_data: Json | null
+          processing_status: string | null
           raw_data: Json | null
           source_format: string | null
+          validation_status: string | null
         }
         Insert: {
+          chunk_count?: number | null
+          chunks_processed?: number | null
           client_id?: string | null
+          column_mapping?: Json | null
+          credit_total?: number | null
+          debit_total?: number | null
+          difference?: number | null
+          engagement_id?: string | null
           financial_year?: string | null
           id?: string
+          import_format?: string | null
+          is_validated?: boolean | null
           normalised_data?: Json | null
+          processing_status?: string | null
           raw_data?: Json | null
           source_format?: string | null
+          validation_status?: string | null
         }
         Update: {
+          chunk_count?: number | null
+          chunks_processed?: number | null
           client_id?: string | null
+          column_mapping?: Json | null
+          credit_total?: number | null
+          debit_total?: number | null
+          difference?: number | null
+          engagement_id?: string | null
           financial_year?: string | null
           id?: string
+          import_format?: string | null
+          is_validated?: boolean | null
           normalised_data?: Json | null
+          processing_status?: string | null
           raw_data?: Json | null
           source_format?: string | null
+          validation_status?: string | null
         }
         Relationships: [
           {
@@ -3127,6 +3276,13 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trial_balance_snapshots_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
             referencedColumns: ["id"]
           },
         ]
