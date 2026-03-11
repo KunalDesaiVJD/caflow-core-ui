@@ -31,9 +31,9 @@ import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 const STAGES = [
   { num: 1, label: "Engagement Setup", icon: Building2 },
   { num: 2, label: "Trial Balance Import", icon: FileText },
-  { num: 3, label: "Scrutiny & Analysis", icon: Eye },
-  { num: 4, label: "Risk Assessment", icon: BarChart3 },
-  { num: 5, label: "Audit Programme", icon: ClipboardCheck },
+  { num: 3, label: "COA & Financial Statements", icon: Calculator },
+  { num: 4, label: "Scrutiny Engine", icon: Eye },
+  { num: 5, label: "Query Tracker", icon: ClipboardCheck },
   { num: 6, label: "Fieldwork", icon: Layers },
   { num: 7, label: "CARO / 3CD Reports", icon: BookMarked },
   { num: 8, label: "FS & Notes", icon: FileText },
