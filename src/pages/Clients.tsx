@@ -82,13 +82,6 @@ const Clients = () => {
     }
     setClientGroupMap(map);
 
-    // Build ITR status map (latest per client)
-    const itrMap: Record<string, any> = {};
-    for (const p of (itrRes.data || []) as any[]) {
-      if (!itrMap[p.client_id]) itrMap[p.client_id] = p;
-    }
-    setItrStatusMap(itrMap);
-
     // Build service count map
     const svcMap: Record<string, number> = {};
     for (const s of (servicesRes.data || []) as any[]) {
