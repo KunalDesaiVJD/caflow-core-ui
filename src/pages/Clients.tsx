@@ -141,7 +141,6 @@ const Clients = () => {
       GSTIN: (c.gstin || []).join(", "),
       Groups: (clientGroupMap[c.id] || []).map(g => g.name).join(", ") || "Ungrouped",
       "Active Services": serviceCountMap[c.id] || 0,
-      "ITR Status": itrStatusMap[c.id]?.filing_status || "—",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
