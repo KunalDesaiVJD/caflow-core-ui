@@ -251,6 +251,15 @@ const RolesPermissions = () => {
         )}
       </div>
 
+      {isSuperadmin && firmsList.length > 0 && (
+        <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+          <SelectTrigger className="w-64"><SelectValue placeholder="Select firm" /></SelectTrigger>
+          <SelectContent>
+            {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      )}
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-auto max-h-[70vh]">

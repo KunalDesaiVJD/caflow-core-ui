@@ -272,6 +272,15 @@ const ServiceMasters = () => {
         <Button onClick={openNew} className="gap-2"><Plus className="h-4 w-4" /> New Category</Button>
       </div>
 
+      {isSuperadmin && firmsList.length > 0 && (
+        <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+          <SelectTrigger className="w-64"><SelectValue placeholder="Select firm" /></SelectTrigger>
+          <SelectContent>
+            {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {categories.map(cat => {
           const tplCount = templates.filter(t => t.service_category_id === cat.id).length;
