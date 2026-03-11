@@ -175,6 +175,7 @@ const App = () => (
               {/* Notice Tracker merged into IT Returns compliance tab */}
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
+              <Route path="/chat" element={<Chat />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/coa-mappings" element={<CoaMappings />} />
