@@ -185,6 +185,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           <FeedbackWidget />
+          <ChatFloatingWidget />
           </PermissionsProvider>
         </BrowserRouter>
       </TooltipProvider>
