@@ -690,7 +690,7 @@ export default function Chat() {
 
       {/* RIGHT — INFO PANEL */}
       {showInfo && activeConv && (
-        <div className="w-72 border-l border-border bg-muted/20 flex flex-col shrink-0 hidden lg:flex">
+        <div className="w-72 border-l border-border bg-muted/20 flex flex-col shrink-0">
           <div className="p-4 border-b border-border flex items-center justify-between">
             <h3 className="text-sm font-semibold text-foreground">Details</h3>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowInfo(false)}>

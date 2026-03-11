@@ -50,14 +50,14 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 const topNavItems = [
-  { title: "Dashboard", path: "/", icon: LayoutDashboard, module: "Dashboard" },
-  { title: "Clients", path: "/clients", icon: Users, module: "Clients" },
+  { title: "Dashboard", path: "/", icon: LayoutDashboard, module: "Client Management" },
+  { title: "Clients", path: "/clients", icon: Users, module: "Client Management" },
   { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
-  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Clients" },
-  { title: "Documents", path: "/documents", icon: FolderOpen, module: "Clients" },
-  { title: "Depreciation", path: "/depreciation", icon: Calculator, module: "Audit Intelligence" },
+  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Client Management" },
+  { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
+  { title: "Depreciation", path: "/depreciation", icon: Calculator, module: "Depreciation" },
 ];
 
 const auditSections = [
@@ -349,7 +349,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Firm Settings */}
-        {can("Settings", "can_view") && (
+        {can("Firm Management", "can_view") && (
           <Link
             to="/settings/firm"
             className={cn(
@@ -365,7 +365,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Service Masters */}
-        {can("Settings", "can_view") && (
+        {can("Service Masters", "can_view") && (
           <Link
             to="/settings/services"
             className={cn(
@@ -381,7 +381,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         )}
 
         {/* Roles & Permissions */}
-        {can("Roles", "can_view") && (
+        {can("Settings", "can_view") && (
           <Link
             to="/settings/roles"
             className={cn(

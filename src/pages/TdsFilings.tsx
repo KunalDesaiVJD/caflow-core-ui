@@ -861,8 +861,67 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search deductee..." className="pl-9" />
         </div>
         <Button onClick={openAdd} size="sm" className="gap-1"><Plus size={14} /> Add Entry</Button>
-        <Button variant="outline" size="sm" className="gap-1"><Download size={14} /> Template</Button>
-        <Button variant="outline" size="sm" className="gap-1"><Upload size={14} /> Import</Button>
+        <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+          const headers = selectedForm === "24Q"
+            ? "Employee Name,PAN,Designation,Salary Amount,Standard Deduction,TDS Deducted,Payment Date,BSR Code,Challan Date,Challan Serial,Challan Amount"
+            : selectedForm === "27EQ"
+            ? "Collectee Name,PAN,TCS Section,Amount,TCS Rate %,TCS Amount,Payment Date,BSR Code,Challan Date,Challan Serial,Challan Amount"
+            : "Deductee Name,PAN,Section,Nature of Payment,Amount,TDS Rate %,TDS Amount,Payment Date,Payment Mode,BSR Code,Challan Date,Challan Serial,Challan Amount";
+          const blob = new Blob([headers + "\n"], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = `TDS_Template_${selectedForm}.csv`; a.click();
+          URL.revokeObjectURL(url);
+        }}><Download size={14} /> Template</Button>
+        <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+          const input = document.createElement("input");
+          input.type = "file"; input.accept = ".csv";
+          input.onchange = async (ev: any) => {
+            const file = ev.target.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            const Papa = (await import("papaparse")).default;
+            const { data: rows } = Papa.parse(text, { header: true, skipEmptyLines: true });
+            if (!rows || rows.length === 0) { toast({ title: "No data found in CSV", variant: "destructive" }); return; }
+            const firmId = await resolveFirmId();
+            const clientId = selectedClient !== "all" ? selectedClient : clients[0]?.id;
+            if (!clientId) { toast({ title: "Select a client first", variant: "destructive" }); return; }
+            let imported = 0;
+            for (const row of rows as any[]) {
+              const name = row["Deductee Name"] || row["Employee Name"] || row["Collectee Name"] || "";
+              if (!name.trim()) continue;
+              const payload: any = {
+                party_name: name.trim(),
+                pan: (row["PAN"] || "").toUpperCase() || null,
+                deductee_pan: (row["PAN"] || "").toUpperCase() || null,
+                section_code: row["Section"] || row["TCS Section"] || null,
+                nature_of_payment: row["Nature of Payment"] || null,
+                amount: parseFloat(row["Amount"] || row["Salary Amount"] || "0") || null,
+                tds_rate: parseFloat(row["TDS Rate %"] || row["TCS Rate %"] || "0") || null,
+                tds_amount: parseFloat(row["TDS Amount"] || row["TCS Amount"] || row["TDS Deducted"] || "0") || null,
+                date: row["Payment Date"] || null,
+                challan_bsr_code: row["BSR Code"] || null,
+                challan_date: row["Challan Date"] || null,
+                challan_serial_no: row["Challan Serial"] || null,
+                challan_amount: parseFloat(row["Challan Amount"] || "0") || null,
+                payment_mode: row["Payment Mode"] || null,
+                form_type: selectedForm,
+                client_id: clientId,
+                firm_id: firmId,
+              };
+              if (selectedForm === "24Q") {
+                payload.salary_amount = parseFloat(row["Salary Amount"] || "0") || null;
+                payload.standard_deduction = parseFloat(row["Standard Deduction"] || "0") || null;
+                payload.designation = row["Designation"] || null;
+              }
+              await supabase.from("tds_entries").insert(payload);
+              imported++;
+            }
+            toast({ title: `${imported} entries imported` });
+            fetchEntries();
+          };
+          input.click();
+        }}><Upload size={14} /> Import CSV</Button>
       </div>
 
       {/* Entries table */}
