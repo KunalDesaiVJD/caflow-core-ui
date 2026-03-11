@@ -77,10 +77,14 @@ function autoDetectMapping(headers: string[]): Record<string, string> {
 }
 
 export default function ImportTrialBalance() {
-  const { clientId } = useParams<{ clientId: string }>();
+  const { clientId: routeClientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const [clientsList, setClientsList] = useState<{ id: string; name: string | null }[]>([]);
+
+  const clientId = routeClientId || selectedClientId;
 
   const fileRef = useRef<HTMLInputElement>(null);
 
