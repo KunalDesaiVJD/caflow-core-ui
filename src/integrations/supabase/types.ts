@@ -1458,39 +1458,182 @@ export type Database = {
           },
         ]
       }
-      invoices: {
+      invoice_line_items: {
         Row: {
           amount: number | null
-          client_id: string | null
-          due_date: string | null
-          firm_id: string | null
-          gst_amount: number | null
+          created_at: string | null
+          description: string
+          hsn_sac_code: string | null
           id: string
-          invoice_no: string | null
-          line_items: Json | null
-          status: string | null
+          invoice_id: string
+          quantity: number | null
+          rate: number | null
+          sort_order: number | null
+          tax_rate_cgst: number | null
+          tax_rate_igst: number | null
+          tax_rate_sgst: number | null
+          unit: string | null
         }
         Insert: {
           amount?: number | null
-          client_id?: string | null
-          due_date?: string | null
-          firm_id?: string | null
-          gst_amount?: number | null
+          created_at?: string | null
+          description?: string
+          hsn_sac_code?: string | null
           id?: string
-          invoice_no?: string | null
-          line_items?: Json | null
-          status?: string | null
+          invoice_id: string
+          quantity?: number | null
+          rate?: number | null
+          sort_order?: number | null
+          tax_rate_cgst?: number | null
+          tax_rate_igst?: number | null
+          tax_rate_sgst?: number | null
+          unit?: string | null
         }
         Update: {
           amount?: number | null
+          created_at?: string | null
+          description?: string
+          hsn_sac_code?: string | null
+          id?: string
+          invoice_id?: string
+          quantity?: number | null
+          rate?: number | null
+          sort_order?: number | null
+          tax_rate_cgst?: number | null
+          tax_rate_igst?: number | null
+          tax_rate_sgst?: number | null
+          unit?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_line_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invoices: {
+        Row: {
+          amount: number | null
+          bank_details_snapshot: Json | null
+          client_id: string | null
+          created_by: string | null
+          due_date: string | null
+          firm_id: string | null
+          footer_text: string | null
+          from_address: string | null
+          from_email: string | null
+          from_firm_name: string | null
+          from_gstin: string | null
+          from_pan: string | null
+          from_phone: string | null
+          gst_amount: number | null
+          id: string
+          invoice_date: string | null
+          invoice_format: string | null
+          invoice_no: string | null
+          is_intra_state: boolean | null
+          line_items: Json | null
+          notes: string | null
+          paid_at: string | null
+          payment_terms: string | null
+          sent_at: string | null
+          show_logo: boolean | null
+          signatory_name: string | null
+          status: string | null
+          subject: string | null
+          subtotal: number | null
+          to_address: string | null
+          to_gstin: string | null
+          to_name: string | null
+          to_pan: string | null
+          total_amount: number | null
+          total_cgst: number | null
+          total_igst: number | null
+          total_sgst: number | null
+          voided_reason: string | null
+        }
+        Insert: {
+          amount?: number | null
+          bank_details_snapshot?: Json | null
           client_id?: string | null
+          created_by?: string | null
           due_date?: string | null
           firm_id?: string | null
+          footer_text?: string | null
+          from_address?: string | null
+          from_email?: string | null
+          from_firm_name?: string | null
+          from_gstin?: string | null
+          from_pan?: string | null
+          from_phone?: string | null
           gst_amount?: number | null
           id?: string
+          invoice_date?: string | null
+          invoice_format?: string | null
           invoice_no?: string | null
+          is_intra_state?: boolean | null
           line_items?: Json | null
+          notes?: string | null
+          paid_at?: string | null
+          payment_terms?: string | null
+          sent_at?: string | null
+          show_logo?: boolean | null
+          signatory_name?: string | null
           status?: string | null
+          subject?: string | null
+          subtotal?: number | null
+          to_address?: string | null
+          to_gstin?: string | null
+          to_name?: string | null
+          to_pan?: string | null
+          total_amount?: number | null
+          total_cgst?: number | null
+          total_igst?: number | null
+          total_sgst?: number | null
+          voided_reason?: string | null
+        }
+        Update: {
+          amount?: number | null
+          bank_details_snapshot?: Json | null
+          client_id?: string | null
+          created_by?: string | null
+          due_date?: string | null
+          firm_id?: string | null
+          footer_text?: string | null
+          from_address?: string | null
+          from_email?: string | null
+          from_firm_name?: string | null
+          from_gstin?: string | null
+          from_pan?: string | null
+          from_phone?: string | null
+          gst_amount?: number | null
+          id?: string
+          invoice_date?: string | null
+          invoice_format?: string | null
+          invoice_no?: string | null
+          is_intra_state?: boolean | null
+          line_items?: Json | null
+          notes?: string | null
+          paid_at?: string | null
+          payment_terms?: string | null
+          sent_at?: string | null
+          show_logo?: boolean | null
+          signatory_name?: string | null
+          status?: string | null
+          subject?: string | null
+          subtotal?: number | null
+          to_address?: string | null
+          to_gstin?: string | null
+          to_name?: string | null
+          to_pan?: string | null
+          total_amount?: number | null
+          total_cgst?: number | null
+          total_igst?: number | null
+          total_sgst?: number | null
+          voided_reason?: string | null
         }
         Relationships: [
           {
@@ -2325,32 +2468,59 @@ export type Database = {
       }
       timesheets: {
         Row: {
+          approved_at: string | null
+          approved_by: string | null
           billable: boolean | null
           client_id: string | null
+          created_at: string | null
           description: string | null
           engagement_id: string | null
+          firm_id: string | null
           hours: number | null
           id: string
+          invoice_id: string | null
+          is_billable: boolean | null
+          is_invoiced: boolean | null
+          minutes: number | null
+          service_category_id: string | null
           user_id: string | null
           work_date: string | null
         }
         Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
           billable?: boolean | null
           client_id?: string | null
+          created_at?: string | null
           description?: string | null
           engagement_id?: string | null
+          firm_id?: string | null
           hours?: number | null
           id?: string
+          invoice_id?: string | null
+          is_billable?: boolean | null
+          is_invoiced?: boolean | null
+          minutes?: number | null
+          service_category_id?: string | null
           user_id?: string | null
           work_date?: string | null
         }
         Update: {
+          approved_at?: string | null
+          approved_by?: string | null
           billable?: boolean | null
           client_id?: string | null
+          created_at?: string | null
           description?: string | null
           engagement_id?: string | null
+          firm_id?: string | null
           hours?: number | null
           id?: string
+          invoice_id?: string | null
+          is_billable?: boolean | null
+          is_invoiced?: boolean | null
+          minutes?: number | null
+          service_category_id?: string | null
           user_id?: string | null
           work_date?: string | null
         }
@@ -2360,6 +2530,27 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "timesheets_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "timesheets_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "timesheets_service_category_id_fkey"
+            columns: ["service_category_id"]
+            isOneToOne: false
+            referencedRelation: "service_categories"
             referencedColumns: ["id"]
           },
           {
