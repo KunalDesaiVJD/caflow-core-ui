@@ -216,6 +216,7 @@ const FirmSettings = () => {
           logo_url: logoUrl,
           signature_url: signatureUrl,
           address: addressLine,
+          msme_no: msmeNo,
         },
       } as any).eq("id", firmId);
 
