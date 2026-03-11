@@ -2059,60 +2059,120 @@ export type Database = {
       tds_entries: {
         Row: {
           amount: number | null
+          challan_amount: number | null
+          challan_bsr_code: string | null
+          challan_date: string | null
           challan_no: string | null
+          challan_serial_no: string | null
           client_id: string | null
+          country_of_residence: string | null
           date: string | null
           deductee_id: string | null
+          deductee_pan: string | null
+          designation: string | null
           due_date: string | null
           filed_at: string | null
           firm_id: string | null
+          form_type: string | null
           id: string
+          lower_cert_no: string | null
+          lower_cert_rate: number | null
+          nature_of_payment: string | null
           pan: string | null
           party_name: string | null
+          payment_mode: string | null
           payment_nature: string | null
+          salary_amount: number | null
           section: string | null
+          section_code: string | null
+          standard_deduction: number | null
           status: string | null
+          tax_treaty_section: string | null
+          taxable_salary: number | null
           tds_amount: number | null
           tds_filing_id: string | null
           tds_rate: number | null
+          trc_available: boolean | null
+          validation_messages: Json | null
+          validation_status: string | null
         }
         Insert: {
           amount?: number | null
+          challan_amount?: number | null
+          challan_bsr_code?: string | null
+          challan_date?: string | null
           challan_no?: string | null
+          challan_serial_no?: string | null
           client_id?: string | null
+          country_of_residence?: string | null
           date?: string | null
           deductee_id?: string | null
+          deductee_pan?: string | null
+          designation?: string | null
           due_date?: string | null
           filed_at?: string | null
           firm_id?: string | null
+          form_type?: string | null
           id?: string
+          lower_cert_no?: string | null
+          lower_cert_rate?: number | null
+          nature_of_payment?: string | null
           pan?: string | null
           party_name?: string | null
+          payment_mode?: string | null
           payment_nature?: string | null
+          salary_amount?: number | null
           section?: string | null
+          section_code?: string | null
+          standard_deduction?: number | null
           status?: string | null
+          tax_treaty_section?: string | null
+          taxable_salary?: number | null
           tds_amount?: number | null
           tds_filing_id?: string | null
           tds_rate?: number | null
+          trc_available?: boolean | null
+          validation_messages?: Json | null
+          validation_status?: string | null
         }
         Update: {
           amount?: number | null
+          challan_amount?: number | null
+          challan_bsr_code?: string | null
+          challan_date?: string | null
           challan_no?: string | null
+          challan_serial_no?: string | null
           client_id?: string | null
+          country_of_residence?: string | null
           date?: string | null
           deductee_id?: string | null
+          deductee_pan?: string | null
+          designation?: string | null
           due_date?: string | null
           filed_at?: string | null
           firm_id?: string | null
+          form_type?: string | null
           id?: string
+          lower_cert_no?: string | null
+          lower_cert_rate?: number | null
+          nature_of_payment?: string | null
           pan?: string | null
           party_name?: string | null
+          payment_mode?: string | null
           payment_nature?: string | null
+          salary_amount?: number | null
           section?: string | null
+          section_code?: string | null
+          standard_deduction?: number | null
           status?: string | null
+          tax_treaty_section?: string | null
+          taxable_salary?: number | null
           tds_amount?: number | null
           tds_filing_id?: string | null
           tds_rate?: number | null
+          trc_available?: boolean | null
+          validation_messages?: Json | null
+          validation_status?: string | null
         }
         Relationships: [
           {
@@ -2149,6 +2209,7 @@ export type Database = {
         Row: {
           acknowledgment_number: string | null
           approver_id: string | null
+          assigned_staff: string | null
           checker_id: string | null
           client_id: string
           created_at: string | null
@@ -2158,15 +2219,21 @@ export type Database = {
           financial_year: string
           firm_id: string
           id: string
+          last_updated_at: string | null
+          last_updated_by: string | null
+          pdf_url: string | null
           preparer_id: string | null
+          prn_no: string | null
           quarter: string
           remarks: string | null
+          tan: string | null
           tds_forms: string[] | null
           work_status: string
         }
         Insert: {
           acknowledgment_number?: string | null
           approver_id?: string | null
+          assigned_staff?: string | null
           checker_id?: string | null
           client_id: string
           created_at?: string | null
@@ -2176,15 +2243,21 @@ export type Database = {
           financial_year: string
           firm_id: string
           id?: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          pdf_url?: string | null
           preparer_id?: string | null
+          prn_no?: string | null
           quarter: string
           remarks?: string | null
+          tan?: string | null
           tds_forms?: string[] | null
           work_status?: string
         }
         Update: {
           acknowledgment_number?: string | null
           approver_id?: string | null
+          assigned_staff?: string | null
           checker_id?: string | null
           client_id?: string
           created_at?: string | null
@@ -2194,9 +2267,14 @@ export type Database = {
           financial_year?: string
           firm_id?: string
           id?: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          pdf_url?: string | null
           preparer_id?: string | null
+          prn_no?: string | null
           quarter?: string
           remarks?: string | null
+          tan?: string | null
           tds_forms?: string[] | null
           work_status?: string
         }
