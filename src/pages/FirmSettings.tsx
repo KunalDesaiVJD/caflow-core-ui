@@ -39,6 +39,7 @@ const FirmSettings = () => {
   const [pan, setPan] = useState("");
   const [gstin, setGstin] = useState("");
   const [tan, setTan] = useState("");
+  const [msmeNo, setMsmeNo] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [website, setWebsite] = useState("");
