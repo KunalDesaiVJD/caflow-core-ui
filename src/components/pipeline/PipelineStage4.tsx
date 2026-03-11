@@ -106,13 +106,14 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
     queryKey: ["tb-accounts-stage4", engagementId],
     queryFn: async () => {
       const { data } = await supabase
-        .from("trial_balance_snapshots")
+        .from("trial_balance_snapshots" as any)
         .select("id, snapshot_data")
         .eq("engagement_id", engagementId)
         .order("created_at", { ascending: false })
         .limit(1);
-      if (data?.[0]?.snapshot_data && Array.isArray(data[0].snapshot_data)) {
-        return data[0].snapshot_data as any[];
+      const rows = data as any[];
+      if (rows?.[0]?.snapshot_data && Array.isArray(rows[0].snapshot_data)) {
+        return rows[0].snapshot_data as any[];
       }
       return [];
     },
