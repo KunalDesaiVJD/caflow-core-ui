@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useAuditContext } from "@/hooks/useAuditContext";
@@ -96,13 +96,17 @@ export default function AuditPipeline() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { engagementId: routeEngId } = useParams<{ engagementId?: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const auditCtx = useAuditContext();
   const contextEngId = auditCtx?.selectedEngagementId || "";
 
   const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeStage, setActiveStage] = useState<number>(1);
+  const [activeStage, setActiveStage] = useState<number>(() => {
+    const sp = searchParams.get("stage");
+    return sp ? parseInt(sp, 10) : 1;
+  });
 
   // Sync from audit context when it changes
   useEffect(() => {
@@ -188,8 +192,21 @@ export default function AuditPipeline() {
 
   const currentStage = engagement?.pipeline_stage || 1;
 
-  // Sync active view stage when engagement loads
-  useEffect(() => { setActiveStage(currentStage); }, [currentStage]);
+  // Sync active view stage from URL search param or engagement data
+  useEffect(() => {
+    const sp = searchParams.get("stage");
+    if (sp) {
+      const stageNum = parseInt(sp, 10);
+      if (stageNum >= 1 && stageNum <= 10) {
+        setActiveStage(stageNum);
+        // Clear the param so it doesn't stick on refresh
+        searchParams.delete("stage");
+        setSearchParams(searchParams, { replace: true });
+        return;
+      }
+    }
+    setActiveStage(currentStage);
+  }, [currentStage, searchParams]);
 
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({

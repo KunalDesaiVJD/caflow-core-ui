@@ -211,7 +211,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                     }
                     const isStageActive = location.pathname.startsWith("/audit/pipeline");
                     return (
-                      <button
+                    <button
                         key={item.title}
                         onClick={async () => {
                           if (selectedEngId && item.stage) {
@@ -219,7 +219,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                               .from("audit_engagements")
                               .update({ pipeline_stage: item.stage } as any)
                               .eq("id", selectedEngId);
-                            navigate(`/audit/pipeline/${selectedEngId}`);
+                            navigate(`/audit/pipeline/${selectedEngId}?stage=${item.stage}`);
                           } else {
                             navigate("/audit/pipeline");
                           }
