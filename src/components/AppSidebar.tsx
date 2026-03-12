@@ -28,27 +28,22 @@ const topNavItems = [
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
 ];
 
-// Fixed stage order — no numbering
 const auditStages = [
-  { title: "Dashboard", path: "/audit", icon: LayoutDashboard },
-  { title: "Engagement Setup & Planning", path: "/audit/pipeline", icon: Building2 },
-  { title: "Workpapers & Risk", path: "/audit/risk", icon: Shield },
-  { title: "Data Import", path: "/audit/import", icon: Upload },
-  { title: "Scrutiny & Analysis", path: "/audit/scrutiny", icon: Eye },
-  { title: "Queries & Communication", path: "/audit/queries", icon: MessageSquare, children: [
-    { title: "Query Tracker", path: "/audit/queries", icon: ClipboardCheck },
-    { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
-  ]},
-  { title: "COA Mapping & FS", path: "/settings/coa-mappings", icon: Layers },
-  { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
-  { title: "CARO / 3CD", path: "/audit/3cd", icon: FileCheck },
-  { title: "Audit Reports", path: "/audit/report", icon: FileOutput },
-  { title: "Sign-Off & Bundle", path: "/audit/signoff", icon: Award },
+  { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
+  { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
+  { title: "Trial Balance Import",      path: "/audit/pipeline", icon: Upload,       stage: 2  },
+  { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
+  { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
+  { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },
+  { title: "Workpapers & Risk",         path: "/audit/pipeline", icon: Shield,       stage: 6  },
+  { title: "Notes to Accounts",         path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
+  { title: "CARO / 3CD Reports",        path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
+  { title: "Review & QC",               path: "/audit/pipeline", icon: Layers,       stage: 9  },
+  { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 10 },
 ];
 
 const auditUtilities = [
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
-  { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Documents", path: "/documents", icon: FolderOpen },
   { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
