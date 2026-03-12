@@ -108,6 +108,7 @@ export default function AuditPipeline() {
   useEffect(() => {
     if (contextEngId && !routeEngId && !selectedEngId) {
       setSelectedEngId(contextEngId);
+      navigate(`/audit/pipeline/${contextEngId}`, { replace: true });
     }
   }, [contextEngId]);
 
@@ -163,7 +164,14 @@ export default function AuditPipeline() {
     enabled: !!selectedEngId,
   });
 
-  useEffect(() => { if (routeEngId) setSelectedEngId(routeEngId); }, [routeEngId]);
+  useEffect(() => {
+    if (routeEngId) {
+      setSelectedEngId(routeEngId);
+      if (auditCtx?.setSelectedEngagementId) {
+        auditCtx.setSelectedEngagementId(routeEngId);
+      }
+    }
+  }, [routeEngId]);
 
   const stageStatuses: Record<string, StageStatus> = useMemo(() => {
     if (!engagement?.stage_statuses) {
@@ -352,7 +360,13 @@ export default function AuditPipeline() {
         {/* Engagement selector */}
         <div className="p-3 border-b border-border space-y-2">
           <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Engagement</Label>
-          <Select value={selectedEngId} onValueChange={setSelectedEngId}>
+          <Select value={selectedEngId} onValueChange={(val) => {
+            setSelectedEngId(val);
+            if (auditCtx?.setSelectedEngagementId) {
+              auditCtx.setSelectedEngagementId(val);
+            }
+            navigate(`/audit/pipeline/${val}`, { replace: true });
+          }}>
             <SelectTrigger className="text-xs"><SelectValue placeholder="Select engagement" /></SelectTrigger>
             <SelectContent>
               {Array.from(grouped.entries()).map(([client, engs]) => (
@@ -431,6 +445,11 @@ export default function AuditPipeline() {
       <div className="flex-1 overflow-y-auto p-6">
         {!selectedEngId ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
+            <div className="self-start mb-4">
+              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+              </Button>
+            </div>
             <Building2 size={48} className="opacity-30" />
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">Audit Intelligence Pipeline</h2>
@@ -441,6 +460,9 @@ export default function AuditPipeline() {
         ) : activeStage === 1 ? (
           /* STAGE 1 */
           <div className="max-w-4xl space-y-6">
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+              <ChevronRight size={14} className="rotate-180" /> Audit Dashboard
+            </Button>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-xl font-bold text-foreground">Engagement Setup & Audit Planning</h1>
