@@ -317,8 +317,8 @@ export default function ImportTrialBalance() {
   const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
   const tagging = importStats?.tagging;
 
-  // Client selector
-  if (!isValidUuid) {
+  // If no client from context or route, show client selector
+  if (!isValidUuid && !contextClientId) {
     return (
       <div className="max-w-lg mx-auto p-8 space-y-6">
         <div>
