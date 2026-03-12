@@ -659,7 +659,7 @@ const NewInvoice = () => {
       </div>
 
       <!-- Terms -->
-      <div style="margin-top:16px;padding-top:8px;border-top:1px solid #ddd;font-size:10px;color:#555">
+      <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
         <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
         <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
       </div>
