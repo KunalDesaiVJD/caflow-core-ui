@@ -192,8 +192,21 @@ export default function AuditPipeline() {
 
   const currentStage = engagement?.pipeline_stage || 1;
 
-  // Sync active view stage when engagement loads
-  useEffect(() => { setActiveStage(currentStage); }, [currentStage]);
+  // Sync active view stage from URL search param or engagement data
+  useEffect(() => {
+    const sp = searchParams.get("stage");
+    if (sp) {
+      const stageNum = parseInt(sp, 10);
+      if (stageNum >= 1 && stageNum <= 10) {
+        setActiveStage(stageNum);
+        // Clear the param so it doesn't stick on refresh
+        searchParams.delete("stage");
+        setSearchParams(searchParams, { replace: true });
+        return;
+      }
+    }
+    setActiveStage(currentStage);
+  }, [currentStage, searchParams]);
 
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({
