@@ -482,7 +482,17 @@ export default function AuditIntelligence() {
                     variant="outline"
                     size="sm"
                     className="h-auto py-2.5 px-3 justify-start gap-2 text-xs"
-                    onClick={() => navigate(action.path)}
+                    onClick={async () => {
+                      if (!selectedEngagementId) {
+                        toast.error("Select an engagement first");
+                        return;
+                      }
+                      await supabase
+                        .from("audit_engagements")
+                        .update({ pipeline_stage: action.stage } as any)
+                        .eq("id", selectedEngagementId);
+                      navigate(`/audit/pipeline/${selectedEngagementId}`);
+                    }}
                   >
                     <action.icon size={14} className="shrink-0 text-primary" />
                     <span className="truncate">{action.label}</span>
