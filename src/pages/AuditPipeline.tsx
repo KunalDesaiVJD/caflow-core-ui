@@ -445,6 +445,11 @@ export default function AuditPipeline() {
       <div className="flex-1 overflow-y-auto p-6">
         {!selectedEngId ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
+            <div className="self-start mb-4">
+              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+              </Button>
+            </div>
             <Building2 size={48} className="opacity-30" />
             <div>
               <h2 className="text-lg font-semibold text-foreground mb-1">Audit Intelligence Pipeline</h2>
