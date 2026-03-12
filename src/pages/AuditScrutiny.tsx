@@ -48,8 +48,7 @@ export default function AuditScrutiny() {
   const { track } = useAuditTracker();
 
   // Auto-bind from audit context if no route clientId
-  let auditCtx: any = null;
-  try { auditCtx = useAuditContext(); } catch {}
+  const auditCtx = useAuditContext();
   const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
   const clientId = routeClientId || contextClientId;
 
