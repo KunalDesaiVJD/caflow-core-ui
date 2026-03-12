@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -30,7 +29,7 @@ import {
   BookMarked, Layers, Award, ChevronRight, Plus, Upload, Search,
   MessageSquare, FileUp, FileOutput, BarChart3, Clock, Activity,
   Users, CalendarDays, AlertTriangle, CheckCircle2, Circle, Loader2,
-  MoreVertical, Pencil, Trash2, HelpCircle, ChevronsUpDown, Check
+  MoreVertical, Pencil, Trash2, ChevronsUpDown, Check
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -58,6 +57,18 @@ const QUICK_ACTIONS = [
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
+const AUDIT_TYPES = [
+  { value: "statutory", label: "Statutory Audit" },
+  { value: "tax_audit", label: "Tax Audit" },
+  { value: "both", label: "Both (Statutory + Tax)" },
+  { value: "internal", label: "Internal Audit" },
+  { value: "stock", label: "Stock Audit" },
+];
+const PERIOD_TYPES = [
+  { value: "annual", label: "Annual" },
+  { value: "half_yearly", label: "Half-Yearly" },
+  { value: "quarterly", label: "Quarterly" },
+];
 const ENTITY_TYPES = [
   { value: "company", label: "Company (Pvt/Public)" },
   { value: "llp", label: "LLP" },
@@ -66,13 +77,6 @@ const ENTITY_TYPES = [
   { value: "trust", label: "Trust / Society" },
   { value: "huf", label: "HUF" },
   { value: "aop", label: "AOP / BOI" },
-];
-const AUDIT_TYPES = [
-  { value: "statutory", label: "Statutory Audit" },
-  { value: "tax_audit", label: "Tax Audit" },
-  { value: "both", label: "Both (Statutory + Tax)" },
-  { value: "internal", label: "Internal Audit" },
-  { value: "stock", label: "Stock Audit" },
 ];
 
 const statusLabel: Record<string, string> = {
@@ -99,9 +103,13 @@ export default function AuditIntelligence() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formSaving, setFormSaving] = useState(false);
 
-  // Searchable dropdown states
+  // Filters
+  const [filterAuditType, setFilterAuditType] = useState<string>("all");
+  const [filterFY, setFilterFY] = useState<string>("all");
+  const [filterPeriodType, setFilterPeriodType] = useState<string>("all");
+
+  // Searchable client dropdown
   const [clientOpen, setClientOpen] = useState(false);
-  const [engagementOpen, setEngagementOpen] = useState(false);
 
   // Edit form
   const [engForm, setEngForm] = useState({
@@ -113,7 +121,6 @@ export default function AuditIntelligence() {
     supabase.from("users").select("id, name").eq("firm_id", user.firm_id).eq("is_active", true)
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
-
 
   useEffect(() => {
     if (!selectedEngagementId) return;
@@ -137,16 +144,44 @@ export default function AuditIntelligence() {
     });
   };
 
-  // Filter engagements by client
+  // Filter engagements by all 4 filters and auto-resolve
   const filteredEngagements = useMemo(() => {
-    if (!selectedClientId || selectedClientId === "all") return engagements;
-    return engagements.filter(e => e.client_id === selectedClientId);
-  }, [engagements, selectedClientId]);
+    let result = engagements.filter(e => e.status !== "archived");
+    if (selectedClientId && selectedClientId !== "all") {
+      result = result.filter(e => e.client_id === selectedClientId);
+    }
+    if (filterAuditType && filterAuditType !== "all") {
+      result = result.filter(e => e.audit_type === filterAuditType);
+    }
+    if (filterFY && filterFY !== "all") {
+      result = result.filter(e => e.financial_year === filterFY);
+    }
+    if (filterPeriodType && filterPeriodType !== "all") {
+      result = result.filter(e => (e.audit_period_type || "annual") === filterPeriodType);
+    }
+    return result;
+  }, [engagements, selectedClientId, filterAuditType, filterFY, filterPeriodType]);
 
-  const activeEngagements = useMemo(() =>
-    filteredEngagements.filter(e => e.status !== "archived"),
-    [filteredEngagements]
-  );
+  // Deduplicate: use a Set to track unique combos
+  const uniqueFilteredEngagements = useMemo(() => {
+    const seen = new Set<string>();
+    return filteredEngagements.filter(e => {
+      const key = `${e.client_id}_${e.audit_type}_${e.financial_year}_${e.audit_period_type || "annual"}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [filteredEngagements]);
+
+  // Auto-select engagement when filters narrow to exactly one
+  useEffect(() => {
+    if (uniqueFilteredEngagements.length === 1) {
+      const eng = uniqueFilteredEngagements[0];
+      if (eng.id !== selectedEngagementId) {
+        setSelectedEngagementId(eng.id);
+      }
+    }
+  }, [uniqueFilteredEngagements]);
 
   const stageStatuses = selectedEngagement?.stage_statuses || {};
   const completedStages = Object.values(stageStatuses).filter((s: any) => s === "complete").length;
@@ -219,17 +254,10 @@ export default function AuditIntelligence() {
 
   const userMap = useMemo(() => new Map(users.map(u => [u.id, u.name])), [users]);
 
-  // Selected client name for display
   const selectedClientName = useMemo(() => {
     if (!selectedClientId || selectedClientId === "all") return "";
     return clients.find(c => c.id === selectedClientId)?.name || "";
   }, [selectedClientId, clients]);
-
-  // Selected engagement label for display
-  const selectedEngagementLabel = useMemo(() => {
-    if (!selectedEngagement) return "";
-    return `${selectedEngagement.client_name} — ${selectedEngagement.audit_type || "Audit"} — FY ${selectedEngagement.financial_year}`;
-  }, [selectedEngagement]);
 
   if (loading) {
     return (
@@ -261,16 +289,16 @@ export default function AuditIntelligence() {
         </div>
       </div>
 
-      {/* Engagement Switcher */}
+      {/* 4-Filter Engagement Switcher */}
       <Card className="p-4">
-        <div className="flex flex-wrap gap-4 items-end">
-          {/* Searchable Client Dropdown */}
-          <div className="flex-1 min-w-[200px]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          {/* Client Filter */}
+          <div>
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Client</label>
             <Popover open={clientOpen} onOpenChange={setClientOpen}>
               <PopoverTrigger asChild>
                 <Button variant="outline" role="combobox" aria-expanded={clientOpen} className="w-full justify-between font-normal">
-                  {selectedClientName || "Select Client..."}
+                  {selectedClientName || "All Clients"}
                   <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                 </Button>
               </PopoverTrigger>
@@ -280,6 +308,16 @@ export default function AuditIntelligence() {
                   <CommandList>
                     <CommandEmpty>No clients found.</CommandEmpty>
                     <CommandGroup>
+                      <CommandItem
+                        value="all-clients"
+                        onSelect={() => {
+                          setSelectedClientId("all");
+                          setClientOpen(false);
+                        }}
+                      >
+                        <Check className={cn("mr-2 h-4 w-4", (!selectedClientId || selectedClientId === "all") ? "opacity-100" : "opacity-0")} />
+                        All Clients
+                      </CommandItem>
                       {clients.map(c => (
                         <CommandItem
                           key={c.id}
@@ -301,68 +339,91 @@ export default function AuditIntelligence() {
             </Popover>
           </div>
 
-          {/* Searchable Engagement Dropdown */}
-          <div className="flex-1 min-w-[280px]">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Engagement</label>
-            <div className="flex gap-2">
-              <Popover open={engagementOpen} onOpenChange={setEngagementOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" role="combobox" aria-expanded={engagementOpen} className="flex-1 justify-between font-normal">
-                    <span className="truncate">{selectedEngagementLabel || "Select Engagement..."}</span>
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[400px] p-0" align="start">
-                  <Command>
-                    <CommandInput placeholder="Search engagements..." />
-                    <CommandList>
-                      <CommandEmpty>No engagements found.</CommandEmpty>
-                      <CommandGroup>
-                        {activeEngagements.map(e => (
-                          <CommandItem
-                            key={e.id}
-                            value={`${e.client_name} ${e.audit_type} ${e.financial_year}`}
-                            onSelect={() => {
-                              setSelectedEngagementId(e.id);
-                              setEngagementOpen(false);
-                            }}
-                          >
-                            <Check className={cn("mr-2 h-4 w-4 shrink-0", selectedEngagementId === e.id ? "opacity-100" : "opacity-0")} />
-                            <span className="truncate">{e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}</span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              {selectedEngagement && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon" className="shrink-0">
-                      <MoreVertical size={16} />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={openEditDialog}>
-                      <Pencil size={14} className="mr-2" /> Edit Engagement
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
-                      <Trash2 size={14} className="mr-2" /> Archive Engagement
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </div>
+          {/* Audit Type Filter */}
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Audit Type</label>
+            <Select value={filterAuditType} onValueChange={setFilterAuditType}>
+              <SelectTrigger><SelectValue placeholder="All Types" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                {AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Financial Year Filter */}
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Financial Year</label>
+            <Select value={filterFY} onValueChange={setFilterFY}>
+              <SelectTrigger><SelectValue placeholder="All Years" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Years</SelectItem>
+                {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Period Type Filter */}
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Period Type</label>
+            <Select value={filterPeriodType} onValueChange={setFilterPeriodType}>
+              <SelectTrigger><SelectValue placeholder="All Periods" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Periods</SelectItem>
+                {PERIOD_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
+
+        {/* Resolved engagement info */}
+        {uniqueFilteredEngagements.length > 1 && (
+          <div className="mt-3 pt-3 border-t border-border">
+            <p className="text-xs text-muted-foreground mb-2">{uniqueFilteredEngagements.length} engagements match. Select one:</p>
+            <div className="flex flex-wrap gap-2">
+              {uniqueFilteredEngagements.map(e => (
+                <Button
+                  key={e.id}
+                  variant={e.id === selectedEngagementId ? "default" : "outline"}
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setSelectedEngagementId(e.id)}
+                >
+                  {e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+        {selectedEngagement && (
+          <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
+            <p className="text-sm text-foreground font-medium">
+              Active: <span className="text-primary">{selectedEngagement.client_name} — {selectedEngagement.audit_type || "Audit"} — FY {selectedEngagement.financial_year}</span>
+            </p>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" className="shrink-0 h-8 w-8">
+                  <MoreVertical size={14} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={openEditDialog}>
+                  <Pencil size={14} className="mr-2" /> Edit Engagement
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
+                  <Trash2 size={14} className="mr-2" /> Archive Engagement
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </Card>
 
       {!selectedEngagement ? (
         <Card className="p-12 text-center">
           <Building2 className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-1">Select an Engagement</h3>
-          <p className="text-sm text-muted-foreground mb-4">Choose a client and engagement above to view the audit dashboard.</p>
+          <p className="text-sm text-muted-foreground mb-4">Use the filters above to narrow down and select an engagement.</p>
           <Button onClick={() => navigate('/audit/pipeline')}>
             <Plus className="mr-2 h-4 w-4" /> Create New Engagement
           </Button>
