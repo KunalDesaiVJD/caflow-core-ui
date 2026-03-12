@@ -125,12 +125,21 @@ export default function ImportTrialBalance() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Use audit context for auto-binding
+  let auditCtx: any = null;
+  try { auditCtx = useAuditContext(); } catch {}
+
+  const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
+  const contextEngagementId = auditCtx?.selectedEngagementId || "";
+
   const [selectedClientId, setSelectedClientId] = useState("");
   const [clientsList, setClientsList] = useState<{ id: string; name: string | null }[]>([]);
   const [engagementId, setEngagementId] = useState("");
   const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
 
-  const clientId = routeClientId || selectedClientId;
+  // Auto-bind from audit context if available
+  const clientId = routeClientId || selectedClientId || contextClientId;
   const fileRef = useRef<HTMLInputElement>(null);
   const firmId = user?.firm_id;
 
@@ -152,9 +161,16 @@ export default function ImportTrialBalance() {
   const [unmatchedOverrides, setUnmatchedOverrides] = useState<Record<string, string>>({});
   const [savingOverrides, setSavingOverrides] = useState(false);
 
-  // Load clients
+  // Auto-set engagement from context
   useEffect(() => {
-    if (routeClientId) return;
+    if (contextEngagementId && !engagementId) {
+      setEngagementId(contextEngagementId);
+    }
+  }, [contextEngagementId]);
+
+  // Load clients only if no context client
+  useEffect(() => {
+    if (routeClientId || contextClientId) return;
     const load = async () => {
       let q = supabase.from("clients").select("id, name").order("name");
       if (firmId) q = q.eq("firm_id", firmId);
@@ -162,7 +178,7 @@ export default function ImportTrialBalance() {
       setClientsList(data || []);
     };
     load();
-  }, [firmId, routeClientId]);
+  }, [firmId, routeClientId, contextClientId]);
 
   // Load engagements
   useEffect(() => {
@@ -173,7 +189,7 @@ export default function ImportTrialBalance() {
         .eq("client_id", clientId)
         .order("financial_year", { ascending: false });
       setEngagements(data || []);
-      if (data && data.length > 0) setEngagementId(data[0].id);
+      if (data && data.length > 0 && !engagementId) setEngagementId(data[0].id);
     };
     load();
   }, [clientId]);
