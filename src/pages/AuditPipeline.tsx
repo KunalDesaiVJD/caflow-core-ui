@@ -360,7 +360,13 @@ export default function AuditPipeline() {
         {/* Engagement selector */}
         <div className="p-3 border-b border-border space-y-2">
           <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Engagement</Label>
-          <Select value={selectedEngId} onValueChange={setSelectedEngId}>
+          <Select value={selectedEngId} onValueChange={(val) => {
+            setSelectedEngId(val);
+            if (auditCtx?.setSelectedEngagementId) {
+              auditCtx.setSelectedEngagementId(val);
+            }
+            navigate(`/audit/pipeline/${val}`, { replace: true });
+          }}>
             <SelectTrigger className="text-xs"><SelectValue placeholder="Select engagement" /></SelectTrigger>
             <SelectContent>
               {Array.from(grouped.entries()).map(([client, engs]) => (
