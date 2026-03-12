@@ -12,7 +12,24 @@ interface CachedTheme {
   ts: number;
 }
 
-/** Inject CSS variables into :root via a <style> tag */
+const CSS_VARS_MAP: Record<string, Record<string, string>> = {
+  midnight_professional: {
+    "--bg-primary": "220 14% 7%", "--bg-secondary": "215 19% 13%",
+    "--text-primary": "210 40% 98%", "--text-secondary": "215 20% 65%",
+    "--accent": "42 52% 54%", "--sidebar-bg": "215 19% 13%",
+  },
+  clean_white: {
+    "--bg-primary": "0 0% 100%", "--bg-secondary": "210 40% 98%",
+    "--text-primary": "222 47% 11%", "--text-secondary": "215 16% 47%",
+    "--accent": "174 68% 32%", "--sidebar-bg": "210 40% 98%",
+  },
+  sage_green: {
+    "--bg-primary": "80 20% 97%", "--bg-secondary": "100 18% 92%",
+    "--text-primary": "24 10% 10%", "--text-secondary": "25 7% 32%",
+    "--accent": "40 35% 37%", "--sidebar-bg": "100 18% 92%",
+  },
+};
+
 function injectVars(cssVars: Record<string, string>) {
   let style = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
   if (!style) {
@@ -20,13 +37,10 @@ function injectVars(cssVars: Record<string, string>) {
     style.id = STYLE_ID;
     document.head.appendChild(style);
   }
-  const entries = Object.entries(cssVars)
-    .map(([k, v]) => `${k}: ${v};`)
-    .join("\n  ");
+  const entries = Object.entries(cssVars).map(([k, v]) => `${k}: ${v};`).join("\n  ");
   style.textContent = `:root {\n  ${entries}\n}`;
 }
 
-/** Apply cached theme immediately to avoid flash */
 function applyCachedTheme(firmId: string | null) {
   if (!firmId) return;
   try {
@@ -36,80 +50,111 @@ function applyCachedTheme(firmId: string | null) {
     if (cached.firmId === firmId && cached.cssVars) {
       injectVars(cached.cssVars);
     }
-  } catch {
-    // ignore parse errors
-  }
+  } catch {}
 }
 
-/** Save theme to localStorage */
 function cacheTheme(firmId: string, cssVars: Record<string, string>, themeId?: string) {
-  const data: CachedTheme = { cssVars, firmId, themeId, ts: Date.now() };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // storage full – ignore
-  }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ cssVars, firmId, themeId, ts: Date.now() } as CachedTheme));
+  } catch {}
 }
 
 export function useThemeLoader() {
   const { user } = useAuth();
   const loadedRef = useRef<string | null>(null);
 
-  // Step 1: Apply cached theme instantly on firm_id change
+  // Step 1: Apply cached theme instantly
   useEffect(() => {
-    if (user?.firm_id) {
-      applyCachedTheme(user.firm_id);
-    }
+    if (user?.firm_id) applyCachedTheme(user.firm_id);
   }, [user?.firm_id]);
 
-  // Step 2: Load from DB and refresh
+  // Step 2: Load from DB with role-based theme support
   useEffect(() => {
     if (!user?.firm_id) return;
-    if (loadedRef.current === user.firm_id) return;
-    loadedRef.current = user.firm_id;
+    if (loadedRef.current === user.firm_id + (user.role || "")) return;
+    loadedRef.current = user.firm_id + (user.role || "");
 
     (async () => {
       try {
-        // Get firm settings to find theme_id or theme_color
-        const { data: firm } = await supabase
-          .from("firms")
-          .select("settings")
-          .eq("id", user.firm_id!)
-          .single();
-
-        const settings = (firm?.settings || {}) as Record<string, any>;
-        const themeColor = settings.theme_color as string | undefined;
-        const themeId = settings.theme_id as string | undefined;
-
         let cssVars: Record<string, string> | null = null;
+        let themeId: string | undefined;
 
-        // Try loading by theme_id first
-        if (themeId) {
-          const { data: theme } = await supabase
-            .from("app_themes")
-            .select("css_vars")
-            .eq("id", themeId)
-            .single();
-          if (theme?.css_vars) {
-            cssVars = theme.css_vars as Record<string, string>;
-          }
-        }
-
-        // Try loading by color_scheme name
-        if (!cssVars && themeColor) {
-          const { data: theme } = await supabase
-            .from("app_themes")
-            .select("css_vars")
-            .eq("color_scheme", themeColor)
-            .eq("active", true)
-            .limit(1)
+        // 1. Check role_theme_overrides for this firm + role
+        if (user.role) {
+          const { data: roleOverride } = await supabase
+            .from("role_theme_overrides")
+            .select("*")
+            .eq("firm_id", user.firm_id!)
+            .eq("role", user.role)
             .maybeSingle();
-          if (theme?.css_vars) {
-            cssVars = theme.css_vars as Record<string, string>;
+
+          if (roleOverride) {
+            // Check if user has personal preference and override is allowed
+            let usePersonal = false;
+            if (roleOverride.allow_user_override) {
+              const { data: userData } = await supabase
+                .from("users")
+                .select("user_preferences")
+                .eq("id", user.id!)
+                .single();
+              const prefs = (userData?.user_preferences as any) || {};
+              if (prefs.theme_color && CSS_VARS_MAP[prefs.theme_color]) {
+                cssVars = CSS_VARS_MAP[prefs.theme_color];
+                usePersonal = true;
+              }
+            }
+
+            if (!usePersonal) {
+              // Use role default
+              if (roleOverride.theme_id) {
+                const { data: theme } = await supabase
+                  .from("app_themes")
+                  .select("css_vars")
+                  .eq("id", roleOverride.theme_id)
+                  .single();
+                if (theme?.css_vars) {
+                  cssVars = theme.css_vars as Record<string, string>;
+                  themeId = roleOverride.theme_id;
+                }
+              }
+              // Fallback to color_scheme from role override
+              if (!cssVars && roleOverride.color_scheme && CSS_VARS_MAP[roleOverride.color_scheme]) {
+                cssVars = CSS_VARS_MAP[roleOverride.color_scheme];
+              }
+            }
           }
         }
 
-        // Fallback: load default theme
+        // 2. Fallback: firm-level theme
+        if (!cssVars) {
+          const { data: firm } = await supabase
+            .from("firms")
+            .select("settings")
+            .eq("id", user.firm_id!)
+            .single();
+
+          const settings = (firm?.settings || {}) as Record<string, any>;
+          const themeColor = settings.theme_color as string | undefined;
+          const firmThemeId = settings.theme_id as string | undefined;
+
+          if (firmThemeId) {
+            const { data: theme } = await supabase
+              .from("app_themes")
+              .select("css_vars")
+              .eq("id", firmThemeId)
+              .single();
+            if (theme?.css_vars) {
+              cssVars = theme.css_vars as Record<string, string>;
+              themeId = firmThemeId;
+            }
+          }
+
+          if (!cssVars && themeColor && CSS_VARS_MAP[themeColor]) {
+            cssVars = CSS_VARS_MAP[themeColor];
+          }
+        }
+
+        // 3. Fallback: system default
         if (!cssVars) {
           const { data: defaultTheme } = await supabase
             .from("app_themes")
@@ -127,11 +172,9 @@ export function useThemeLoader() {
           injectVars(cssVars);
           cacheTheme(user.firm_id!, cssVars, themeId);
         }
-      } catch {
-        // Silently fail – cached theme is already applied
-      }
+      } catch {}
     })();
-  }, [user?.firm_id]);
+  }, [user?.firm_id, user?.role]);
 
   // Cleanup on logout
   useEffect(() => {
