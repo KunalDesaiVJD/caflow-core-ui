@@ -108,6 +108,7 @@ export default function AuditPipeline() {
   useEffect(() => {
     if (contextEngId && !routeEngId && !selectedEngId) {
       setSelectedEngId(contextEngId);
+      navigate(`/audit/pipeline/${contextEngId}`, { replace: true });
     }
   }, [contextEngId]);
 
