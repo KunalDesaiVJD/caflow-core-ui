@@ -95,7 +95,6 @@ export default function AuditIntelligence() {
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
   // Dialogs
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formSaving, setFormSaving] = useState(false);
@@ -104,7 +103,7 @@ export default function AuditIntelligence() {
   const [clientOpen, setClientOpen] = useState(false);
   const [engagementOpen, setEngagementOpen] = useState(false);
 
-  // Create/Edit form
+  // Edit form
   const [engForm, setEngForm] = useState({
     client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company",
   });
