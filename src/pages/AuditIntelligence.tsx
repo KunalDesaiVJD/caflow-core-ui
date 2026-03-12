@@ -555,56 +555,6 @@ export default function AuditIntelligence() {
         </>
       )}
 
-      {/* ─── Create Engagement Dialog ─── */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create New Audit Engagement</DialogTitle>
-            <DialogDescription>Select a client with statutory or tax audit activated.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Client *</Label>
-              <Select value={engForm.client_id} onValueChange={v => setEngForm(f => ({ ...f, client_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select audit-activated client" /></SelectTrigger>
-                <SelectContent>
-                  {eligibleClients.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name} ({c.entity_type || "—"})</SelectItem>)}
-                  {eligibleClients.length === 0 && <div className="px-3 py-2 text-sm text-muted-foreground">No audit-activated clients found</div>}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Financial Year *</Label>
-              <Select value={engForm.financial_year} onValueChange={v => setEngForm(f => ({ ...f, financial_year: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Audit Type *</Label>
-              <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Entity Type *</Label>
-              <Select value={engForm.entity_type} onValueChange={v => setEngForm(f => ({ ...f, entity_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ENTITY_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={formSaving || !engForm.client_id}>
-              {formSaving ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Plus size={16} className="mr-2" />}
-              Create Engagement
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* ─── Edit Engagement Dialog ─── */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
         <DialogContent>
