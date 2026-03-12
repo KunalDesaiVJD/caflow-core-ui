@@ -36,16 +36,16 @@ import { toast } from "sonner";
 
 // ─── Stage definitions ───
 const STAGES = [
-  { num: 1, label: "Engagement Setup & Planning", icon: Building2, path: "/audit/pipeline" },
-  { num: 2, label: "Workpapers & Risk", icon: Shield, path: "/audit/risk" },
-  { num: 3, label: "Data Import", icon: FileText, path: "/audit/import" },
-  { num: 4, label: "Scrutiny & Ledger Analysis", icon: Eye, path: "/audit/scrutiny" },
-  { num: 5, label: "Queries & Communication", icon: ClipboardCheck, path: "/audit/queries" },
-  { num: 6, label: "COA Mapping & FS Prep", icon: Calculator, path: "/settings/coa-mappings" },
-  { num: 7, label: "Notes to Accounts", icon: BookMarked, path: "/audit/notes" },
-  { num: 8, label: "CARO / 3CD", icon: FileText, path: "/audit/3cd" },
-  { num: 9, label: "Audit Reports", icon: Layers, path: "/audit/report" },
-  { num: 10, label: "Sign-Off & Bundle", icon: Award, path: "/audit/pipeline" },
+  { num: 1,  label: "Engagement Setup",           icon: Building2      },
+  { num: 2,  label: "Trial Balance Import",        icon: FileText       },
+  { num: 3,  label: "COA & Financial Statements",  icon: Calculator     },
+  { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
+  { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
+  { num: 6,  label: "Workpapers & Risk",           icon: Shield         },
+  { num: 7,  label: "Notes to Accounts",           icon: BookMarked     },
+  { num: 8,  label: "CARO / 3CD Reports",          icon: FileText       },
+  { num: 9,  label: "Review & QC",                 icon: Layers         },
+  { num: 10, label: "Sign-off & UDIN",             icon: Award          },
 ];
 
 const QUICK_ACTIONS = [
@@ -163,20 +163,16 @@ export default function AuditIntelligence() {
     return "text-muted-foreground";
   };
 
-  const handleStageClick = (stage: typeof STAGES[0]) => {
+  const handleStageClick = async (stage: typeof STAGES[0]) => {
     if (!selectedEngagementId) {
       toast.error("Please select an engagement first");
       return;
     }
-    // Stages rendered inside the pipeline view
-    const pipelineStages = [1, 2, 5, 6, 7, 8, 10];
-    if (pipelineStages.includes(stage.num)) {
-      // Update pipeline_stage so the pipeline opens to the correct stage
-      supabase.from("audit_engagements").update({ pipeline_stage: stage.num } as any).eq("id", selectedEngagementId);
-      navigate(`/audit/pipeline/${selectedEngagementId}`);
-    } else if (stage.path) {
-      navigate(stage.path);
-    }
+    await supabase
+      .from("audit_engagements")
+      .update({ pipeline_stage: stage.num } as any)
+      .eq("id", selectedEngagementId);
+    navigate(`/audit/pipeline/${selectedEngagementId}`);
   };
 
   // ─── Edit Engagement ───
