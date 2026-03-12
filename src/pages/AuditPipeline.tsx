@@ -524,7 +524,7 @@ export default function AuditPipeline() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
                   <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold">B</span>
-                  Audit Questionnaire (Mandatory)
+                  Preliminary Questions
                   {questValid ? <CheckCircle2 size={16} className="text-primary ml-auto" /> : <span className="text-xs text-destructive ml-auto">Required</span>}
                 </CardTitle>
               </CardHeader>
