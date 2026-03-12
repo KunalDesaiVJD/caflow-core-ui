@@ -151,9 +151,6 @@ const App = () => (
               <Route path="/audit/:clientId/queries/dispatch" element={<AuditQueryDispatch />} />
               <Route path="/audit/report" element={<AuditReportEngine />} />
               <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
-              <Route path="/audit/risk" element={<Navigate to="/audit/pipeline" replace />} />
-              <Route path="/audit/notes" element={<Navigate to="/audit/pipeline" replace />} />
-              <Route path="/audit/signoff" element={<Navigate to="/audit/pipeline" replace />} />
               <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
               <Route path="/audit/:engagementId" element={<EngagementDetail />} />
               <Route path="/audit-intelligence" element={<Navigate to="/audit" replace />} />
