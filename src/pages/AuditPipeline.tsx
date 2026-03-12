@@ -444,13 +444,13 @@ export default function AuditPipeline() {
           <div className="max-w-4xl space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-xl font-bold text-foreground">Stage 1 — Engagement Setup & Audit Planning</h1>
-                <p className="text-sm text-muted-foreground">Complete 1A (Setup) and 1B (Questionnaire). 1C (Planning) is optional.</p>
+                <h1 className="text-xl font-bold text-foreground">Engagement Setup & Audit Planning</h1>
+                <p className="text-sm text-muted-foreground">Complete the preliminary questionnaire and review the planning calendar.</p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => saveStage1(false)} disabled={saving}>Save Draft</Button>
                 <Button size="sm" onClick={() => saveStage1(true)} disabled={saving || !canCompleteStage1} className="gap-1">
-                  Complete Stage 1 <ArrowRight size={14} />
+                  Complete & Proceed <ArrowRight size={14} />
                 </Button>
               </div>
             </div>
