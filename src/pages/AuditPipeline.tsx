@@ -174,6 +174,9 @@ export default function AuditPipeline() {
 
   const currentStage = engagement?.pipeline_stage || 1;
 
+  // Sync active view stage when engagement loads
+  useEffect(() => { setActiveStage(currentStage); }, [currentStage]);
+
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
