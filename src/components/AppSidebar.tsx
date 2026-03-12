@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAuditContext } from "@/hooks/useAuditContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
   LayoutDashboard, Users, Receipt, FileText, CreditCard, BookOpen,
@@ -27,27 +28,22 @@ const topNavItems = [
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
 ];
 
-// Fixed stage order — no numbering
 const auditStages = [
-  { title: "Dashboard", path: "/audit", icon: LayoutDashboard },
-  { title: "Engagement Setup & Planning", path: "/audit/pipeline", icon: Building2 },
-  { title: "Workpapers & Risk", path: "/audit/risk", icon: Shield },
-  { title: "Data Import", path: "/audit/import", icon: Upload },
-  { title: "Scrutiny & Analysis", path: "/audit/scrutiny", icon: Eye },
-  { title: "Queries & Communication", path: "/audit/queries", icon: MessageSquare, children: [
-    { title: "Query Tracker", path: "/audit/queries", icon: ClipboardCheck },
-    { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
-  ]},
-  { title: "COA Mapping & FS", path: "/settings/coa-mappings", icon: Layers },
-  { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
-  { title: "CARO / 3CD", path: "/audit/3cd", icon: FileCheck },
-  { title: "Audit Reports", path: "/audit/report", icon: FileOutput },
-  { title: "Sign-Off & Bundle", path: "/audit/signoff", icon: Award },
+  { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
+  { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
+  { title: "Trial Balance Import",      path: "/audit/pipeline", icon: Upload,       stage: 2  },
+  { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
+  { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
+  { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },
+  { title: "Workpapers & Risk",         path: "/audit/pipeline", icon: Shield,       stage: 6  },
+  { title: "Notes to Accounts",         path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
+  { title: "CARO / 3CD Reports",        path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
+  { title: "Review & QC",               path: "/audit/pipeline", icon: Layers,       stage: 9  },
+  { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 10 },
 ];
 
 const auditUtilities = [
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
-  { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Documents", path: "/documents", icon: FolderOpen },
   { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
@@ -65,18 +61,16 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { can } = usePermissions();
+  const auditCtx = useAuditContext();
+  const selectedEngId = auditCtx?.selectedEngagementId || "";
   const [firmLogo, setFirmLogo] = useState<string | null>(null);
   const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [utilitiesOpen, setUtilitiesOpen] = useState(false);
-  const [queriesOpen, setQueriesOpen] = useState(false);
 
   useEffect(() => {
     if (location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings" || location.pathname === "/depreciation") {
       setAuditOpen(true);
-    }
-    if (location.pathname.startsWith("/audit/queries") || location.pathname.startsWith("/audit/dispatch")) {
-      setQueriesOpen(true);
     }
   }, [location.pathname]);
 
@@ -196,62 +190,50 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
-                  {/* Stage items */}
                   {auditStages.map((item) => {
-                    // Items with children (Queries & Communication)
-                    if ('children' in item && item.children) {
-                      const isParentActive = item.children.some(c => isActive(c.path));
+                    const isDashboard = item.path === "/audit" && !('stage' in item && item.stage);
+                    if (isDashboard) {
                       return (
-                        <Collapsible key={item.title} open={queriesOpen} onOpenChange={setQueriesOpen}>
-                          <CollapsibleTrigger className="w-full">
-                            <div className={cn(
-                              "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200 w-full",
-                              isParentActive
-                                ? "bg-sidebar-gold/10 text-sidebar-gold"
-                                : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                            )}>
-                              <item.icon size={14} className="shrink-0" />
-                              <span className="truncate flex-1 text-left">{item.title}</span>
-                              {queriesOpen ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
-                            </div>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="ml-3 pl-2 border-l border-sidebar-border/30 space-y-0.5 mt-0.5">
-                              {item.children.map(child => (
-                                <Link
-                                  key={child.path}
-                                  to={child.path}
-                                  className={cn(
-                                    "flex items-center gap-2 px-2 py-1 rounded-md text-[11px] font-medium transition-all duration-200",
-                                    isActive(child.path)
-                                      ? "bg-sidebar-gold/10 text-sidebar-gold"
-                                      : "text-sidebar-foreground/70 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                                  )}
-                                >
-                                  <child.icon size={12} className="shrink-0" />
-                                  <span className="truncate">{child.title}</span>
-                                </Link>
-                              ))}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
+                        <Link
+                          key={item.title}
+                          to="/audit"
+                          className={cn(
+                            "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                            isActive("/audit") && !location.pathname.startsWith("/audit/pipeline")
+                              ? "bg-sidebar-gold/10 text-sidebar-gold"
+                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                          )}
+                        >
+                          <item.icon size={14} className="shrink-0" />
+                          <span className="truncate">{item.title}</span>
+                        </Link>
                       );
                     }
-
+                    const isStageActive = location.pathname.startsWith("/audit/pipeline");
                     return (
-                      <Link
+                      <button
                         key={item.title}
-                        to={item.path}
+                        onClick={async () => {
+                          if (selectedEngId && item.stage) {
+                            await supabase
+                              .from("audit_engagements")
+                              .update({ pipeline_stage: item.stage } as any)
+                              .eq("id", selectedEngId);
+                            navigate(`/audit/pipeline/${selectedEngId}`);
+                          } else {
+                            navigate("/audit/pipeline");
+                          }
+                        }}
                         className={cn(
-                          "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
-                          isActive(item.path) && (item.path !== "/audit/pipeline" || location.pathname.startsWith("/audit/pipeline"))
-                            ? "bg-sidebar-gold/10 text-sidebar-gold"
+                          "w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200 text-left",
+                          isStageActive && item.stage
+                            ? "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
                             : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
                         )}
                       >
                         <item.icon size={14} className="shrink-0" />
                         <span className="truncate">{item.title}</span>
-                      </Link>
+                      </button>
                     );
                   })}
 
