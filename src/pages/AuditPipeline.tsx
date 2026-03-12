@@ -495,9 +495,17 @@ export default function AuditPipeline() {
                 <div>
                   <Label>Client *</Label>
                   <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Select audit-activated client" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                     <SelectContent>
-                      {(eligibleClients || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.entity_type})</SelectItem>)}
+                      {(eligibleClients || []).length === 0 ? (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Add a client first.</div>
+                      ) : (
+                        (eligibleClients || []).map(c => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
