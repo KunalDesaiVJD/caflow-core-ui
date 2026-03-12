@@ -525,17 +525,17 @@ const NewInvoice = () => {
       const gstPct = item.gst_percent;
       return `
       <tr>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${i + 1}.</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;font-size:11px">
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;vertical-align:middle;font-size:11px">
           ${item.description}
           ${item.description_details ? `<div style="font-size:10px;color:#555;margin-top:2px;white-space:pre-line">${item.description_details}</div>` : ""}
         </td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${item.hsn_sac_code}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">\u20B9${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">\u20B9${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${gstPct}%</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px;font-weight:600">\u20B9${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${gstPct}%</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">\u20B9${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
     }).join("");
 
