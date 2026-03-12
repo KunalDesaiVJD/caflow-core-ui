@@ -49,12 +49,12 @@ const STAGES = [
 ];
 
 const QUICK_ACTIONS = [
-  { label: "Import Trial Balance", icon: Upload, path: "/audit/import" },
-  { label: "Scrutiny Dashboard", icon: Search, path: "/audit/scrutiny" },
-  { label: "Raise Client Query", icon: MessageSquare, path: "/audit/queries" },
-  { label: "Upload Workpaper", icon: FileUp, path: "/audit/risk" },
-  { label: "Notes to Accounts", icon: BookMarked, path: "/audit/notes" },
-  { label: "Generate Report", icon: FileOutput, path: "/audit/report" },
+  { label: "Import Trial Balance", icon: Upload, stage: 2 },
+  { label: "Scrutiny Engine", icon: Search, stage: 4 },
+  { label: "Client Queries", icon: MessageSquare, stage: 5 },
+  { label: "Workpapers & Risk", icon: FileUp, stage: 6 },
+  { label: "Notes to Accounts", icon: BookMarked, stage: 7 },
+  { label: "Generate Report", icon: FileOutput, stage: 9 },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
@@ -95,7 +95,6 @@ export default function AuditIntelligence() {
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
   // Dialogs
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formSaving, setFormSaving] = useState(false);
@@ -104,7 +103,7 @@ export default function AuditIntelligence() {
   const [clientOpen, setClientOpen] = useState(false);
   const [engagementOpen, setEngagementOpen] = useState(false);
 
-  // Create/Edit form
+  // Edit form
   const [engForm, setEngForm] = useState({
     client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company",
   });
@@ -115,11 +114,6 @@ export default function AuditIntelligence() {
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 
-  // Eligible clients (statutory/tax audit activated)
-  const eligibleClients = useMemo(() =>
-    clients.filter((c: any) => c.statutory_audit_applicable || (c.tax_audit_type && c.tax_audit_type !== "")),
-    [clients]
-  );
 
   useEffect(() => {
     if (!selectedEngagementId) return;
@@ -183,28 +177,6 @@ export default function AuditIntelligence() {
     } else if (stage.path) {
       navigate(stage.path);
     }
-  };
-
-  // ─── Create Engagement ───
-  const handleCreate = async () => {
-    if (!engForm.client_id) { toast.error("Please select a client"); return; }
-    setFormSaving(true);
-    const { data, error } = await supabase.from("audit_engagements").insert({
-      client_id: engForm.client_id,
-      firm_id: user!.firm_id!,
-      financial_year: engForm.financial_year,
-      audit_type: engForm.audit_type,
-      entity_type: engForm.entity_type,
-      status: "planning",
-      pipeline_stage: 1,
-      stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started", "10": "not_started" },
-    } as any).select("id").single();
-    setFormSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Engagement created");
-    setShowCreateDialog(false);
-    refreshEngagements();
-    setTimeout(() => setSelectedEngagementId(data.id), 300);
   };
 
   // ─── Edit Engagement ───
@@ -280,10 +252,14 @@ export default function AuditIntelligence() {
           <p className="text-sm text-muted-foreground">Engagement dashboard, progress tracking & audit analytics</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate("/audit/pipeline")}>
+          <Button variant="outline" onClick={() =>
+            navigate(selectedEngagementId
+              ? `/audit/pipeline/${selectedEngagementId}`
+              : '/audit/pipeline')
+          }>
             <Layers className="mr-2 h-4 w-4" /> Pipeline View
           </Button>
-          <Button onClick={() => { setEngForm({ client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company" }); setShowCreateDialog(true); }}>
+          <Button onClick={() => navigate('/audit/pipeline')}>
             <Plus className="mr-2 h-4 w-4" /> New Engagement
           </Button>
         </div>
@@ -391,7 +367,7 @@ export default function AuditIntelligence() {
           <Building2 className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-1">Select an Engagement</h3>
           <p className="text-sm text-muted-foreground mb-4">Choose a client and engagement above to view the audit dashboard.</p>
-          <Button onClick={() => { setEngForm({ client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company" }); setShowCreateDialog(true); }}>
+          <Button onClick={() => navigate('/audit/pipeline')}>
             <Plus className="mr-2 h-4 w-4" /> Create New Engagement
           </Button>
         </Card>
@@ -506,7 +482,17 @@ export default function AuditIntelligence() {
                     variant="outline"
                     size="sm"
                     className="h-auto py-2.5 px-3 justify-start gap-2 text-xs"
-                    onClick={() => navigate(action.path)}
+                    onClick={async () => {
+                      if (!selectedEngagementId) {
+                        toast.error("Select an engagement first");
+                        return;
+                      }
+                      await supabase
+                        .from("audit_engagements")
+                        .update({ pipeline_stage: action.stage } as any)
+                        .eq("id", selectedEngagementId);
+                      navigate(`/audit/pipeline/${selectedEngagementId}`);
+                    }}
                   >
                     <action.icon size={14} className="shrink-0 text-primary" />
                     <span className="truncate">{action.label}</span>
@@ -568,56 +554,6 @@ export default function AuditIntelligence() {
           </div>
         </>
       )}
-
-      {/* ─── Create Engagement Dialog ─── */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create New Audit Engagement</DialogTitle>
-            <DialogDescription>Select a client with statutory or tax audit activated.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Client *</Label>
-              <Select value={engForm.client_id} onValueChange={v => setEngForm(f => ({ ...f, client_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select audit-activated client" /></SelectTrigger>
-                <SelectContent>
-                  {eligibleClients.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name} ({c.entity_type || "—"})</SelectItem>)}
-                  {eligibleClients.length === 0 && <div className="px-3 py-2 text-sm text-muted-foreground">No audit-activated clients found</div>}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Financial Year *</Label>
-              <Select value={engForm.financial_year} onValueChange={v => setEngForm(f => ({ ...f, financial_year: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Audit Type *</Label>
-              <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Entity Type *</Label>
-              <Select value={engForm.entity_type} onValueChange={v => setEngForm(f => ({ ...f, entity_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ENTITY_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={formSaving || !engForm.client_id}>
-              {formSaving ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Plus size={16} className="mr-2" />}
-              Create Engagement
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* ─── Edit Engagement Dialog ─── */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
