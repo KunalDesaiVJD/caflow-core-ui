@@ -20,7 +20,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [selectedClientId, setSelectedClientId] = useState<string>("all");
   const [selectedEngagementId, setSelectedEngagementId] = useState<string>("");
-  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[]>([]);
   const [engagements, setEngagements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
