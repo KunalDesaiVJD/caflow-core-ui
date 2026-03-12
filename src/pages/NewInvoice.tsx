@@ -502,11 +502,12 @@ const NewInvoice = () => {
     try {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
-        margin: [10, 10, 10, 10],
+        margin: [10, 10, 20, 10],
         filename: `Tax_Invoice_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
       }).from(container).save();
     } finally {
       document.body.removeChild(container);
