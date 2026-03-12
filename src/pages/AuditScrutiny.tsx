@@ -51,14 +51,20 @@ export default function AuditScrutiny() {
   // Auto-bind from audit context if no route clientId
   const auditCtx = useAuditContext();
   const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
+  const contextFY = auditCtx?.selectedEngagement?.financial_year || "";
   const clientId = routeClientId || contextClientId;
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasTB, setHasTB] = useState<boolean | null>(null);
 
-  // Filters
-  const [fy, setFy] = useState("2024-25");
+  // Filters — default FY from engagement context
+  const [fy, setFy] = useState(contextFY || "2024-25");
+
+  // Sync FY when engagement context changes
+  useEffect(() => {
+    if (contextFY) setFy(contextFY);
+  }, [contextFY]);
   const [category, setCategory] = useState("All");
   const [severity, setSeverity] = useState("All");
   const [status, setStatus] = useState("All");
