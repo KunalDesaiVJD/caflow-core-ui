@@ -179,28 +179,6 @@ export default function AuditIntelligence() {
     }
   };
 
-  // ─── Create Engagement ───
-  const handleCreate = async () => {
-    if (!engForm.client_id) { toast.error("Please select a client"); return; }
-    setFormSaving(true);
-    const { data, error } = await supabase.from("audit_engagements").insert({
-      client_id: engForm.client_id,
-      firm_id: user!.firm_id!,
-      financial_year: engForm.financial_year,
-      audit_type: engForm.audit_type,
-      entity_type: engForm.entity_type,
-      status: "planning",
-      pipeline_stage: 1,
-      stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started", "10": "not_started" },
-    } as any).select("id").single();
-    setFormSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Engagement created");
-    setShowCreateDialog(false);
-    refreshEngagements();
-    setTimeout(() => setSelectedEngagementId(data.id), 300);
-  };
-
   // ─── Edit Engagement ───
   const openEditDialog = () => {
     if (!selectedEngagement) return;
