@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -10,7 +10,9 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2 } from "lucide-react";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import { ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2, ChevronRight, ChevronDown, FolderTree, AlertTriangle } from "lucide-react";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import * as XLSX from "xlsx";
 
 const ACCOUNT_GROUPS = [
@@ -69,6 +71,117 @@ interface CoaMapping {
   account_group: string | null;
 }
 
+interface HierarchyNode {
+  id: string;
+  node_id: string;
+  parent_node_id: string | null;
+  tally_group_name: string;
+  level: number;
+  is_leaf: boolean;
+  opening_balance: number;
+  txn_debit: number;
+  txn_credit: number;
+  closing_balance: number;
+  primary_group: string | null;
+  bs_pl_side: string | null;
+}
+
+// ─── Hierarchy-aware mapping tree node ───
+function MappingTreeNode({
+  node,
+  allNodes,
+  mappings,
+  onMap,
+}: {
+  node: HierarchyNode;
+  allNodes: HierarchyNode[];
+  mappings: CoaMapping[];
+  onMap: (ledgerName: string, standardHead: string, bsPl: string, accountGroup: string) => void;
+}) {
+  const [open, setOpen] = useState(node.level <= 2);
+  const children = allNodes.filter(n => n.parent_node_id === node.node_id);
+  const hasChildren = children.length > 0;
+  const mapped = mappings.find(m => (m.raw_ledger_name || "").toLowerCase() === node.tally_group_name.toLowerCase());
+  const parentMapped = findAncestorMapping(node, allNodes, mappings);
+
+  const fmtNum = (n: number) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+
+  return (
+    <div>
+      <div
+        className={`flex items-center gap-2 py-1.5 px-2 text-xs border-b border-border/30 ${
+          node.is_leaf ? "hover:bg-muted/50" : "hover:bg-muted/30"
+        } ${parentMapped && !mapped ? "bg-primary/5" : ""}`}
+        style={{ paddingLeft: `${(node.level - 1) * 20 + 8}px` }}
+      >
+        {hasChildren ? (
+          <button onClick={() => setOpen(!open)} className="shrink-0">
+            {open ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
+          </button>
+        ) : (
+          <div className="w-[14px]" />
+        )}
+        <span className={`flex-1 ${node.is_leaf ? "text-foreground" : "font-semibold text-muted-foreground"}`}>
+          {node.tally_group_name}
+        </span>
+        {mapped ? (
+          <Badge variant="default" className="text-[10px] h-5 shrink-0">{mapped.standard_head}</Badge>
+        ) : parentMapped ? (
+          <Badge variant="outline" className="text-[10px] h-5 shrink-0 border-primary/30 text-primary">
+            ↳ via {parentMapped.standard_head}
+          </Badge>
+        ) : null}
+        <span className="w-20 text-right font-mono text-muted-foreground shrink-0">{fmtNum(node.closing_balance)}</span>
+      </div>
+      {open && hasChildren && (
+        <div>
+          {children.map(child => (
+            <MappingTreeNode key={child.id} node={child} allNodes={allNodes} mappings={mappings} onMap={onMap} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Walk up the hierarchy to find if any ancestor is mapped */
+function findAncestorMapping(
+  node: HierarchyNode,
+  allNodes: HierarchyNode[],
+  mappings: CoaMapping[]
+): CoaMapping | null {
+  let current = node;
+  while (current.parent_node_id) {
+    const parent = allNodes.find(n => n.node_id === current.parent_node_id);
+    if (!parent) break;
+    const mapped = mappings.find(m => (m.raw_ledger_name || "").toLowerCase() === parent.tally_group_name.toLowerCase());
+    if (mapped) return mapped;
+    current = parent;
+  }
+  return null;
+}
+
+/** Get all descendant node names for a given node */
+function getDescendantNames(nodeId: string, allNodes: HierarchyNode[]): string[] {
+  const names: string[] = [];
+  const children = allNodes.filter(n => n.parent_node_id === nodeId);
+  for (const child of children) {
+    names.push(child.tally_group_name);
+    names.push(...getDescendantNames(child.node_id, allNodes));
+  }
+  return names;
+}
+
+/** Sum only leaf descendants (no double-counting with parent) */
+function sumLeafDescendants(nodeId: string, allNodes: HierarchyNode[]): number {
+  const children = allNodes.filter(n => n.parent_node_id === nodeId);
+  if (children.length === 0) {
+    const self = allNodes.find(n => n.node_id === nodeId);
+    return self?.closing_balance || 0;
+  }
+  return children.reduce((sum, child) => sum + sumLeafDescendants(child.node_id, allNodes), 0);
+}
+
 const CoaMappings = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -82,13 +195,37 @@ const CoaMappings = () => {
   const [saving, setSaving] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ standard_head: "", bs_pl: "", account_group: "" });
+  const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
+  const [selectedEngagement, setSelectedEngagement] = useState("");
+  const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
 
-  // Inline mapping state for unmapped ledgers
   const [mapForms, setMapForms] = useState<Record<string, { standard_head: string; bs_pl: string; account_group: string }>>({});
 
   useEffect(() => {
+    loadEngagements();
     loadData();
   }, [firmId]);
+
+  useEffect(() => {
+    if (selectedEngagement) loadHierarchy();
+  }, [selectedEngagement]);
+
+  async function loadEngagements() {
+    let q = supabase.from("audit_engagements").select("id, financial_year, client_id").order("financial_year", { ascending: false });
+    if (firmId) q = q.eq("firm_id", firmId);
+    const { data } = await q.limit(20);
+    setEngagements(data || []);
+    if (data && data.length > 0) setSelectedEngagement(data[0].id);
+  }
+
+  async function loadHierarchy() {
+    const { data } = await supabase
+      .from("tb_hierarchy_nodes")
+      .select("id, node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
+      .eq("engagement_id", selectedEngagement)
+      .order("row_number", { ascending: true });
+    setHierarchyNodes((data || []) as HierarchyNode[]);
+  }
 
   async function loadData() {
     setLoading(true);
@@ -100,7 +237,6 @@ const CoaMappings = () => {
     const allMappings = (mappingsRes.data || []) as CoaMapping[];
     setMappings(allMappings);
 
-    // Extract unique ledger names from all snapshots
     const mappedNames = new Set(allMappings.map(m => (m.raw_ledger_name || "").toLowerCase()));
     const allLedgerNames = new Set<string>();
     for (const snap of snapshotsRes.data || []) {
@@ -116,7 +252,6 @@ const CoaMappings = () => {
     const unmapped = Array.from(allLedgerNames).filter(n => !mappedNames.has(n.toLowerCase()));
     setUnmappedLedgers(unmapped.sort());
 
-    // Pre-populate fuzzy suggestions
     const forms: Record<string, any> = {};
     for (const name of unmapped) {
       const match = fuzzyMatch(name);
@@ -219,6 +354,25 @@ const CoaMappings = () => {
     e.target.value = "";
   }
 
+  // Build aggregated mapped summary (hierarchy-aware, no double counting)
+  const mappedSummary = useMemo(() => {
+    if (hierarchyNodes.length === 0 || mappings.length === 0) return [];
+    const result: { mapping: CoaMapping; leafTotal: number; childCount: number; children: string[] }[] = [];
+    for (const m of mappings) {
+      const matchingNode = hierarchyNodes.find(n => n.tally_group_name.toLowerCase() === (m.raw_ledger_name || "").toLowerCase());
+      if (!matchingNode) continue;
+      // Check this node isn't already covered by an ancestor mapping
+      const ancestorMapping = findAncestorMapping(matchingNode, hierarchyNodes, mappings);
+      if (ancestorMapping) continue; // skip — already nested under a parent mapping
+      const descendants = getDescendantNames(matchingNode.node_id, hierarchyNodes);
+      const leafTotal = sumLeafDescendants(matchingNode.node_id, hierarchyNodes);
+      result.push({ mapping: m, leafTotal, childCount: descendants.length, children: descendants.slice(0, 10) });
+    }
+    return result;
+  }, [hierarchyNodes, mappings]);
+
+  const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parent_node_id), [hierarchyNodes]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -234,11 +388,23 @@ const CoaMappings = () => {
           <ArrowLeft className="h-3 w-3" /> Back to Settings
         </Button>
         <h1 className="text-2xl font-display font-bold text-foreground">Chart of Accounts Mappings</h1>
-        <p className="text-sm text-muted-foreground">Map Tally/Busy ledger names to standard Schedule III account heads.</p>
+        <p className="text-sm text-muted-foreground">Map Tally/Busy ledger names to standard Schedule III account heads. Hierarchy-aware — mapping a parent auto-nests children.</p>
       </div>
 
-      <Tabs defaultValue="unmapped" className="space-y-4">
+      <Alert>
+        <FolderTree className="h-4 w-4" />
+        <AlertTitle className="text-sm">Hierarchy-Aware Mapping</AlertTitle>
+        <AlertDescription className="text-xs">
+          When you map a parent group (e.g. "Share Capital"), all child ledgers automatically appear nested under it.
+          Only leaf-level amounts are aggregated — no double-counting of parent + child totals.
+        </AlertDescription>
+      </Alert>
+
+      <Tabs defaultValue="hierarchy" className="space-y-4">
         <TabsList>
+          <TabsTrigger value="hierarchy" className="gap-2">
+            <FolderTree className="h-3.5 w-3.5" /> Hierarchy View
+          </TabsTrigger>
           <TabsTrigger value="unmapped" className="gap-2">
             Unmapped Ledgers
             {unmappedLedgers.length > 0 && (
@@ -246,7 +412,93 @@ const CoaMappings = () => {
             )}
           </TabsTrigger>
           <TabsTrigger value="all">All Mappings</TabsTrigger>
+          <TabsTrigger value="summary">Mapped Summary</TabsTrigger>
         </TabsList>
+
+        {/* Hierarchy View */}
+        <TabsContent value="hierarchy">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm">TB Hierarchy with Mapping Status</CardTitle>
+                  <CardDescription>Select an engagement to view its hierarchy and mapping coverage.</CardDescription>
+                </div>
+                <Select value={selectedEngagement} onValueChange={setSelectedEngagement}>
+                  <SelectTrigger className="w-48 h-8 text-xs"><SelectValue placeholder="Select engagement" /></SelectTrigger>
+                  <SelectContent>
+                    {engagements.map(e => <SelectItem key={e.id} value={e.id} className="text-xs">FY {e.financial_year || "—"}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {hierarchyNodes.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">No hierarchy data. Import a Trial Balance first.</p>
+              ) : (
+                <div className="border rounded-lg overflow-auto max-h-[500px]">
+                  <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
+                    <div className="w-4" />
+                    <span className="flex-1">Account / Group</span>
+                    <span className="w-32 text-center">Mapping</span>
+                    <span className="w-20 text-right">Closing</span>
+                  </div>
+                  {rootNodes.map(node => (
+                    <MappingTreeNode key={node.id} node={node} allNodes={hierarchyNodes} mappings={mappings} onMap={handleMap} />
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Mapped Summary — hierarchy-aware */}
+        <TabsContent value="summary">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Mapped Summary (Hierarchy-Aware)</CardTitle>
+              <CardDescription>Shows mapped heads with leaf-only totals. No double-counting of parent + child values.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {mappedSummary.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">No hierarchy-linked mappings found. Import a TB and create mappings first.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Mapped Head</TableHead>
+                      <TableHead className="text-xs">Standard Head</TableHead>
+                      <TableHead className="text-xs">Account Group</TableHead>
+                      <TableHead className="text-xs text-right">Leaf Total (₹)</TableHead>
+                      <TableHead className="text-xs text-right">Sub-Ledgers</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {mappedSummary.map(({ mapping, leafTotal, childCount, children }) => (
+                      <TableRow key={mapping.id}>
+                        <TableCell className="text-xs font-medium">{mapping.raw_ledger_name}</TableCell>
+                        <TableCell className="text-xs">{mapping.standard_head}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{mapping.account_group}</TableCell>
+                        <TableCell className="text-xs text-right font-mono">
+                          {leafTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                        </TableCell>
+                        <TableCell className="text-xs text-right">
+                          {childCount > 0 ? (
+                            <span className="text-muted-foreground" title={children.join(", ")}>
+                              {childCount} nested
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">leaf</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="unmapped">
           <Card>
