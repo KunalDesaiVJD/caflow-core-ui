@@ -164,7 +164,14 @@ export default function AuditPipeline() {
     enabled: !!selectedEngId,
   });
 
-  useEffect(() => { if (routeEngId) setSelectedEngId(routeEngId); }, [routeEngId]);
+  useEffect(() => {
+    if (routeEngId) {
+      setSelectedEngId(routeEngId);
+      if (auditCtx?.setSelectedEngagementId) {
+        auditCtx.setSelectedEngagementId(routeEngId);
+      }
+    }
+  }, [routeEngId]);
 
   const stageStatuses: Record<string, StageStatus> = useMemo(() => {
     if (!engagement?.stage_statuses) {
