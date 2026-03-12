@@ -128,16 +128,22 @@ export default function AuditPipeline() {
 
   // ─── Audit-eligible clients ───
   const { data: eligibleClients } = useQuery({
-    queryKey: ["audit-eligible-clients", user?.firm_id],
+    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
-      const { data } = await supabase
+      let query = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
-        .eq("firm_id", user!.firm_id!)
         .order("name");
+
+      if (user?.firm_id) {
+        query = query.eq("firm_id", user.firm_id);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
       return data || [];
     },
-    enabled: !!user?.firm_id,
+    enabled: !!user?.id,
   });
 
   // ─── Staff ───
