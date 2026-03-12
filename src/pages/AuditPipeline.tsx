@@ -135,7 +135,7 @@ export default function AuditPipeline() {
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
         .eq("firm_id", user!.firm_id!)
         .order("name");
-      return (data || []).filter((c: any) => c.statutory_audit_applicable || (c.tax_audit_type && c.tax_audit_type !== "" && c.tax_audit_type !== null));
+      return data || [];
     },
     enabled: !!user?.firm_id,
   });
