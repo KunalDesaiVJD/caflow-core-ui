@@ -174,9 +174,11 @@ export default function AuditIntelligence() {
       toast.error("Please select an engagement first");
       return;
     }
-    if (stage.num === 1) {
-      navigate(`/audit/pipeline/${selectedEngagementId}`);
-    } else if (stage.num === 10) {
+    // Stages rendered inside the pipeline view
+    const pipelineStages = [1, 2, 5, 6, 7, 8, 10];
+    if (pipelineStages.includes(stage.num)) {
+      // Update pipeline_stage so the pipeline opens to the correct stage
+      supabase.from("audit_engagements").update({ pipeline_stage: stage.num } as any).eq("id", selectedEngagementId);
       navigate(`/audit/pipeline/${selectedEngagementId}`);
     } else if (stage.path) {
       navigate(stage.path);

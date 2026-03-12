@@ -755,59 +755,78 @@ export default function AuditPipeline() {
               </Button>
             </div>
           </div>
-        ) : currentStage === 2 ? (
-          /* STAGE 2 */
+        ) : activeStage === 2 ? (
+          /* STAGE 2 — Trial Balance Import */
           <PipelineStage2
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 3 ? (
-          /* STAGE 3 */
+        ) : activeStage === 3 ? (
+          /* STAGE 3 — COA & Financial Statements */
           <PipelineStage3
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 4 ? (
+        ) : activeStage === 4 ? (
           <PipelineStage4
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 5 ? (
+        ) : activeStage === 5 ? (
           <PipelineStage5
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 6 ? (
+        ) : activeStage === 6 ? (
           <PipelineStage6
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 7 ? (
+        ) : activeStage === 7 ? (
           <PipelineStage7
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
-            <CheckCircle2 size={48} className="text-primary opacity-40" />
-            <div>
-              <h2 className="text-lg font-semibold text-foreground mb-1">Stage {currentStage} — {STAGES[currentStage - 1]?.label}</h2>
-              <p className="text-sm">This stage will be built in the next iteration.</p>
-            </div>
+        ) : activeStage === 8 ? (
+          /* STAGE 8 — CARO / 3CD */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
+            {engagement?.caro_applicable ? (
+              <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
+            ) : (
+              <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
+            )}
           </div>
-        )}
+        ) : activeStage === 9 ? (
+          /* STAGE 9 — Audit Reports */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">Audit Reports</h1>
+            <Card><CardContent className="p-6 space-y-4">
+              <p className="text-sm text-muted-foreground">Generate and review audit reports for this engagement.</p>
+              <Button onClick={() => navigate("/audit/report")} className="gap-2">
+                <FileText size={16} /> Open Report Engine
+              </Button>
+            </CardContent></Card>
+          </div>
+        ) : activeStage === 10 ? (
+          /* STAGE 10 — Sign-Off & Bundle */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">Sign-Off & Bundle</h1>
+            <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
+          </div>
+        ) : null}
       </div>
 
       {/* New Engagement Dialog */}
