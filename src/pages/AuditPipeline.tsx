@@ -21,8 +21,12 @@ import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award
+  Eye, BarChart3, BookMarked, Shield, Award, CalendarDays
 } from "lucide-react";
+import { Calendar } from "@/components/ui/calendar";
+import { EngagementCARO } from "@/components/engagement/EngagementCARO";
+import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
+import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
@@ -98,6 +102,7 @@ export default function AuditPipeline() {
   const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeStage, setActiveStage] = useState<number>(1);
 
   // Sync from audit context when it changes
   useEffect(() => {
@@ -168,6 +173,9 @@ export default function AuditPipeline() {
   }, [engagement]);
 
   const currentStage = engagement?.pipeline_stage || 1;
+
+  // Sync active view stage when engagement loads
+  useEffect(() => { setActiveStage(currentStage); }, [currentStage]);
 
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({
@@ -368,31 +376,29 @@ export default function AuditPipeline() {
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {STAGES.map(s => {
             const status = stageStatuses[String(s.num)] || "not_started";
-            const isActive = s.num === currentStage;
             const Icon = s.icon;
             return (
               <button
                 key={s.num}
                 onClick={() => {
-                  if ((status === "complete" || status === "in_progress") && selectedEngId) {
-                    // Navigate to that stage by updating pipeline_stage
-                    supabase.from("audit_engagements").update({ pipeline_stage: s.num } as any).eq("id", selectedEngId).then(() => refetchEng());
+                  if (selectedEngId) {
+                    setActiveStage(s.num);
                   }
                 }}
                 className={cn(
                   "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors text-left",
-                  isActive && "bg-primary/10 text-primary font-semibold",
-                  status === "complete" && !isActive && "text-primary/70",
+                  s.num === activeStage && "bg-primary/10 text-primary font-semibold",
+                  status === "complete" && s.num !== activeStage && "text-primary/70",
                   status === "locked" && "text-muted-foreground opacity-60",
-                  status === "not_started" && !isActive && "text-muted-foreground hover:bg-muted",
+                  status === "not_started" && s.num !== activeStage && "text-muted-foreground hover:bg-muted",
                 )}
               >
                 <div className={cn(
                   "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0",
-                  isActive && "bg-primary text-primary-foreground",
-                  status === "complete" && !isActive && "bg-primary/20 text-primary",
+                  s.num === activeStage && "bg-primary text-primary-foreground",
+                  status === "complete" && s.num !== activeStage && "bg-primary/20 text-primary",
                   status === "locked" && "bg-muted text-muted-foreground",
-                  status === "not_started" && !isActive && "bg-muted text-muted-foreground",
+                  status === "not_started" && s.num !== activeStage && "bg-muted text-muted-foreground",
                 )}>
                   {status === "complete" ? <CheckCircle2 size={14} /> :
                    status === "locked" ? <Lock size={12} /> :
@@ -432,18 +438,18 @@ export default function AuditPipeline() {
             </div>
             <Button onClick={() => setShowNewEng(true)} className="gap-2"><Plus size={16} /> New Engagement</Button>
           </div>
-        ) : currentStage === 1 || stageStatuses["1"] === "in_progress" || stageStatuses["1"] === "not_started" ? (
+        ) : activeStage === 1 ? (
           /* STAGE 1 */
           <div className="max-w-4xl space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-xl font-bold text-foreground">Stage 1 — Engagement Setup & Audit Planning</h1>
-                <p className="text-sm text-muted-foreground">Complete 1A (Setup) and 1B (Questionnaire). 1C (Planning) is optional.</p>
+                <h1 className="text-xl font-bold text-foreground">Engagement Setup & Audit Planning</h1>
+                <p className="text-sm text-muted-foreground">Complete the preliminary questionnaire and review the planning calendar.</p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => saveStage1(false)} disabled={saving}>Save Draft</Button>
                 <Button size="sm" onClick={() => saveStage1(true)} disabled={saving || !canCompleteStage1} className="gap-1">
-                  Complete Stage 1 <ArrowRight size={14} />
+                  Complete & Proceed <ArrowRight size={14} />
                 </Button>
               </div>
             </div>
@@ -517,7 +523,7 @@ export default function AuditPipeline() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
                   <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold">B</span>
-                  Audit Questionnaire (Mandatory)
+                  Preliminary Questions
                   {questValid ? <CheckCircle2 size={16} className="text-primary ml-auto" /> : <span className="text-xs text-destructive ml-auto">Required</span>}
                 </CardTitle>
               </CardHeader>
@@ -643,67 +649,98 @@ export default function AuditPipeline() {
               </CardContent>
             </Card>
 
-            {/* 1C — Planning (optional) */}
+            {/* Planning Calendar */}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-bold">C</span>
-                  Audit Planning
-                  <Badge variant="outline" className="text-[10px] ml-auto">Optional — Skip allowed</Badge>
+                  <CalendarDays size={18} className="text-primary" />
+                  Audit Planning Calendar
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label>Materiality Threshold (₹)</Label>
-                  <Input type="number" value={planning.materiality} onChange={e => setPlanning(p => ({ ...p, materiality: e.target.value }))} placeholder="Absolute amount" />
-                </div>
-                <div>
-                  <Label>Performance Materiality (%)</Label>
-                  <Input type="number" value={planning.perf_materiality_pct} onChange={e => setPlanning(p => ({ ...p, perf_materiality_pct: e.target.value }))} />
-                  {planning.materiality && <p className="text-xs text-muted-foreground mt-1">= ₹{(parseFloat(planning.materiality) * parseFloat(planning.perf_materiality_pct) / 100).toLocaleString("en-IN")}</p>}
-                </div>
-                <div>
-                  <Label>Risk Profile</Label>
-                  <Select value={planning.risk_profile} onValueChange={v => setPlanning(p => ({ ...p, risk_profile: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Expected Completion Date</Label>
-                  <Input type="date" value={planning.expected_completion} onChange={e => setPlanning(p => ({ ...p, expected_completion: e.target.value }))} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Risk Justification</Label>
-                  <Textarea value={planning.risk_justification} onChange={e => setPlanning(p => ({ ...p, risk_justification: e.target.value }))} placeholder="Explain risk assessment rationale..." rows={2} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Key Audit Areas</Label>
-                  <Textarea value={planning.key_areas} onChange={e => setPlanning(p => ({ ...p, key_areas: e.target.value }))} placeholder="Revenue recognition, Related party transactions, Inventory valuation..." rows={2} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Engagement Team</Label>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {(firmUsers || []).map(u => {
-                      const selected = planning.team_members.includes(u.id);
-                      return (
-                        <Badge
-                          key={u.id}
-                          variant={selected ? "default" : "outline"}
-                          className="cursor-pointer text-xs"
-                          onClick={() => setPlanning(p => ({
-                            ...p,
-                            team_members: selected ? p.team_members.filter(id => id !== u.id) : [...p.team_members, u.id],
-                          }))}
-                        >
-                          {u.name} ({u.role})
-                        </Badge>
-                      );
-                    })}
+              <CardContent>
+                <div className="flex flex-col lg:flex-row gap-6">
+                  <div className="shrink-0">
+                    <Calendar mode="single" className="rounded-md border" />
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <h4 className="text-sm font-semibold text-foreground">Engagement Milestones</h4>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <CalendarDays size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Planned Start</p>
+                          <p className="text-sm font-medium text-foreground">{engagement?.planned_start || "Not set"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <CalendarDays size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Expected Completion</p>
+                          <p className="text-sm font-medium text-foreground">{planning.expected_completion || engagement?.planned_end || "Not set"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <Shield size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Risk Profile</p>
+                          <p className="text-sm font-medium text-foreground capitalize">{planning.risk_profile || "Medium"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <Building2 size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Team Members</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {planning.team_members.length > 0
+                              ? `${planning.team_members.length} assigned`
+                              : "None assigned"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <Separator />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label className="text-xs">Materiality Threshold (₹)</Label>
+                        <Input type="number" value={planning.materiality} onChange={e => setPlanning(p => ({ ...p, materiality: e.target.value }))} placeholder="Absolute amount" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Expected Completion</Label>
+                        <Input type="date" value={planning.expected_completion} onChange={e => setPlanning(p => ({ ...p, expected_completion: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Risk Profile</Label>
+                        <Select value={planning.risk_profile} onValueChange={v => setPlanning(p => ({ ...p, risk_profile: v }))}>
+                          <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="low">Low</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="high">High</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Engagement Team</Label>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(firmUsers || []).slice(0, 6).map(u => {
+                            const selected = planning.team_members.includes(u.id);
+                            return (
+                              <Badge
+                                key={u.id}
+                                variant={selected ? "default" : "outline"}
+                                className="cursor-pointer text-[10px]"
+                                onClick={() => setPlanning(p => ({
+                                  ...p,
+                                  team_members: selected ? p.team_members.filter(id => id !== u.id) : [...p.team_members, u.id],
+                                }))}
+                              >
+                                {u.name}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -717,59 +754,78 @@ export default function AuditPipeline() {
               </Button>
             </div>
           </div>
-        ) : currentStage === 2 ? (
-          /* STAGE 2 */
+        ) : activeStage === 2 ? (
+          /* STAGE 2 — Trial Balance Import */
           <PipelineStage2
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 3 ? (
-          /* STAGE 3 */
+        ) : activeStage === 3 ? (
+          /* STAGE 3 — COA & Financial Statements */
           <PipelineStage3
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 4 ? (
+        ) : activeStage === 4 ? (
           <PipelineStage4
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 5 ? (
+        ) : activeStage === 5 ? (
           <PipelineStage5
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 6 ? (
+        ) : activeStage === 6 ? (
           <PipelineStage6
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : currentStage === 7 ? (
+        ) : activeStage === 7 ? (
           <PipelineStage7
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
-            <CheckCircle2 size={48} className="text-primary opacity-40" />
-            <div>
-              <h2 className="text-lg font-semibold text-foreground mb-1">Stage {currentStage} — {STAGES[currentStage - 1]?.label}</h2>
-              <p className="text-sm">This stage will be built in the next iteration.</p>
-            </div>
+        ) : activeStage === 8 ? (
+          /* STAGE 8 — CARO / 3CD */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
+            {engagement?.caro_applicable ? (
+              <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
+            ) : (
+              <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
+            )}
           </div>
-        )}
+        ) : activeStage === 9 ? (
+          /* STAGE 9 — Audit Reports */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">Audit Reports</h1>
+            <Card><CardContent className="p-6 space-y-4">
+              <p className="text-sm text-muted-foreground">Generate and review audit reports for this engagement.</p>
+              <Button onClick={() => navigate("/audit/report")} className="gap-2">
+                <FileText size={16} /> Open Report Engine
+              </Button>
+            </CardContent></Card>
+          </div>
+        ) : activeStage === 10 ? (
+          /* STAGE 10 — Sign-Off & Bundle */
+          <div className="max-w-4xl space-y-6">
+            <h1 className="text-xl font-bold text-foreground">Sign-Off & Bundle</h1>
+            <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
+          </div>
+        ) : null}
       </div>
 
       {/* New Engagement Dialog */}
