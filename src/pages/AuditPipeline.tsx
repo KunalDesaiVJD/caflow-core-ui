@@ -21,8 +21,12 @@ import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award
+  Eye, BarChart3, BookMarked, Shield, Award, CalendarDays
 } from "lucide-react";
+import { Calendar } from "@/components/ui/calendar";
+import { EngagementCARO } from "@/components/engagement/EngagementCARO";
+import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
+import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
