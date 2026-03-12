@@ -114,11 +114,6 @@ export default function AuditIntelligence() {
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 
-  // Eligible clients (statutory/tax audit activated)
-  const eligibleClients = useMemo(() =>
-    clients.filter((c: any) => c.statutory_audit_applicable || (c.tax_audit_type && c.tax_audit_type !== "")),
-    [clients]
-  );
 
   useEffect(() => {
     if (!selectedEngagementId) return;
