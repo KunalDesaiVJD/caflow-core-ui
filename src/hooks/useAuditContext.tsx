@@ -7,7 +7,7 @@ interface AuditContextType {
   selectedEngagementId: string;
   setSelectedClientId: (id: string) => void;
   setSelectedEngagementId: (id: string) => void;
-  clients: { id: string; name: string | null; entity_type: string | null }[];
+  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[];
   engagements: any[];
   selectedEngagement: any | null;
   loading: boolean;
