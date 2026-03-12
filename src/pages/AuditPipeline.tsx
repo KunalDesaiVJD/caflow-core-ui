@@ -102,6 +102,7 @@ export default function AuditPipeline() {
   const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeStage, setActiveStage] = useState<number>(1);
 
   // Sync from audit context when it changes
   useEffect(() => {
