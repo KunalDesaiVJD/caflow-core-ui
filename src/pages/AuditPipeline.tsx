@@ -279,6 +279,21 @@ export default function AuditPipeline() {
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
+      // Check for duplicate engagement
+      const { data: existing } = await supabase
+        .from("audit_engagements")
+        .select("id")
+        .eq("client_id", form1A.client_id)
+        .eq("firm_id", user!.firm_id!)
+        .eq("financial_year", form1A.financial_year)
+        .eq("audit_type", form1A.audit_type)
+        .eq("audit_period_type", form1A.audit_period_type)
+        .neq("status", "archived")
+        .limit(1);
+      if (existing && existing.length > 0) {
+        throw new Error("An engagement already exists for this client, audit type, financial year, and period.");
+      }
+
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
         firm_id: user!.firm_id!,
