@@ -11,6 +11,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FeedbackWidget } from "./components/FeedbackWidget";
 import { ChatFloatingWidget } from "./components/ChatFloatingWidget";
 import { PermissionsProvider } from "./hooks/usePermissions";
+import { AuditContextProvider } from "./hooks/useAuditContext";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
 import ImportTrialBalance from "./pages/ImportTrialBalance";
@@ -66,14 +67,13 @@ import { useAuth } from "./hooks/useAuth";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 5 * 60 * 1000, // 5 min for reference data
+      staleTime: 5 * 60 * 1000,
       refetchOnWindowFocus: true,
       retry: 1,
     },
   },
 });
 
-/** Guard that only allows client role to access portal */
 function PortalGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return null;
@@ -82,7 +82,6 @@ function PortalGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** Guard that redirects client role away from CA interface */
 function CAGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return null;
@@ -99,21 +98,16 @@ const App = () => (
         <BrowserRouter>
           <PermissionsProvider>
           <Routes>
-            {/* Public auth routes */}
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
-
-            {/* Change password */}
             <Route path="/settings/change-password" element={<ProtectedRoute><ChangePassword /></ProtectedRoute>} />
 
-            {/* Client Portal - only for client role */}
             <Route element={<PortalGuard><PortalLayout /></PortalGuard>}>
               <Route path="/portal" element={<PortalHome />} />
               <Route path="/portal/queries" element={<PortalQueries />} />
             </Route>
 
-            {/* Superadmin platform */}
             <Route element={<ProtectedRoute><CAGuard><AdminLayout /></CAGuard></ProtectedRoute>}>
               <Route path="/admin" element={<AdminOverview />} />
               <Route path="/admin/firms" element={<AdminFirms />} />
@@ -126,8 +120,8 @@ const App = () => (
               <Route path="/admin/settings" element={<SettingsPage />} />
             </Route>
 
-            {/* Protected app routes - not for client role */}
-            <Route element={<ProtectedRoute><CAGuard><AppLayout /></CAGuard></ProtectedRoute>}>
+            {/* Protected app routes with AuditContext */}
+            <Route element={<ProtectedRoute><CAGuard><AuditContextProvider><AppLayout /></AuditContextProvider></CAGuard></ProtectedRoute>}>
               <Route path="/" element={<Index />} />
               <Route path="/clients" element={<Clients />} />
               <Route path="/clients/groups" element={<ClientGroups />} />
@@ -135,14 +129,11 @@ const App = () => (
               <Route path="/clients/edit/:clientId" element={<NewClientWizard />} />
               <Route path="/clients/:clientId" element={<ClientDetail />} />
 
-              {/* Old audit routes → redirect banner */}
               <Route path="/clients/:clientId/audit/*" element={<AuditRedirect />} />
 
-              {/* Audit Pipeline - 10-stage */}
               <Route path="/audit/pipeline" element={<AuditPipeline />} />
               <Route path="/audit/pipeline/:engagementId" element={<AuditPipeline />} />
 
-              {/* Consolidated Audit Intelligence routes */}
               <Route path="/audit" element={<AuditIntelligence />} />
               <Route path="/audit/import" element={<ImportTrialBalance />} />
               <Route path="/audit/scrutiny" element={<AuditScrutiny />} />
@@ -160,12 +151,11 @@ const App = () => (
               <Route path="/audit/:clientId/queries/dispatch" element={<AuditQueryDispatch />} />
               <Route path="/audit/report" element={<AuditReportEngine />} />
               <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
+              <Route path="/audit/risk" element={<AuditPipeline />} />
+              <Route path="/audit/notes" element={<AuditPipeline />} />
+              <Route path="/audit/signoff" element={<AuditPipeline />} />
               <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
-
-              {/* Keep legacy engagement detail route working */}
               <Route path="/audit/:engagementId" element={<EngagementDetail />} />
-
-              {/* Remove old audit-intelligence route → redirect */}
               <Route path="/audit-intelligence" element={<Navigate to="/audit" replace />} />
 
               <Route path="/tds-filings" element={<TdsFilings />} />
@@ -181,7 +171,6 @@ const App = () => (
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
-              {/* Notice Tracker merged into IT Returns compliance tab */}
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />

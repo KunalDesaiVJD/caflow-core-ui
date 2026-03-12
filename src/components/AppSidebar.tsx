@@ -24,28 +24,28 @@ const topNavItems = [
   { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
-  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Client Management" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
 ];
 
-// New stage-based audit sidebar structure
+// Fixed stage order per requirement
 const auditStages = [
   { title: "Dashboard", path: "/audit", icon: LayoutDashboard },
-  { title: "Engagement Setup & Planning", path: "/audit/pipeline", icon: Building2 },
-  { title: "Data Import", path: "/audit/import", icon: Upload },
-  { title: "COA Mapping", path: "/settings/coa-mappings", icon: Layers },
-  { title: "Scrutiny", path: "/audit/scrutiny", icon: Eye },
-  { title: "Queries", path: "/audit/queries", icon: MessageSquare },
-  { title: "Workpapers & Risk", path: "/audit/risk", icon: Shield },
-  { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
-  { title: "CARO / 3CD", path: "/audit/3cd", icon: FileCheck },
-  { title: "Audit Reports", path: "/audit/report", icon: FileOutput },
-  { title: "Sign-Off", path: "/audit/pipeline", icon: Award },
+  { title: "1. Engagement Setup & Planning", path: "/audit/pipeline", icon: Building2 },
+  { title: "2. Workpapers & Risk", path: "/audit/risk", icon: Shield },
+  { title: "3. Data Import", path: "/audit/import", icon: Upload },
+  { title: "4. Scrutiny & Analysis", path: "/audit/scrutiny", icon: Eye },
+  { title: "5. Queries & Communication", path: "/audit/queries", icon: MessageSquare },
+  { title: "6. COA Mapping & FS", path: "/settings/coa-mappings", icon: Layers },
+  { title: "7. Notes to Accounts", path: "/audit/notes", icon: BookMarked },
+  { title: "8. CARO / 3CD", path: "/audit/3cd", icon: FileCheck },
+  { title: "9. Audit Reports", path: "/audit/report", icon: FileOutput },
+  { title: "10. Sign-Off & Bundle", path: "/audit/signoff", icon: Award },
 ];
 
 const auditUtilities = [
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
   { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
+  { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
   { title: "Preliminary Questions", path: "/audit/preliminary", icon: HelpCircle },
   { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
