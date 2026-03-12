@@ -4,48 +4,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  LayoutDashboard,
-  Users,
-  Receipt,
-  FileText,
-  CreditCard,
-  BookOpen,
-  Search,
-  Settings,
-  LogOut,
-  PanelLeftClose,
-  PanelLeft,
-  Shield,
-  KeyRound,
-  Building2,
-  Clock,
-  Landmark,
-  FolderOpen,
-  ChevronDown,
-  ChevronRight,
-  FileSearch,
-  BarChart3,
-  ClipboardList,
-  CalendarDays,
-  AlertTriangle,
-  FileCheck,
-  BookMarked,
-  Calculator,
-  MessageSquare,
-  BrainCircuit,
-  FileOutput,
-  HelpCircle,
-  Package,
-  Send,
-  Layers,
+  LayoutDashboard, Users, Receipt, FileText, CreditCard, BookOpen,
+  Search, Settings, LogOut, PanelLeftClose, PanelLeft, Shield,
+  Building2, FolderOpen, ChevronDown, ChevronRight, FileSearch,
+  BarChart3, ClipboardCheck, CalendarDays, AlertTriangle, FileCheck,
+  BookMarked, Calculator, MessageSquare, BrainCircuit, FileOutput,
+  HelpCircle, Package, Send, Layers, Eye, Award, Upload
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
@@ -57,53 +26,32 @@ const topNavItems = [
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen, module: "Client Management" },
   { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
-  { title: "Depreciation", path: "/depreciation", icon: Calculator, module: "Depreciation" },
 ];
 
-const auditSections = [
-  {
-    label: "Scrutiny",
-    items: [
-      { title: "TB Import", path: "/audit/import", icon: FileOutput },
-      { title: "Scrutiny Dashboard", path: "/audit/scrutiny", icon: FileSearch },
-      { title: "Narration AI", path: "/audit/narration", icon: BrainCircuit },
-      { title: "COA Mapping", path: "/settings/coa-mappings", icon: Layers },
-      { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
-    ],
-  },
-  {
-    label: "Reports",
-    items: [
-      { title: "3CD Clauses", path: "/audit/3cd", icon: ClipboardList },
-      { title: "CARO 2020", path: "/audit/caro", icon: FileCheck },
-      { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
-    ],
-  },
-  {
-    label: "Engagements",
-    items: [
-      { title: "10-Stage Pipeline", path: "/audit/pipeline", icon: ClipboardList },
-      { title: "Engagements", path: "/audit", icon: FileText },
-      { title: "Calendar", path: "/audit/calendar", icon: CalendarDays },
-      { title: "Risk Assessment", path: "/audit/risk", icon: AlertTriangle },
-      { title: "Workpapers", path: "/audit/workpapers", icon: FileText },
-      { title: "Sign-Off & Bundle", path: "/audit/signoff", icon: FileCheck },
-    ],
-  },
-  {
-    label: "Intelligence",
-    items: [
-      { title: "Preliminary Questions", path: "/audit/preliminary", icon: HelpCircle },
-      { title: "Query Tracker", path: "/audit/queries", icon: MessageSquare },
-      { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
-      { title: "Audit Report", path: "/audit/report", icon: FileOutput },
-      { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
-    ],
-  },
+// New stage-based audit sidebar structure
+const auditStages = [
+  { title: "Dashboard", path: "/audit", icon: LayoutDashboard },
+  { title: "Engagement Setup & Planning", path: "/audit/pipeline", icon: Building2 },
+  { title: "Data Import", path: "/audit/import", icon: Upload },
+  { title: "COA Mapping", path: "/settings/coa-mappings", icon: Layers },
+  { title: "Scrutiny", path: "/audit/scrutiny", icon: Eye },
+  { title: "Queries", path: "/audit/queries", icon: MessageSquare },
+  { title: "Workpapers & Risk", path: "/audit/risk", icon: Shield },
+  { title: "Notes to Accounts", path: "/audit/notes", icon: BookMarked },
+  { title: "CARO / 3CD", path: "/audit/3cd", icon: FileCheck },
+  { title: "Audit Reports", path: "/audit/report", icon: FileOutput },
+  { title: "Sign-Off", path: "/audit/pipeline", icon: Award },
+];
+
+const auditUtilities = [
+  { title: "Depreciation", path: "/depreciation", icon: Calculator },
+  { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
+  { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
+  { title: "Preliminary Questions", path: "/audit/preliminary", icon: HelpCircle },
+  { title: "Query Dispatch", path: "/audit/dispatch", icon: Send },
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };
-const userMgmtItem = { title: "User Management", path: "/settings/users", icon: Users };
 
 interface AppSidebarProps {
   collapsed: boolean;
@@ -118,18 +66,11 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const [firmLogo, setFirmLogo] = useState<string | null>(null);
   const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
 
-  // Auto-expand audit section if on /audit route
   useEffect(() => {
-    if (location.pathname.startsWith("/audit")) {
+    if (location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings" || location.pathname === "/depreciation") {
       setAuditOpen(true);
-      // Auto-expand the section that contains the active route
-      for (const section of auditSections) {
-        if (section.items.some(item => isActive(item.path))) {
-          setOpenSections(prev => ({ ...prev, [section.label]: true }));
-        }
-      }
     }
   }, [location.pathname]);
 
@@ -158,11 +99,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname === path || location.pathname.startsWith(path + "/");
 
-  const isAuditActive = location.pathname.startsWith("/audit");
-
-  const toggleSection = (label: string) => {
-    setOpenSections(prev => ({ ...prev, [label]: !prev[label] }));
-  };
+  const isAuditActive = location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings";
 
   return (
     <aside
@@ -216,7 +153,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           </Link>
         ))}
 
-        {/* Audit Intelligence - Collapsible - only if can view */}
+        {/* Audit Intelligence - Collapsible */}
         {can("Audit Intelligence", "can_view") && (
           collapsed ? (
             <Link
@@ -228,7 +165,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                   : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
               )}
             >
-              <Search size={20} className={cn("shrink-0 text-sidebar-gold")} />
+              <Search size={20} className="shrink-0 text-sidebar-gold" />
             </Link>
           ) : (
             <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
@@ -253,33 +190,49 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
-                  {auditSections.map((section) => (
-                    <Collapsible key={section.label} open={openSections[section.label] ?? false} onOpenChange={() => toggleSection(section.label)}>
-                      <CollapsibleTrigger className="w-full">
-                        <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer">
-                          <span>{section.label}</span>
-                          {openSections[section.label] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        </div>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        {section.items.map((item) => (
-                          <Link
-                            key={item.path}
-                            to={item.path}
-                            className={cn(
-                              "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
-                              isActive(item.path)
-                                ? "bg-sidebar-gold/10 text-sidebar-gold"
-                                : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                            )}
-                          >
-                            <item.icon size={14} className="shrink-0" />
-                            <span className="truncate">{item.title}</span>
-                          </Link>
-                        ))}
-                      </CollapsibleContent>
-                    </Collapsible>
+                  {/* Stage items */}
+                  {auditStages.map((item) => (
+                    <Link
+                      key={item.title}
+                      to={item.path}
+                      className={cn(
+                        "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                        isActive(item.path) && (item.path !== "/audit/pipeline" || location.pathname.startsWith("/audit/pipeline"))
+                          ? "bg-sidebar-gold/10 text-sidebar-gold"
+                          : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                      )}
+                    >
+                      <item.icon size={14} className="shrink-0" />
+                      <span className="truncate">{item.title}</span>
+                    </Link>
                   ))}
+
+                  {/* Utilities sub-section */}
+                  <Collapsible open={utilitiesOpen} onOpenChange={setUtilitiesOpen}>
+                    <CollapsibleTrigger className="w-full">
+                      <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/60 hover:text-sidebar-foreground/80 cursor-pointer mt-2">
+                        <span>Utilities</span>
+                        {utilitiesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      </div>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      {auditUtilities.map((item) => (
+                        <Link
+                          key={item.path}
+                          to={item.path}
+                          className={cn(
+                            "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
+                            isActive(item.path)
+                              ? "bg-sidebar-gold/10 text-sidebar-gold"
+                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                          )}
+                        >
+                          <item.icon size={14} className="shrink-0" />
+                          <span className="truncate">{item.title}</span>
+                        </Link>
+                      ))}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               </CollapsibleContent>
             </Collapsible>
@@ -335,15 +288,15 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         {/* User Management - firm_admin only */}
         {user?.role === "firm_admin" && (
           <Link
-            to={userMgmtItem.path}
+            to="/settings/users"
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive(userMgmtItem.path)
+              isActive("/settings/users")
                 ? "bg-sidebar-gold/15 text-sidebar-gold"
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}
           >
-            <userMgmtItem.icon size={20} className="shrink-0" />
+            <Users size={20} className="shrink-0" />
             {!collapsed && <span>User Management</span>}
           </Link>
         )}
@@ -431,15 +384,16 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
               )}
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuContent side="top" align="start" className="w-52">
+            <DropdownMenuItem onClick={() => navigate("/settings")}>
+              <Settings size={14} className="mr-2" /> Settings
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => navigate("/settings/change-password")}>
-              <KeyRound size={14} className="mr-2" />
-              Change Password
+              <Shield size={14} className="mr-2" /> Change Password
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="text-destructive">
-              <LogOut size={14} className="mr-2" />
-              Log Out
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+              <LogOut size={14} className="mr-2" /> Sign Out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
