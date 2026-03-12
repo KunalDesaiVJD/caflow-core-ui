@@ -163,8 +163,6 @@ export default function AuditIntelligence() {
     return "text-muted-foreground";
   };
 
-  const handleStageClick = (stage: typeof STAGES[0]) => {
-    if (!selectedEngagementId) {
   const handleStageClick = async (stage: typeof STAGES[0]) => {
     if (!selectedEngagementId) {
       toast.error("Please select an engagement first");
