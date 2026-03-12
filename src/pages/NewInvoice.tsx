@@ -494,11 +494,23 @@ const NewInvoice = () => {
 
   const handleFinalize = () => { setFinalizeOpen(false); handleSave("finalized"); };
 
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     const html = generateInvoiceHtml();
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const w = window.open(URL.createObjectURL(blob), "_blank");
-    if (w) setTimeout(() => { w.print(); }, 500);
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    try {
+      const html2pdf = (await import("html2pdf.js")).default;
+      await html2pdf().set({
+        margin: [10, 10, 10, 10],
+        filename: `Tax_Invoice_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      }).from(container).save();
+    } finally {
+      document.body.removeChild(container);
+    }
   };
 
   const isLocked = status === "finalized" || status === "sent" || status === "paid" || status === "voided";

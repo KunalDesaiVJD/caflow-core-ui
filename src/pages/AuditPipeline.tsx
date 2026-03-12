@@ -375,12 +375,15 @@ export default function AuditPipeline() {
   }, [engagements]);
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
-      {/* LEFT — Stepper + Selector */}
-      <div className="w-72 border-r border-border bg-muted/30 flex flex-col shrink-0 overflow-hidden">
-        {/* Engagement selector */}
-        <div className="p-3 border-b border-border space-y-2">
-          <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Engagement</Label>
+    <div className="flex flex-col h-[calc(100vh-4rem)]">
+      {/* TOP — Engagement selector + stage tabs */}
+      <div className="border-b border-border bg-muted/30 px-4 py-3 shrink-0">
+        <div className="flex items-center gap-3 mb-3">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+            <ChevronRight size={14} className="rotate-180" /> Dashboard
+          </Button>
+          <div className="flex-1" />
+          <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider mr-1">Engagement</Label>
           <Select value={selectedEngId} onValueChange={(val) => {
             setSelectedEngId(val);
             if (auditCtx?.setSelectedEngagementId) {
@@ -388,7 +391,7 @@ export default function AuditPipeline() {
             }
             navigate(`/audit/pipeline/${val}`, { replace: true });
           }}>
-            <SelectTrigger className="text-xs"><SelectValue placeholder="Select engagement" /></SelectTrigger>
+            <SelectTrigger className="text-xs w-64"><SelectValue placeholder="Select engagement" /></SelectTrigger>
             <SelectContent>
               {Array.from(grouped.entries()).map(([client, engs]) => (
                 <div key={client}>
@@ -402,67 +405,48 @@ export default function AuditPipeline() {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => setShowNewEng(true)}>
+          <Button size="sm" variant="outline" className="gap-1 text-xs" onClick={() => setShowNewEng(true)}>
             <Plus size={14} /> New Engagement
           </Button>
-        </div>
-
-        {/* 10-stage stepper */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-          {STAGES.map(s => {
-            const status = stageStatuses[String(s.num)] || "not_started";
-            const Icon = s.icon;
-            return (
-              <button
-                key={s.num}
-                onClick={() => {
-                  if (selectedEngId) {
-                    setActiveStage(s.num);
-                  }
-                }}
-                className={cn(
-                  "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors text-left",
-                  s.num === activeStage && "bg-primary/10 text-primary font-semibold",
-                  status === "complete" && s.num !== activeStage && "text-primary/70",
-                  status === "locked" && "text-muted-foreground opacity-60",
-                  status === "not_started" && s.num !== activeStage && "text-muted-foreground hover:bg-muted",
-                )}
-              >
-                <div className={cn(
-                  "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0",
-                  s.num === activeStage && "bg-primary text-primary-foreground",
-                  status === "complete" && s.num !== activeStage && "bg-primary/20 text-primary",
-                  status === "locked" && "bg-muted text-muted-foreground",
-                  status === "not_started" && s.num !== activeStage && "bg-muted text-muted-foreground",
-                )}>
-                  {status === "complete" ? <CheckCircle2 size={14} /> :
-                   status === "locked" ? <Lock size={12} /> :
-                   s.num}
-                </div>
-                <span className="truncate">{s.label}</span>
-                {status === "complete" && <Badge variant="outline" className="ml-auto text-[9px] px-1 py-0">Done</Badge>}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Auto-flags summary */}
-        {selectedEngId && (
-          <div className="p-3 border-t border-border space-y-1">
-            <p className="text-[10px] font-semibold uppercase text-muted-foreground">Auto-Determined</p>
-            <div className="flex flex-wrap gap-1">
+          {selectedEngId && (
+            <div className="flex items-center gap-1 ml-2">
               {autoFlags.requires_caro && <Badge variant="secondary" className="text-[9px]">CARO</Badge>}
               {autoFlags.requires_3cd && <Badge variant="secondary" className="text-[9px]">3CD</Badge>}
               {autoFlags.requires_3ca && <Badge variant="secondary" className="text-[9px]">3CA</Badge>}
               {autoFlags.requires_3cb && <Badge variant="secondary" className="text-[9px]">3CB</Badge>}
               {autoFlags.requires_cash_flow && <Badge variant="secondary" className="text-[9px]">Cash Flow</Badge>}
-              <Badge variant="outline" className="text-[9px]">Sch III {autoFlags.schedule_iii_division === "div_ii" ? "Div II" : "Div I"}</Badge>
             </div>
+          )}
+        </div>
+        {/* Horizontal stage tabs */}
+        {selectedEngId && (
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {STAGES.map(s => {
+              const status = stageStatuses[String(s.num)] || "not_started";
+              return (
+                <button
+                  key={s.num}
+                  onClick={() => setActiveStage(s.num)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap",
+                    s.num === activeStage && "bg-primary text-primary-foreground",
+                    status === "complete" && s.num !== activeStage && "bg-primary/10 text-primary hover:bg-primary/20",
+                    status === "locked" && "text-muted-foreground opacity-60",
+                    status === "not_started" && s.num !== activeStage && "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {status === "complete" ? <CheckCircle2 size={12} /> :
+                   status === "locked" ? <Lock size={10} /> :
+                   <span className="text-[10px] font-bold">{s.num}</span>}
+                  {s.label}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* RIGHT — Stage Content */}
+      {/* MAIN — Stage Content */}
       <div className="flex-1 overflow-y-auto p-6">
         {!selectedEngId ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-4">
