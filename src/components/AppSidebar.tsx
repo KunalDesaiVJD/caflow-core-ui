@@ -72,9 +72,6 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
     if (location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings" || location.pathname === "/depreciation") {
       setAuditOpen(true);
     }
-    if (location.pathname.startsWith("/audit/queries") || location.pathname.startsWith("/audit/dispatch")) {
-      setQueriesOpen(true);
-    }
   }, [location.pathname]);
 
   useEffect(() => {
