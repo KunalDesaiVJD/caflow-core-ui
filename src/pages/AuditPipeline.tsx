@@ -128,16 +128,22 @@ export default function AuditPipeline() {
 
   // ─── Audit-eligible clients ───
   const { data: eligibleClients } = useQuery({
-    queryKey: ["audit-eligible-clients", user?.firm_id],
+    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
-      const { data } = await supabase
+      let query = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
-        .eq("firm_id", user!.firm_id!)
         .order("name");
+
+      if (user?.firm_id) {
+        query = query.eq("firm_id", user.firm_id);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
       return data || [];
     },
-    enabled: !!user?.firm_id,
+    enabled: !!user?.id,
   });
 
   // ─── Staff ───
@@ -489,9 +495,17 @@ export default function AuditPipeline() {
                 <div>
                   <Label>Client *</Label>
                   <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Select audit-activated client" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                     <SelectContent>
-                      {(eligibleClients || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.entity_type})</SelectItem>)}
+                      {(eligibleClients || []).length === 0 ? (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Add a client first.</div>
+                      ) : (
+                        (eligibleClients || []).map(c => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -872,7 +886,15 @@ export default function AuditPipeline() {
               <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
                 <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
-                  {(eligibleClients || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {(eligibleClients || []).length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Add a client first.</div>
+                  ) : (
+                    (eligibleClients || []).map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
