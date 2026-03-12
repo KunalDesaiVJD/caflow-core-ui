@@ -650,67 +650,98 @@ export default function AuditPipeline() {
               </CardContent>
             </Card>
 
-            {/* 1C — Planning (optional) */}
+            {/* Planning Calendar */}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-bold">C</span>
-                  Audit Planning
-                  <Badge variant="outline" className="text-[10px] ml-auto">Optional — Skip allowed</Badge>
+                  <CalendarDays size={18} className="text-primary" />
+                  Audit Planning Calendar
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <Label>Materiality Threshold (₹)</Label>
-                  <Input type="number" value={planning.materiality} onChange={e => setPlanning(p => ({ ...p, materiality: e.target.value }))} placeholder="Absolute amount" />
-                </div>
-                <div>
-                  <Label>Performance Materiality (%)</Label>
-                  <Input type="number" value={planning.perf_materiality_pct} onChange={e => setPlanning(p => ({ ...p, perf_materiality_pct: e.target.value }))} />
-                  {planning.materiality && <p className="text-xs text-muted-foreground mt-1">= ₹{(parseFloat(planning.materiality) * parseFloat(planning.perf_materiality_pct) / 100).toLocaleString("en-IN")}</p>}
-                </div>
-                <div>
-                  <Label>Risk Profile</Label>
-                  <Select value={planning.risk_profile} onValueChange={v => setPlanning(p => ({ ...p, risk_profile: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Expected Completion Date</Label>
-                  <Input type="date" value={planning.expected_completion} onChange={e => setPlanning(p => ({ ...p, expected_completion: e.target.value }))} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Risk Justification</Label>
-                  <Textarea value={planning.risk_justification} onChange={e => setPlanning(p => ({ ...p, risk_justification: e.target.value }))} placeholder="Explain risk assessment rationale..." rows={2} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Key Audit Areas</Label>
-                  <Textarea value={planning.key_areas} onChange={e => setPlanning(p => ({ ...p, key_areas: e.target.value }))} placeholder="Revenue recognition, Related party transactions, Inventory valuation..." rows={2} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Engagement Team</Label>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {(firmUsers || []).map(u => {
-                      const selected = planning.team_members.includes(u.id);
-                      return (
-                        <Badge
-                          key={u.id}
-                          variant={selected ? "default" : "outline"}
-                          className="cursor-pointer text-xs"
-                          onClick={() => setPlanning(p => ({
-                            ...p,
-                            team_members: selected ? p.team_members.filter(id => id !== u.id) : [...p.team_members, u.id],
-                          }))}
-                        >
-                          {u.name} ({u.role})
-                        </Badge>
-                      );
-                    })}
+              <CardContent>
+                <div className="flex flex-col lg:flex-row gap-6">
+                  <div className="shrink-0">
+                    <Calendar mode="single" className="rounded-md border" />
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <h4 className="text-sm font-semibold text-foreground">Engagement Milestones</h4>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <CalendarDays size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Planned Start</p>
+                          <p className="text-sm font-medium text-foreground">{engagement?.planned_start || "Not set"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <CalendarDays size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Expected Completion</p>
+                          <p className="text-sm font-medium text-foreground">{planning.expected_completion || engagement?.planned_end || "Not set"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <Shield size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Risk Profile</p>
+                          <p className="text-sm font-medium text-foreground capitalize">{planning.risk_profile || "Medium"}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
+                        <Building2 size={14} className="text-primary shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Team Members</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {planning.team_members.length > 0
+                              ? `${planning.team_members.length} assigned`
+                              : "None assigned"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <Separator />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label className="text-xs">Materiality Threshold (₹)</Label>
+                        <Input type="number" value={planning.materiality} onChange={e => setPlanning(p => ({ ...p, materiality: e.target.value }))} placeholder="Absolute amount" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Expected Completion</Label>
+                        <Input type="date" value={planning.expected_completion} onChange={e => setPlanning(p => ({ ...p, expected_completion: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Risk Profile</Label>
+                        <Select value={planning.risk_profile} onValueChange={v => setPlanning(p => ({ ...p, risk_profile: v }))}>
+                          <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="low">Low</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="high">High</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Engagement Team</Label>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(firmUsers || []).slice(0, 6).map(u => {
+                            const selected = planning.team_members.includes(u.id);
+                            return (
+                              <Badge
+                                key={u.id}
+                                variant={selected ? "default" : "outline"}
+                                className="cursor-pointer text-[10px]"
+                                onClick={() => setPlanning(p => ({
+                                  ...p,
+                                  team_members: selected ? p.team_members.filter(id => id !== u.id) : [...p.team_members, u.id],
+                                }))}
+                              >
+                                {u.name}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>
