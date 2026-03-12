@@ -367,7 +367,7 @@ export default function AuditIntelligence() {
           <Building2 className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-1">Select an Engagement</h3>
           <p className="text-sm text-muted-foreground mb-4">Choose a client and engagement above to view the audit dashboard.</p>
-          <Button onClick={() => { setEngForm({ client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company" }); setShowCreateDialog(true); }}>
+          <Button onClick={() => navigate('/audit/pipeline')}>
             <Plus className="mr-2 h-4 w-4" /> Create New Engagement
           </Button>
         </Card>
