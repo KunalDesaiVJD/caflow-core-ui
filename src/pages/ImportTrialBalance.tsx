@@ -317,8 +317,8 @@ export default function ImportTrialBalance() {
   const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
   const tagging = importStats?.tagging;
 
-  // Client selector
-  if (!isValidUuid) {
+  // If no client from context or route, show client selector
+  if (!isValidUuid && !contextClientId) {
     return (
       <div className="max-w-lg mx-auto p-8 space-y-6">
         <div>
@@ -358,7 +358,18 @@ export default function ImportTrialBalance() {
       {/* Setup Row */}
       <Card>
         <CardContent className="pt-6 space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          {/* Show existing import info */}
+          {existingImport && !importStats && !fileName && (
+            <Alert>
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <AlertTitle className="text-sm">Trial Balance Already Imported</AlertTitle>
+              <AlertDescription className="text-xs">
+                A trial balance has been imported for this engagement. Upload a new file to replace it.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Financial Year</Label>
               <Select value={fy} onValueChange={setFy}>
@@ -367,20 +378,6 @@ export default function ImportTrialBalance() {
                   {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Engagement</Label>
-              <Select value={engagementId} onValueChange={setEngagementId}>
-                <SelectTrigger><SelectValue placeholder="Select engagement" /></SelectTrigger>
-                <SelectContent>
-                  {engagements.map(e => (
-                    <SelectItem key={e.id} value={e.id}>FY {e.financial_year || "—"}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {engagements.length === 0 && (
-                <p className="text-xs text-destructive">No engagements found. Create one first in Audit Pipeline.</p>
-              )}
             </div>
             <div className="space-y-2">
               <Label>Upload Tally Trial Balance</Label>
@@ -394,6 +391,24 @@ export default function ImportTrialBalance() {
               </div>
             </div>
           </div>
+
+          {/* Hidden engagement selector - auto-bind from context */}
+          {!contextEngagementId && engagements.length > 0 && (
+            <div className="space-y-2">
+              <Label>Engagement</Label>
+              <Select value={engagementId} onValueChange={setEngagementId}>
+                <SelectTrigger><SelectValue placeholder="Select engagement" /></SelectTrigger>
+                <SelectContent>
+                  {engagements.map(e => (
+                    <SelectItem key={e.id} value={e.id}>FY {e.financial_year || "—"}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {!contextEngagementId && engagements.length === 0 && (
+            <p className="text-xs text-destructive">No engagements found. Create one first in Audit Pipeline.</p>
+          )}
 
           {existingImport && fileName && !importStats && (
             <Alert>

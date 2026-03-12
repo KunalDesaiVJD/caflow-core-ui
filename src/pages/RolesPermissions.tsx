@@ -156,7 +156,19 @@ const RolesPermissions = () => {
     if (!canEdit) return;
     setGrid(prev => {
       const row = { ...prev[role][module] };
-      (row as any)[field] = !(row as any)[field];
+      const newVal = !(row as any)[field];
+      (row as any)[field] = newVal;
+      // Auto-enable can_view when any other permission is turned on
+      if (newVal && field !== "can_view") {
+        row.can_view = true;
+      }
+      // Auto-disable downstream when can_view is turned off
+      if (!newVal && field === "can_view") {
+        row.can_create = false;
+        row.can_edit = false;
+        row.can_delete = false;
+        row.can_export = false;
+      }
       return { ...prev, [role]: { ...prev[role], [module]: row } };
     });
     setDirty(true);

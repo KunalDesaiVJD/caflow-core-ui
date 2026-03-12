@@ -7,7 +7,7 @@ interface AuditContextType {
   selectedEngagementId: string;
   setSelectedClientId: (id: string) => void;
   setSelectedEngagementId: (id: string) => void;
-  clients: { id: string; name: string | null; entity_type: string | null }[];
+  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[];
   engagements: any[];
   selectedEngagement: any | null;
   loading: boolean;
@@ -20,7 +20,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [selectedClientId, setSelectedClientId] = useState<string>("all");
   const [selectedEngagementId, setSelectedEngagementId] = useState<string>("");
-  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[]>([]);
   const [engagements, setEngagements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -29,7 +29,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     setLoading(true);
 
     const engQuery = supabase.from("audit_engagements").select("*");
-    const clientQuery = supabase.from("clients").select("id, name, entity_type");
+    const clientQuery = supabase.from("clients").select("id, name, entity_type, statutory_audit_applicable, tax_audit_type");
 
     if (user?.firm_id) {
       engQuery.eq("firm_id", user.firm_id);

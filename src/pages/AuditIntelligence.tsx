@@ -6,17 +6,23 @@ import { useAuditContext } from "@/hooks/useAuditContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNow } from "date-fns";
 import {
@@ -24,11 +30,11 @@ import {
   BookMarked, Layers, Award, ChevronRight, Plus, Upload, Search,
   MessageSquare, FileUp, FileOutput, BarChart3, Clock, Activity,
   Users, CalendarDays, AlertTriangle, CheckCircle2, Circle, Loader2,
-  MoreVertical, Pencil, Trash2, HelpCircle
+  MoreVertical, Pencil, Trash2, HelpCircle, ChevronsUpDown, Check
 } from "lucide-react";
 import { toast } from "sonner";
 
-// ─── Stage definitions (correct order per requirement) ───
+// ─── Stage definitions ───
 const STAGES = [
   { num: 1, label: "Engagement Setup & Planning", icon: Building2, path: "/audit/pipeline" },
   { num: 2, label: "Workpapers & Risk", icon: Shield, path: "/audit/risk" },
@@ -86,8 +92,6 @@ export default function AuditIntelligence() {
   } = useAuditContext();
 
   const [users, setUsers] = useState<{ id: string; name: string | null }[]>([]);
-
-  // Metrics
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
   // Dialogs
@@ -95,6 +99,10 @@ export default function AuditIntelligence() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formSaving, setFormSaving] = useState(false);
+
+  // Searchable dropdown states
+  const [clientOpen, setClientOpen] = useState(false);
+  const [engagementOpen, setEngagementOpen] = useState(false);
 
   // Create/Edit form
   const [engForm, setEngForm] = useState({
@@ -113,7 +121,6 @@ export default function AuditIntelligence() {
     [clients]
   );
 
-  // Load metrics for selected engagement
   useEffect(() => {
     if (!selectedEngagementId) return;
     loadMetrics(selectedEngagementId);
@@ -138,9 +145,14 @@ export default function AuditIntelligence() {
 
   // Filter engagements by client
   const filteredEngagements = useMemo(() => {
-    if (selectedClientId === "all") return engagements;
+    if (!selectedClientId || selectedClientId === "all") return engagements;
     return engagements.filter(e => e.client_id === selectedClientId);
   }, [engagements, selectedClientId]);
+
+  const activeEngagements = useMemo(() =>
+    filteredEngagements.filter(e => e.status !== "archived"),
+    [filteredEngagements]
+  );
 
   const stageStatuses = selectedEngagement?.stage_statuses || {};
   const completedStages = Object.values(stageStatuses).filter((s: any) => s === "complete").length;
@@ -235,8 +247,19 @@ export default function AuditIntelligence() {
     refreshEngagements();
   };
 
-  // Partner/manager names
   const userMap = useMemo(() => new Map(users.map(u => [u.id, u.name])), [users]);
+
+  // Selected client name for display
+  const selectedClientName = useMemo(() => {
+    if (!selectedClientId || selectedClientId === "all") return "";
+    return clients.find(c => c.id === selectedClientId)?.name || "";
+  }, [selectedClientId, clients]);
+
+  // Selected engagement label for display
+  const selectedEngagementLabel = useMemo(() => {
+    if (!selectedEngagement) return "";
+    return `${selectedEngagement.client_name} — ${selectedEngagement.audit_type || "Audit"} — FY ${selectedEngagement.financial_year}`;
+  }, [selectedEngagement]);
 
   if (loading) {
     return (
@@ -267,32 +290,78 @@ export default function AuditIntelligence() {
       {/* Engagement Switcher */}
       <Card className="p-4">
         <div className="flex flex-wrap gap-4 items-end">
+          {/* Searchable Client Dropdown */}
           <div className="flex-1 min-w-[200px]">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Client</label>
-            <Select value={selectedClientId} onValueChange={setSelectedClientId}>
-              <SelectTrigger><SelectValue placeholder="All Clients" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Clients</SelectItem>
-                {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <Popover open={clientOpen} onOpenChange={setClientOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" role="combobox" aria-expanded={clientOpen} className="w-full justify-between font-normal">
+                  {selectedClientName || "Select Client..."}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[300px] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search clients..." />
+                  <CommandList>
+                    <CommandEmpty>No clients found.</CommandEmpty>
+                    <CommandGroup>
+                      {clients.map(c => (
+                        <CommandItem
+                          key={c.id}
+                          value={c.name || c.id}
+                          onSelect={() => {
+                            setSelectedClientId(c.id);
+                            setClientOpen(false);
+                          }}
+                        >
+                          <Check className={cn("mr-2 h-4 w-4", selectedClientId === c.id ? "opacity-100" : "opacity-0")} />
+                          {c.name || "Unnamed"}
+                          {c.entity_type && <Badge variant="secondary" className="ml-auto text-[10px]">{c.entity_type}</Badge>}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
+
+          {/* Searchable Engagement Dropdown */}
           <div className="flex-1 min-w-[280px]">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">Engagement</label>
             <div className="flex gap-2">
-              <Select value={selectedEngagementId} onValueChange={setSelectedEngagementId}>
-                <SelectTrigger className="flex-1"><SelectValue placeholder="Select Engagement" /></SelectTrigger>
-                <SelectContent>
-                  {filteredEngagements.filter(e => e.status !== "archived").map(e => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}
-                    </SelectItem>
-                  ))}
-                  {filteredEngagements.length === 0 && (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">No engagements found</div>
-                  )}
-                </SelectContent>
-              </Select>
+              <Popover open={engagementOpen} onOpenChange={setEngagementOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" role="combobox" aria-expanded={engagementOpen} className="flex-1 justify-between font-normal">
+                    <span className="truncate">{selectedEngagementLabel || "Select Engagement..."}</span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[400px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search engagements..." />
+                    <CommandList>
+                      <CommandEmpty>No engagements found.</CommandEmpty>
+                      <CommandGroup>
+                        {activeEngagements.map(e => (
+                          <CommandItem
+                            key={e.id}
+                            value={`${e.client_name} ${e.audit_type} ${e.financial_year}`}
+                            onSelect={() => {
+                              setSelectedEngagementId(e.id);
+                              setEngagementOpen(false);
+                            }}
+                          >
+                            <Check className={cn("mr-2 h-4 w-4 shrink-0", selectedEngagementId === e.id ? "opacity-100" : "opacity-0")} />
+                            <span className="truncate">{e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}</span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               {selectedEngagement && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
