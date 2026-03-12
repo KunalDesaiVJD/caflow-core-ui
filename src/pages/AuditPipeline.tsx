@@ -823,6 +823,9 @@ export default function AuditPipeline() {
         ) : activeStage === 8 ? (
           /* STAGE 8 — CARO / 3CD */
           <div className="max-w-4xl space-y-6">
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+              <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+            </Button>
             <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
             {engagement?.caro_applicable ? (
               <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
@@ -831,9 +834,12 @@ export default function AuditPipeline() {
             )}
           </div>
         ) : activeStage === 9 ? (
-          /* STAGE 9 — Audit Reports */
+          /* STAGE 9 — Review & QC */
           <div className="max-w-4xl space-y-6">
-            <h1 className="text-xl font-bold text-foreground">Audit Reports</h1>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+              <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+            </Button>
+            <h1 className="text-xl font-bold text-foreground">Review & QC</h1>
             <Card><CardContent className="p-6 space-y-4">
               <p className="text-sm text-muted-foreground">Generate and review audit reports for this engagement.</p>
               <Button onClick={() => navigate("/audit/report")} className="gap-2">
@@ -842,9 +848,12 @@ export default function AuditPipeline() {
             </CardContent></Card>
           </div>
         ) : activeStage === 10 ? (
-          /* STAGE 10 — Sign-Off & Bundle */
+          /* STAGE 10 — Sign-Off & UDIN */
           <div className="max-w-4xl space-y-6">
-            <h1 className="text-xl font-bold text-foreground">Sign-Off & Bundle</h1>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+              <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+            </Button>
+            <h1 className="text-xl font-bold text-foreground">Sign-off & UDIN</h1>
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
         ) : null}
