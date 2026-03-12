@@ -252,10 +252,14 @@ export default function AuditIntelligence() {
           <p className="text-sm text-muted-foreground">Engagement dashboard, progress tracking & audit analytics</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate("/audit/pipeline")}>
+          <Button variant="outline" onClick={() =>
+            navigate(selectedEngagementId
+              ? `/audit/pipeline/${selectedEngagementId}`
+              : '/audit/pipeline')
+          }>
             <Layers className="mr-2 h-4 w-4" /> Pipeline View
           </Button>
-          <Button onClick={() => { setEngForm({ client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company" }); setShowCreateDialog(true); }}>
+          <Button onClick={() => navigate('/audit/pipeline')}>
             <Plus className="mr-2 h-4 w-4" /> New Engagement
           </Button>
         </div>
