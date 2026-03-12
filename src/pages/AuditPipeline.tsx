@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useAuditContext } from "@/hooks/useAuditContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -91,10 +92,19 @@ export default function AuditPipeline() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { engagementId: routeEngId } = useParams<{ engagementId?: string }>();
+  const auditCtx = useAuditContext();
+  const contextEngId = auditCtx?.selectedEngagementId || "";
 
-  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || "");
+  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Sync from audit context when it changes
+  useEffect(() => {
+    if (contextEngId && !routeEngId && !selectedEngId) {
+      setSelectedEngId(contextEngId);
+    }
+  }, [contextEngId]);
 
   // ─── Engagement list ───
   const { data: engagements } = useQuery({

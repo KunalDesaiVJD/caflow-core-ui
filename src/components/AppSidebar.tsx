@@ -49,6 +49,7 @@ const auditUtilities = [
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
   { title: "AI Skills", path: "/audit/ai-skills", icon: BrainCircuit },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
+  { title: "Documents", path: "/documents", icon: FolderOpen },
   { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
 ];
 
