@@ -59,6 +59,7 @@ export type Database = {
           color_scheme: string
           created_at: string | null
           css_vars: Json
+          default_for_roles: Json | null
           id: string
           is_default: boolean | null
           layout_type: string
@@ -69,6 +70,7 @@ export type Database = {
           color_scheme?: string
           created_at?: string | null
           css_vars?: Json
+          default_for_roles?: Json | null
           id?: string
           is_default?: boolean | null
           layout_type?: string
@@ -79,6 +81,7 @@ export type Database = {
           color_scheme?: string
           created_at?: string | null
           css_vars?: Json
+          default_for_roles?: Json | null
           id?: string
           is_default?: boolean | null
           layout_type?: string
@@ -338,6 +341,7 @@ export type Database = {
           audit_period_type: string | null
           audit_programme: Json | null
           audit_type: string | null
+          bundle_url: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
           cash_flow_method: string | null
@@ -386,6 +390,7 @@ export type Database = {
           audit_period_type?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
+          bundle_url?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           cash_flow_method?: string | null
@@ -434,6 +439,7 @@ export type Database = {
           audit_period_type?: string | null
           audit_programme?: Json | null
           audit_type?: string | null
+          bundle_url?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
           cash_flow_method?: string | null
@@ -3025,6 +3031,57 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      role_theme_overrides: {
+        Row: {
+          allow_user_override: boolean | null
+          color_scheme: string | null
+          created_by: string | null
+          firm_id: string
+          id: string
+          layout_type: string | null
+          role: string
+          theme_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          allow_user_override?: boolean | null
+          color_scheme?: string | null
+          created_by?: string | null
+          firm_id: string
+          id?: string
+          layout_type?: string | null
+          role: string
+          theme_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          allow_user_override?: boolean | null
+          color_scheme?: string | null
+          created_by?: string | null
+          firm_id?: string
+          id?: string
+          layout_type?: string | null
+          role?: string
+          theme_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "role_theme_overrides_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "role_theme_overrides_theme_id_fkey"
+            columns: ["theme_id"]
+            isOneToOne: false
+            referencedRelation: "app_themes"
             referencedColumns: ["id"]
           },
         ]
