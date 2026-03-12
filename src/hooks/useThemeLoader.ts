@@ -92,14 +92,14 @@ export function useThemeLoader() {
             // Check if user has personal preference and override is allowed
             let usePersonal = false;
             if (roleOverride.allow_user_override) {
-              // Check localStorage for personal theme preference
               try {
                 const raw = localStorage.getItem("userThemePref");
                 const prefs = raw ? JSON.parse(raw) : {};
-              if (prefs.theme_color && CSS_VARS_MAP[prefs.theme_color]) {
-                cssVars = CSS_VARS_MAP[prefs.theme_color];
-                usePersonal = true;
-              }
+                if (prefs.theme_color && CSS_VARS_MAP[prefs.theme_color]) {
+                  cssVars = CSS_VARS_MAP[prefs.theme_color];
+                  usePersonal = true;
+                }
+              } catch {}
             }
 
             if (!usePersonal) {
