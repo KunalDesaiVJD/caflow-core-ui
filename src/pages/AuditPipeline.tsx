@@ -96,7 +96,7 @@ export default function AuditPipeline() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { engagementId: routeEngId } = useParams<{ engagementId?: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const auditCtx = useAuditContext();
   const contextEngId = auditCtx?.selectedEngagementId || "";
 

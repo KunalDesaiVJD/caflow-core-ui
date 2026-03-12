@@ -207,7 +207,7 @@ export default function AuditIntelligence() {
       .from("audit_engagements")
       .update({ pipeline_stage: stage.num } as any)
       .eq("id", selectedEngagementId);
-    navigate(`/audit/pipeline/${selectedEngagementId}`);
+    navigate(`/audit/pipeline/${selectedEngagementId}?stage=${stage.num}`);
   };
 
   // ─── Edit Engagement ───
