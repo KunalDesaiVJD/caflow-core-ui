@@ -439,7 +439,7 @@ export default function AuditPipeline() {
             </div>
             <Button onClick={() => setShowNewEng(true)} className="gap-2"><Plus size={16} /> New Engagement</Button>
           </div>
-        ) : currentStage === 1 || stageStatuses["1"] === "in_progress" || stageStatuses["1"] === "not_started" ? (
+        ) : activeStage === 1 ? (
           /* STAGE 1 */
           <div className="max-w-4xl space-y-6">
             <div className="flex items-center justify-between">
