@@ -388,18 +388,18 @@ export default function AuditPipeline() {
                 }}
                 className={cn(
                   "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors text-left",
-                  isActive && "bg-primary/10 text-primary font-semibold",
-                  status === "complete" && !isActive && "text-primary/70",
+                  s.num === activeStage && "bg-primary/10 text-primary font-semibold",
+                  status === "complete" && s.num !== activeStage && "text-primary/70",
                   status === "locked" && "text-muted-foreground opacity-60",
-                  status === "not_started" && !isActive && "text-muted-foreground hover:bg-muted",
+                  status === "not_started" && s.num !== activeStage && "text-muted-foreground hover:bg-muted",
                 )}
               >
                 <div className={cn(
                   "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0",
-                  isActive && "bg-primary text-primary-foreground",
-                  status === "complete" && !isActive && "bg-primary/20 text-primary",
+                  s.num === activeStage && "bg-primary text-primary-foreground",
+                  status === "complete" && s.num !== activeStage && "bg-primary/20 text-primary",
                   status === "locked" && "bg-muted text-muted-foreground",
-                  status === "not_started" && !isActive && "bg-muted text-muted-foreground",
+                  status === "not_started" && s.num !== activeStage && "bg-muted text-muted-foreground",
                 )}>
                   {status === "complete" ? <CheckCircle2 size={14} /> :
                    status === "locked" ? <Lock size={12} /> :
