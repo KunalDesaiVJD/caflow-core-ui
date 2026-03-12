@@ -2277,6 +2277,47 @@ export type Database = {
           },
         ]
       }
+      invoice_item_masters: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          default_rate: number | null
+          description: string
+          firm_id: string | null
+          hsn_sac_code: string | null
+          id: string
+          is_active: boolean | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          default_rate?: number | null
+          description: string
+          firm_id?: string | null
+          hsn_sac_code?: string | null
+          id?: string
+          is_active?: boolean | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          default_rate?: number | null
+          description?: string
+          firm_id?: string | null
+          hsn_sac_code?: string | null
+          id?: string
+          is_active?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_item_masters_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoice_line_items: {
         Row: {
           amount: number | null
@@ -2358,6 +2399,8 @@ export type Database = {
           notes: string | null
           paid_at: string | null
           payment_terms: string | null
+          place_of_supply: string | null
+          reference_no: string | null
           sent_at: string | null
           show_logo: boolean | null
           signatory_name: string | null
@@ -2398,6 +2441,8 @@ export type Database = {
           notes?: string | null
           paid_at?: string | null
           payment_terms?: string | null
+          place_of_supply?: string | null
+          reference_no?: string | null
           sent_at?: string | null
           show_logo?: boolean | null
           signatory_name?: string | null
@@ -2438,6 +2483,8 @@ export type Database = {
           notes?: string | null
           paid_at?: string | null
           payment_terms?: string | null
+          place_of_supply?: string | null
+          reference_no?: string | null
           sent_at?: string | null
           show_logo?: boolean | null
           signatory_name?: string | null
