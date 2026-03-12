@@ -382,9 +382,8 @@ export default function AuditPipeline() {
               <button
                 key={s.num}
                 onClick={() => {
-                  if ((status === "complete" || status === "in_progress") && selectedEngId) {
-                    // Navigate to that stage by updating pipeline_stage
-                    supabase.from("audit_engagements").update({ pipeline_stage: s.num } as any).eq("id", selectedEngId).then(() => refetchEng());
+                  if (selectedEngId) {
+                    setActiveStage(s.num);
                   }
                 }}
                 className={cn(
