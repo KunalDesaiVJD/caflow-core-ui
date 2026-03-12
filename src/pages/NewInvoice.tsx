@@ -502,11 +502,12 @@ const NewInvoice = () => {
     try {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
-        margin: [10, 10, 10, 10],
+        margin: [10, 10, 20, 10],
         filename: `Tax_Invoice_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
       }).from(container).save();
     } finally {
       document.body.removeChild(container);
@@ -525,17 +526,17 @@ const NewInvoice = () => {
       const gstPct = item.gst_percent;
       return `
       <tr>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${i + 1}.</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;font-size:11px">
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;vertical-align:middle;font-size:11px">
           ${item.description}
           ${item.description_details ? `<div style="font-size:10px;color:#555;margin-top:2px;white-space:pre-line">${item.description_details}</div>` : ""}
         </td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${item.hsn_sac_code}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">\u20B9${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px">\u20B9${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;font-size:11px">${gstPct}%</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;font-size:11px;font-weight:600">\u20B9${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${gstPct}%</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">\u20B9${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
     }).join("");
 
@@ -658,7 +659,7 @@ const NewInvoice = () => {
       </div>
 
       <!-- Terms -->
-      <div style="margin-top:16px;padding-top:8px;border-top:1px solid #ddd;font-size:10px;color:#555">
+      <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
         <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
         <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
       </div>
