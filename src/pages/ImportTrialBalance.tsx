@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   ArrowLeft, Upload, CheckCircle2, AlertTriangle, FileSpreadsheet, Loader2,
-  ChevronRight, ChevronDown, FolderTree, Layers, Tag, Zap, AlertCircle,
+  ChevronRight, ChevronDown, FolderTree, Layers, Tag, Zap, AlertCircle, Trash2, RefreshCw,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -79,6 +79,15 @@ interface ImportStats {
   tagging: TaggingResult | null;
 }
 
+interface ExistingTBData {
+  totalLedgers: number;
+  bsCount: number;
+  plCount: number;
+  financialYear: string;
+  importFormat: string | null;
+  ledgers: { id: string; ledger_name: string | null; primary_group: string | null; bs_pl_side: string | null; closing_balance: number | null; opening_balance: number | null; matched_category_code: string | null }[];
+}
+
 // ─── Tree Node ───
 function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: HierarchyNode[] }) {
   const [open, setOpen] = useState(node.level <= 2);
@@ -126,9 +135,7 @@ export default function ImportTrialBalance() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // Use audit context for auto-binding (always called, context is always available within AppLayout)
   const auditCtx = useAuditContext();
-
   const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
   const contextEngagementId = auditCtx?.selectedEngagementId || "";
 
@@ -137,7 +144,6 @@ export default function ImportTrialBalance() {
   const [engagementId, setEngagementId] = useState("");
   const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
 
-  // Auto-bind from audit context if available
   const clientId = routeClientId || selectedClientId || contextClientId;
   const fileRef = useRef<HTMLInputElement>(null);
   const firmId = user?.firm_id;
@@ -151,12 +157,13 @@ export default function ImportTrialBalance() {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [error, setError] = useState("");
 
-  // Re-import dialog
   const [showReimportDialog, setShowReimportDialog] = useState(false);
   const [existingImport, setExistingImport] = useState(false);
+  const [existingTBData, setExistingTBData] = useState<ExistingTBData | null>(null);
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [reimportAction, setReimportAction] = useState<"replace" | "prior_year" | null>(null);
 
-  // Unmatched ledger overrides
   const [unmatchedOverrides, setUnmatchedOverrides] = useState<Record<string, string>>({});
   const [savingOverrides, setSavingOverrides] = useState(false);
 
@@ -193,17 +200,59 @@ export default function ImportTrialBalance() {
     load();
   }, [clientId]);
 
-  // Check for existing import when engagement changes
+  // Check for existing import and load TB data when engagement changes
   useEffect(() => {
     if (!engagementId) return;
-    const check = async () => {
-      const { count } = await supabase.from("trial_balance_snapshots")
-        .select("id", { count: "exact", head: true })
-        .eq("engagement_id", engagementId);
-      setExistingImport((count || 0) > 0);
-    };
-    check();
+    loadExistingTB();
   }, [engagementId]);
+
+  const loadExistingTB = async () => {
+    if (!engagementId) return;
+    setLoadingExisting(true);
+    try {
+      const { data, count } = await supabase.from("trial_balance_snapshots")
+        .select("id, ledger_name, primary_group, bs_pl_side, closing_balance, opening_balance, matched_category_code, financial_year, import_format, account_type", { count: "exact" })
+        .eq("engagement_id", engagementId)
+        .order("ledger_name");
+
+      const hasData = (count || 0) > 0;
+      setExistingImport(hasData);
+
+      if (hasData && data) {
+        const leafLedgers = data.filter(d => d.account_type !== "group");
+        setExistingTBData({
+          totalLedgers: leafLedgers.length,
+          bsCount: leafLedgers.filter(d => d.bs_pl_side === "BS").length,
+          plCount: leafLedgers.filter(d => d.bs_pl_side === "PL").length,
+          financialYear: data[0]?.financial_year || "",
+          importFormat: data[0]?.import_format || null,
+          ledgers: leafLedgers.slice(0, 200) as any,
+        });
+      } else {
+        setExistingTBData(null);
+      }
+    } catch {
+      setExistingTBData(null);
+    }
+    setLoadingExisting(false);
+  };
+
+  const handleDeleteTB = async () => {
+    if (!engagementId) return;
+    setFormSaving(true);
+    try {
+      await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", engagementId);
+      toast({ title: "Trial Balance removed successfully" });
+      setExistingImport(false);
+      setExistingTBData(null);
+      setShowDeleteConfirm(false);
+    } catch (err: any) {
+      toast({ title: "Failed to remove", description: err.message, variant: "destructive" });
+    }
+    setFormSaving(false);
+  };
+
+  const [formSaving, setFormSaving] = useState(false);
 
   const isValidUuid = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
 
@@ -275,7 +324,10 @@ export default function ImportTrialBalance() {
 
       setParseProgress("Tagging ledgers with scrutiny categories...");
       setImportStats(data as ImportStats);
+      setExistingImport(true);
       toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
+      // Reload existing TB data
+      loadExistingTB();
     } catch (err: any) {
       setError(err.message);
       toast({ title: "Parse failed", description: err.message, variant: "destructive" });
@@ -294,7 +346,6 @@ export default function ImportTrialBalance() {
           .eq("id", id);
       }
       toast({ title: `${entries.length} ledger categories saved` });
-      // Update local tagging result
       if (importStats?.tagging) {
         const updated = { ...importStats.tagging };
         updated.unmatched -= entries.length;
@@ -316,6 +367,8 @@ export default function ImportTrialBalance() {
   const leafNodes = useMemo(() => importStats?.hierarchy?.filter(n => n.isLeaf) || [], [importStats]);
   const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
   const tagging = importStats?.tagging;
+
+  const fmtNum = (n: number | null) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
   // If no client from context or route, show client selector
   if (!isValidUuid && !contextClientId) {
@@ -355,149 +408,211 @@ export default function ImportTrialBalance() {
         </div>
       </div>
 
-      {/* Setup Row */}
-      <Card>
-        <CardContent className="pt-6 space-y-4">
-          {/* Show existing import info */}
-          {existingImport && !importStats && !fileName && (
-            <Alert>
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <AlertTitle className="text-sm">Trial Balance Already Imported</AlertTitle>
-              <AlertDescription className="text-xs">
-                A trial balance has been imported for this engagement. Upload a new file to replace it.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Financial Year</Label>
-              <Select value={fy} onValueChange={setFy}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Upload Tally Trial Balance</Label>
-              <div
-                className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                onClick={() => fileRef.current?.click()}
-              >
-                <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-1" />
-                <p className="text-xs font-medium text-foreground">{fileName || "Click to upload .xlsx, .xls, .csv"}</p>
-                <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileSelect} />
+      {/* ─── Existing TB Display ─── */}
+      {existingImport && existingTBData && !importStats && !fileName && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <CheckCircle2 size={18} className="text-emerald-600" />
+                Imported Trial Balance
+              </CardTitle>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                  <RefreshCw size={14} className="mr-1" /> Replace TB
+                </Button>
+                <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setShowDeleteConfirm(true)}>
+                  <Trash2 size={14} className="mr-1" /> Remove TB
+                </Button>
               </div>
             </div>
-          </div>
-
-          {/* Hidden engagement selector - auto-bind from context */}
-          {!contextEngagementId && engagements.length > 0 && (
-            <div className="space-y-2">
-              <Label>Engagement</Label>
-              <Select value={engagementId} onValueChange={setEngagementId}>
-                <SelectTrigger><SelectValue placeholder="Select engagement" /></SelectTrigger>
-                <SelectContent>
-                  {engagements.map(e => (
-                    <SelectItem key={e.id} value={e.id}>FY {e.financial_year || "—"}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Summary Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="p-3 bg-muted/50 rounded-lg text-center">
+                <p className="text-2xl font-bold text-foreground">{existingTBData.totalLedgers}</p>
+                <p className="text-xs text-muted-foreground">Total Ledgers</p>
+              </div>
+              <div className="p-3 bg-muted/50 rounded-lg text-center">
+                <p className="text-2xl font-bold text-foreground">{existingTBData.bsCount}</p>
+                <p className="text-xs text-muted-foreground">Balance Sheet</p>
+              </div>
+              <div className="p-3 bg-muted/50 rounded-lg text-center">
+                <p className="text-2xl font-bold text-foreground">{existingTBData.plCount}</p>
+                <p className="text-xs text-muted-foreground">Profit & Loss</p>
+              </div>
+              <div className="p-3 bg-muted/50 rounded-lg text-center">
+                <p className="text-sm font-semibold text-foreground">FY {existingTBData.financialYear || "—"}</p>
+                <p className="text-xs text-muted-foreground">{existingTBData.importFormat || "Excel"}</p>
+              </div>
             </div>
-          )}
-          {!contextEngagementId && engagements.length === 0 && (
-            <p className="text-xs text-destructive">No engagements found. Create one first in Audit Pipeline.</p>
-          )}
 
-          {existingImport && fileName && !importStats && (
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle className="text-sm">Existing Import Detected</AlertTitle>
-              <AlertDescription className="text-xs">
-                A TB has already been imported for this engagement. You can replace it or add as prior year comparison.
-              </AlertDescription>
-            </Alert>
-          )}
+            {/* Ledger Table */}
+            <div className="border rounded-lg overflow-auto max-h-[400px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">Ledger Name</TableHead>
+                    <TableHead className="text-xs">Group</TableHead>
+                    <TableHead className="text-xs">BS/PL</TableHead>
+                    <TableHead className="text-xs">Category</TableHead>
+                    <TableHead className="text-xs text-right">Opening</TableHead>
+                    <TableHead className="text-xs text-right">Closing</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {existingTBData.ledgers.map(l => (
+                    <TableRow key={l.id}>
+                      <TableCell className="text-xs">{l.ledger_name || "—"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{l.primary_group || "—"}</TableCell>
+                      <TableCell><Badge variant="outline" className="text-[10px]">{l.bs_pl_side || "—"}</Badge></TableCell>
+                      <TableCell>
+                        {l.matched_category_code ? (
+                          <Badge variant="secondary" className="text-[10px]">{l.matched_category_code}</Badge>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-right font-mono">{fmtNum(l.opening_balance)}</TableCell>
+                      <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(l.closing_balance)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {existingTBData.totalLedgers > 200 && (
+              <p className="text-xs text-muted-foreground text-center">Showing first 200 of {existingTBData.totalLedgers} ledgers</p>
+            )}
 
-          {fileName && !importStats && (
-            <Button onClick={handleParseClick} disabled={parsing || !engagementId} className="w-full">
-              {parsing ? (
-                <><Loader2 size={16} className="mr-2 animate-spin" /> {parseProgress}</>
-              ) : (
-                <><FileSpreadsheet size={16} className="mr-2" /> Parse, Import & Tag Trial Balance</>
-              )}
-            </Button>
-          )}
+            {/* Quick Actions */}
+            <div className="flex gap-2 pt-2">
+              <Button size="sm" onClick={() => navigate("/audit/scrutiny")}>
+                <Zap size={14} className="mr-1" /> Run Scrutiny
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => navigate("/settings/coa-mappings")}>
+                <Layers size={14} className="mr-1" /> COA Mapping
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-          {fileName?.toLowerCase().endsWith(".csv") && (
-            <Alert>
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="text-sm">CSV Format Detected</AlertTitle>
-              <AlertDescription className="text-xs">
-                CSV format does not contain hierarchy/indent information. All accounts will be imported as flat ledgers.
-                For full hierarchy, export as Excel from Tally (Reports → Trial Balance → Export).
-              </AlertDescription>
-            </Alert>
-          )}
+      {/* Upload area - show when no existing TB or user wants to replace */}
+      {(!existingImport || fileName || !existingTBData) && (
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            {existingImport && !fileName && !existingTBData && (
+              <Alert>
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <AlertTitle className="text-sm">Trial Balance Already Imported</AlertTitle>
+                <AlertDescription className="text-xs">
+                  A trial balance has been imported for this engagement. Upload a new file to replace it.
+                </AlertDescription>
+              </Alert>
+            )}
 
-          {error && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="text-sm">Parse Error</AlertTitle>
-              <AlertDescription className="text-xs">{error}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Financial Year</Label>
+                <Select value={fy} onValueChange={setFy}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Upload Tally Trial Balance</Label>
+                <div
+                  className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-1" />
+                  <p className="text-xs font-medium text-foreground">{fileName || "Click to upload .xlsx, .xls, .csv"}</p>
+                  <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileSelect} />
+                </div>
+              </div>
+            </div>
+
+            {/* Hidden engagement selector - auto-bind from context */}
+            {!contextEngagementId && engagements.length > 0 && (
+              <div className="space-y-2">
+                <Label>Engagement</Label>
+                <Select value={engagementId} onValueChange={setEngagementId}>
+                  <SelectTrigger><SelectValue placeholder="Select engagement" /></SelectTrigger>
+                  <SelectContent>
+                    {engagements.map(e => (
+                      <SelectItem key={e.id} value={e.id}>FY {e.financial_year || "—"}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {!contextEngagementId && engagements.length === 0 && (
+              <p className="text-xs text-destructive">No engagements found. Create one first in Audit Pipeline.</p>
+            )}
+
+            {existingImport && fileName && !importStats && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle className="text-sm">Existing Import Detected</AlertTitle>
+                <AlertDescription className="text-xs">
+                  A TB has already been imported for this engagement. You can replace it or add as prior year comparison.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {fileName && !importStats && (
+              <Button onClick={handleParseClick} disabled={parsing || !engagementId} className="w-full">
+                {parsing ? (
+                  <><Loader2 size={16} className="mr-2 animate-spin" /> {parseProgress}</>
+                ) : (
+                  <><FileSpreadsheet size={16} className="mr-2" /> Parse, Import & Tag Trial Balance</>
+                )}
+              </Button>
+            )}
+
+            {fileName?.toLowerCase().endsWith(".csv") && (
+              <Alert>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle className="text-sm">CSV Format Detected</AlertTitle>
+                <AlertDescription className="text-xs">
+                  CSV format does not contain hierarchy/indent information. All accounts will be imported as flat ledgers.
+                  For full hierarchy, export as Excel from Tally (Reports → Trial Balance → Export).
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {error && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle className="text-sm">Parse Error</AlertTitle>
+                <AlertDescription className="text-xs">{error}</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Results */}
       {importStats && (
         <>
           {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className="text-2xl font-bold text-foreground">{importStats.leafLedgers}</p>
-                <p className="text-xs text-muted-foreground">Leaf Ledgers</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className="text-2xl font-bold text-foreground">{importStats.primaryGroups}</p>
-                <p className="text-xs text-muted-foreground">Primary Groups</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className="text-2xl font-bold text-foreground">{importStats.bsAccounts}</p>
-                <p className="text-xs text-muted-foreground">Balance Sheet</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className="text-2xl font-bold text-foreground">{importStats.plAccounts}</p>
-                <p className="text-xs text-muted-foreground">Profit & Loss</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className={`text-2xl font-bold ${importStats.isBalanced ? "text-emerald-600" : "text-destructive"}`}>
-                  {importStats.isBalanced ? "YES" : "NO"}
-                </p>
-                <p className="text-xs text-muted-foreground">TB Balanced</p>
-              </CardContent>
-            </Card>
+            <Card><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{importStats.leafLedgers}</p><p className="text-xs text-muted-foreground">Leaf Ledgers</p></CardContent></Card>
+            <Card><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{importStats.primaryGroups}</p><p className="text-xs text-muted-foreground">Primary Groups</p></CardContent></Card>
+            <Card><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{importStats.bsAccounts}</p><p className="text-xs text-muted-foreground">Balance Sheet</p></CardContent></Card>
+            <Card><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{importStats.plAccounts}</p><p className="text-xs text-muted-foreground">Profit & Loss</p></CardContent></Card>
+            <Card><CardContent className="p-4 text-center"><p className={`text-2xl font-bold ${importStats.isBalanced ? "text-emerald-600" : "text-destructive"}`}>{importStats.isBalanced ? "YES" : "NO"}</p><p className="text-xs text-muted-foreground">TB Balanced</p></CardContent></Card>
           </div>
 
-          {/* Balance warning / success */}
           {!importStats.isBalanced ? (
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle className="text-sm">Trial Balance is NOT Balanced</AlertTitle>
               <AlertDescription className="text-xs">
                 Dr total (₹{importStats.totalDr.toLocaleString("en-IN")}) ≠ Cr total (₹{importStats.totalCr.toLocaleString("en-IN")}).
-                Check your Tally export settings. Scrutiny will run but results may be unreliable.
               </AlertDescription>
             </Alert>
           ) : (
@@ -510,81 +625,46 @@ export default function ImportTrialBalance() {
             </Alert>
           )}
 
-          {/* ─── Ledger Matching Results ─── */}
           {tagging && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Tag size={18} /> Ledger Matching Results
-                </CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2"><Tag size={18} /> Ledger Matching Results</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex gap-4 text-sm">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 size={16} className="text-emerald-600" />
-                    <span className="font-medium">{tagging.tagged}</span>
-                    <span className="text-muted-foreground">ledgers matched</span>
-                  </div>
-                  {tagging.unmatched > 0 && (
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle size={16} className="text-amber-500" />
-                      <span className="font-medium text-amber-600">{tagging.unmatched}</span>
-                      <span className="text-muted-foreground">unmatched</span>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2"><CheckCircle2 size={16} className="text-emerald-600" /><span className="font-medium">{tagging.tagged}</span><span className="text-muted-foreground">matched</span></div>
+                  {tagging.unmatched > 0 && <div className="flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500" /><span className="font-medium text-amber-600">{tagging.unmatched}</span><span className="text-muted-foreground">unmatched</span></div>}
                 </div>
-
-                {/* Category breakdown */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {Object.entries(tagging.categoryBreakdown)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([cat, count]) => (
-                      <div key={cat} className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
-                        <span className="font-medium">{CATEGORY_LABELS[cat] || cat}</span>
-                        <Badge variant="secondary" className="text-[10px] h-5">{count}</Badge>
-                      </div>
-                    ))}
+                  {Object.entries(tagging.categoryBreakdown).sort(([, a], [, b]) => b - a).map(([cat, count]) => (
+                    <div key={cat} className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
+                      <span className="font-medium">{CATEGORY_LABELS[cat] || cat}</span>
+                      <Badge variant="secondary" className="text-[10px] h-5">{count}</Badge>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Unmatched ledger overrides */}
                 {tagging.unmatchedLedgers.length > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium text-amber-600 flex items-center gap-1">
-                        <AlertTriangle size={14} /> Unmatched Ledgers — Assign Category Manually
-                      </p>
+                      <p className="text-sm font-medium text-amber-600 flex items-center gap-1"><AlertTriangle size={14} /> Unmatched Ledgers — Assign Category Manually</p>
                       {Object.values(unmatchedOverrides).some(v => v) && (
                         <Button size="sm" onClick={handleSaveOverrides} disabled={savingOverrides}>
-                          {savingOverrides ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
-                          Save Overrides
+                          {savingOverrides ? <Loader2 size={14} className="animate-spin mr-1" /> : null}Save Overrides
                         </Button>
                       )}
                     </div>
                     <div className="border rounded-lg overflow-auto max-h-[250px]">
                       <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="text-xs">Ledger Name</TableHead>
-                            <TableHead className="text-xs w-48">Assign Category</TableHead>
-                          </TableRow>
-                        </TableHeader>
+                        <TableHeader><TableRow><TableHead className="text-xs">Ledger Name</TableHead><TableHead className="text-xs w-48">Assign Category</TableHead></TableRow></TableHeader>
                         <TableBody>
                           {tagging.unmatchedLedgers.map(l => (
                             <TableRow key={l.id}>
                               <TableCell className="text-xs">{l.name}</TableCell>
                               <TableCell>
-                                <Select
-                                  value={unmatchedOverrides[l.id] || ""}
-                                  onValueChange={v => setUnmatchedOverrides(prev => ({ ...prev, [l.id]: v }))}
-                                >
-                                  <SelectTrigger className="h-7 text-xs">
-                                    <SelectValue placeholder="Select..." />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Object.entries(CATEGORY_LABELS).map(([code, label]) => (
-                                      <SelectItem key={code} value={code} className="text-xs">{code} — {label}</SelectItem>
-                                    ))}
-                                  </SelectContent>
+                                <Select value={unmatchedOverrides[l.id] || ""} onValueChange={v => setUnmatchedOverrides(prev => ({ ...prev, [l.id]: v }))}>
+                                  <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>
+                                  <SelectContent>{Object.entries(CATEGORY_LABELS).map(([code, label]) => (<SelectItem key={code} value={code} className="text-xs">{code} — {label}</SelectItem>))}</SelectContent>
                                 </Select>
                               </TableCell>
                             </TableRow>
@@ -592,14 +672,10 @@ export default function ImportTrialBalance() {
                         </TableBody>
                       </Table>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      These ledgers had no keyword match — they will use TB-level rules only unless manually tagged.
-                    </p>
                   </div>
                 )}
 
-                {/* Run Full Scrutiny button */}
-                <Button className="w-full" variant="default" onClick={() => navigate(`/audit-scrutiny?engagement=${engagementId}`)}>
+                <Button className="w-full" variant="default" onClick={() => navigate("/audit/scrutiny")}>
                   <Zap size={16} className="mr-2" /> Run Full Scrutiny Now →
                 </Button>
               </CardContent>
@@ -610,16 +686,10 @@ export default function ImportTrialBalance() {
           <Card>
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <FolderTree size={18} /> Hierarchy Tree
-                </CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2"><FolderTree size={18} /> Hierarchy Tree</CardTitle>
                 <div className="flex gap-1">
-                  <Button variant={viewMode === "tree" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("tree")}>
-                    <FolderTree size={12} /> Tree
-                  </Button>
-                  <Button variant={viewMode === "flat" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("flat")}>
-                    <Layers size={12} /> Flat
-                  </Button>
+                  <Button variant={viewMode === "tree" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("tree")}><FolderTree size={12} /> Tree</Button>
+                  <Button variant={viewMode === "flat" ? "default" : "outline"} size="sm" className="text-xs h-7 gap-1" onClick={() => setViewMode("flat")}><Layers size={12} /> Flat</Button>
                 </div>
               </div>
             </CardHeader>
@@ -627,32 +697,20 @@ export default function ImportTrialBalance() {
               {viewMode === "tree" ? (
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
-                    <div className="w-4" />
-                    <span className="flex-1">Account / Group</span>
-                    <span className="w-24 text-right">Opening</span>
-                    <span className="w-24 text-right">Txn Dr</span>
-                    <span className="w-24 text-right">Txn Cr</span>
-                    <span className="w-24 text-right">Closing</span>
+                    <div className="w-4" /><span className="flex-1">Account / Group</span>
+                    <span className="w-24 text-right">Opening</span><span className="w-24 text-right">Txn Dr</span><span className="w-24 text-right">Txn Cr</span><span className="w-24 text-right">Closing</span>
                   </div>
-                  {rootNodes.map(node => (
-                    <TreeNode key={node.nodeId} node={node} allNodes={importStats.hierarchy} />
-                  ))}
+                  {rootNodes.map(node => <TreeNode key={node.nodeId} node={node} allNodes={importStats.hierarchy} />)}
                 </div>
               ) : (
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
                   <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-xs">Ledger Name</TableHead>
-                        <TableHead className="text-xs">Primary Group</TableHead>
-                        <TableHead className="text-xs">BS/PL</TableHead>
-                        <TableHead className="text-xs">Dr/Cr</TableHead>
-                        <TableHead className="text-xs text-right">Opening</TableHead>
-                        <TableHead className="text-xs text-right">Txn Dr</TableHead>
-                        <TableHead className="text-xs text-right">Txn Cr</TableHead>
-                        <TableHead className="text-xs text-right">Closing</TableHead>
-                      </TableRow>
-                    </TableHeader>
+                    <TableHeader><TableRow>
+                      <TableHead className="text-xs">Ledger Name</TableHead><TableHead className="text-xs">Primary Group</TableHead>
+                      <TableHead className="text-xs">BS/PL</TableHead><TableHead className="text-xs">Dr/Cr</TableHead>
+                      <TableHead className="text-xs text-right">Opening</TableHead><TableHead className="text-xs text-right">Txn Dr</TableHead>
+                      <TableHead className="text-xs text-right">Txn Cr</TableHead><TableHead className="text-xs text-right">Closing</TableHead>
+                    </TableRow></TableHeader>
                     <TableBody>
                       {leafNodes.map(n => (
                         <TableRow key={n.nodeId}>
@@ -673,14 +731,9 @@ export default function ImportTrialBalance() {
             </CardContent>
           </Card>
 
-          {/* Actions */}
           <div className="flex justify-center gap-3">
-            <Button variant="outline" onClick={() => { setImportStats(null); setFileName(""); setFileBase64(""); }}>
-              Upload Another File
-            </Button>
-            <Button onClick={() => navigate(-1)}>
-              Back to Engagement
-            </Button>
+            <Button variant="outline" onClick={() => { setImportStats(null); setFileName(""); setFileBase64(""); }}>Upload Another File</Button>
+            <Button onClick={() => navigate(-1)}>Back to Engagement</Button>
           </div>
         </>
       )}
@@ -690,29 +743,40 @@ export default function ImportTrialBalance() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Existing Import Found</DialogTitle>
-            <DialogDescription>
-              A Trial Balance has already been imported for this engagement. What would you like to do?
-            </DialogDescription>
+            <DialogDescription>A Trial Balance has already been imported for this engagement. What would you like to do?</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-4">
             <Button variant="outline" className="w-full justify-start h-auto py-3" onClick={() => handleReimportConfirm("replace")}>
-              <div className="text-left">
-                <p className="font-medium">Replace Existing</p>
-                <p className="text-xs text-muted-foreground">Delete current TB data and import fresh. Previous data will be lost.</p>
-              </div>
+              <div className="text-left"><p className="font-medium">Replace Existing</p><p className="text-xs text-muted-foreground">Delete current TB data and import fresh.</p></div>
             </Button>
             <Button variant="outline" className="w-full justify-start h-auto py-3" onClick={() => handleReimportConfirm("prior_year")}>
-              <div className="text-left">
-                <p className="font-medium">Add as Prior Year Comparison</p>
-                <p className="text-xs text-muted-foreground">Keep existing as current year, import this as prior year for YoY comparison in scrutiny.</p>
-              </div>
+              <div className="text-left"><p className="font-medium">Add as Prior Year Comparison</p><p className="text-xs text-muted-foreground">Keep existing as current year, import this as prior year.</p></div>
             </Button>
           </div>
+          <DialogFooter><Button variant="ghost" onClick={() => setShowReimportDialog(false)}>Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Trial Balance?</DialogTitle>
+            <DialogDescription>This will permanently delete the imported trial balance data for this engagement. Scrutiny findings linked to this data may also be affected.</DialogDescription>
+          </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowReimportDialog(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteTB} disabled={formSaving}>
+              {formSaving && <Loader2 size={16} className="mr-2 animate-spin" />} Remove Trial Balance
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Hidden file input for replace */}
+      {existingImport && existingTBData && !fileName && (
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileSelect} />
+      )}
     </div>
   );
 }
