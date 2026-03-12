@@ -92,12 +92,10 @@ export function useThemeLoader() {
             // Check if user has personal preference and override is allowed
             let usePersonal = false;
             if (roleOverride.allow_user_override) {
-              const { data: userData } = await supabase
-                .from("users")
-                .select("user_preferences")
-                .eq("id", user.id!)
-                .single();
-              const prefs = (userData?.user_preferences as any) || {};
+              // Check localStorage for personal theme preference
+              try {
+                const raw = localStorage.getItem("userThemePref");
+                const prefs = raw ? JSON.parse(raw) : {};
               if (prefs.theme_color && CSS_VARS_MAP[prefs.theme_color]) {
                 cssVars = CSS_VARS_MAP[prefs.theme_color];
                 usePersonal = true;
