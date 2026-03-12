@@ -126,9 +126,8 @@ export default function ImportTrialBalance() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // Use audit context for auto-binding
-  let auditCtx: any = null;
-  try { auditCtx = useAuditContext(); } catch {}
+  // Use audit context for auto-binding (always called, context is always available within AppLayout)
+  const auditCtx = useAuditContext();
 
   const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
   const contextEngagementId = auditCtx?.selectedEngagementId || "";
