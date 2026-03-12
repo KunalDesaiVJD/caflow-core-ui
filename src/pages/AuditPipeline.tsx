@@ -376,7 +376,6 @@ export default function AuditPipeline() {
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {STAGES.map(s => {
             const status = stageStatuses[String(s.num)] || "not_started";
-            const isActive = s.num === currentStage;
             const Icon = s.icon;
             return (
               <button
