@@ -165,18 +165,16 @@ export default function AuditIntelligence() {
 
   const handleStageClick = (stage: typeof STAGES[0]) => {
     if (!selectedEngagementId) {
+  const handleStageClick = async (stage: typeof STAGES[0]) => {
+    if (!selectedEngagementId) {
       toast.error("Please select an engagement first");
       return;
     }
-    // Stages rendered inside the pipeline view
-    const pipelineStages = [1, 2, 5, 6, 7, 8, 10];
-    if (pipelineStages.includes(stage.num)) {
-      // Update pipeline_stage so the pipeline opens to the correct stage
-      supabase.from("audit_engagements").update({ pipeline_stage: stage.num } as any).eq("id", selectedEngagementId);
-      navigate(`/audit/pipeline/${selectedEngagementId}`);
-    } else if (stage.path) {
-      navigate(stage.path);
-    }
+    await supabase
+      .from("audit_engagements")
+      .update({ pipeline_stage: stage.num } as any)
+      .eq("id", selectedEngagementId);
+    navigate(`/audit/pipeline/${selectedEngagementId}`);
   };
 
   // ─── Edit Engagement ───
