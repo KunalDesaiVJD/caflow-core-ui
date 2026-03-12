@@ -109,37 +109,75 @@ serve(async (req) => {
     // Get raw data with headers
     const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
 
-    // ─── Detect header row and column positions ───
+    // ─── Detect header row and column positions (multi-row header support) ───
     let dataStartRow = -1;
     const colMap = { opening: -1, txnDebit: -1, txnCredit: -1, closing: -1 };
     let detectedFormat = "unknown";
+    let particularsRow = -1;
 
+    // Step 1: Find the row where col A = "Particulars"
     for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
       const row = rawRows[r];
       if (!row) continue;
       const firstCell = String(row[0] || "").trim().toLowerCase();
-      
       if (firstCell === "particulars" || firstCell === "account name" || firstCell === "ledger name") {
-        // Scan this row for column headers
-        for (let c = 1; c < row.length; c++) {
-          const h = String(row[c] || "").toLowerCase().trim();
-          if (h.includes("opening")) colMap.opening = c;
-          else if (h.includes("debit") && !h.includes("credit")) colMap.txnDebit = c;
-          else if (h.includes("credit")) colMap.txnCredit = c;
-          else if (h.includes("closing")) colMap.closing = c;
-        }
-        
-        // Skip sub-header rows (e.g. currency row)
-        dataStartRow = r + 1;
-        // Check if next row is also a header (e.g. "₹" row)
-        if (dataStartRow < rawRows.length) {
-          const nextFirst = String(rawRows[dataStartRow]?.[0] || "").trim();
-          if (!nextFirst || nextFirst === "₹" || nextFirst.toLowerCase().includes("amount")) {
-            dataStartRow++;
-          }
-        }
+        particularsRow = r;
         break;
       }
+    }
+
+    if (particularsRow >= 0) {
+      // Step 2: Read up to 3 rows as a header block and combine text vertically per column
+      const headerRowCount = 3;
+      const maxCol = Math.max(...rawRows.slice(particularsRow, particularsRow + headerRowCount)
+        .filter(Boolean).map(r => r.length));
+
+      // Build combined header text for each column
+      const combinedHeaders: string[] = [];
+      for (let c = 0; c < maxCol; c++) {
+        const parts: string[] = [];
+        for (let hr = 0; hr < headerRowCount; hr++) {
+          const row = rawRows[particularsRow + hr];
+          if (!row) continue;
+          const cellText = String(row[c] || "").trim();
+          if (cellText) parts.push(cellText);
+        }
+        combinedHeaders[c] = parts.join(" ").toLowerCase();
+      }
+
+      console.log("[parse-tally-tb] Combined header text per column:", JSON.stringify(combinedHeaders));
+
+      // Step 3: Detect column positions from combined header text
+      for (let c = 1; c < combinedHeaders.length; c++) {
+        const h = combinedHeaders[c];
+        if (h.includes("opening") && colMap.opening < 0) colMap.opening = c;
+        else if (h.includes("debit") && !h.includes("credit") && colMap.txnDebit < 0) colMap.txnDebit = c;
+        else if (h.includes("credit") && colMap.txnCredit < 0) colMap.txnCredit = c;
+        else if (h.includes("closing") && colMap.closing < 0) colMap.closing = c;
+      }
+
+      // Step 4: Find first actual data row (skip all sub-header/currency rows after Particulars)
+      dataStartRow = particularsRow + 1;
+      while (dataStartRow < rawRows.length && dataStartRow < particularsRow + headerRowCount + 2) {
+        const row = rawRows[dataStartRow];
+        if (!row) { dataStartRow++; continue; }
+        const firstVal = String(row[0] || "").trim().toLowerCase();
+        // Skip empty rows, currency indicator rows, or sub-header rows
+        const isSubHeader = !firstVal || firstVal === "₹" || firstVal.includes("amount") ||
+          firstVal.includes("balance") || firstVal.includes("debit") || firstVal.includes("credit");
+        // Also check if this row has numeric data in column 1+ (indicating actual data)
+        const hasNumericData = row.slice(1).some((v: any) => {
+          if (v === null || v === undefined) return false;
+          return typeof v === "number" || /^[\d,.\-()\s]+$/.test(String(v).trim());
+        });
+        if (isSubHeader && !hasNumericData) {
+          dataStartRow++;
+        } else {
+          break;
+        }
+      }
+
+      console.log("[parse-tally-tb] Particulars row:", particularsRow, "Data starts at row:", dataStartRow, "colMap:", JSON.stringify(colMap));
     }
 
     // Determine format based on detected columns
