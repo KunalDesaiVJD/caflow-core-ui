@@ -460,6 +460,9 @@ export default function AuditPipeline() {
         ) : activeStage === 1 ? (
           /* STAGE 1 */
           <div className="max-w-4xl space-y-6">
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+              <ChevronRight size={14} className="rotate-180" /> Audit Dashboard
+            </Button>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-xl font-bold text-foreground">Engagement Setup & Audit Planning</h1>
