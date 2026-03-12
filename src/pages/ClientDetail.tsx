@@ -118,35 +118,40 @@ const ClientDetail = () => {
 
   async function loadAllData() {
     setLoading(true);
-    const [clientRes, findingsRes, profileRes, catRes, csRes, staffRes, wgRes, itrRes] = await Promise.all([
-      supabase.from("clients").select("*").eq("id", clientId!).single(),
-      supabase.from("scrutiny_findings").select("*").eq("client_id", clientId!),
-      supabase.from("client_profiles").select("banking_data, loan_data").eq("client_id", clientId!).limit(1),
-      supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("sort_order"),
-      supabase.from("client_services").select("*").eq("client_id", clientId!),
-      supabase.from("users").select("id, name").order("name"),
-      supabase.from("itr_work_groups").select("*").order("code"),
-      supabase.from("itr_profiles").select("*").eq("client_id", clientId!).limit(1),
-    ]);
+    try {
+      const [clientRes, findingsRes, profileRes, catRes, csRes, staffRes, wgRes, itrRes] = await Promise.all([
+        supabase.from("clients").select("*").eq("id", clientId!).single(),
+        supabase.from("scrutiny_findings").select("*").eq("client_id", clientId!).then(r => r).catch(() => ({ data: [] })),
+        supabase.from("client_profiles").select("banking_data, loan_data").eq("client_id", clientId!).limit(1),
+        supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("sort_order"),
+        supabase.from("client_services").select("*").eq("client_id", clientId!),
+        supabase.from("users").select("id, name").order("name"),
+        supabase.from("itr_work_groups").select("*").order("code").then(r => r).catch(() => ({ data: [] })),
+        supabase.from("itr_profiles").select("*").eq("client_id", clientId!).limit(1).then(r => r).catch(() => ({ data: [] })),
+      ]);
 
-    const c = clientRes.data as Client | null;
-    setClient(c);
-    setFindings(findingsRes.data || []);
-    if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
-    setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
-    setClientServices((csRes.data || []) as any as ClientService[]);
-    setStaffList((staffRes.data || []) as any[]);
-    setItrWorkGroups(wgRes.data || []);
-    setClientItrProfile(itrRes.data?.[0] || null);
+      const c = clientRes.data as Client | null;
+      setClient(c);
+      setFindings((findingsRes as any).data || []);
+      if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
+      setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
+      setClientServices((csRes.data || []) as any as ClientService[]);
+      setStaffList((staffRes.data || []) as any[]);
+      setItrWorkGroups((wgRes as any).data || []);
+      setClientItrProfile((itrRes as any).data?.[0] || null);
 
-    if (c) {
-      setAuditForm({
-        statutory_audit_applicable: c.statutory_audit_applicable || false,
-        tax_audit_type: c.tax_audit_type || "",
-        caro_applicable: c.caro_applicable || false,
-        internal_audit_applicable: c.internal_audit_applicable || false,
-        stock_audit_applicable: c.stock_audit_applicable || false,
-      });
+      if (c) {
+        setAuditForm({
+          statutory_audit_applicable: c.statutory_audit_applicable || false,
+          tax_audit_type: c.tax_audit_type || "",
+          caro_applicable: c.caro_applicable || false,
+          internal_audit_applicable: c.internal_audit_applicable || false,
+          stock_audit_applicable: c.stock_audit_applicable || false,
+        });
+      }
+    } catch (e: any) {
+      console.error("Error loading client data:", e);
+      toast({ title: "Error loading client data", description: e?.message, variant: "destructive" });
     }
     setLoading(false);
   }
