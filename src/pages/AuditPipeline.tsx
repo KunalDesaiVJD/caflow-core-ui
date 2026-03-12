@@ -199,9 +199,6 @@ export default function AuditPipeline() {
       const stageNum = parseInt(sp, 10);
       if (stageNum >= 1 && stageNum <= 10) {
         setActiveStage(stageNum);
-        // Clear the param so it doesn't stick on refresh
-        searchParams.delete("stage");
-        setSearchParams(searchParams, { replace: true });
         return;
       }
     }

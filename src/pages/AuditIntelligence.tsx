@@ -548,7 +548,7 @@ export default function AuditIntelligence() {
                         .from("audit_engagements")
                         .update({ pipeline_stage: action.stage } as any)
                         .eq("id", selectedEngagementId);
-                      navigate(`/audit/pipeline/${selectedEngagementId}`);
+                      navigate(`/audit/pipeline/${selectedEngagementId}?stage=${action.stage}`);
                     }}
                   >
                     <action.icon size={14} className="shrink-0 text-primary" />
