@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useAuditTracker } from "@/hooks/useAuditTracker";
+import { useAuditContext } from "@/hooks/useAuditContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,11 +42,16 @@ type Finding = {
 };
 
 export default function AuditScrutiny() {
-  const { clientId } = useParams<{ clientId: string }>();
+  const { clientId: routeClientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
   const { track } = useAuditTracker();
+
+  // Auto-bind from audit context if no route clientId
+  const auditCtx = useAuditContext();
+  const contextClientId = auditCtx?.selectedEngagement?.client_id || "";
+  const clientId = routeClientId || contextClientId;
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
