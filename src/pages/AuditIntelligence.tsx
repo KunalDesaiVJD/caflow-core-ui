@@ -49,12 +49,12 @@ const STAGES = [
 ];
 
 const QUICK_ACTIONS = [
-  { label: "Import Trial Balance", icon: Upload, path: "/audit/import" },
-  { label: "Scrutiny Dashboard", icon: Search, path: "/audit/scrutiny" },
-  { label: "Raise Client Query", icon: MessageSquare, path: "/audit/queries" },
-  { label: "Upload Workpaper", icon: FileUp, path: "/audit/risk" },
-  { label: "Notes to Accounts", icon: BookMarked, path: "/audit/notes" },
-  { label: "Generate Report", icon: FileOutput, path: "/audit/report" },
+  { label: "Import Trial Balance", icon: Upload, stage: 2 },
+  { label: "Scrutiny Engine", icon: Search, stage: 4 },
+  { label: "Client Queries", icon: MessageSquare, stage: 5 },
+  { label: "Workpapers & Risk", icon: FileUp, stage: 6 },
+  { label: "Notes to Accounts", icon: BookMarked, stage: 7 },
+  { label: "Generate Report", icon: FileOutput, stage: 9 },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
