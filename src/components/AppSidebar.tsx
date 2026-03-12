@@ -61,11 +61,12 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { can } = usePermissions();
+  const auditCtx = useAuditContext();
+  const selectedEngId = auditCtx?.selectedEngagementId || "";
   const [firmLogo, setFirmLogo] = useState<string | null>(null);
   const [firmDisplayName, setFirmDisplayName] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
   const [utilitiesOpen, setUtilitiesOpen] = useState(false);
-  const [queriesOpen, setQueriesOpen] = useState(false);
 
   useEffect(() => {
     if (location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings" || location.pathname === "/depreciation") {
