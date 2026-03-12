@@ -92,10 +92,19 @@ export default function AuditPipeline() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { engagementId: routeEngId } = useParams<{ engagementId?: string }>();
+  const auditCtx = useAuditContext();
+  const contextEngId = auditCtx?.selectedEngagementId || "";
 
-  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || "");
+  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Sync from audit context when it changes
+  useEffect(() => {
+    if (contextEngId && !routeEngId && !selectedEngId) {
+      setSelectedEngId(contextEngId);
+    }
+  }, [contextEngId]);
 
   // ─── Engagement list ───
   const { data: engagements } = useQuery({
