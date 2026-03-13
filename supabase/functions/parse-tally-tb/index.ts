@@ -481,13 +481,29 @@ serve(async (req) => {
     const nodes: HierarchyNode[] = [];
     const parentStack: { level: number; nodeId: string; name: string }[] = [];
     const childCounterByParent = new Map<string, number>();
-    const groupRegistry = new Map<string, HierarchyNode>();
+    const nodeRegistry = new Map<string, HierarchyNode>();
     const hasIndentSignals = dataRows.some((r) => r.indent > 0);
+    let prevWasGroup = false;
+    let prevGroupLevel = 1;
 
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
-      const fallbackLevel = row.hasAmounts ? 4 : row.bold ? 1 : row.italic ? 3 : 2;
-      const level = Math.max(1, hasIndentSignals ? row.indent + 1 : fallbackLevel);
+      const normalizedName = normalizeGroupName(row.name);
+      const knownGroupByName = KNOWN_GROUP_NAMES.has(normalizedName);
+      const rowLooksGroup = !row.isLedger || (!hasIndentSignals && knownGroupByName);
+
+      let level = 1;
+      if (hasIndentSignals) {
+        level = Math.max(1, row.indent + 1);
+      } else if (row.bold) {
+        level = 1;
+      } else if (row.italic) {
+        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 3;
+      } else if (rowLooksGroup) {
+        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 1;
+      } else {
+        level = prevWasGroup ? Math.max(prevGroupLevel + 1, 2) : 4;
+      }
 
       // Maintain parent stack by computed level
       while (parentStack.length >= level) {
@@ -495,12 +511,27 @@ serve(async (req) => {
       }
 
       const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
-      const isLeaf = row.hasAmounts;
 
-      let node: HierarchyNode | null = null;
-      if (!isLeaf) {
-        const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
-        node = groupRegistry.get(dedupeKey) || null;
+      // Skip duplicate echo rows where child group name repeats the parent name (e.g. & vs and)
+      if (rowLooksGroup && parentNode && normalizeGroupName(parentNode.name) === normalizedName) {
+        prevWasGroup = true;
+        prevGroupLevel = level;
+        continue;
+      }
+
+      const isLeaf = !rowLooksGroup;
+      const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizedName}::${isLeaf ? "leaf" : "group"}`;
+      let node = nodeRegistry.get(dedupeKey) || null;
+
+      if (node && isLeaf) {
+        const sameBalances =
+          Math.abs((node.opening || 0) - row.opening) < 0.01 &&
+          Math.abs((node.txnDebit || 0) - row.txnDebit) < 0.01 &&
+          Math.abs((node.txnCredit || 0) - row.txnCredit) < 0.01 &&
+          Math.abs((node.closing || 0) - row.closing) < 0.01;
+        if (!sameBalances) {
+          node = null;
+        }
       }
 
       if (!node) {
@@ -533,15 +564,15 @@ serve(async (req) => {
         };
 
         nodes.push(node);
-
-        if (!isLeaf) {
-          const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
-          groupRegistry.set(dedupeKey, node);
-        }
+        nodeRegistry.set(dedupeKey, node);
       }
 
       if (!node.isLeaf) {
-        parentStack.push({ level, nodeId: node.nodeId, name: node.name });
+        parentStack.push({ level: node.level, nodeId: node.nodeId, name: node.name });
+        prevWasGroup = true;
+        prevGroupLevel = node.level;
+      } else {
+        prevWasGroup = false;
       }
     }
 
