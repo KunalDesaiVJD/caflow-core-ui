@@ -160,12 +160,19 @@ interface TbHierarchyNode {
 }
 
 const formatTbNumber = (value: number) =>
-  value ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  Math.abs(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const splitDrCr = (value: number) =>
+  value >= 0
+    ? { dr: value || 0, cr: 0 }
+    : { dr: 0, cr: Math.abs(value || 0) };
 
 function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
+  const opening = splitDrCr(node.opening || 0);
+  const closing = splitDrCr(node.closing || 0);
 
   return (
     <div>
@@ -180,10 +187,12 @@ function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHier
           className={cn("shrink-0 text-muted-foreground transition-transform", !open && hasChildren ? "-rotate-90" : "", !hasChildren ? "opacity-0" : "")}
         />
         <span className={cn("flex-1", node.isLeaf ? "text-foreground" : "font-semibold text-foreground")}>{node.name}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.opening)}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit)}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit)}</span>
-        <span className="w-28 text-right font-mono text-foreground">{formatTbNumber(node.closing)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.dr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.cr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit || 0)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit || 0)}</span>
+        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.dr)}</span>
+        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.cr)}</span>
       </button>
 
       {open && hasChildren && children.map((child) => (
