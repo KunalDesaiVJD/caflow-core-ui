@@ -146,6 +146,53 @@ function autoDetectLedgerMapping(headers: string[]): Record<string, string> {
   return mapping;
 }
 
+interface TbHierarchyNode {
+  nodeId: string;
+  parentNodeId: string | null;
+  name: string;
+  level: number;
+  isLeaf: boolean;
+  opening: number;
+  txnDebit: number;
+  txnCredit: number;
+  closing: number;
+  primaryGroup: string;
+}
+
+const formatTbNumber = (value: number) =>
+  value ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+
+function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
+  const [open, setOpen] = useState(node.level <= 2);
+  const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
+  const hasChildren = children.length > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => hasChildren && setOpen((prev) => !prev)}
+        className="flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40"
+        style={{ paddingLeft: `${(node.level - 1) * 16 + 10}px` }}
+      >
+        <ChevronDown
+          size={14}
+          className={cn("shrink-0 text-muted-foreground transition-transform", !open && hasChildren ? "-rotate-90" : "", !hasChildren ? "opacity-0" : "")}
+        />
+        <span className={cn("flex-1", node.isLeaf ? "text-foreground" : "font-semibold text-foreground")}>{node.name}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.opening)}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit)}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit)}</span>
+        <span className="w-28 text-right font-mono text-foreground">{formatTbNumber(node.closing)}</span>
+      </button>
+
+      {open && hasChildren && children.map((child) => (
+        <TbTreeRow key={child.nodeId} node={child} allNodes={allNodes} />
+      ))}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
