@@ -328,9 +328,10 @@ serve(async (req) => {
 
     console.log(`[parse-tally-tb] Detected format: ${detectedFormat}, isAmountDrCr: ${isAmountDrCrFormat}`);
 
-    // ─── Read cell indents from XLSX cell properties ───
+    // ─── Read cell indents/styles from XLSX cell properties ───
     const indentMap: Record<number, number> = {};
     const boldMap: Record<number, boolean> = {};
+    const italicMap: Record<number, boolean> = {};
 
     if (!isCSV) {
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
@@ -341,6 +342,7 @@ serve(async (req) => {
           const style = cell.s as any;
           indentMap[r] = style?.alignment?.indent || 0;
           boldMap[r] = style?.font?.bold || false;
+          italicMap[r] = style?.font?.italic || false;
         }
       }
     }
