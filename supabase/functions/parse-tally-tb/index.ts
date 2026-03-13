@@ -57,15 +57,35 @@ function detectNormalBalance(primaryGroup: string): string {
 function parseNum(val: any): number {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
+
   let s = String(val).trim();
-  // Handle parentheses for negative
-  const isNeg = s.startsWith("(") && s.endsWith(")");
-  if (isNeg) s = s.slice(1, -1);
-  // Remove commas, spaces, Dr/Cr text
-  s = s.replace(/[,\s]/g, "").replace(/Cr|Dr/gi, "").trim();
+  const isNegByParens = s.startsWith("(") && s.endsWith(")");
+  if (isNegByParens) s = s.slice(1, -1);
+
+  s = s.replace(/[\s,\u00A0]/g, "").replace(/Cr|Dr|Credit|Debit/gi, "").trim();
   const n = parseFloat(s);
   if (isNaN(n)) return 0;
-  return isNeg ? -n : n;
+
+  const signed = isNegByParens ? -n : n;
+  return Object.is(signed, -0) ? 0 : signed;
+}
+
+/** Parse balance cell where Dr/Cr marker may be embedded in same cell text */
+function parseSignedBalance(val: any): number {
+  if (val === null || val === undefined || val === "") return 0;
+  if (typeof val === "number") return Object.is(val, -0) ? 0 : val;
+
+  const raw = String(val).trim();
+  if (!raw) return 0;
+
+  const hasCrMarker = /(^|\b)cr(\b|$)|credit/i.test(raw);
+  const hasDrMarker = /(^|\b)dr(\b|$)|debit/i.test(raw);
+  const parsed = parseNum(raw);
+
+  if (parsed === 0) return 0;
+  if (hasCrMarker && !hasDrMarker) return -Math.abs(parsed);
+  if (hasDrMarker && !hasCrMarker) return Math.abs(parsed);
+  return parsed;
 }
 
 function normalizeGroupName(name: string): string {
@@ -137,7 +157,16 @@ serve(async (req) => {
 
     // ─── Detect header row and column positions (multi-row header support) ───
     let dataStartRow = -1;
-    const colMap = { opening: -1, txnDebit: -1, txnCredit: -1, closing: -1 };
+    const colMap = {
+      opening: -1,
+      openingDebit: -1,
+      openingCredit: -1,
+      txnDebit: -1,
+      txnCredit: -1,
+      closing: -1,
+      closingDebit: -1,
+      closingCredit: -1,
+    };
     let detectedFormat = "unknown";
     let particularsRow = -1;
 
@@ -236,13 +265,26 @@ serve(async (req) => {
       // Step 3: Detect standard column positions from combined header text
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
-        if (h.includes("opening") && colMap.opening < 0) {
+        const hasOpening = h.includes("opening");
+        const hasClosing = h.includes("closing");
+        const debitHeader = isDebitHeader(h);
+        const creditHeader = isCreditHeader(h);
+
+        if (hasOpening && debitHeader && colMap.openingDebit < 0) {
+          colMap.openingDebit = c;
+        } else if (hasOpening && creditHeader && colMap.openingCredit < 0) {
+          colMap.openingCredit = c;
+        } else if (hasClosing && debitHeader && colMap.closingDebit < 0) {
+          colMap.closingDebit = c;
+        } else if (hasClosing && creditHeader && colMap.closingCredit < 0) {
+          colMap.closingCredit = c;
+        } else if (hasOpening && colMap.opening < 0) {
           colMap.opening = c;
-        } else if (h.includes("closing") && colMap.closing < 0) {
+        } else if (hasClosing && colMap.closing < 0) {
           colMap.closing = c;
-        } else if (isDebitHeader(h) && colMap.txnDebit < 0) {
+        } else if (!hasOpening && !hasClosing && debitHeader && colMap.txnDebit < 0) {
           colMap.txnDebit = c;
-        } else if (isCreditHeader(h) && colMap.txnCredit < 0) {
+        } else if (!hasOpening && !hasClosing && creditHeader && colMap.txnCredit < 0) {
           colMap.txnCredit = c;
         }
       }
@@ -296,9 +338,21 @@ serve(async (req) => {
     }
 
     // Determine format
-    const numCols = [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing].filter(c => c >= 0).length;
+    const detectedNumericColumns = [
+      colMap.opening,
+      colMap.openingDebit,
+      colMap.openingCredit,
+      colMap.txnDebit,
+      colMap.txnCredit,
+      colMap.closing,
+      colMap.closingDebit,
+      colMap.closingCredit,
+    ].filter((c) => c >= 0);
+    const numCols = detectedNumericColumns.length;
     if (isAmountDrCrFormat) {
       detectedFormat = "amount-drcr";
+    } else if (colMap.openingDebit >= 0 || colMap.openingCredit >= 0 || colMap.closingDebit >= 0 || colMap.closingCredit >= 0) {
+      detectedFormat = "dr-cr-split";
     } else if (numCols >= 4) {
       detectedFormat = "5-column";
     } else if (numCols === 3) {
@@ -454,26 +508,46 @@ serve(async (req) => {
         closing = opening + txnDebit - txnCredit;
 
         // If explicit opening/closing columns were also detected, trust them
-        if (colMap.opening >= 0) opening = parseNum(row[colMap.opening]);
-        if (colMap.closing >= 0) closing = parseNum(row[colMap.closing]);
+        if (colMap.opening >= 0) opening = parseSignedBalance(row[colMap.opening]);
+        if (colMap.closing >= 0) closing = parseSignedBalance(row[colMap.closing]);
 
         if (!hasDrCrMarker && amount !== 0) {
           opening = 0;
           closing = 0;
         }
       } else {
-        const openingCol = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
-        const closingCol = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
-        txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
-        txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
+        const openingDebitCol = colMap.openingDebit >= 0 ? Math.abs(parseNum(row[colMap.openingDebit])) : 0;
+        const openingCreditCol = colMap.openingCredit >= 0 ? Math.abs(parseNum(row[colMap.openingCredit])) : 0;
+        const closingDebitCol = colMap.closingDebit >= 0 ? Math.abs(parseNum(row[colMap.closingDebit])) : 0;
+        const closingCreditCol = colMap.closingCredit >= 0 ? Math.abs(parseNum(row[colMap.closingCredit])) : 0;
 
-        const hasNumericCells = [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
+        txnDebit = colMap.txnDebit >= 0 ? Math.abs(parseNum(row[colMap.txnDebit])) : 0;
+        txnCredit = colMap.txnCredit >= 0 ? Math.abs(parseNum(row[colMap.txnCredit])) : 0;
+
+        const hasSplitOpening = colMap.openingDebit >= 0 || colMap.openingCredit >= 0;
+        const hasSplitClosing = colMap.closingDebit >= 0 || colMap.closingCredit >= 0;
+
+        const hasNumericCells = [
+          colMap.opening,
+          colMap.openingDebit,
+          colMap.openingCredit,
+          colMap.txnDebit,
+          colMap.txnCredit,
+          colMap.closing,
+          colMap.closingDebit,
+          colMap.closingCredit,
+        ]
           .filter((c) => c >= 0)
           .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
-        // Requested formula for ledger rows
-        opening = colMap.opening >= 0 ? openingCol : (txnDebit - txnCredit);
-        closing = colMap.closing >= 0 ? closingCol : (opening + txnDebit - txnCredit);
+        // Internal signed balance convention: balance = debit - credit
+        opening = hasSplitOpening
+          ? openingDebitCol - openingCreditCol
+          : (colMap.opening >= 0 ? parseSignedBalance(row[colMap.opening]) : (txnDebit - txnCredit));
+
+        closing = hasSplitClosing
+          ? closingDebitCol - closingCreditCol
+          : (colMap.closing >= 0 ? parseSignedBalance(row[colMap.closing]) : (opening + txnDebit - txnCredit));
 
         isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || opening !== 0 || closing !== 0;
       }
@@ -504,40 +578,65 @@ serve(async (req) => {
 
     // ─── Build hierarchy tree (indentation-first, formatting-secondary) ───
     const nodes: HierarchyNode[] = [];
-    const parentStack: HierarchyNode[] = [];
     const childCounterByParent = new Map<string, number>();
     const groupRegistry = new Map<string, HierarchyNode>();
     const hasIndentSignals = dataRows.some((r) => r.indent > 0);
 
-    const dataRowsWithStructure = dataRows.map((row, index) => {
+    const EPSILON = 0.000001;
+    const hasNonZeroValue = (v: number) => Math.abs(v) > EPSILON;
+
+    type StructuredRow = TBRow & {
+      level: number;
+      isGroupHint: boolean;
+      normalizedName: string;
+      hasValues: boolean;
+    };
+
+    const indentValues = [...new Set(dataRows.map((r) => r.indent).filter((indent) => indent > 0))].sort((a, b) => a - b);
+    const indentLevelMap = new Map<number, number>();
+    indentValues.forEach((indent, idx) => {
+      indentLevelMap.set(indent, idx + 2); // indent 0 => level 1, first indented level => 2
+    });
+
+    const structuredRows: StructuredRow[] = [];
+
+    for (let index = 0; index < dataRows.length; index++) {
+      const row = dataRows[index];
       const normalizedName = normalizeGroupName(row.name);
       const knownGroupByName = KNOWN_GROUP_NAMES.has(normalizedName);
       const hasValues =
-        Math.abs(row.opening) > 0.000001 ||
-        Math.abs(row.txnDebit) > 0.000001 ||
-        Math.abs(row.txnCredit) > 0.000001 ||
-        Math.abs(row.closing) > 0.000001;
+        hasNonZeroValue(row.opening) ||
+        hasNonZeroValue(row.txnDebit) ||
+        hasNonZeroValue(row.txnCredit) ||
+        hasNonZeroValue(row.closing);
 
       const nextRow = dataRows.slice(index + 1).find((r) => !!r.name?.trim());
-      const nextIndent = nextRow ? nextRow.indent : row.indent;
+      const hasChildrenByIndent = !!nextRow && nextRow.indent > row.indent;
 
       let level = 1;
       let isGroupHint = false;
 
       if (hasIndentSignals) {
-        level = Math.max(1, row.indent + 1);
-        isGroupHint = !!nextRow && nextIndent > row.indent;
-        if (!hasValues) isGroupHint = true;
-        if (knownGroupByName) isGroupHint = true;
+        level = row.indent > 0 ? (indentLevelMap.get(row.indent) || row.indent + 1) : 1;
+        isGroupHint = hasChildrenByIndent || (!hasValues && !!nextRow) || (knownGroupByName && !hasValues);
+
+        const prev = structuredRows[structuredRows.length - 1];
+        if (prev && row.indent === prev.indent && prev.isGroupHint && isGroupHint) {
+          const formattingSuggestsChild = (prev.bold && !row.bold) || (!prev.italic && row.italic);
+          const primaryParentHint = KNOWN_GROUP_NAMES.has(prev.normalizedName) && !knownGroupByName;
+          if (formattingSuggestsChild || primaryParentHint) {
+            level = prev.level + 1;
+          }
+        }
       } else {
-        // Formatting fallback when indentation is unavailable
+        // Formatting fallback when indentation metadata is missing
         if (row.bold) {
           level = 1;
           isGroupHint = true;
         } else if (row.italic) {
           level = 3;
           isGroupHint = true;
-        } else if (!hasValues) {
+        } else if (!hasValues && !!nextRow) {
           level = 2;
           isGroupHint = true;
         } else {
@@ -545,25 +644,34 @@ serve(async (req) => {
           isGroupHint = false;
         }
 
-        if (knownGroupByName && !hasValues) {
+        if (hasChildrenByIndent || (knownGroupByName && !hasValues)) {
           isGroupHint = true;
         }
       }
 
-      return {
-        ...row,
-        level,
-        isGroupHint,
-        normalizedName,
-      };
-    });
-
-    for (const row of dataRowsWithStructure) {
-      while (parentStack.length >= row.level) {
-        parentStack.pop();
+      // Required rule: heading rows with zero values and children are groups
+      if (!isGroupHint && !hasValues && !!nextRow) {
+        isGroupHint = true;
       }
 
-      const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
+      structuredRows.push({
+        ...row,
+        level: Math.max(1, level),
+        isGroupHint,
+        normalizedName,
+        hasValues,
+      });
+    }
+
+    // Parent stack using computed levels (indentation primary)
+    const levelStack: HierarchyNode[] = [];
+
+    for (const row of structuredRows) {
+      while (levelStack.length >= row.level) {
+        levelStack.pop();
+      }
+
+      const parentNode = row.level > 1 ? (levelStack[row.level - 2] || null) : null;
 
       if (row.isGroupHint) {
         const groupKey = `${parentNode?.nodeId || "root"}::${row.normalizedName}`;
@@ -575,7 +683,7 @@ serve(async (req) => {
           childCounterByParent.set(parentKey, nextIndex);
 
           const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
-          const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+          const primaryGroup = parentNode ? parentNode.primaryGroup : row.name;
           const bsPlSide = detectBsPlSide(primaryGroup);
           const normalBal = detectNormalBalance(primaryGroup);
 
@@ -600,9 +708,12 @@ serve(async (req) => {
 
           nodes.push(groupNode);
           groupRegistry.set(groupKey, groupNode);
+        } else {
+          groupNode.level = Math.min(groupNode.level, row.level);
+          groupNode.rowNumber = Math.min(groupNode.rowNumber, row.rowNum);
         }
 
-        parentStack.push(groupNode);
+        levelStack[row.level - 1] = groupNode;
         continue;
       }
 
@@ -611,7 +722,7 @@ serve(async (req) => {
       childCounterByParent.set(parentKey, nextIndex);
 
       const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
-      const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+      const primaryGroup = parentNode ? parentNode.primaryGroup : row.name;
       const bsPlSide = detectBsPlSide(primaryGroup);
       const normalBal = detectNormalBalance(primaryGroup);
 
@@ -635,6 +746,7 @@ serve(async (req) => {
       };
 
       nodes.push(leafNode);
+      levelStack[row.level - 1] = leafNode;
     }
 
     // ─── Recursive group aggregation from child accounts ───

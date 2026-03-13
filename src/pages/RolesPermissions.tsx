@@ -72,7 +72,7 @@ const ROLE_COLORS: Record<string, string> = {
 const RolesPermissions = () => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { refresh: refreshCtx } = usePermissions();
+  const { refresh: refreshCtx, can, loading: permissionsLoading } = usePermissions();
   const [grid, setGrid] = useState<Record<string, Record<string, PermRow>>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -85,7 +85,8 @@ const RolesPermissions = () => {
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
   const isSuperadmin = user?.role === "superadmin";
   const firmId = isSuperadmin ? selectedFirmId : user?.firm_id;
-  const canEdit = isSuperadmin || user?.role === "firm_admin";
+  const canViewSettings = isSuperadmin || can("Settings", "can_view");
+  const canEdit = isSuperadmin || can("Settings", "can_edit");
 
   // Load firms for superadmin
   useEffect(() => {
@@ -97,7 +98,13 @@ const RolesPermissions = () => {
   }, [isSuperadmin]);
 
   useEffect(() => {
-    if (firmId) loadGrid();
+    if (!firmId) {
+      setGrid({});
+      setLoading(false);
+      setDirty(false);
+      return;
+    }
+    loadGrid();
   }, [firmId]);
 
   async function loadGrid() {
@@ -149,6 +156,7 @@ const RolesPermissions = () => {
 
     setGrid(g);
     setLastModified(lm);
+    setDirty(false);
     setLoading(false);
   }
 
