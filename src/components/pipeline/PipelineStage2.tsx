@@ -214,6 +214,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     totalAccounts: number; debitTotal: number; creditTotal: number;
     difference: number; isValid: boolean; preview: any[];
   } | null>(null);
+  const [tbHierarchyNodes, setTbHierarchyNodes] = useState<TbHierarchyNode[]>([]);
+  const [tbViewMode, setTbViewMode] = useState<"tree" | "flat">("tree");
   const [tbOverrideJustification, setTbOverrideJustification] = useState("");
   const [tbShowOverride, setTbShowOverride] = useState(false);
   const tbFileRef = useRef<HTMLInputElement>(null);
