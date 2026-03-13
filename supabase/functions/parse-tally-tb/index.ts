@@ -146,12 +146,18 @@ serve(async (req) => {
     let amountCol = -1;
     let drCrCol = -1;
 
-    // Step 1: Find the row where col A = "Particulars" or similar
+    // Step 1: Find the row where col A looks like account header
     for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
       const row = rawRows[r];
       if (!row) continue;
       const firstCell = String(row[0] || "").trim().toLowerCase();
-      if (firstCell === "particulars" || firstCell === "account name" || firstCell === "ledger name" || firstCell === "name") {
+      if (
+        firstCell === "particulars" ||
+        firstCell === "account name" ||
+        firstCell === "ledger name" ||
+        firstCell === "ledger" ||
+        firstCell === "name"
+      ) {
         particularsRow = r;
         break;
       }
@@ -191,6 +197,13 @@ serve(async (req) => {
       }
     }
 
+    const headerHasToken = (header: string, token: string) => new RegExp(`(^|\\b|\\s)${token}(\\b|\\s|$)`, "i").test(header);
+    const isDebitHeader = (header: string) =>
+      (header.includes("debit") || header.includes("debit amount") || headerHasToken(header, "dr")) &&
+      !(header.includes("credit") || headerHasToken(header, "cr"));
+    const isCreditHeader = (header: string) =>
+      (header.includes("credit") || header.includes("credit amount") || headerHasToken(header, "cr"));
+
     if (particularsRow >= 0) {
       // Step 2: Read up to 3 rows as a header block and combine text vertically per column
       const headerRowCount = 3;
@@ -223,10 +236,15 @@ serve(async (req) => {
       // Step 3: Detect standard column positions from combined header text
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
-        if (h.includes("opening") && colMap.opening < 0) colMap.opening = c;
-        else if (h.includes("debit") && !h.includes("credit") && colMap.txnDebit < 0) colMap.txnDebit = c;
-        else if (h.includes("credit") && colMap.txnCredit < 0) colMap.txnCredit = c;
-        else if (h.includes("closing") && colMap.closing < 0) colMap.closing = c;
+        if (h.includes("opening") && colMap.opening < 0) {
+          colMap.opening = c;
+        } else if (h.includes("closing") && colMap.closing < 0) {
+          colMap.closing = c;
+        } else if (isDebitHeader(h) && colMap.txnDebit < 0) {
+          colMap.txnDebit = c;
+        } else if (isCreditHeader(h) && colMap.txnCredit < 0) {
+          colMap.txnCredit = c;
+        }
       }
 
       // Step 4: Find first actual data row
