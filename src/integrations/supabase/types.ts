@@ -4060,6 +4060,15 @@ export type Database = {
     Functions: {
       current_user_firm_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
+      is_chat_conversation_admin: {
+        Args: { _conversation_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_chat_conversation_member: {
+        Args: { _conversation_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_same_firm_user: { Args: { _user_id: string }; Returns: boolean }
       is_superadmin: { Args: never; Returns: boolean }
       set_user_context: {
         Args: { p_user_id: string; p_user_name: string; p_user_role: string }
