@@ -412,7 +412,7 @@ export default function ImportTrialBalance() {
   const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parentNodeId), [hierarchyNodes]);
   const tagging = importStats?.tagging;
 
-  const fmtNum = (n: number | null) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  const fmtNum = (n: number | null) => Math.abs(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // If no client from context or route, show client selector
   if (!isValidUuid && !contextClientId) {
