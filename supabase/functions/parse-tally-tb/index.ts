@@ -397,8 +397,8 @@ serve(async (req) => {
 
       const nameLower = name.toLowerCase();
       // Skip total/grand total rows
-      if (nameLower === "total" || nameLower.includes("grand total") || nameLower === "closing balance" ||
-          nameLower.includes("opening balance") || nameLower === "difference in opening") {
+      if (/\bgrand\s*total\b/i.test(nameLower) || /^total\b/i.test(nameLower) ||
+          nameLower === "closing balance" || nameLower.includes("opening balance") || nameLower === "difference in opening") {
         skippedRows++;
         continue;
       }
