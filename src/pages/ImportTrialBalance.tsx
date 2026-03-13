@@ -364,8 +364,7 @@ export default function ImportTrialBalance() {
       setImportStats(data as ImportStats);
       setExistingImport(true);
       toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
-      // Reload existing TB data
-      loadExistingTB();
+      await Promise.all([loadExistingTB(), loadHierarchy()]);
     } catch (err: any) {
       setError(err.message);
       toast({ title: "Parse failed", description: err.message, variant: "destructive" });
