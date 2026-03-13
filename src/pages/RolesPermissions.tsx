@@ -156,6 +156,7 @@ const RolesPermissions = () => {
 
     setGrid(g);
     setLastModified(lm);
+    setDirty(false);
     setLoading(false);
   }
 
