@@ -62,6 +62,14 @@ function parseNum(val: any): number {
   return isNeg ? -n : n;
 }
 
+function normalizeGroupName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 interface TBRow {
   rowNum: number;
   name: string;
