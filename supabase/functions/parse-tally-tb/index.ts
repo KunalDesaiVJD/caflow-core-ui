@@ -659,6 +659,7 @@ serve(async (req) => {
           level: n.level,
           isLeaf: n.isLeaf,
           bold: n.bold,
+          italic: n.italic,
           indent: n.indent,
           opening: n.opening,
           txnDebit: n.txnDebit,
