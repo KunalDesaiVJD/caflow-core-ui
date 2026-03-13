@@ -93,17 +93,22 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
-  const fmtNum = (n: number) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  const fmtNum = (n: number) => Math.abs(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const splitDrCr = (n: number) => (n >= 0 ? { dr: n || 0, cr: 0 } : { dr: 0, cr: Math.abs(n || 0) });
+  const opening = splitDrCr(node.opening || 0);
+  const closing = splitDrCr(node.closing || 0);
 
   if (node.isLeaf) {
     return (
       <div className="flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded text-xs" style={{ paddingLeft: `${(node.level - 1) * 20 + 12}px` }}>
         <div className="w-4" />
         <span className="flex-1 text-foreground">{node.name}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.opening)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit)}</span>
-        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(node.closing)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.dr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.cr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit || 0)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit || 0)}</span>
+        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(closing.dr)}</span>
+        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(closing.cr)}</span>
       </div>
     );
   }
@@ -116,10 +121,12 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
           {hasChildren ? (open ? <ChevronDown size={14} className="text-muted-foreground shrink-0" /> : <ChevronRight size={14} className="text-muted-foreground shrink-0" />) : <div className="w-[14px]" />}
           <span className="flex-1 font-semibold text-muted-foreground">{node.name}</span>
           <Badge variant="outline" className="text-[10px] h-4">{node.bsPlSide}</Badge>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.opening)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.closing)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.dr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.cr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit || 0)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit || 0)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(closing.dr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(closing.cr)}</span>
         </div>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -405,7 +412,7 @@ export default function ImportTrialBalance() {
   const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parentNodeId), [hierarchyNodes]);
   const tagging = importStats?.tagging;
 
-  const fmtNum = (n: number | null) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  const fmtNum = (n: number | null) => Math.abs(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // If no client from context or route, show client selector
   if (!isValidUuid && !contextClientId) {
@@ -735,7 +742,9 @@ export default function ImportTrialBalance() {
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
                     <div className="w-4" /><span className="flex-1">Account / Group</span>
-                    <span className="w-24 text-right">Opening</span><span className="w-24 text-right">Txn Dr</span><span className="w-24 text-right">Txn Cr</span><span className="w-24 text-right">Closing</span>
+                    <span className="w-24 text-right">Opening DR</span><span className="w-24 text-right">Opening CR</span>
+                    <span className="w-24 text-right">TXN DR</span><span className="w-24 text-right">TXN CR</span>
+                    <span className="w-24 text-right">Closing DR</span><span className="w-24 text-right">Closing CR</span>
                   </div>
                   {rootNodes.length > 0 ? rootNodes.map(node => <TreeNode key={node.nodeId} node={node} allNodes={hierarchyNodes} />) : (
                     <div className="p-4 text-xs text-muted-foreground">No hierarchy nodes available for this import.</div>
@@ -747,22 +756,29 @@ export default function ImportTrialBalance() {
                     <TableHeader><TableRow>
                       <TableHead className="text-xs">Ledger Name</TableHead><TableHead className="text-xs">Primary Group</TableHead>
                       <TableHead className="text-xs">BS/PL</TableHead><TableHead className="text-xs">Dr/Cr</TableHead>
-                      <TableHead className="text-xs text-right">Opening</TableHead><TableHead className="text-xs text-right">Txn Dr</TableHead>
-                      <TableHead className="text-xs text-right">Txn Cr</TableHead><TableHead className="text-xs text-right">Closing</TableHead>
+                      <TableHead className="text-xs text-right">Opening DR</TableHead><TableHead className="text-xs text-right">Opening CR</TableHead>
+                      <TableHead className="text-xs text-right">TXN DR</TableHead><TableHead className="text-xs text-right">TXN CR</TableHead>
+                      <TableHead className="text-xs text-right">Closing DR</TableHead><TableHead className="text-xs text-right">Closing CR</TableHead>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {leafNodes.map(n => (
-                        <TableRow key={n.nodeId}>
-                          <TableCell className="text-xs">{n.name}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{n.primaryGroup}</TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{n.bsPlSide}</Badge></TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{n.normalBal}</Badge></TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.opening ? n.opening.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.txnDebit ? n.txnDebit.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.txnCredit ? n.txnCredit.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono font-medium">{n.closing ? n.closing.toLocaleString("en-IN") : "—"}</TableCell>
-                        </TableRow>
-                      ))}
+                      {leafNodes.map(n => {
+                        const opening = n.opening >= 0 ? { dr: n.opening || 0, cr: 0 } : { dr: 0, cr: Math.abs(n.opening || 0) };
+                        const closing = n.closing >= 0 ? { dr: n.closing || 0, cr: 0 } : { dr: 0, cr: Math.abs(n.closing || 0) };
+                        return (
+                          <TableRow key={n.nodeId}>
+                            <TableCell className="text-xs">{n.name}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{n.primaryGroup}</TableCell>
+                            <TableCell><Badge variant="outline" className="text-[10px]">{n.bsPlSide}</Badge></TableCell>
+                            <TableCell><Badge variant="outline" className="text-[10px]">{n.normalBal}</Badge></TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(opening.dr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(opening.cr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(n.txnDebit || 0)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(n.txnCredit || 0)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(closing.dr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(closing.cr)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

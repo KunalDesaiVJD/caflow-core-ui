@@ -146,12 +146,18 @@ serve(async (req) => {
     let amountCol = -1;
     let drCrCol = -1;
 
-    // Step 1: Find the row where col A = "Particulars" or similar
+    // Step 1: Find the row where col A looks like account header
     for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
       const row = rawRows[r];
       if (!row) continue;
       const firstCell = String(row[0] || "").trim().toLowerCase();
-      if (firstCell === "particulars" || firstCell === "account name" || firstCell === "ledger name" || firstCell === "name") {
+      if (
+        firstCell === "particulars" ||
+        firstCell === "account name" ||
+        firstCell === "ledger name" ||
+        firstCell === "ledger" ||
+        firstCell === "name"
+      ) {
         particularsRow = r;
         break;
       }
@@ -191,6 +197,13 @@ serve(async (req) => {
       }
     }
 
+    const headerHasToken = (header: string, token: string) => new RegExp(`(^|\\b|\\s)${token}(\\b|\\s|$)`, "i").test(header);
+    const isDebitHeader = (header: string) =>
+      (header.includes("debit") || header.includes("debit amount") || headerHasToken(header, "dr")) &&
+      !(header.includes("credit") || headerHasToken(header, "cr"));
+    const isCreditHeader = (header: string) =>
+      (header.includes("credit") || header.includes("credit amount") || headerHasToken(header, "cr"));
+
     if (particularsRow >= 0) {
       // Step 2: Read up to 3 rows as a header block and combine text vertically per column
       const headerRowCount = 3;
@@ -223,10 +236,15 @@ serve(async (req) => {
       // Step 3: Detect standard column positions from combined header text
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
-        if (h.includes("opening") && colMap.opening < 0) colMap.opening = c;
-        else if (h.includes("debit") && !h.includes("credit") && colMap.txnDebit < 0) colMap.txnDebit = c;
-        else if (h.includes("credit") && colMap.txnCredit < 0) colMap.txnCredit = c;
-        else if (h.includes("closing") && colMap.closing < 0) colMap.closing = c;
+        if (h.includes("opening") && colMap.opening < 0) {
+          colMap.opening = c;
+        } else if (h.includes("closing") && colMap.closing < 0) {
+          colMap.closing = c;
+        } else if (isDebitHeader(h) && colMap.txnDebit < 0) {
+          colMap.txnDebit = c;
+        } else if (isCreditHeader(h) && colMap.txnCredit < 0) {
+          colMap.txnCredit = c;
+        }
       }
 
       // Step 4: Find first actual data row
@@ -379,8 +397,8 @@ serve(async (req) => {
 
       const nameLower = name.toLowerCase();
       // Skip total/grand total rows
-      if (nameLower === "total" || nameLower.includes("grand total") || nameLower === "closing balance" ||
-          nameLower.includes("opening balance") || nameLower === "difference in opening") {
+      if (/\bgrand\s*total\b/i.test(nameLower) || /^total\b/i.test(nameLower) ||
+          nameLower === "closing balance" || nameLower.includes("opening balance") || nameLower === "difference in opening") {
         skippedRows++;
         continue;
       }
@@ -421,7 +439,7 @@ serve(async (req) => {
           txnCredit = Math.abs(amount);
           isLedger = true;
         } else if (amount === 0) {
-          // Allow zero-transaction ledger rows without Dr/Cr markers
+          // Allow zero-value rows to preserve hierarchy shape
           txnDebit = 0;
           txnCredit = 0;
           isLedger = true;
@@ -429,14 +447,19 @@ serve(async (req) => {
           // Non-zero amount without Dr/Cr is usually a group/subtotal row
           txnDebit = 0;
           txnCredit = 0;
-          opening = amount;
-          closing = amount;
           isLedger = false;
         }
 
-        if (hasDrCrMarker || amount === 0) {
-          opening = txnDebit - txnCredit;
-          closing = opening + txnDebit - txnCredit;
+        opening = txnDebit - txnCredit;
+        closing = opening + txnDebit - txnCredit;
+
+        // If explicit opening/closing columns were also detected, trust them
+        if (colMap.opening >= 0) opening = parseNum(row[colMap.opening]);
+        if (colMap.closing >= 0) closing = parseNum(row[colMap.closing]);
+
+        if (!hasDrCrMarker && amount !== 0) {
+          opening = 0;
+          closing = 0;
         }
       } else {
         const openingCol = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
@@ -448,9 +471,11 @@ serve(async (req) => {
           .filter((c) => c >= 0)
           .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
-        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || openingCol !== 0 || closingCol !== 0;
-        opening = txnDebit - txnCredit;
-        closing = opening + txnDebit - txnCredit;
+        // Requested formula for ledger rows
+        opening = colMap.opening >= 0 ? openingCol : (txnDebit - txnCredit);
+        closing = colMap.closing >= 0 ? closingCol : (opening + txnDebit - txnCredit);
+
+        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || opening !== 0 || closing !== 0;
       }
 
       // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
@@ -477,103 +502,139 @@ serve(async (req) => {
       );
     }
 
-    // ─── Build hierarchy tree (indentation-first, formatting fallback) ───
+    // ─── Build hierarchy tree (indentation-first, formatting-secondary) ───
     const nodes: HierarchyNode[] = [];
-    const parentStack: { level: number; nodeId: string; name: string }[] = [];
+    const parentStack: HierarchyNode[] = [];
     const childCounterByParent = new Map<string, number>();
-    const nodeRegistry = new Map<string, HierarchyNode>();
+    const groupRegistry = new Map<string, HierarchyNode>();
     const hasIndentSignals = dataRows.some((r) => r.indent > 0);
-    let prevWasGroup = false;
-    let prevGroupLevel = 1;
 
-    for (let i = 0; i < dataRows.length; i++) {
-      const row = dataRows[i];
+    const dataRowsWithStructure = dataRows.map((row, index) => {
       const normalizedName = normalizeGroupName(row.name);
       const knownGroupByName = KNOWN_GROUP_NAMES.has(normalizedName);
-      const rowLooksGroup = !row.isLedger || (!hasIndentSignals && knownGroupByName);
+      const hasValues =
+        Math.abs(row.opening) > 0.000001 ||
+        Math.abs(row.txnDebit) > 0.000001 ||
+        Math.abs(row.txnCredit) > 0.000001 ||
+        Math.abs(row.closing) > 0.000001;
+
+      const nextRow = dataRows.slice(index + 1).find((r) => !!r.name?.trim());
+      const nextIndent = nextRow ? nextRow.indent : row.indent;
 
       let level = 1;
+      let isGroupHint = false;
+
       if (hasIndentSignals) {
         level = Math.max(1, row.indent + 1);
-      } else if (row.bold) {
-        level = 1;
-      } else if (row.italic) {
-        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 3;
-      } else if (rowLooksGroup) {
-        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 1;
+        isGroupHint = !!nextRow && nextIndent > row.indent;
+        if (!hasValues) isGroupHint = true;
+        if (knownGroupByName) isGroupHint = true;
       } else {
-        level = prevWasGroup ? Math.max(prevGroupLevel + 1, 2) : 4;
+        // Formatting fallback when indentation is unavailable
+        if (row.bold) {
+          level = 1;
+          isGroupHint = true;
+        } else if (row.italic) {
+          level = 3;
+          isGroupHint = true;
+        } else if (!hasValues) {
+          level = 2;
+          isGroupHint = true;
+        } else {
+          level = 4;
+          isGroupHint = false;
+        }
+
+        if (knownGroupByName && !hasValues) {
+          isGroupHint = true;
+        }
       }
 
-      // Maintain parent stack by computed level
-      while (parentStack.length >= level) {
+      return {
+        ...row,
+        level,
+        isGroupHint,
+        normalizedName,
+      };
+    });
+
+    for (const row of dataRowsWithStructure) {
+      while (parentStack.length >= row.level) {
         parentStack.pop();
       }
 
       const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
 
-      // Skip duplicate echo rows where child group name repeats the parent name (e.g. & vs and)
-      if (rowLooksGroup && parentNode && normalizeGroupName(parentNode.name) === normalizedName) {
-        prevWasGroup = true;
-        prevGroupLevel = level;
+      if (row.isGroupHint) {
+        const groupKey = `${parentNode?.nodeId || "root"}::${row.normalizedName}`;
+        let groupNode = groupRegistry.get(groupKey) || null;
+
+        if (!groupNode) {
+          const parentKey = parentNode?.nodeId || "root";
+          const nextIndex = (childCounterByParent.get(parentKey) || 0) + 1;
+          childCounterByParent.set(parentKey, nextIndex);
+
+          const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
+          const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+          const bsPlSide = detectBsPlSide(primaryGroup);
+          const normalBal = detectNormalBalance(primaryGroup);
+
+          groupNode = {
+            nodeId,
+            parentNodeId: parentNode?.nodeId || null,
+            level: row.level,
+            name: row.name,
+            indent: row.indent,
+            bold: row.bold,
+            italic: row.italic,
+            isLeaf: false,
+            primaryGroup,
+            bsPlSide,
+            normalBal,
+            opening: 0,
+            txnDebit: 0,
+            txnCredit: 0,
+            closing: 0,
+            rowNumber: row.rowNum,
+          };
+
+          nodes.push(groupNode);
+          groupRegistry.set(groupKey, groupNode);
+        }
+
+        parentStack.push(groupNode);
         continue;
       }
 
-      const isLeaf = !rowLooksGroup;
-      const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizedName}::${isLeaf ? "leaf" : "group"}`;
-      let node = nodeRegistry.get(dedupeKey) || null;
+      const parentKey = parentNode?.nodeId || "root";
+      const nextIndex = (childCounterByParent.get(parentKey) || 0) + 1;
+      childCounterByParent.set(parentKey, nextIndex);
 
-      if (node && isLeaf) {
-        const sameBalances =
-          Math.abs((node.opening || 0) - row.opening) < 0.01 &&
-          Math.abs((node.txnDebit || 0) - row.txnDebit) < 0.01 &&
-          Math.abs((node.txnCredit || 0) - row.txnCredit) < 0.01 &&
-          Math.abs((node.closing || 0) - row.closing) < 0.01;
-        if (!sameBalances) {
-          node = null;
-        }
-      }
+      const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
+      const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+      const bsPlSide = detectBsPlSide(primaryGroup);
+      const normalBal = detectNormalBalance(primaryGroup);
 
-      if (!node) {
-        const parentKey = parentNode?.nodeId || "root";
-        const nextIndex = (childCounterByParent.get(parentKey) || 0) + 1;
-        childCounterByParent.set(parentKey, nextIndex);
+      const leafNode: HierarchyNode = {
+        nodeId,
+        parentNodeId: parentNode?.nodeId || null,
+        level: row.level,
+        name: row.name,
+        indent: row.indent,
+        bold: row.bold,
+        italic: row.italic,
+        isLeaf: true,
+        primaryGroup,
+        bsPlSide,
+        normalBal,
+        opening: row.opening,
+        txnDebit: row.txnDebit,
+        txnCredit: row.txnCredit,
+        closing: row.closing,
+        rowNumber: row.rowNum,
+      };
 
-        const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
-        const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
-        const bsPlSide = detectBsPlSide(primaryGroup);
-        const normalBal = detectNormalBalance(primaryGroup);
-
-        node = {
-          nodeId,
-          parentNodeId: parentNode?.nodeId || null,
-          level,
-          name: row.name,
-          indent: row.indent,
-          bold: row.bold,
-          italic: row.italic,
-          isLeaf,
-          primaryGroup,
-          bsPlSide,
-          normalBal,
-          opening: row.opening,
-          txnDebit: row.txnDebit,
-          txnCredit: row.txnCredit,
-          closing: row.closing,
-          rowNumber: row.rowNum,
-        };
-
-        nodes.push(node);
-        nodeRegistry.set(dedupeKey, node);
-      }
-
-      if (!node.isLeaf) {
-        parentStack.push({ level: node.level, nodeId: node.nodeId, name: node.name });
-        prevWasGroup = true;
-        prevGroupLevel = node.level;
-      } else {
-        prevWasGroup = false;
-      }
+      nodes.push(leafNode);
     }
 
     // ─── Recursive group aggregation from child accounts ───

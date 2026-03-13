@@ -160,12 +160,19 @@ interface TbHierarchyNode {
 }
 
 const formatTbNumber = (value: number) =>
-  value ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  Math.abs(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const splitDrCr = (value: number) =>
+  value >= 0
+    ? { dr: value || 0, cr: 0 }
+    : { dr: 0, cr: Math.abs(value || 0) };
 
 function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
+  const opening = splitDrCr(node.opening || 0);
+  const closing = splitDrCr(node.closing || 0);
 
   return (
     <div>
@@ -180,10 +187,12 @@ function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHier
           className={cn("shrink-0 text-muted-foreground transition-transform", !open && hasChildren ? "-rotate-90" : "", !hasChildren ? "opacity-0" : "")}
         />
         <span className={cn("flex-1", node.isLeaf ? "text-foreground" : "font-semibold text-foreground")}>{node.name}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.opening)}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit)}</span>
-        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit)}</span>
-        <span className="w-28 text-right font-mono text-foreground">{formatTbNumber(node.closing)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.dr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.cr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit || 0)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit || 0)}</span>
+        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.dr)}</span>
+        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.cr)}</span>
       </button>
 
       {open && hasChildren && children.map((child) => (
@@ -1125,10 +1134,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       {/* Header row */}
                       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
                         <span className="flex-1 pl-6">Account / Group</span>
-                        <span className="w-28 text-right">Opening</span>
-                        <span className="w-28 text-right">Txn Debit</span>
-                        <span className="w-28 text-right">Txn Credit</span>
-                        <span className="w-28 text-right">Closing</span>
+                        <span className="w-24 text-right">Opening DR</span>
+                        <span className="w-24 text-right">Opening CR</span>
+                        <span className="w-24 text-right">TXN DR</span>
+                        <span className="w-24 text-right">TXN CR</span>
+                        <span className="w-24 text-right">Closing DR</span>
+                        <span className="w-24 text-right">Closing CR</span>
                       </div>
                       {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
                         .filter((n) => n.parentNodeId === null || n.level === 1)
