@@ -238,6 +238,43 @@ export default function ImportTrialBalance() {
     setLoadingExisting(false);
   };
 
+  async function loadHierarchy() {
+    if (!engagementId) {
+      setHierarchyNodes([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("tb_hierarchy_nodes")
+      .select("node_id, parent_node_id, tally_group_name, level, is_leaf, is_bold, indent_value, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side, normal_balance")
+      .eq("engagement_id", engagementId)
+      .order("row_number", { ascending: true });
+
+    if (error) {
+      setHierarchyNodes([]);
+      return;
+    }
+
+    const mapped: HierarchyNode[] = (data || []).map((row: any) => ({
+      nodeId: row.node_id,
+      parentNodeId: row.parent_node_id,
+      name: row.tally_group_name,
+      level: row.level || 1,
+      isLeaf: !!row.is_leaf,
+      bold: !!row.is_bold,
+      indent: row.indent_value || 0,
+      opening: row.opening_balance || 0,
+      txnDebit: row.txn_debit || 0,
+      txnCredit: row.txn_credit || 0,
+      closing: row.closing_balance || 0,
+      primaryGroup: row.primary_group || row.tally_group_name,
+      bsPlSide: row.bs_pl_side || "Unknown",
+      normalBal: row.normal_balance || "Unknown",
+    }));
+
+    setHierarchyNodes(mapped);
+  }
+
   const handleDeleteTB = async () => {
     if (!engagementId) return;
     setFormSaving(true);
