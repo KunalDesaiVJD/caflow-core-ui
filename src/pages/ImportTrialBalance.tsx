@@ -93,17 +93,22 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
-  const fmtNum = (n: number) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+  const fmtNum = (n: number) => Math.abs(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const splitDrCr = (n: number) => (n >= 0 ? { dr: n || 0, cr: 0 } : { dr: 0, cr: Math.abs(n || 0) });
+  const opening = splitDrCr(node.opening || 0);
+  const closing = splitDrCr(node.closing || 0);
 
   if (node.isLeaf) {
     return (
       <div className="flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded text-xs" style={{ paddingLeft: `${(node.level - 1) * 20 + 12}px` }}>
         <div className="w-4" />
         <span className="flex-1 text-foreground">{node.name}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.opening)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit)}</span>
-        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(node.closing)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.dr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.cr)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit || 0)}</span>
+        <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit || 0)}</span>
+        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(closing.dr)}</span>
+        <span className="w-24 text-right font-mono font-medium text-foreground">{fmtNum(closing.cr)}</span>
       </div>
     );
   }
@@ -116,10 +121,12 @@ function TreeNode({ node, allNodes }: { node: HierarchyNode; allNodes: Hierarchy
           {hasChildren ? (open ? <ChevronDown size={14} className="text-muted-foreground shrink-0" /> : <ChevronRight size={14} className="text-muted-foreground shrink-0" />) : <div className="w-[14px]" />}
           <span className="flex-1 font-semibold text-muted-foreground">{node.name}</span>
           <Badge variant="outline" className="text-[10px] h-4">{node.bsPlSide}</Badge>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.opening)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit)}</span>
-          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.closing)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.dr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(opening.cr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnDebit || 0)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(node.txnCredit || 0)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(closing.dr)}</span>
+          <span className="w-24 text-right font-mono text-muted-foreground">{fmtNum(closing.cr)}</span>
         </div>
       </CollapsibleTrigger>
       <CollapsibleContent>
