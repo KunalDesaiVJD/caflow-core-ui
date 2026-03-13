@@ -277,6 +277,36 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     enabled: !!engagementId,
   });
 
+  // ─── Flagged transactions ───
+  const { data: flaggedTransactions } = useQuery({
+    queryKey: ["flagged-transactions", engagementId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("ledger_transactions")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .eq("scrutiny_flag", true)
+        .order("date")
+        .limit(200);
+      return data || [];
+    },
+    enabled: !!engagementId && showFlagged,
+  });
+
+  // ─── Ledger import batches ───
+  const { data: ledgerBatches } = useQuery({
+    queryKey: ["ledger-batches", engagementId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("ledger_import_batches")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .order("imported_at", { ascending: false });
+      return data || [];
+    },
+    enabled: !!engagementId,
+  });
+
   // Load existing TB result if available
   useEffect(() => {
     if (storedTbHierarchy.length > 0) {
