@@ -371,6 +371,7 @@ serve(async (req) => {
 
       const indent = isCSV ? 0 : (indentMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
+      const italic = isCSV ? false : (italicMap[r] || false);
 
       // If indent not available from styles, try to detect from leading spaces
       let effectiveIndent = indent;
@@ -380,7 +381,14 @@ serve(async (req) => {
         effectiveIndent = Math.floor(leadingSpaces / 3);
       }
 
-      let opening = 0, txnDebit = 0, txnCredit = 0, closing = 0;
+      let txnDebit = 0;
+      let txnCredit = 0;
+
+      const hasAmountCells = isAmountDrCrFormat
+        ? row[amountCol] !== null && row[amountCol] !== undefined && String(row[amountCol]).trim() !== ""
+        : [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
+            .filter((c) => c >= 0)
+            .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
       if (isAmountDrCrFormat) {
         // Amount + Dr/Cr format
@@ -398,17 +406,28 @@ serve(async (req) => {
           txnDebit = 0;
           txnCredit = 0;
         }
-        closing = amount; // Store original amount as closing
       } else {
-        opening = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
         txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
         txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
-        closing = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
       }
 
-      // IMPORTANT: Do NOT skip rows where both debit and credit are zero
-      // These are valid accounts with no transactions
-      dataRows.push({ rowNum: r, name, indent: effectiveIndent, bold, opening, txnDebit, txnCredit, closing });
+      // Restore opening + closing columns from imported debit/credit values
+      const opening = txnDebit - txnCredit;
+      const closing = opening + txnDebit - txnCredit;
+
+      // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
+      dataRows.push({
+        rowNum: r,
+        name,
+        indent: effectiveIndent,
+        bold,
+        italic,
+        hasAmounts: hasAmountCells,
+        opening,
+        txnDebit,
+        txnCredit,
+        closing,
+      });
     }
 
     console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows: ${dataRows.length}, Skipped: ${skippedRows}`);
