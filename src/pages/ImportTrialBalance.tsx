@@ -756,22 +756,29 @@ export default function ImportTrialBalance() {
                     <TableHeader><TableRow>
                       <TableHead className="text-xs">Ledger Name</TableHead><TableHead className="text-xs">Primary Group</TableHead>
                       <TableHead className="text-xs">BS/PL</TableHead><TableHead className="text-xs">Dr/Cr</TableHead>
-                      <TableHead className="text-xs text-right">Opening</TableHead><TableHead className="text-xs text-right">Txn Dr</TableHead>
-                      <TableHead className="text-xs text-right">Txn Cr</TableHead><TableHead className="text-xs text-right">Closing</TableHead>
+                      <TableHead className="text-xs text-right">Opening DR</TableHead><TableHead className="text-xs text-right">Opening CR</TableHead>
+                      <TableHead className="text-xs text-right">TXN DR</TableHead><TableHead className="text-xs text-right">TXN CR</TableHead>
+                      <TableHead className="text-xs text-right">Closing DR</TableHead><TableHead className="text-xs text-right">Closing CR</TableHead>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {leafNodes.map(n => (
-                        <TableRow key={n.nodeId}>
-                          <TableCell className="text-xs">{n.name}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{n.primaryGroup}</TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{n.bsPlSide}</Badge></TableCell>
-                          <TableCell><Badge variant="outline" className="text-[10px]">{n.normalBal}</Badge></TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.opening ? n.opening.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.txnDebit ? n.txnDebit.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono">{n.txnCredit ? n.txnCredit.toLocaleString("en-IN") : "—"}</TableCell>
-                          <TableCell className="text-xs text-right font-mono font-medium">{n.closing ? n.closing.toLocaleString("en-IN") : "—"}</TableCell>
-                        </TableRow>
-                      ))}
+                      {leafNodes.map(n => {
+                        const opening = n.opening >= 0 ? { dr: n.opening || 0, cr: 0 } : { dr: 0, cr: Math.abs(n.opening || 0) };
+                        const closing = n.closing >= 0 ? { dr: n.closing || 0, cr: 0 } : { dr: 0, cr: Math.abs(n.closing || 0) };
+                        return (
+                          <TableRow key={n.nodeId}>
+                            <TableCell className="text-xs">{n.name}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{n.primaryGroup}</TableCell>
+                            <TableCell><Badge variant="outline" className="text-[10px]">{n.bsPlSide}</Badge></TableCell>
+                            <TableCell><Badge variant="outline" className="text-[10px]">{n.normalBal}</Badge></TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(opening.dr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(opening.cr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(n.txnDebit || 0)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono">{fmtNum(n.txnCredit || 0)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(closing.dr)}</TableCell>
+                            <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(closing.cr)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
