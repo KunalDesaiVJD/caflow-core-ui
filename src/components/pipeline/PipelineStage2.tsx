@@ -240,46 +240,69 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async () => {
       const { data } = await supabase
         .from("trial_balance_snapshots")
-        .select("*")
+        .select("id, debit_total, credit_total, difference, validation_status, is_validated, normalised_data, ledger_name, txn_debit, txn_credit")
         .eq("engagement_id", engagementId)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       return data;
     },
     enabled: !!engagementId,
   });
 
-  // ─── Flagged transactions ───
-  const { data: flaggedTransactions } = useQuery({
-    queryKey: ["flagged-transactions", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("ledger_transactions")
-        .select("*")
+  const { data: storedTbHierarchy = [] } = useQuery({
+    queryKey: ["tb-hierarchy-nodes", engagementId],
+    queryFn: async (): Promise<TbHierarchyNode[]> => {
+      const { data, error } = await supabase
+        .from("tb_hierarchy_nodes")
+        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group")
         .eq("engagement_id", engagementId)
-        .eq("scrutiny_flag", true)
-        .order("date")
-        .limit(200);
-      return data || [];
-    },
-    enabled: !!engagementId && showFlagged,
-  });
+        .order("row_number", { ascending: true });
 
-  // ─── Ledger import batches ───
-  const { data: ledgerBatches } = useQuery({
-    queryKey: ["ledger-batches", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("ledger_import_batches")
-        .select("*")
-        .eq("engagement_id", engagementId)
-        .order("imported_at", { ascending: false });
-      return data || [];
+      if (error) throw error;
+
+      return (data || []).map((row: any) => ({
+        nodeId: row.node_id,
+        parentNodeId: row.parent_node_id,
+        name: row.tally_group_name,
+        level: row.level || 1,
+        isLeaf: !!row.is_leaf,
+        opening: row.opening_balance || 0,
+        txnDebit: row.txn_debit || 0,
+        txnCredit: row.txn_credit || 0,
+        closing: row.closing_balance || 0,
+        primaryGroup: row.primary_group || row.tally_group_name,
+      }));
     },
     enabled: !!engagementId,
   });
 
   // Load existing TB result if available
   useEffect(() => {
+    if (storedTbHierarchy.length > 0) {
+      const leafRows = storedTbHierarchy.filter((row) => row.isLeaf);
+      const debitTotal = leafRows.reduce((sum, row) => sum + (row.txnDebit || 0), 0);
+      const creditTotal = leafRows.reduce((sum, row) => sum + (row.txnCredit || 0), 0);
+      const difference = Math.abs(debitTotal - creditTotal);
+
+      setTbHierarchyNodes(storedTbHierarchy);
+      setTbResult((prev) => prev || {
+        totalAccounts: leafRows.length,
+        debitTotal: Math.round(debitTotal * 100) / 100,
+        creditTotal: Math.round(creditTotal * 100) / 100,
+        difference: Math.round(difference * 100) / 100,
+        isValid: difference <= 1,
+        preview: leafRows.slice(0, 20).map((row) => ({
+          account_name: row.name,
+          account_group: row.primaryGroup,
+          debit: row.txnDebit,
+          credit: row.txnCredit,
+        })),
+      });
+      setTbStep((prev) => (prev < 5 ? 5 : prev));
+      return;
+    }
+
     if (existingTb && (existingTb as any).is_validated) {
       const tb = existingTb as any;
       setTbResult({
@@ -292,7 +315,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       });
       setTbStep(5);
     }
-  }, [existingTb]);
+  }, [existingTb, storedTbHierarchy]);
 
   // ─── Replace confirmation state ───
   const [showReplaceDialog, setShowReplaceDialog] = useState(false);
