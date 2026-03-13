@@ -496,16 +496,17 @@ const ClientDetail = () => {
                   <div className="space-y-2">
                     <p className="text-sm"><span className="text-muted-foreground">Current Group:</span> <span className="font-medium">{itrWorkGroups.find(g => g.id === clientItrProfile.itr_work_group_id)?.name || "Unassigned"}</span></p>
                     <Select
-                      value={clientItrProfile.itr_work_group_id || ""}
+                      value={clientItrProfile.itr_work_group_id || "__none__"}
                       onValueChange={async v => {
-                        await supabase.from("itr_profiles").update({ itr_work_group_id: v || null } as any).eq("id", clientItrProfile.id);
-                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: v || null }));
+                        const val = v === "__none__" ? null : v;
+                        await supabase.from("itr_profiles").update({ itr_work_group_id: val } as any).eq("id", clientItrProfile.id);
+                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: val }));
                         toast({ title: "Work group updated" });
                       }}
                     >
                       <SelectTrigger className="w-64"><SelectValue placeholder="Select work group" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">Unassigned</SelectItem>
+                        <SelectItem value="__none__">Unassigned</SelectItem>
                         {itrWorkGroups.map(g => <SelectItem key={g.id} value={g.id}>{g.code} — {g.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
