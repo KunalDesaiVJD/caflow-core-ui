@@ -401,8 +401,8 @@ export default function ImportTrialBalance() {
     }
   };
 
-  const leafNodes = useMemo(() => importStats?.hierarchy?.filter(n => n.isLeaf) || [], [importStats]);
-  const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
+  const leafNodes = useMemo(() => hierarchyNodes.filter(n => n.isLeaf), [hierarchyNodes]);
+  const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parentNodeId), [hierarchyNodes]);
   const tagging = importStats?.tagging;
 
   const fmtNum = (n: number | null) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
