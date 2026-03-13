@@ -47,12 +47,19 @@ function detectNormalBalance(primaryGroup: string): string {
   return "Unknown";
 }
 
+/** Parse Indian number format: 1,25,000 → 125000, (25,000) → -25000 */
 function parseNum(val: any): number {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
-  const s = String(val).replace(/[,\s]/g, "").replace(/\((.+)\)/, "-$1").replace(/Cr|Dr/gi, "").trim();
+  let s = String(val).trim();
+  // Handle parentheses for negative
+  const isNeg = s.startsWith("(") && s.endsWith(")");
+  if (isNeg) s = s.slice(1, -1);
+  // Remove commas, spaces, Dr/Cr text
+  s = s.replace(/[,\s]/g, "").replace(/Cr|Dr/gi, "").trim();
   const n = parseFloat(s);
-  return isNaN(n) ? 0 : n;
+  if (isNaN(n)) return 0;
+  return isNeg ? -n : n;
 }
 
 interface TBRow {
@@ -109,20 +116,61 @@ serve(async (req) => {
     // Get raw data with headers
     const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
 
+    console.log(`[parse-tally-tb] Total raw rows: ${rawRows.length}`);
+
     // ─── Detect header row and column positions (multi-row header support) ───
     let dataStartRow = -1;
     const colMap = { opening: -1, txnDebit: -1, txnCredit: -1, closing: -1 };
     let detectedFormat = "unknown";
     let particularsRow = -1;
 
-    // Step 1: Find the row where col A = "Particulars"
+    // === NEW: Detect Amount + Dr/Cr format ===
+    let isAmountDrCrFormat = false;
+    let amountCol = -1;
+    let drCrCol = -1;
+
+    // Step 1: Find the row where col A = "Particulars" or similar
     for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
       const row = rawRows[r];
       if (!row) continue;
       const firstCell = String(row[0] || "").trim().toLowerCase();
-      if (firstCell === "particulars" || firstCell === "account name" || firstCell === "ledger name") {
+      if (firstCell === "particulars" || firstCell === "account name" || firstCell === "ledger name" || firstCell === "name") {
         particularsRow = r;
         break;
+      }
+    }
+
+    // If no header found, scan for the first row that looks like data
+    if (particularsRow < 0) {
+      for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
+        const row = rawRows[r];
+        if (!row || !row[0]) continue;
+        const firstCell = String(row[0]).trim();
+        // Skip common non-data rows
+        const lower = firstCell.toLowerCase();
+        if (lower.includes("company") || lower.includes("trial balance") || lower.includes("period") ||
+            lower.includes("date") || lower.includes("from") || lower.includes("to") || lower === "") continue;
+        // Check if subsequent rows have data patterns (text + number)
+        let looksLikeData = false;
+        for (let checkR = r; checkR < Math.min(r + 5, rawRows.length); checkR++) {
+          const checkRow = rawRows[checkR];
+          if (!checkRow || !checkRow[0]) continue;
+          const hasText = typeof checkRow[0] === "string" && checkRow[0].trim().length > 0;
+          const hasNum = checkRow.slice(1).some((v: any) => typeof v === "number" || (typeof v === "string" && /[\d]/.test(v)));
+          if (hasText && hasNum) { looksLikeData = true; break; }
+        }
+        if (looksLikeData) {
+          // This row or one before it might be the header
+          // Check if current row is a header
+          const allText = row.every((c: any) => c === null || typeof c === "string");
+          if (allText) {
+            particularsRow = r;
+          } else {
+            // No header row, data starts directly
+            dataStartRow = r;
+          }
+          break;
+        }
       }
     }
 
@@ -147,7 +195,15 @@ serve(async (req) => {
 
       console.log("[parse-tally-tb] Combined header text per column:", JSON.stringify(combinedHeaders));
 
-      // Step 3: Detect column positions from combined header text
+      // === Check for Amount + Dr/Cr format ===
+      // Look for a column that says "amount" and another that says "dr/cr" or similar
+      for (let c = 1; c < combinedHeaders.length; c++) {
+        const h = combinedHeaders[c];
+        if ((h.includes("amount") || h.includes("balance")) && amountCol < 0) amountCol = c;
+        if ((h.includes("dr/cr") || h.includes("dr cr") || h === "dr" || h === "cr" || h.includes("type")) && drCrCol < 0) drCrCol = c;
+      }
+
+      // Step 3: Detect standard column positions from combined header text
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
         if (h.includes("opening") && colMap.opening < 0) colMap.opening = c;
@@ -156,16 +212,14 @@ serve(async (req) => {
         else if (h.includes("closing") && colMap.closing < 0) colMap.closing = c;
       }
 
-      // Step 4: Find first actual data row (skip all sub-header/currency rows after Particulars)
+      // Step 4: Find first actual data row
       dataStartRow = particularsRow + 1;
       while (dataStartRow < rawRows.length && dataStartRow < particularsRow + headerRowCount + 2) {
         const row = rawRows[dataStartRow];
         if (!row) { dataStartRow++; continue; }
         const firstVal = String(row[0] || "").trim().toLowerCase();
-        // Skip empty rows, currency indicator rows, or sub-header rows
         const isSubHeader = !firstVal || firstVal === "₹" || firstVal.includes("amount") ||
           firstVal.includes("balance") || firstVal.includes("debit") || firstVal.includes("credit");
-        // Also check if this row has numeric data in column 1+ (indicating actual data)
         const hasNumericData = row.slice(1).some((v: any) => {
           if (v === null || v === undefined) return false;
           return typeof v === "number" || /^[\d,.\-()\s]+$/.test(String(v).trim());
@@ -180,20 +234,59 @@ serve(async (req) => {
       console.log("[parse-tally-tb] Particulars row:", particularsRow, "Data starts at row:", dataStartRow, "colMap:", JSON.stringify(colMap));
     }
 
-    // Determine format based on detected columns
+    // === Auto-detect Amount+Dr/Cr from data if headers didn't reveal it ===
+    if (amountCol < 0 && colMap.txnDebit < 0 && colMap.txnCredit < 0 && dataStartRow >= 0) {
+      // Scan a few data rows: if col B is numeric and col C is "Dr"/"Cr", it's Amount+Dr/Cr
+      let drCrHits = 0;
+      const scanStart = dataStartRow >= 0 ? dataStartRow : 0;
+      for (let r = scanStart; r < Math.min(scanStart + 20, rawRows.length); r++) {
+        const row = rawRows[r];
+        if (!row || !row[0]) continue;
+        const colC = String(row[2] || "").trim().toLowerCase();
+        if (colC === "dr" || colC === "cr" || colC === "dr." || colC === "cr.") drCrHits++;
+        // Also check if col B is numeric-looking
+      }
+      if (drCrHits >= 3) {
+        isAmountDrCrFormat = true;
+        amountCol = 1;
+        drCrCol = 2;
+        console.log("[parse-tally-tb] Detected Amount + Dr/Cr format from data scan");
+      }
+    }
+
+    // If explicit Dr/Cr column header found
+    if (amountCol >= 0 && drCrCol >= 0 && colMap.txnDebit < 0 && colMap.txnCredit < 0) {
+      isAmountDrCrFormat = true;
+      console.log("[parse-tally-tb] Using Amount+Dr/Cr format: amountCol=", amountCol, "drCrCol=", drCrCol);
+    }
+
+    // Determine format
     const numCols = [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing].filter(c => c >= 0).length;
-    if (numCols >= 4) detectedFormat = "5-column";
-    else if (numCols === 3) detectedFormat = "4-column";
-    else if (numCols === 2) detectedFormat = "3-column";
-    
+    if (isAmountDrCrFormat) {
+      detectedFormat = "amount-drcr";
+    } else if (numCols >= 4) {
+      detectedFormat = "5-column";
+    } else if (numCols === 3) {
+      detectedFormat = "4-column";
+    } else if (numCols === 2) {
+      detectedFormat = "3-column";
+    }
+
     // Fallback column detection for common Tally layouts
     if (dataStartRow < 0) {
-      dataStartRow = 13; // Tally default: skip first 13 rows
+      dataStartRow = 0;
+      // Try to find first row with text in col A
+      for (let r = 0; r < rawRows.length; r++) {
+        const row = rawRows[r];
+        if (row && row[0] && String(row[0]).trim().length > 2) {
+          dataStartRow = r;
+          break;
+        }
+      }
     }
-    
-    // If columns not detected, use positional defaults
-    if (colMap.txnDebit < 0 && colMap.txnCredit < 0) {
-      // Try to count non-empty columns in data rows
+
+    // If columns still not detected and not Amount+Dr/Cr, use positional defaults
+    if (!isAmountDrCrFormat && colMap.txnDebit < 0 && colMap.txnCredit < 0) {
       const sampleRow = rawRows[dataStartRow];
       if (sampleRow) {
         const nonEmpty = sampleRow.filter((v: any) => v !== null && v !== undefined && String(v).trim() !== "").length;
@@ -203,6 +296,18 @@ serve(async (req) => {
         } else if (nonEmpty >= 4) {
           colMap.txnDebit = 1; colMap.txnCredit = 2; colMap.closing = 3;
           detectedFormat = "4-column";
+        } else if (nonEmpty >= 3) {
+          // Could be Amount + Dr/Cr — check col C values
+          const colCVal = String(sampleRow[2] || "").trim().toLowerCase();
+          if (colCVal === "dr" || colCVal === "cr" || colCVal === "dr." || colCVal === "cr.") {
+            isAmountDrCrFormat = true;
+            amountCol = 1;
+            drCrCol = 2;
+            detectedFormat = "amount-drcr";
+          } else {
+            colMap.txnDebit = 1; colMap.txnCredit = 2;
+            detectedFormat = "3-column";
+          }
         } else {
           colMap.txnDebit = 1; colMap.txnCredit = 2;
           detectedFormat = "3-column";
@@ -210,10 +315,12 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[parse-tally-tb] Detected format: ${detectedFormat}, isAmountDrCr: ${isAmountDrCrFormat}`);
+
     // ─── Read cell indents from XLSX cell properties ───
     const indentMap: Record<number, number> = {};
     const boldMap: Record<number, boolean> = {};
-    
+
     if (!isCSV) {
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
       for (let r = dataStartRow; r <= range.e.r; r++) {
@@ -229,13 +336,25 @@ serve(async (req) => {
 
     // ─── Parse data rows ───
     const dataRows: TBRow[] = [];
+    let skippedRows = 0;
+
     for (let r = dataStartRow; r < rawRows.length; r++) {
       const row = rawRows[r];
-      if (!row) continue;
-      const name = String(row[0] || "").trim();
-      if (!name) continue;
+      if (!row) { skippedRows++; continue; }
+
+      const rawNameCell = row[0];
+      const name = String(rawNameCell || "").trim();
+
+      // Skip rows with no account name
+      if (!name) { skippedRows++; continue; }
+
       const nameLower = name.toLowerCase();
-      if (nameLower.includes("grand total") || nameLower === "total" || nameLower.includes("closing balance")) continue;
+      // Skip total/grand total rows
+      if (nameLower === "total" || nameLower.includes("grand total") || nameLower === "closing balance" ||
+          nameLower.includes("opening balance") || nameLower === "difference in opening") {
+        skippedRows++;
+        continue;
+      }
 
       const indent = isCSV ? 0 : (indentMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
@@ -243,17 +362,49 @@ serve(async (req) => {
       // If indent not available from styles, try to detect from leading spaces
       let effectiveIndent = indent;
       if (effectiveIndent === 0 && !isCSV) {
-        const rawName = String(row[0] || "");
+        const rawName = String(rawNameCell || "");
         const leadingSpaces = rawName.length - rawName.trimStart().length;
-        effectiveIndent = Math.floor(leadingSpaces / 3); // 3 spaces per indent level
+        effectiveIndent = Math.floor(leadingSpaces / 3);
       }
 
-      const opening = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
-      const txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
-      const txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
-      const closing = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
+      let opening = 0, txnDebit = 0, txnCredit = 0, closing = 0;
 
+      if (isAmountDrCrFormat) {
+        // Amount + Dr/Cr format
+        const amount = parseNum(row[amountCol]);
+        const drCrVal = String(row[drCrCol] || "").trim().toLowerCase().replace(".", "");
+
+        if (drCrVal === "dr") {
+          txnDebit = Math.abs(amount);
+          txnCredit = 0;
+        } else if (drCrVal === "cr") {
+          txnDebit = 0;
+          txnCredit = Math.abs(amount);
+        } else {
+          // No Dr/Cr indicator — account with zero transactions
+          txnDebit = 0;
+          txnCredit = 0;
+        }
+        closing = amount; // Store original amount as closing
+      } else {
+        opening = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
+        txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
+        txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
+        closing = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
+      }
+
+      // IMPORTANT: Do NOT skip rows where both debit and credit are zero
+      // These are valid accounts with no transactions
       dataRows.push({ rowNum: r, name, indent: effectiveIndent, bold, opening, txnDebit, txnCredit, closing });
+    }
+
+    console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows: ${dataRows.length}, Skipped: ${skippedRows}`);
+
+    if (dataRows.length === 0) {
+      return new Response(
+        JSON.stringify({ success: false, error: `No valid rows found. Total rows scanned: ${rawRows.length}, all skipped. Data start row: ${dataStartRow}, format: ${detectedFormat}` }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // ─── Build hierarchy tree ───
@@ -303,6 +454,11 @@ serve(async (req) => {
       }
     }
 
+    const leafNodes = nodes.filter(n => n.isLeaf);
+    const groupNodes = nodes.filter(n => !n.isLeaf);
+
+    console.log(`[parse-tally-tb] Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}`);
+
     // ─── Save to database ───
     const batchId = crypto.randomUUID();
     await supabase.from("ledger_import_batches").insert({
@@ -312,7 +468,7 @@ serve(async (req) => {
       import_type: "trial_balance",
       status: "processing",
       total_rows: nodes.length,
-      leaf_rows: nodes.filter(n => n.isLeaf).length,
+      leaf_rows: leafNodes.length,
       original_filename: fileName,
     });
 
@@ -340,12 +496,11 @@ serve(async (req) => {
         primary_group: n.primaryGroup,
         row_number: n.rowNumber,
       }));
-      await supabase.from("tb_hierarchy_nodes").insert(batch);
+      const { error: insertErr } = await supabase.from("tb_hierarchy_nodes").insert(batch);
+      if (insertErr) console.error("[parse-tally-tb] Insert hierarchy error:", insertErr);
     }
 
     // Save leaf ledgers to trial_balance_snapshots
-    const leafNodes = nodes.filter(n => n.isLeaf);
-    
     // Delete old leaf snapshots for this engagement
     await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", engagementId);
 
@@ -367,7 +522,8 @@ serve(async (req) => {
         closing_balance: n.closing,
         financial_year: financialYear || null,
       }));
-      await supabase.from("trial_balance_snapshots").insert(batch);
+      const { error: insertErr } = await supabase.from("trial_balance_snapshots").insert(batch);
+      if (insertErr) console.error("[parse-tally-tb] Insert snapshots error:", insertErr);
     }
 
     await supabase.from("ledger_import_batches").update({
@@ -418,6 +574,9 @@ serve(async (req) => {
         isBalanced,
         detectedFormat,
         batchId,
+        rowsRead: rawRows.length,
+        groupsDetected: groupNodes.length,
+        rowsSkipped: skippedRows,
         tagging: taggingResult,
         hierarchy: nodes.map(n => ({
           nodeId: n.nodeId,

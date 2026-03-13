@@ -245,6 +245,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
   }, [existingTb]);
 
+  // ─── Replace confirmation state ───
+  const [showReplaceDialog, setShowReplaceDialog] = useState(false);
+  const [tbFileBase64, setTbFileBase64] = useState("");
+
+  // Check if Tally format that should go through edge function
+  const isTallyFormat = tbFormat === "tally_excel" || tbFormat === "tally_xml";
+
   // ═══════ TB IMPORT LOGIC ═══════
 
   const needsColumnMapping = tbFormat === "generic_excel" || tbFormat === "generic_csv";
@@ -258,21 +265,35 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     reader.onload = (evt) => {
       const data = evt.target?.result;
       try {
-        const wb = XLSX.read(data, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        setTbParsedData(jsonData);
+        if (isTallyFormat) {
+          // For Tally formats, store base64 for edge function
+          const arrayBuffer = data as ArrayBuffer;
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = "";
+          for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+          setTbFileBase64(btoa(binary));
+          // Also parse locally for row count preview
+          const wb = XLSX.read(data, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          setTbParsedData(jsonData);
+          setTbStep(4); // Go directly to process step
+        } else {
+          const wb = XLSX.read(data, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          setTbParsedData(jsonData);
 
-        if (jsonData.length > 0) {
-          const headerRow = jsonData[0].map((h: any) => String(h || "").trim()).filter(Boolean);
-          setTbHeaders(headerRow);
+          if (jsonData.length > 0) {
+            const headerRow = jsonData[0].map((h: any) => String(h || "").trim()).filter(Boolean);
+            setTbHeaders(headerRow);
 
-          // Auto-map for known formats
-          if (tbFormat === "generic_excel" || tbFormat === "generic_csv") {
-            setTbMapping(autoDetectMapping(headerRow));
+            if (tbFormat === "generic_excel" || tbFormat === "generic_csv") {
+              setTbMapping(autoDetectMapping(headerRow));
+            }
           }
+          setTbStep(needsColumnMapping ? 3 : 4);
         }
-        setTbStep(needsColumnMapping ? 3 : 4); // Skip mapper for known formats
       } catch (err) {
         toast.error("Failed to parse file");
       }
@@ -286,23 +307,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
     const parseNum = (v: any) => {
       if (v == null || v === "") return 0;
-      const s = String(v).replace(/,/g, "").replace(/Cr|Dr/gi, "").trim();
-      return parseFloat(s) || 0;
+      let s = String(v).trim();
+      const isNeg = s.startsWith("(") && s.endsWith(")");
+      if (isNeg) s = s.slice(1, -1);
+      s = s.replace(/,/g, "").replace(/Cr|Dr/gi, "").trim();
+      const n = parseFloat(s) || 0;
+      return isNeg ? -n : n;
     };
-
-    if (tbFormat === "tally_excel") {
-      // Known Tally columns
-      const nameIdx = headerRow.findIndex(h => normalize(h).includes("particulars"));
-      const drIdx = headerRow.findIndex(h => normalize(h).includes("debit"));
-      const crIdx = headerRow.findIndex(h => normalize(h).includes("credit"));
-      
-      return tbParsedData.slice(1).filter(row => row[nameIdx]).map(row => ({
-        account_name: String(row[nameIdx] || "").trim(),
-        debit: parseNum(row[drIdx]),
-        credit: parseNum(row[crIdx]),
-        account_group: "",
-      }));
-    }
 
     if (tbFormat === "expert_software_excel") {
       const codeIdx = headerRow.findIndex(h => normalize(h).includes("code"));
@@ -340,10 +351,56 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   }, [tbParsedData, tbFormat, tbMapping]);
 
   const handleTbProcess = async () => {
+    // Check for existing TB — show replace dialog
+    if (existingTb && !showReplaceDialog) {
+      setShowReplaceDialog(true);
+      return;
+    }
+    setShowReplaceDialog(false);
+
     setTbProcessing(true);
     setTbProgress(10);
 
     try {
+      if (isTallyFormat) {
+        // ─── Route through edge function for Tally formats ───
+        setTbProgress(20);
+        const { data, error: fnError } = await supabase.functions.invoke("parse-tally-tb", {
+          body: {
+            engagementId,
+            firmId: user?.firm_id || null,
+            fileBase64: tbFileBase64,
+            fileName: tbFile?.name,
+            financialYear: engagement.financial_year,
+          },
+        });
+
+        if (fnError) throw new Error(fnError.message || "Edge function error");
+        if (!data?.success) throw new Error(data?.error || "Parse failed");
+
+        setTbProgress(100);
+
+        setTbResult({
+          totalAccounts: data.leafLedgers,
+          debitTotal: Math.round(data.totalDr * 100) / 100,
+          creditTotal: Math.round(data.totalCr * 100) / 100,
+          difference: Math.round(Math.abs(data.totalDr - data.totalCr) * 100) / 100,
+          isValid: data.isBalanced,
+          preview: (data.hierarchy || []).filter((n: any) => n.isLeaf).slice(0, 20).map((n: any) => ({
+            account_name: n.name,
+            account_group: n.primaryGroup,
+            debit: n.txnDebit,
+            credit: n.txnCredit,
+          })),
+        });
+
+        setTbStep(5);
+        toast.success(`${data.leafLedgers} ledgers imported — ${data.detectedFormat} format detected. Groups: ${data.groupsDetected}, Skipped: ${data.rowsSkipped}`);
+        queryClient.invalidateQueries({ queryKey: ["tb-snapshot-for-engagement"] });
+        return;
+      }
+
+      // ─── Generic / Expert local parse flow ───
       const rows = parseTbRows();
       if (rows.length === 0) {
         toast.error("No valid rows found");
@@ -378,18 +435,9 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         processing_status: "complete",
       };
 
-      // Upsert
-      const { data: existing } = await supabase
-        .from("trial_balance_snapshots")
-        .select("id")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      if (existing) {
-        await supabase.from("trial_balance_snapshots").update(payload).eq("id", existing.id);
-      } else {
-        await supabase.from("trial_balance_snapshots").insert(payload);
-      }
+      // Upsert — delete old then insert
+      await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", engagementId);
+      await supabase.from("trial_balance_snapshots").insert(payload);
 
       setTbProgress(100);
 
@@ -677,7 +725,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">Stage 2 — Data Import</h1>
-          <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name} — FY {engagement.financial_year}</p>
+          <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
         </div>
         <div className="flex gap-2">
           {engagement.parent_engagement_id && (
@@ -1216,6 +1264,25 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
             <Button variant="outline" onClick={() => setTbShowOverride(false)}>Cancel</Button>
             <Button onClick={handleTbOverride} disabled={!tbOverrideJustification.trim()}>
               Override & Proceed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Replace Existing TB Dialog */}
+      <Dialog open={showReplaceDialog} onOpenChange={setShowReplaceDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Existing Trial Balance Found</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            A Trial Balance already exists for this engagement. Replacing it will delete all existing TB data including hierarchy nodes and tagged categories.
+          </p>
+          <p className="text-sm font-medium">Replace existing Trial Balance?</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReplaceDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => handleTbProcess()}>
+              Replace
             </Button>
           </DialogFooter>
         </DialogContent>
