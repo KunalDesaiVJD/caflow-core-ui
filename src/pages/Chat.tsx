@@ -327,56 +327,84 @@ export default function Chat() {
 
   const createIndividualChat = async (otherUserId: string) => {
     if (!user) return;
-    // Check if conversation already exists
-    const { data: existingParticipants } = await supabase
-      .from("chat_participants")
-      .select("conversation_id")
-      .eq("user_id", user.id);
+    try {
+      // Check if conversation already exists — use a direct query approach
+      const { data: myParticipations } = await supabase
+        .from("chat_participants")
+        .select("conversation_id")
+        .eq("user_id", user.id);
 
-    if (existingParticipants) {
-      for (const ep of existingParticipants) {
-        const { data: otherP } = await supabase
+      if (myParticipations && myParticipations.length > 0) {
+        const convIds = myParticipations.map(p => p.conversation_id);
+        // Find conversations where the other user is also a participant
+        const { data: otherParticipations } = await supabase
           .from("chat_participants")
           .select("conversation_id")
-          .eq("conversation_id", ep.conversation_id)
-          .eq("user_id", otherUserId);
-        if (otherP && otherP.length > 0) {
-          const { data: conv } = await supabase
-            .from("chat_conversations")
-            .select("type")
-            .eq("id", ep.conversation_id)
-            .eq("type", "individual")
-            .single();
-          if (conv) {
-            setActiveConvId(ep.conversation_id);
-            setShowNewChat(false);
-            return;
+          .eq("user_id", otherUserId)
+          .in("conversation_id", convIds);
+
+        if (otherParticipations && otherParticipations.length > 0) {
+          // Check if any of these is an individual chat
+          for (const op of otherParticipations) {
+            const { data: conv } = await supabase
+              .from("chat_conversations")
+              .select("id, type")
+              .eq("id", op.conversation_id)
+              .eq("type", "individual")
+              .maybeSingle();
+            if (conv) {
+              setActiveConvId(conv.id);
+              setShowNewChat(false);
+              return;
+            }
           }
         }
       }
-    }
 
-    // Create new conversation
-    const convFirmId = user.firm_id;
-    if (!convFirmId) { toast.error("Firm ID not found"); return; }
-    const { data: conv, error: convError } = await supabase.from("chat_conversations").insert({
-      firm_id: convFirmId,
-      type: "individual",
-      created_by: user.id,
-    }).select().single();
+      // Create new conversation
+      const convFirmId = user.firm_id;
+      if (!convFirmId) { toast.error("Firm ID not found. Please re-login."); return; }
 
-    if (convError) { toast.error("Failed to create conversation: " + convError.message); return; }
+      const { data: conv, error: convError } = await supabase.from("chat_conversations").insert({
+        firm_id: convFirmId,
+        type: "individual",
+        created_by: user.id,
+      }).select().single();
 
-    if (conv) {
-      const { error: partError } = await supabase.from("chat_participants").insert([
-        { conversation_id: conv.id, user_id: user.id, role: "admin" },
-        { conversation_id: conv.id, user_id: otherUserId, role: "member" },
-      ]);
-      if (partError) { toast.error("Failed to add participants: " + partError.message); return; }
+      if (convError || !conv) {
+        console.error("Chat creation error:", convError);
+        toast.error("Failed to create conversation: " + (convError?.message || "Unknown error"));
+        return;
+      }
+
+      // Insert creator first, then other user (sequential to avoid RLS timing issues)
+      const { error: selfPartError } = await supabase.from("chat_participants").insert({
+        conversation_id: conv.id, user_id: user.id, role: "admin",
+      });
+      if (selfPartError) {
+        console.error("Self participant error:", selfPartError);
+        toast.error("Failed to join conversation: " + selfPartError.message);
+        return;
+      }
+
+      const { error: otherPartError } = await supabase.from("chat_participants").insert({
+        conversation_id: conv.id, user_id: otherUserId, role: "member",
+      });
+      if (otherPartError) {
+        console.error("Other participant error:", otherPartError);
+        toast.error("Failed to add participant: " + otherPartError.message);
+        return;
+      }
+
       setActiveConvId(conv.id);
       queryClient.invalidateQueries({ queryKey: ["chat_conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["chat_participants", conv.id] });
+      setShowNewChat(false);
+      toast.success("Chat started!");
+    } catch (err: any) {
+      console.error("createIndividualChat error:", err);
+      toast.error("Failed to start chat: " + (err?.message || "Unknown error"));
     }
-    setShowNewChat(false);
   };
 
   const createGroupChat = async () => {

@@ -387,10 +387,10 @@ const ClientDetail = () => {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pl-12">
                         <div className="space-y-1">
                           <Label className="text-[11px]">Frequency Override</Label>
-                          <Select value={cs.frequency_override || ""} onValueChange={v => updateServiceField(cs.id, "frequency_override", v || null)}>
+                          <Select value={cs.frequency_override || "__default__"} onValueChange={v => updateServiceField(cs.id, "frequency_override", v === "__default__" ? null : v)}>
                             <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Default" /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="">Default</SelectItem>
+                              <SelectItem value="__default__">Default</SelectItem>
                               {FREQUENCIES.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                             </SelectContent>
                           </Select>
@@ -496,16 +496,17 @@ const ClientDetail = () => {
                   <div className="space-y-2">
                     <p className="text-sm"><span className="text-muted-foreground">Current Group:</span> <span className="font-medium">{itrWorkGroups.find(g => g.id === clientItrProfile.itr_work_group_id)?.name || "Unassigned"}</span></p>
                     <Select
-                      value={clientItrProfile.itr_work_group_id || ""}
+                      value={clientItrProfile.itr_work_group_id || "__none__"}
                       onValueChange={async v => {
-                        await supabase.from("itr_profiles").update({ itr_work_group_id: v || null } as any).eq("id", clientItrProfile.id);
-                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: v || null }));
+                        const val = v === "__none__" ? null : v;
+                        await supabase.from("itr_profiles").update({ itr_work_group_id: val } as any).eq("id", clientItrProfile.id);
+                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: val }));
                         toast({ title: "Work group updated" });
                       }}
                     >
                       <SelectTrigger className="w-64"><SelectValue placeholder="Select work group" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">Unassigned</SelectItem>
+                        <SelectItem value="__none__">Unassigned</SelectItem>
                         {itrWorkGroups.map(g => <SelectItem key={g.id} value={g.id}>{g.code} — {g.name}</SelectItem>)}
                       </SelectContent>
                     </Select>

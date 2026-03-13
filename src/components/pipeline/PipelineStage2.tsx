@@ -1092,8 +1092,93 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 </Alert>
               )}
 
-              {/* Preview Table */}
-              {tbResult.preview.length > 0 && (
+              {/* View Toggle */}
+              {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant={tbViewMode === "tree" ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() => setTbViewMode("tree")}
+                  >
+                    <ChevronDown size={14} /> Hierarchy Tree
+                  </Button>
+                  <Button
+                    variant={tbViewMode === "flat" ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() => setTbViewMode("flat")}
+                  >
+                    <Table2 size={14} /> Flat Preview
+                  </Button>
+                </div>
+              )}
+
+              {/* Hierarchy Tree View */}
+              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Trial Balance Hierarchy</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="max-h-[500px] overflow-auto">
+                      {/* Header row */}
+                      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
+                        <span className="flex-1 pl-6">Account / Group</span>
+                        <span className="w-28 text-right">Opening</span>
+                        <span className="w-28 text-right">Txn Debit</span>
+                        <span className="w-28 text-right">Txn Credit</span>
+                        <span className="w-28 text-right">Closing</span>
+                      </div>
+                      {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
+                        .filter((n) => n.parentNodeId === null || n.level === 1)
+                        .map((node) => (
+                          <TbTreeRow
+                            key={node.nodeId}
+                            node={node}
+                            allNodes={tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy}
+                          />
+                        ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Flat Preview Table */}
+              {tbViewMode === "flat" && tbResult.preview.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Preview (first 20 accounts)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="max-h-64 overflow-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Account Name</TableHead>
+                            <TableHead>Group</TableHead>
+                            <TableHead className="text-right">Debit</TableHead>
+                            <TableHead className="text-right">Credit</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {tbResult.preview.map((row: any, i: number) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs">{row.account_name || row.ledger_name}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{row.account_group}</TableCell>
+                              <TableCell className="text-xs text-right">{(row.debit || row.closing_dr || 0).toLocaleString("en-IN")}</TableCell>
+                              <TableCell className="text-xs text-right">{(row.credit || row.closing_cr || 0).toLocaleString("en-IN")}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* No hierarchy — show flat by default */}
+              {tbHierarchyNodes.length === 0 && storedTbHierarchy.length === 0 && tbResult.preview.length > 0 && (
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Preview (first 20 accounts)</CardTitle>
