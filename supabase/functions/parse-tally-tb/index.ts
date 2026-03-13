@@ -371,7 +371,8 @@ serve(async (req) => {
       if (!row) { skippedRows++; continue; }
 
       const rawNameCell = row[0];
-      const name = String(rawNameCell || "").trim();
+      const rawName = String(rawNameCell || "");
+      const name = rawName.trim();
 
       // Skip rows with no account name
       if (!name) { skippedRows++; continue; }
@@ -384,51 +385,73 @@ serve(async (req) => {
         continue;
       }
 
-      const indent = isCSV ? 0 : (indentMap[r] || 0);
+      const indentFromStyle = isCSV ? 0 : (indentMap[r] || 0);
+      const indentFromOutline = isCSV ? 0 : (rowOutlineMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
       const italic = isCSV ? false : (italicMap[r] || false);
 
-      // If indent not available from styles, try to detect from leading spaces
-      let effectiveIndent = indent;
+      // If indent not available from styles, try to detect from leading spaces/tabs/non-breaking spaces
+      let effectiveIndent = Math.max(indentFromStyle, indentFromOutline);
       if (effectiveIndent === 0 && !isCSV) {
-        const rawName = String(rawNameCell || "");
-        const leadingSpaces = rawName.length - rawName.trimStart().length;
-        effectiveIndent = Math.floor(leadingSpaces / 3);
+        const wsMatch = rawName.match(/^[\s\u00A0]+/);
+        const leading = wsMatch ? wsMatch[0].replace(/\t/g, "    ").length : 0;
+        if (leading > 0) {
+          effectiveIndent = Math.floor(leading / 2);
+        }
       }
 
       let txnDebit = 0;
       let txnCredit = 0;
-
-      const hasAmountCells = isAmountDrCrFormat
-        ? row[amountCol] !== null && row[amountCol] !== undefined && String(row[amountCol]).trim() !== ""
-        : [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
-            .filter((c) => c >= 0)
-            .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
+      let opening = 0;
+      let closing = 0;
+      let isLedger = false;
 
       if (isAmountDrCrFormat) {
         // Amount + Dr/Cr format
         const amount = parseNum(row[amountCol]);
         const drCrVal = String(row[drCrCol] || "").trim().toLowerCase().replace(".", "");
+        const hasDrCrMarker = drCrVal === "dr" || drCrVal === "cr";
 
         if (drCrVal === "dr") {
           txnDebit = Math.abs(amount);
           txnCredit = 0;
+          isLedger = true;
         } else if (drCrVal === "cr") {
           txnDebit = 0;
           txnCredit = Math.abs(amount);
-        } else {
-          // No Dr/Cr indicator — account with zero transactions
+          isLedger = true;
+        } else if (amount === 0) {
+          // Allow zero-transaction ledger rows without Dr/Cr markers
           txnDebit = 0;
           txnCredit = 0;
+          isLedger = true;
+        } else {
+          // Non-zero amount without Dr/Cr is usually a group/subtotal row
+          txnDebit = 0;
+          txnCredit = 0;
+          opening = amount;
+          closing = amount;
+          isLedger = false;
+        }
+
+        if (hasDrCrMarker || amount === 0) {
+          opening = txnDebit - txnCredit;
+          closing = opening + txnDebit - txnCredit;
         }
       } else {
+        const openingCol = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
+        const closingCol = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
         txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
         txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
-      }
 
-      // Restore opening + closing columns from imported debit/credit values
-      const opening = txnDebit - txnCredit;
-      const closing = opening + txnDebit - txnCredit;
+        const hasNumericCells = [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
+          .filter((c) => c >= 0)
+          .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
+
+        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || openingCol !== 0 || closingCol !== 0;
+        opening = txnDebit - txnCredit;
+        closing = opening + txnDebit - txnCredit;
+      }
 
       // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
       dataRows.push({
@@ -437,7 +460,7 @@ serve(async (req) => {
         indent: effectiveIndent,
         bold,
         italic,
-        hasAmounts: hasAmountCells,
+        isLedger,
         opening,
         txnDebit,
         txnCredit,
