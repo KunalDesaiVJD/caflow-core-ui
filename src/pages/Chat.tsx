@@ -368,10 +368,11 @@ export default function Chat() {
     if (convError) { toast.error("Failed to create conversation: " + convError.message); return; }
 
     if (conv) {
-      await supabase.from("chat_participants").insert([
+      const { error: partError } = await supabase.from("chat_participants").insert([
         { conversation_id: conv.id, user_id: user.id, role: "admin" },
         { conversation_id: conv.id, user_id: otherUserId, role: "member" },
       ]);
+      if (partError) { toast.error("Failed to add participants: " + partError.message); return; }
       setActiveConvId(conv.id);
       queryClient.invalidateQueries({ queryKey: ["chat_conversations"] });
     }
