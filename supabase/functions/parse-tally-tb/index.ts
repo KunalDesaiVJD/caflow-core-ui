@@ -29,6 +29,12 @@ const PL_EXPENSE = [
   "employee benefit","financial expense","manufacturing expenses",
 ];
 
+const KNOWN_GROUP_NAMES = new Set(
+  [...BS_GROUPS_CR, ...BS_GROUPS_DR, ...PL_INCOME, ...PL_EXPENSE].map((g) =>
+    g.toLowerCase().replace(/&/g, " and ").replace(/\s+/g, " ").trim()
+  )
+);
+
 function detectBsPlSide(primaryGroup: string): string {
   const pg = primaryGroup.toLowerCase().trim();
   if (BS_GROUPS_CR.some(g => pg.includes(g))) return "BS";
