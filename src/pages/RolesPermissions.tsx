@@ -98,7 +98,13 @@ const RolesPermissions = () => {
   }, [isSuperadmin]);
 
   useEffect(() => {
-    if (firmId) loadGrid();
+    if (!firmId) {
+      setGrid({});
+      setLoading(false);
+      setDirty(false);
+      return;
+    }
+    loadGrid();
   }, [firmId]);
 
   async function loadGrid() {
