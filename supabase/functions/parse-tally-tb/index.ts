@@ -439,57 +439,99 @@ serve(async (req) => {
       );
     }
 
-    // ─── Build hierarchy tree ───
+    // ─── Build hierarchy tree (indentation-first, formatting fallback) ───
     const nodes: HierarchyNode[] = [];
-    const indentStack: { indent: number; nodeId: string; name: string }[] = [];
+    const parentStack: { level: number; nodeId: string; name: string }[] = [];
+    const childCounterByParent = new Map<string, number>();
+    const groupRegistry = new Map<string, HierarchyNode>();
+    const hasIndentSignals = dataRows.some((r) => r.indent > 0);
 
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
-      const nextIndent = i < dataRows.length - 1 ? dataRows[i + 1].indent : -1;
-      const isLeaf = isCSV ? true : (nextIndent <= row.indent);
+      const fallbackLevel = row.hasAmounts ? 4 : row.bold ? 1 : row.italic ? 3 : 2;
+      const level = Math.max(1, hasIndentSignals ? row.indent + 1 : fallbackLevel);
 
-      // Pop stack to find parent
-      while (indentStack.length > 0 && indentStack[indentStack.length - 1].indent >= row.indent) {
-        indentStack.pop();
+      // Maintain parent stack by computed level
+      while (parentStack.length >= level) {
+        parentStack.pop();
       }
 
-      const parentNode = indentStack.length > 0 ? indentStack[indentStack.length - 1] : null;
-      const level = indentStack.length + 1;
-      const nodeId = parentNode
-        ? `${parentNode.nodeId}.${nodes.filter(n => n.parentNodeId === parentNode.nodeId).length + 1}`
-        : String(nodes.filter(n => !n.parentNodeId).length + 1);
+      const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
+      const isLeaf = row.hasAmounts;
 
-      const primaryGroup = indentStack.length > 0 ? indentStack[0].name : row.name;
-      const bsPlSide = detectBsPlSide(primaryGroup);
-      const normalBal = detectNormalBalance(primaryGroup);
-
-      nodes.push({
-        nodeId,
-        parentNodeId: parentNode?.nodeId || null,
-        level,
-        name: row.name,
-        indent: row.indent,
-        bold: row.bold,
-        isLeaf,
-        primaryGroup,
-        bsPlSide,
-        normalBal,
-        opening: row.opening,
-        txnDebit: row.txnDebit,
-        txnCredit: row.txnCredit,
-        closing: row.closing,
-        rowNumber: row.rowNum,
-      });
-
+      let node: HierarchyNode | null = null;
       if (!isLeaf) {
-        indentStack.push({ indent: row.indent, nodeId, name: row.name });
+        const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
+        node = groupRegistry.get(dedupeKey) || null;
       }
+
+      if (!node) {
+        const parentKey = parentNode?.nodeId || "root";
+        const nextIndex = (childCounterByParent.get(parentKey) || 0) + 1;
+        childCounterByParent.set(parentKey, nextIndex);
+
+        const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
+        const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+        const bsPlSide = detectBsPlSide(primaryGroup);
+        const normalBal = detectNormalBalance(primaryGroup);
+
+        node = {
+          nodeId,
+          parentNodeId: parentNode?.nodeId || null,
+          level,
+          name: row.name,
+          indent: row.indent,
+          bold: row.bold,
+          italic: row.italic,
+          isLeaf,
+          primaryGroup,
+          bsPlSide,
+          normalBal,
+          opening: row.opening,
+          txnDebit: row.txnDebit,
+          txnCredit: row.txnCredit,
+          closing: row.closing,
+          rowNumber: row.rowNum,
+        };
+
+        nodes.push(node);
+
+        if (!isLeaf) {
+          const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
+          groupRegistry.set(dedupeKey, node);
+        }
+      }
+
+      if (!node.isLeaf) {
+        parentStack.push({ level, nodeId: node.nodeId, name: node.name });
+      }
+    }
+
+    // ─── Recursive group aggregation from child accounts ───
+    const childrenByParent = new Map<string, HierarchyNode[]>();
+    for (const node of nodes) {
+      if (!node.parentNodeId) continue;
+      const children = childrenByParent.get(node.parentNodeId) || [];
+      children.push(node);
+      childrenByParent.set(node.parentNodeId, children);
+    }
+
+    const nodesByDepth = [...nodes].sort((a, b) => b.level - a.level);
+    for (const node of nodesByDepth) {
+      if (node.isLeaf) continue;
+      const children = childrenByParent.get(node.nodeId) || [];
+      if (children.length === 0) continue;
+
+      node.opening = children.reduce((sum, child) => sum + child.opening, 0);
+      node.txnDebit = children.reduce((sum, child) => sum + child.txnDebit, 0);
+      node.txnCredit = children.reduce((sum, child) => sum + child.txnCredit, 0);
+      node.closing = children.reduce((sum, child) => sum + child.closing, 0);
     }
 
     const leafNodes = nodes.filter(n => n.isLeaf);
     const groupNodes = nodes.filter(n => !n.isLeaf);
 
-    console.log(`[parse-tally-tb] Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}`);
+    console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows detected: ${dataRows.length}, Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}, Rows skipped: ${skippedRows}`);
 
     // ─── Save to database ───
     const batchId = crypto.randomUUID();
