@@ -439,7 +439,7 @@ serve(async (req) => {
           txnCredit = Math.abs(amount);
           isLedger = true;
         } else if (amount === 0) {
-          // Allow zero-transaction ledger rows without Dr/Cr markers
+          // Allow zero-value rows to preserve hierarchy shape
           txnDebit = 0;
           txnCredit = 0;
           isLedger = true;
@@ -447,14 +447,19 @@ serve(async (req) => {
           // Non-zero amount without Dr/Cr is usually a group/subtotal row
           txnDebit = 0;
           txnCredit = 0;
-          opening = amount;
-          closing = amount;
           isLedger = false;
         }
 
-        if (hasDrCrMarker || amount === 0) {
-          opening = txnDebit - txnCredit;
-          closing = opening + txnDebit - txnCredit;
+        opening = txnDebit - txnCredit;
+        closing = opening + txnDebit - txnCredit;
+
+        // If explicit opening/closing columns were also detected, trust them
+        if (colMap.opening >= 0) opening = parseNum(row[colMap.opening]);
+        if (colMap.closing >= 0) closing = parseNum(row[colMap.closing]);
+
+        if (!hasDrCrMarker && amount !== 0) {
+          opening = 0;
+          closing = 0;
         }
       } else {
         const openingCol = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
@@ -466,9 +471,11 @@ serve(async (req) => {
           .filter((c) => c >= 0)
           .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
-        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || openingCol !== 0 || closingCol !== 0;
-        opening = txnDebit - txnCredit;
-        closing = opening + txnDebit - txnCredit;
+        // Requested formula for ledger rows
+        opening = colMap.opening >= 0 ? openingCol : (txnDebit - txnCredit);
+        closing = colMap.closing >= 0 ? closingCol : (opening + txnDebit - txnCredit);
+
+        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || opening !== 0 || closing !== 0;
       }
 
       // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
