@@ -135,7 +135,7 @@ export default function Chat() {
     queryKey: ["firm_users_chat", user?.firm_id, user?.role],
     queryFn: async () => {
       if (!user) return [];
-      let q = supabase.from("users").select("id, name, email, role").neq("id", user.id).eq("is_active", true);
+      let q = supabase.from("users").select("id, name, email, role").neq("id", user.id);
       if (user.firm_id && user.role !== "superadmin") q = q.eq("firm_id", user.firm_id);
       const { data } = await q;
       return (data || []) as FirmUser[];

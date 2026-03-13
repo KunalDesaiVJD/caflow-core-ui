@@ -25,7 +25,6 @@ const topNavItems = [
   { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
   { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
-  { title: "Documents", path: "/documents", icon: FolderOpen, module: "Client Management" },
 ];
 
 const auditStages = [
