@@ -387,10 +387,10 @@ const ClientDetail = () => {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pl-12">
                         <div className="space-y-1">
                           <Label className="text-[11px]">Frequency Override</Label>
-                          <Select value={cs.frequency_override || ""} onValueChange={v => updateServiceField(cs.id, "frequency_override", v || null)}>
+                          <Select value={cs.frequency_override || "__default__"} onValueChange={v => updateServiceField(cs.id, "frequency_override", v === "__default__" ? null : v)}>
                             <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Default" /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="">Default</SelectItem>
+                              <SelectItem value="__default__">Default</SelectItem>
                               {FREQUENCIES.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                             </SelectContent>
                           </Select>
