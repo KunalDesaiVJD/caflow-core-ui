@@ -482,13 +482,28 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
         setTbProgress(100);
 
+        const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row) => ({
+          nodeId: row.nodeId,
+          parentNodeId: row.parentNodeId,
+          name: row.name,
+          level: row.level || 1,
+          isLeaf: !!row.isLeaf,
+          opening: row.opening || 0,
+          txnDebit: row.txnDebit || 0,
+          txnCredit: row.txnCredit || 0,
+          closing: row.closing || 0,
+          primaryGroup: row.primaryGroup || row.name,
+        }));
+        const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
+        setTbHierarchyNodes(mappedHierarchy);
+
         setTbResult({
           totalAccounts: data.leafLedgers,
           debitTotal: Math.round(data.totalDr * 100) / 100,
           creditTotal: Math.round(data.totalCr * 100) / 100,
           difference: Math.round(Math.abs(data.totalDr - data.totalCr) * 100) / 100,
           isValid: data.isBalanced,
-          preview: (data.hierarchy || []).filter((n: any) => n.isLeaf).slice(0, 20).map((n: any) => ({
+          preview: leafPreview.map((n) => ({
             account_name: n.name,
             account_group: n.primaryGroup,
             debit: n.txnDebit,
