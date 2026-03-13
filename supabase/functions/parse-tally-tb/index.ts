@@ -82,7 +82,7 @@ interface TBRow {
   indent: number;
   bold: boolean;
   italic: boolean;
-  hasAmounts: boolean;
+  isLedger: boolean;
   opening: number;
   txnDebit: number;
   txnCredit: number;
