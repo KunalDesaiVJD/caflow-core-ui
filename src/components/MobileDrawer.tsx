@@ -13,7 +13,6 @@ import {
   LogOut,
   X,
   Clock,
-  FolderOpen,
   Shield,
   Building2,
 } from "lucide-react";
