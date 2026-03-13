@@ -154,6 +154,7 @@ export default function ImportTrialBalance() {
   const [parsing, setParsing] = useState(false);
   const [parseProgress, setParseProgress] = useState("");
   const [importStats, setImportStats] = useState<ImportStats | null>(null);
+  const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [error, setError] = useState("");
 
