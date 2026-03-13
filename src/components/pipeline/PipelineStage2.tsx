@@ -725,7 +725,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">Stage 2 — Data Import</h1>
-          <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name} — FY {engagement.financial_year}</p>
+          <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
         </div>
         <div className="flex gap-2">
           {engagement.parent_engagement_id && (
