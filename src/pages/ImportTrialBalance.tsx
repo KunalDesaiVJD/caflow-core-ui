@@ -742,7 +742,9 @@ export default function ImportTrialBalance() {
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
                     <div className="w-4" /><span className="flex-1">Account / Group</span>
-                    <span className="w-24 text-right">Opening</span><span className="w-24 text-right">Txn Dr</span><span className="w-24 text-right">Txn Cr</span><span className="w-24 text-right">Closing</span>
+                    <span className="w-24 text-right">Opening DR</span><span className="w-24 text-right">Opening CR</span>
+                    <span className="w-24 text-right">TXN DR</span><span className="w-24 text-right">TXN CR</span>
+                    <span className="w-24 text-right">Closing DR</span><span className="w-24 text-right">Closing CR</span>
                   </div>
                   {rootNodes.length > 0 ? rootNodes.map(node => <TreeNode key={node.nodeId} node={node} allNodes={hierarchyNodes} />) : (
                     <div className="p-4 text-xs text-muted-foreground">No hierarchy nodes available for this import.</div>
