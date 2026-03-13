@@ -29,6 +29,12 @@ const PL_EXPENSE = [
   "employee benefit","financial expense","manufacturing expenses",
 ];
 
+const KNOWN_GROUP_NAMES = new Set(
+  [...BS_GROUPS_CR, ...BS_GROUPS_DR, ...PL_INCOME, ...PL_EXPENSE].map((g) =>
+    g.toLowerCase().replace(/&/g, " and ").replace(/\s+/g, " ").trim()
+  )
+);
+
 function detectBsPlSide(primaryGroup: string): string {
   const pg = primaryGroup.toLowerCase().trim();
   if (BS_GROUPS_CR.some(g => pg.includes(g))) return "BS";
@@ -76,7 +82,7 @@ interface TBRow {
   indent: number;
   bold: boolean;
   italic: boolean;
-  hasAmounts: boolean;
+  isLedger: boolean;
   opening: number;
   txnDebit: number;
   txnCredit: number;
@@ -332,6 +338,15 @@ serve(async (req) => {
     const indentMap: Record<number, number> = {};
     const boldMap: Record<number, boolean> = {};
     const italicMap: Record<number, boolean> = {};
+    const rowOutlineMap: Record<number, number> = {};
+
+    const worksheetRows = (ws as any)["!rows"] || [];
+    for (let r = dataStartRow; r < rawRows.length; r++) {
+      const rowMeta = worksheetRows[r];
+      if (rowMeta && typeof rowMeta.level === "number") {
+        rowOutlineMap[r] = Math.max(0, rowMeta.level);
+      }
+    }
 
     if (!isCSV) {
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
@@ -356,7 +371,8 @@ serve(async (req) => {
       if (!row) { skippedRows++; continue; }
 
       const rawNameCell = row[0];
-      const name = String(rawNameCell || "").trim();
+      const rawName = String(rawNameCell || "");
+      const name = rawName.trim();
 
       // Skip rows with no account name
       if (!name) { skippedRows++; continue; }
@@ -369,51 +385,73 @@ serve(async (req) => {
         continue;
       }
 
-      const indent = isCSV ? 0 : (indentMap[r] || 0);
+      const indentFromStyle = isCSV ? 0 : (indentMap[r] || 0);
+      const indentFromOutline = isCSV ? 0 : (rowOutlineMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
       const italic = isCSV ? false : (italicMap[r] || false);
 
-      // If indent not available from styles, try to detect from leading spaces
-      let effectiveIndent = indent;
+      // If indent not available from styles, try to detect from leading spaces/tabs/non-breaking spaces
+      let effectiveIndent = Math.max(indentFromStyle, indentFromOutline);
       if (effectiveIndent === 0 && !isCSV) {
-        const rawName = String(rawNameCell || "");
-        const leadingSpaces = rawName.length - rawName.trimStart().length;
-        effectiveIndent = Math.floor(leadingSpaces / 3);
+        const wsMatch = rawName.match(/^[\s\u00A0]+/);
+        const leading = wsMatch ? wsMatch[0].replace(/\t/g, "    ").length : 0;
+        if (leading > 0) {
+          effectiveIndent = Math.floor(leading / 2);
+        }
       }
 
       let txnDebit = 0;
       let txnCredit = 0;
-
-      const hasAmountCells = isAmountDrCrFormat
-        ? row[amountCol] !== null && row[amountCol] !== undefined && String(row[amountCol]).trim() !== ""
-        : [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
-            .filter((c) => c >= 0)
-            .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
+      let opening = 0;
+      let closing = 0;
+      let isLedger = false;
 
       if (isAmountDrCrFormat) {
         // Amount + Dr/Cr format
         const amount = parseNum(row[amountCol]);
         const drCrVal = String(row[drCrCol] || "").trim().toLowerCase().replace(".", "");
+        const hasDrCrMarker = drCrVal === "dr" || drCrVal === "cr";
 
         if (drCrVal === "dr") {
           txnDebit = Math.abs(amount);
           txnCredit = 0;
+          isLedger = true;
         } else if (drCrVal === "cr") {
           txnDebit = 0;
           txnCredit = Math.abs(amount);
-        } else {
-          // No Dr/Cr indicator — account with zero transactions
+          isLedger = true;
+        } else if (amount === 0) {
+          // Allow zero-transaction ledger rows without Dr/Cr markers
           txnDebit = 0;
           txnCredit = 0;
+          isLedger = true;
+        } else {
+          // Non-zero amount without Dr/Cr is usually a group/subtotal row
+          txnDebit = 0;
+          txnCredit = 0;
+          opening = amount;
+          closing = amount;
+          isLedger = false;
+        }
+
+        if (hasDrCrMarker || amount === 0) {
+          opening = txnDebit - txnCredit;
+          closing = opening + txnDebit - txnCredit;
         }
       } else {
+        const openingCol = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
+        const closingCol = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
         txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
         txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
-      }
 
-      // Restore opening + closing columns from imported debit/credit values
-      const opening = txnDebit - txnCredit;
-      const closing = opening + txnDebit - txnCredit;
+        const hasNumericCells = [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
+          .filter((c) => c >= 0)
+          .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
+
+        isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || openingCol !== 0 || closingCol !== 0;
+        opening = txnDebit - txnCredit;
+        closing = opening + txnDebit - txnCredit;
+      }
 
       // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
       dataRows.push({
@@ -422,7 +460,7 @@ serve(async (req) => {
         indent: effectiveIndent,
         bold,
         italic,
-        hasAmounts: hasAmountCells,
+        isLedger,
         opening,
         txnDebit,
         txnCredit,
@@ -443,13 +481,29 @@ serve(async (req) => {
     const nodes: HierarchyNode[] = [];
     const parentStack: { level: number; nodeId: string; name: string }[] = [];
     const childCounterByParent = new Map<string, number>();
-    const groupRegistry = new Map<string, HierarchyNode>();
+    const nodeRegistry = new Map<string, HierarchyNode>();
     const hasIndentSignals = dataRows.some((r) => r.indent > 0);
+    let prevWasGroup = false;
+    let prevGroupLevel = 1;
 
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
-      const fallbackLevel = row.hasAmounts ? 4 : row.bold ? 1 : row.italic ? 3 : 2;
-      const level = Math.max(1, hasIndentSignals ? row.indent + 1 : fallbackLevel);
+      const normalizedName = normalizeGroupName(row.name);
+      const knownGroupByName = KNOWN_GROUP_NAMES.has(normalizedName);
+      const rowLooksGroup = !row.isLedger || (!hasIndentSignals && knownGroupByName);
+
+      let level = 1;
+      if (hasIndentSignals) {
+        level = Math.max(1, row.indent + 1);
+      } else if (row.bold) {
+        level = 1;
+      } else if (row.italic) {
+        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 3;
+      } else if (rowLooksGroup) {
+        level = prevWasGroup ? Math.min(prevGroupLevel + 1, 3) : 1;
+      } else {
+        level = prevWasGroup ? Math.max(prevGroupLevel + 1, 2) : 4;
+      }
 
       // Maintain parent stack by computed level
       while (parentStack.length >= level) {
@@ -457,12 +511,27 @@ serve(async (req) => {
       }
 
       const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
-      const isLeaf = row.hasAmounts;
 
-      let node: HierarchyNode | null = null;
-      if (!isLeaf) {
-        const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
-        node = groupRegistry.get(dedupeKey) || null;
+      // Skip duplicate echo rows where child group name repeats the parent name (e.g. & vs and)
+      if (rowLooksGroup && parentNode && normalizeGroupName(parentNode.name) === normalizedName) {
+        prevWasGroup = true;
+        prevGroupLevel = level;
+        continue;
+      }
+
+      const isLeaf = !rowLooksGroup;
+      const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizedName}::${isLeaf ? "leaf" : "group"}`;
+      let node = nodeRegistry.get(dedupeKey) || null;
+
+      if (node && isLeaf) {
+        const sameBalances =
+          Math.abs((node.opening || 0) - row.opening) < 0.01 &&
+          Math.abs((node.txnDebit || 0) - row.txnDebit) < 0.01 &&
+          Math.abs((node.txnCredit || 0) - row.txnCredit) < 0.01 &&
+          Math.abs((node.closing || 0) - row.closing) < 0.01;
+        if (!sameBalances) {
+          node = null;
+        }
       }
 
       if (!node) {
@@ -495,15 +564,15 @@ serve(async (req) => {
         };
 
         nodes.push(node);
-
-        if (!isLeaf) {
-          const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
-          groupRegistry.set(dedupeKey, node);
-        }
+        nodeRegistry.set(dedupeKey, node);
       }
 
       if (!node.isLeaf) {
-        parentStack.push({ level, nodeId: node.nodeId, name: node.name });
+        parentStack.push({ level: node.level, nodeId: node.nodeId, name: node.name });
+        prevWasGroup = true;
+        prevGroupLevel = node.level;
+      } else {
+        prevWasGroup = false;
       }
     }
 

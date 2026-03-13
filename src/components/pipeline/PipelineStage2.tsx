@@ -146,6 +146,53 @@ function autoDetectLedgerMapping(headers: string[]): Record<string, string> {
   return mapping;
 }
 
+interface TbHierarchyNode {
+  nodeId: string;
+  parentNodeId: string | null;
+  name: string;
+  level: number;
+  isLeaf: boolean;
+  opening: number;
+  txnDebit: number;
+  txnCredit: number;
+  closing: number;
+  primaryGroup: string;
+}
+
+const formatTbNumber = (value: number) =>
+  value ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+
+function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
+  const [open, setOpen] = useState(node.level <= 2);
+  const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
+  const hasChildren = children.length > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => hasChildren && setOpen((prev) => !prev)}
+        className="flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40"
+        style={{ paddingLeft: `${(node.level - 1) * 16 + 10}px` }}
+      >
+        <ChevronDown
+          size={14}
+          className={cn("shrink-0 text-muted-foreground transition-transform", !open && hasChildren ? "-rotate-90" : "", !hasChildren ? "opacity-0" : "")}
+        />
+        <span className={cn("flex-1", node.isLeaf ? "text-foreground" : "font-semibold text-foreground")}>{node.name}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.opening)}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit)}</span>
+        <span className="w-28 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit)}</span>
+        <span className="w-28 text-right font-mono text-foreground">{formatTbNumber(node.closing)}</span>
+      </button>
+
+      {open && hasChildren && children.map((child) => (
+        <TbTreeRow key={child.nodeId} node={child} allNodes={allNodes} />
+      ))}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -167,6 +214,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     totalAccounts: number; debitTotal: number; creditTotal: number;
     difference: number; isValid: boolean; preview: any[];
   } | null>(null);
+  const [tbHierarchyNodes, setTbHierarchyNodes] = useState<TbHierarchyNode[]>([]);
+  const [tbViewMode, setTbViewMode] = useState<"tree" | "flat">("tree");
   const [tbOverrideJustification, setTbOverrideJustification] = useState("");
   const [tbShowOverride, setTbShowOverride] = useState(false);
   const tbFileRef = useRef<HTMLInputElement>(null);
@@ -191,10 +240,39 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async () => {
       const { data } = await supabase
         .from("trial_balance_snapshots")
-        .select("*")
+        .select("id, debit_total, credit_total, difference, validation_status, is_validated, normalised_data, ledger_name, txn_debit, txn_credit")
         .eq("engagement_id", engagementId)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       return data;
+    },
+    enabled: !!engagementId,
+  });
+
+  const { data: storedTbHierarchy = [] } = useQuery({
+    queryKey: ["tb-hierarchy-nodes", engagementId],
+    queryFn: async (): Promise<TbHierarchyNode[]> => {
+      const { data, error } = await supabase
+        .from("tb_hierarchy_nodes")
+        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group")
+        .eq("engagement_id", engagementId)
+        .order("row_number", { ascending: true });
+
+      if (error) throw error;
+
+      return (data || []).map((row: any) => ({
+        nodeId: row.node_id,
+        parentNodeId: row.parent_node_id,
+        name: row.tally_group_name,
+        level: row.level || 1,
+        isLeaf: !!row.is_leaf,
+        opening: row.opening_balance || 0,
+        txnDebit: row.txn_debit || 0,
+        txnCredit: row.txn_credit || 0,
+        closing: row.closing_balance || 0,
+        primaryGroup: row.primary_group || row.tally_group_name,
+      }));
     },
     enabled: !!engagementId,
   });
@@ -231,6 +309,30 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
   // Load existing TB result if available
   useEffect(() => {
+    if (storedTbHierarchy.length > 0) {
+      const leafRows = storedTbHierarchy.filter((row) => row.isLeaf);
+      const debitTotal = leafRows.reduce((sum, row) => sum + (row.txnDebit || 0), 0);
+      const creditTotal = leafRows.reduce((sum, row) => sum + (row.txnCredit || 0), 0);
+      const difference = Math.abs(debitTotal - creditTotal);
+
+      setTbHierarchyNodes(storedTbHierarchy);
+      setTbResult((prev) => prev || {
+        totalAccounts: leafRows.length,
+        debitTotal: Math.round(debitTotal * 100) / 100,
+        creditTotal: Math.round(creditTotal * 100) / 100,
+        difference: Math.round(difference * 100) / 100,
+        isValid: difference <= 1,
+        preview: leafRows.slice(0, 20).map((row) => ({
+          account_name: row.name,
+          account_group: row.primaryGroup,
+          debit: row.txnDebit,
+          credit: row.txnCredit,
+        })),
+      });
+      setTbStep((prev) => (prev < 5 ? 5 : prev));
+      return;
+    }
+
     if (existingTb && (existingTb as any).is_validated) {
       const tb = existingTb as any;
       setTbResult({
@@ -243,7 +345,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       });
       setTbStep(5);
     }
-  }, [existingTb]);
+  }, [existingTb, storedTbHierarchy]);
 
   // ─── Replace confirmation state ───
   const [showReplaceDialog, setShowReplaceDialog] = useState(false);
@@ -380,13 +482,28 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
         setTbProgress(100);
 
+        const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row) => ({
+          nodeId: row.nodeId,
+          parentNodeId: row.parentNodeId,
+          name: row.name,
+          level: row.level || 1,
+          isLeaf: !!row.isLeaf,
+          opening: row.opening || 0,
+          txnDebit: row.txnDebit || 0,
+          txnCredit: row.txnCredit || 0,
+          closing: row.closing || 0,
+          primaryGroup: row.primaryGroup || row.name,
+        }));
+        const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
+        setTbHierarchyNodes(mappedHierarchy);
+
         setTbResult({
           totalAccounts: data.leafLedgers,
           debitTotal: Math.round(data.totalDr * 100) / 100,
           creditTotal: Math.round(data.totalCr * 100) / 100,
           difference: Math.round(Math.abs(data.totalDr - data.totalCr) * 100) / 100,
           isValid: data.isBalanced,
-          preview: (data.hierarchy || []).filter((n: any) => n.isLeaf).slice(0, 20).map((n: any) => ({
+          preview: leafPreview.map((n) => ({
             account_name: n.name,
             account_group: n.primaryGroup,
             debit: n.txnDebit,
