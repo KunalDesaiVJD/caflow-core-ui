@@ -338,6 +338,15 @@ serve(async (req) => {
     const indentMap: Record<number, number> = {};
     const boldMap: Record<number, boolean> = {};
     const italicMap: Record<number, boolean> = {};
+    const rowOutlineMap: Record<number, number> = {};
+
+    const worksheetRows = (ws as any)["!rows"] || [];
+    for (let r = dataStartRow; r < rawRows.length; r++) {
+      const rowMeta = worksheetRows[r];
+      if (rowMeta && typeof rowMeta.level === "number") {
+        rowOutlineMap[r] = Math.max(0, rowMeta.level);
+      }
+    }
 
     if (!isCSV) {
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
