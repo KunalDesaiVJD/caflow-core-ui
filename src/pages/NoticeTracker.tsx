@@ -106,9 +106,10 @@ export default function NoticeTracker() {
 
   const createMutation = useMutation({
     mutationFn: async (values: typeof form) => {
+      if (!user?.firm_id) throw new Error("Firm ID not found. Please re-login.");
       const { error } = await supabase.from("demand_notices").insert({
         client_id: values.client_id,
-        firm_id: user?.firm_id,
+        firm_id: user.firm_id,
         notice_type: values.notice_type,
         notice_ref_no: values.notice_ref_no || null,
         assessment_year: values.assessment_year || null,

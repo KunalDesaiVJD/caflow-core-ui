@@ -135,7 +135,7 @@ export default function Chat() {
     queryKey: ["firm_users_chat", user?.firm_id, user?.role],
     queryFn: async () => {
       if (!user) return [];
-      let q = supabase.from("users").select("id, name, email, role").neq("id", user.id).eq("is_active", true);
+      let q = supabase.from("users").select("id, name, email, role").neq("id", user.id);
       if (user.firm_id && user.role !== "superadmin") q = q.eq("firm_id", user.firm_id);
       const { data } = await q;
       return (data || []) as FirmUser[];
@@ -356,20 +356,23 @@ export default function Chat() {
       }
     }
 
-    // Get the other user's firm_id for the conversation
-    const otherUser = firmUsers.find(u => u.id === otherUserId);
-    const convFirmId = user.firm_id || (otherUser as any)?.firm_id || "";
-    const { data: conv } = await supabase.from("chat_conversations").insert({
+    // Create new conversation
+    const convFirmId = user.firm_id;
+    if (!convFirmId) { toast.error("Firm ID not found"); return; }
+    const { data: conv, error: convError } = await supabase.from("chat_conversations").insert({
       firm_id: convFirmId,
       type: "individual",
       created_by: user.id,
     }).select().single();
 
+    if (convError) { toast.error("Failed to create conversation: " + convError.message); return; }
+
     if (conv) {
-      await supabase.from("chat_participants").insert([
+      const { error: partError } = await supabase.from("chat_participants").insert([
         { conversation_id: conv.id, user_id: user.id, role: "admin" },
         { conversation_id: conv.id, user_id: otherUserId, role: "member" },
       ]);
+      if (partError) { toast.error("Failed to add participants: " + partError.message); return; }
       setActiveConvId(conv.id);
       queryClient.invalidateQueries({ queryKey: ["chat_conversations"] });
     }

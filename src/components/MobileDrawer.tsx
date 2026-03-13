@@ -13,7 +13,6 @@ import {
   LogOut,
   X,
   Clock,
-  FolderOpen,
   Shield,
   Building2,
 } from "lucide-react";
@@ -28,7 +27,7 @@ const navItems = [
   { title: "Timesheets", path: "/billing/timesheets", icon: Clock },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Audit Intelligence", path: "/audit", icon: Search },
-  { title: "Documents", path: "/documents", icon: FolderOpen },
+  
   { title: "Settings", path: "/settings", icon: Settings },
 ];
 

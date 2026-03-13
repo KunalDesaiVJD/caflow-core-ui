@@ -119,26 +119,31 @@ const ClientDetail = () => {
   async function loadAllData() {
     setLoading(true);
     try {
-      const [clientRes, findingsRes, profileRes, catRes, csRes, staffRes, wgRes, itrRes] = await Promise.all([
+      const [clientRes, profileRes, catRes, csRes, staffRes] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId!).single(),
-        supabase.from("scrutiny_findings").select("*").eq("client_id", clientId!),
         supabase.from("client_profiles").select("banking_data, loan_data").eq("client_id", clientId!).limit(1),
-        supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("sort_order"),
+        supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("name"),
         supabase.from("client_services").select("*").eq("client_id", clientId!),
         supabase.from("users").select("id, name").order("name"),
-        supabase.from("itr_work_groups").select("*").order("code"),
-        supabase.from("itr_profiles").select("*").eq("client_id", clientId!).limit(1),
       ]);
+
+      // Load optional tables gracefully
+      let findingsData: any[] = [];
+      let wgData: any[] = [];
+      let itrData: any = null;
+      try { const r = await supabase.from("scrutiny_findings").select("*").eq("client_id", clientId!); findingsData = r.data || []; } catch {}
+      try { const r = await supabase.from("itr_work_groups").select("*").order("code"); wgData = r.data || []; } catch {}
+      try { const r = await supabase.from("itr_profiles").select("*").eq("client_id", clientId!).limit(1); itrData = r.data?.[0] || null; } catch {}
 
       const c = clientRes.data as Client | null;
       setClient(c);
-      setFindings((findingsRes as any).data || []);
+      setFindings(findingsData);
       if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
       setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
       setStaffList((staffRes.data || []) as any[]);
-      setItrWorkGroups((wgRes as any).data || []);
-      setClientItrProfile((itrRes as any).data?.[0] || null);
+      setItrWorkGroups(wgData);
+      setClientItrProfile(itrData);
 
       if (c) {
         setAuditForm({
