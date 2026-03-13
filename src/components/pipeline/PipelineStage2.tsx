@@ -1268,6 +1268,25 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Replace Existing TB Dialog */}
+      <Dialog open={showReplaceDialog} onOpenChange={setShowReplaceDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Existing Trial Balance Found</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            A Trial Balance already exists for this engagement. Replacing it will delete all existing TB data including hierarchy nodes and tagged categories.
+          </p>
+          <p className="text-sm font-medium">Replace existing Trial Balance?</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReplaceDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => handleTbProcess()}>
+              Replace
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
