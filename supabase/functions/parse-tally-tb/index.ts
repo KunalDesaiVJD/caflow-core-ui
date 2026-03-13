@@ -62,11 +62,21 @@ function parseNum(val: any): number {
   return isNeg ? -n : n;
 }
 
+function normalizeGroupName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 interface TBRow {
   rowNum: number;
   name: string;
   indent: number;
   bold: boolean;
+  italic: boolean;
+  hasAmounts: boolean;
   opening: number;
   txnDebit: number;
   txnCredit: number;
@@ -80,6 +90,7 @@ interface HierarchyNode {
   name: string;
   indent: number;
   bold: boolean;
+  italic: boolean;
   isLeaf: boolean;
   primaryGroup: string;
   bsPlSide: string;
@@ -317,9 +328,10 @@ serve(async (req) => {
 
     console.log(`[parse-tally-tb] Detected format: ${detectedFormat}, isAmountDrCr: ${isAmountDrCrFormat}`);
 
-    // ─── Read cell indents from XLSX cell properties ───
+    // ─── Read cell indents/styles from XLSX cell properties ───
     const indentMap: Record<number, number> = {};
     const boldMap: Record<number, boolean> = {};
+    const italicMap: Record<number, boolean> = {};
 
     if (!isCSV) {
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
@@ -330,6 +342,7 @@ serve(async (req) => {
           const style = cell.s as any;
           indentMap[r] = style?.alignment?.indent || 0;
           boldMap[r] = style?.font?.bold || false;
+          italicMap[r] = style?.font?.italic || false;
         }
       }
     }
@@ -358,6 +371,7 @@ serve(async (req) => {
 
       const indent = isCSV ? 0 : (indentMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
+      const italic = isCSV ? false : (italicMap[r] || false);
 
       // If indent not available from styles, try to detect from leading spaces
       let effectiveIndent = indent;
@@ -367,7 +381,14 @@ serve(async (req) => {
         effectiveIndent = Math.floor(leadingSpaces / 3);
       }
 
-      let opening = 0, txnDebit = 0, txnCredit = 0, closing = 0;
+      let txnDebit = 0;
+      let txnCredit = 0;
+
+      const hasAmountCells = isAmountDrCrFormat
+        ? row[amountCol] !== null && row[amountCol] !== undefined && String(row[amountCol]).trim() !== ""
+        : [colMap.opening, colMap.txnDebit, colMap.txnCredit, colMap.closing]
+            .filter((c) => c >= 0)
+            .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
       if (isAmountDrCrFormat) {
         // Amount + Dr/Cr format
@@ -385,17 +406,28 @@ serve(async (req) => {
           txnDebit = 0;
           txnCredit = 0;
         }
-        closing = amount; // Store original amount as closing
       } else {
-        opening = colMap.opening >= 0 ? parseNum(row[colMap.opening]) : 0;
         txnDebit = colMap.txnDebit >= 0 ? parseNum(row[colMap.txnDebit]) : 0;
         txnCredit = colMap.txnCredit >= 0 ? parseNum(row[colMap.txnCredit]) : 0;
-        closing = colMap.closing >= 0 ? parseNum(row[colMap.closing]) : 0;
       }
 
-      // IMPORTANT: Do NOT skip rows where both debit and credit are zero
-      // These are valid accounts with no transactions
-      dataRows.push({ rowNum: r, name, indent: effectiveIndent, bold, opening, txnDebit, txnCredit, closing });
+      // Restore opening + closing columns from imported debit/credit values
+      const opening = txnDebit - txnCredit;
+      const closing = opening + txnDebit - txnCredit;
+
+      // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
+      dataRows.push({
+        rowNum: r,
+        name,
+        indent: effectiveIndent,
+        bold,
+        italic,
+        hasAmounts: hasAmountCells,
+        opening,
+        txnDebit,
+        txnCredit,
+        closing,
+      });
     }
 
     console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows: ${dataRows.length}, Skipped: ${skippedRows}`);
@@ -407,57 +439,99 @@ serve(async (req) => {
       );
     }
 
-    // ─── Build hierarchy tree ───
+    // ─── Build hierarchy tree (indentation-first, formatting fallback) ───
     const nodes: HierarchyNode[] = [];
-    const indentStack: { indent: number; nodeId: string; name: string }[] = [];
+    const parentStack: { level: number; nodeId: string; name: string }[] = [];
+    const childCounterByParent = new Map<string, number>();
+    const groupRegistry = new Map<string, HierarchyNode>();
+    const hasIndentSignals = dataRows.some((r) => r.indent > 0);
 
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
-      const nextIndent = i < dataRows.length - 1 ? dataRows[i + 1].indent : -1;
-      const isLeaf = isCSV ? true : (nextIndent <= row.indent);
+      const fallbackLevel = row.hasAmounts ? 4 : row.bold ? 1 : row.italic ? 3 : 2;
+      const level = Math.max(1, hasIndentSignals ? row.indent + 1 : fallbackLevel);
 
-      // Pop stack to find parent
-      while (indentStack.length > 0 && indentStack[indentStack.length - 1].indent >= row.indent) {
-        indentStack.pop();
+      // Maintain parent stack by computed level
+      while (parentStack.length >= level) {
+        parentStack.pop();
       }
 
-      const parentNode = indentStack.length > 0 ? indentStack[indentStack.length - 1] : null;
-      const level = indentStack.length + 1;
-      const nodeId = parentNode
-        ? `${parentNode.nodeId}.${nodes.filter(n => n.parentNodeId === parentNode.nodeId).length + 1}`
-        : String(nodes.filter(n => !n.parentNodeId).length + 1);
+      const parentNode = parentStack.length > 0 ? parentStack[parentStack.length - 1] : null;
+      const isLeaf = row.hasAmounts;
 
-      const primaryGroup = indentStack.length > 0 ? indentStack[0].name : row.name;
-      const bsPlSide = detectBsPlSide(primaryGroup);
-      const normalBal = detectNormalBalance(primaryGroup);
-
-      nodes.push({
-        nodeId,
-        parentNodeId: parentNode?.nodeId || null,
-        level,
-        name: row.name,
-        indent: row.indent,
-        bold: row.bold,
-        isLeaf,
-        primaryGroup,
-        bsPlSide,
-        normalBal,
-        opening: row.opening,
-        txnDebit: row.txnDebit,
-        txnCredit: row.txnCredit,
-        closing: row.closing,
-        rowNumber: row.rowNum,
-      });
-
+      let node: HierarchyNode | null = null;
       if (!isLeaf) {
-        indentStack.push({ indent: row.indent, nodeId, name: row.name });
+        const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
+        node = groupRegistry.get(dedupeKey) || null;
       }
+
+      if (!node) {
+        const parentKey = parentNode?.nodeId || "root";
+        const nextIndex = (childCounterByParent.get(parentKey) || 0) + 1;
+        childCounterByParent.set(parentKey, nextIndex);
+
+        const nodeId = parentNode ? `${parentNode.nodeId}.${nextIndex}` : String(nextIndex);
+        const primaryGroup = parentStack.length > 0 ? parentStack[0].name : row.name;
+        const bsPlSide = detectBsPlSide(primaryGroup);
+        const normalBal = detectNormalBalance(primaryGroup);
+
+        node = {
+          nodeId,
+          parentNodeId: parentNode?.nodeId || null,
+          level,
+          name: row.name,
+          indent: row.indent,
+          bold: row.bold,
+          italic: row.italic,
+          isLeaf,
+          primaryGroup,
+          bsPlSide,
+          normalBal,
+          opening: row.opening,
+          txnDebit: row.txnDebit,
+          txnCredit: row.txnCredit,
+          closing: row.closing,
+          rowNumber: row.rowNum,
+        };
+
+        nodes.push(node);
+
+        if (!isLeaf) {
+          const dedupeKey = `${parentNode?.nodeId || "root"}::${normalizeGroupName(row.name)}`;
+          groupRegistry.set(dedupeKey, node);
+        }
+      }
+
+      if (!node.isLeaf) {
+        parentStack.push({ level, nodeId: node.nodeId, name: node.name });
+      }
+    }
+
+    // ─── Recursive group aggregation from child accounts ───
+    const childrenByParent = new Map<string, HierarchyNode[]>();
+    for (const node of nodes) {
+      if (!node.parentNodeId) continue;
+      const children = childrenByParent.get(node.parentNodeId) || [];
+      children.push(node);
+      childrenByParent.set(node.parentNodeId, children);
+    }
+
+    const nodesByDepth = [...nodes].sort((a, b) => b.level - a.level);
+    for (const node of nodesByDepth) {
+      if (node.isLeaf) continue;
+      const children = childrenByParent.get(node.nodeId) || [];
+      if (children.length === 0) continue;
+
+      node.opening = children.reduce((sum, child) => sum + child.opening, 0);
+      node.txnDebit = children.reduce((sum, child) => sum + child.txnDebit, 0);
+      node.txnCredit = children.reduce((sum, child) => sum + child.txnCredit, 0);
+      node.closing = children.reduce((sum, child) => sum + child.closing, 0);
     }
 
     const leafNodes = nodes.filter(n => n.isLeaf);
     const groupNodes = nodes.filter(n => !n.isLeaf);
 
-    console.log(`[parse-tally-tb] Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}`);
+    console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows detected: ${dataRows.length}, Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}, Rows skipped: ${skippedRows}`);
 
     // ─── Save to database ───
     const batchId = crypto.randomUUID();
@@ -585,6 +659,7 @@ serve(async (req) => {
           level: n.level,
           isLeaf: n.isLeaf,
           bold: n.bold,
+          italic: n.italic,
           indent: n.indent,
           opening: n.opening,
           txnDebit: n.txnDebit,

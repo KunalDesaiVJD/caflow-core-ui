@@ -154,6 +154,7 @@ export default function ImportTrialBalance() {
   const [parsing, setParsing] = useState(false);
   const [parseProgress, setParseProgress] = useState("");
   const [importStats, setImportStats] = useState<ImportStats | null>(null);
+  const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [error, setError] = useState("");
 
@@ -200,10 +201,10 @@ export default function ImportTrialBalance() {
     load();
   }, [clientId]);
 
-  // Check for existing import and load TB data when engagement changes
+  // Check for existing import + hierarchy when engagement changes
   useEffect(() => {
     if (!engagementId) return;
-    loadExistingTB();
+    void Promise.all([loadExistingTB(), loadHierarchy()]);
   }, [engagementId]);
 
   const loadExistingTB = async () => {
@@ -236,6 +237,43 @@ export default function ImportTrialBalance() {
     }
     setLoadingExisting(false);
   };
+
+  async function loadHierarchy() {
+    if (!engagementId) {
+      setHierarchyNodes([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("tb_hierarchy_nodes")
+      .select("node_id, parent_node_id, tally_group_name, level, is_leaf, is_bold, indent_value, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side, normal_balance")
+      .eq("engagement_id", engagementId)
+      .order("row_number", { ascending: true });
+
+    if (error) {
+      setHierarchyNodes([]);
+      return;
+    }
+
+    const mapped: HierarchyNode[] = (data || []).map((row: any) => ({
+      nodeId: row.node_id,
+      parentNodeId: row.parent_node_id,
+      name: row.tally_group_name,
+      level: row.level || 1,
+      isLeaf: !!row.is_leaf,
+      bold: !!row.is_bold,
+      indent: row.indent_value || 0,
+      opening: row.opening_balance || 0,
+      txnDebit: row.txn_debit || 0,
+      txnCredit: row.txn_credit || 0,
+      closing: row.closing_balance || 0,
+      primaryGroup: row.primary_group || row.tally_group_name,
+      bsPlSide: row.bs_pl_side || "Unknown",
+      normalBal: row.normal_balance || "Unknown",
+    }));
+
+    setHierarchyNodes(mapped);
+  }
 
   const handleDeleteTB = async () => {
     if (!engagementId) return;
@@ -326,8 +364,7 @@ export default function ImportTrialBalance() {
       setImportStats(data as ImportStats);
       setExistingImport(true);
       toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
-      // Reload existing TB data
-      loadExistingTB();
+      await Promise.all([loadExistingTB(), loadHierarchy()]);
     } catch (err: any) {
       setError(err.message);
       toast({ title: "Parse failed", description: err.message, variant: "destructive" });
@@ -364,8 +401,8 @@ export default function ImportTrialBalance() {
     }
   };
 
-  const leafNodes = useMemo(() => importStats?.hierarchy?.filter(n => n.isLeaf) || [], [importStats]);
-  const rootNodes = useMemo(() => importStats?.hierarchy?.filter(n => !n.parentNodeId) || [], [importStats]);
+  const leafNodes = useMemo(() => hierarchyNodes.filter(n => n.isLeaf), [hierarchyNodes]);
+  const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parentNodeId), [hierarchyNodes]);
   const tagging = importStats?.tagging;
 
   const fmtNum = (n: number | null) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
@@ -700,7 +737,9 @@ export default function ImportTrialBalance() {
                     <div className="w-4" /><span className="flex-1">Account / Group</span>
                     <span className="w-24 text-right">Opening</span><span className="w-24 text-right">Txn Dr</span><span className="w-24 text-right">Txn Cr</span><span className="w-24 text-right">Closing</span>
                   </div>
-                  {rootNodes.map(node => <TreeNode key={node.nodeId} node={node} allNodes={importStats.hierarchy} />)}
+                  {rootNodes.length > 0 ? rootNodes.map(node => <TreeNode key={node.nodeId} node={node} allNodes={hierarchyNodes} />) : (
+                    <div className="p-4 text-xs text-muted-foreground">No hierarchy nodes available for this import.</div>
+                  )}
                 </div>
               ) : (
                 <div className="border rounded-lg overflow-auto max-h-[500px]">
