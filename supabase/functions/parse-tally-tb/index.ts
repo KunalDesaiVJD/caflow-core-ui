@@ -67,6 +67,8 @@ interface TBRow {
   name: string;
   indent: number;
   bold: boolean;
+  italic: boolean;
+  hasAmounts: boolean;
   opening: number;
   txnDebit: number;
   txnCredit: number;
@@ -80,6 +82,7 @@ interface HierarchyNode {
   name: string;
   indent: number;
   bold: boolean;
+  italic: boolean;
   isLeaf: boolean;
   primaryGroup: string;
   bsPlSide: string;
