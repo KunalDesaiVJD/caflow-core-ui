@@ -201,10 +201,10 @@ export default function ImportTrialBalance() {
     load();
   }, [clientId]);
 
-  // Check for existing import and load TB data when engagement changes
+  // Check for existing import + hierarchy when engagement changes
   useEffect(() => {
     if (!engagementId) return;
-    loadExistingTB();
+    void Promise.all([loadExistingTB(), loadHierarchy()]);
   }, [engagementId]);
 
   const loadExistingTB = async () => {
