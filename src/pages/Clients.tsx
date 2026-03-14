@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText } from "lucide-react";
+import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, Upload, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface Client {
@@ -36,6 +36,7 @@ interface GroupInfo {
 }
 
 const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
+const PAGE_SIZE = 20;
 
 type ViewMode = "it" | "table" | "card";
 
@@ -53,6 +54,7 @@ const Clients = () => {
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [clientGroupMap, setClientGroupMap] = useState<Record<string, GroupInfo[]>>({});
@@ -62,6 +64,10 @@ const Clients = () => {
 
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
+
+  // Import state
+  const importRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
 
   const fetchData = async () => {
     const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
@@ -148,6 +154,72 @@ const Clients = () => {
     toast({ title: "Exported to Excel" });
   };
 
+  // ── Bulk Import ──
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+      if (rows.length === 0) { toast({ title: "No data found", variant: "destructive" }); return; }
+
+      // Get existing PANs for duplicate check
+      const { data: existingClients } = await supabase.from("clients").select("pan").not("pan", "is", null);
+      const existingPans = new Set((existingClients || []).map((c: any) => (c.pan || "").toUpperCase()).filter(Boolean));
+
+      let success = 0;
+      let failed = 0;
+      const errors: string[] = [];
+
+      for (const row of rows) {
+        const name = (row["Client Name"] || row["Name"] || row["name"] || "").trim();
+        if (!name) { failed++; errors.push("Empty name"); continue; }
+
+        const pan = (row["PAN"] || row["pan"] || "").toUpperCase().trim();
+        if (pan && existingPans.has(pan)) {
+          failed++;
+          errors.push(`Duplicate PAN: ${pan}`);
+          continue;
+        }
+
+        const gstinRaw = (row["GSTIN"] || row["gstin"] || "").trim();
+        const gstin = gstinRaw ? [gstinRaw] : null;
+
+        const { error } = await supabase.from("clients").insert({
+          name,
+          pan: pan || null,
+          entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
+          gstin,
+          firm_id: user?.firm_id || null,
+          user_id: user?.id || null,
+        } as any);
+
+        if (error) {
+          failed++;
+          errors.push(`${name}: ${error.message}`);
+        } else {
+          success++;
+          if (pan) existingPans.add(pan);
+        }
+      }
+
+      toast({
+        title: "Import Complete",
+        description: `Total: ${rows.length} | Success: ${success} | Failed: ${failed}`,
+      });
+      fetchData();
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setImporting(false);
+      if (importRef.current) importRef.current.value = "";
+    }
+  };
+
   const filtered = clients.filter((c) => {
     const matchesSearch = !search || (c.name || "").toLowerCase().includes(search.toLowerCase()) || (c.pan || "").toLowerCase().includes(search.toLowerCase());
     const matchesEntity = entityFilter === "all" || c.entity_type === entityFilter;
@@ -161,6 +233,13 @@ const Clients = () => {
     return matchesSearch && matchesEntity && matchesGroup;
   });
 
+  // Reset page when filters change
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter]);
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginatedItems = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
   const toggleGroupFilter = (id: string) => {
     setGroupFilter(prev => {
       if (id === "ungrouped") return prev.includes("ungrouped") ? prev.filter(x => x !== "ungrouped") : ["ungrouped"];
@@ -169,6 +248,36 @@ const Clients = () => {
     });
   };
 
+  const PaginationControls = () => {
+    if (filtered.length <= PAGE_SIZE) return null;
+    return (
+      <div className="flex items-center justify-between pt-4">
+        <p className="text-xs text-muted-foreground">
+          Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button variant="outline" size="icon" className="h-8 w-8" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+            let page: number;
+            if (totalPages <= 5) page = i + 1;
+            else if (currentPage <= 3) page = i + 1;
+            else if (currentPage >= totalPages - 2) page = totalPages - 4 + i;
+            else page = currentPage - 2 + i;
+            return (
+              <Button key={page} variant={page === currentPage ? "default" : "outline"} size="icon" className="h-8 w-8 text-xs" onClick={() => setCurrentPage(page)}>
+                {page}
+              </Button>
+            );
+          })}
+          <Button variant="outline" size="icon" className="h-8 w-8" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -191,6 +300,8 @@ const Clients = () => {
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
           </div>
+          <Button variant="outline" size="sm" onClick={() => importRef.current?.click()} disabled={importing} className="gap-1.5"><Upload className="h-4 w-4" /> Import</Button>
+          <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
           <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>
@@ -239,78 +350,118 @@ const Clients = () => {
         <Card><CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground"><Users className="h-10 w-10 mb-3 opacity-40" /><p>No clients found</p></CardContent></Card>
       ) : viewMode === "it" ? (
         /* IT VIEW */
-        <div className="rounded-md border border-border overflow-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Client Name</TableHead>
-                <TableHead className="text-xs">PAN</TableHead>
-                <TableHead className="text-xs">Constitution</TableHead>
-                <TableHead className="text-xs">Active Services</TableHead>
-                <TableHead className="text-xs w-12"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map(client => {
-                const svcCount = serviceCountMap[client.id] || 0;
-                return (
-                  <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
-                    <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
-                    <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
-                    <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
-                    <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                          <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          <div className="rounded-md border border-border overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Client Name</TableHead>
+                  <TableHead className="text-xs">PAN</TableHead>
+                  <TableHead className="text-xs">Constitution</TableHead>
+                  <TableHead className="text-xs">Active Services</TableHead>
+                  <TableHead className="text-xs w-12"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedItems.map(client => {
+                  const svcCount = serviceCountMap[client.id] || 0;
+                  return (
+                    <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
+                      <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                      <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
+                      <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
+                      <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                            <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <PaginationControls />
+        </>
       ) : viewMode === "table" ? (
         /* TABLE VIEW */
-        <div className="rounded-md border border-border overflow-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Name</TableHead>
-                <TableHead className="text-xs">PAN</TableHead>
-                <TableHead className="text-xs">Entity Type</TableHead>
-                <TableHead className="text-xs">CIN</TableHead>
-                <TableHead className="text-xs">GSTIN</TableHead>
-                <TableHead className="text-xs">Groups</TableHead>
-                <TableHead className="text-xs w-12"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map(client => {
-                const clientGroups = clientGroupMap[client.id] || [];
-                return (
-                  <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
-                    <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
-                    <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
-                    <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
-                    <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
-                    <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {clientGroups.length > 0 ? clientGroups.map(g => (
-                          <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>{g.name}</Badge>
-                        )) : <span className="text-[10px] text-muted-foreground">—</span>}
+        <>
+          <div className="rounded-md border border-border overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Name</TableHead>
+                  <TableHead className="text-xs">PAN</TableHead>
+                  <TableHead className="text-xs">Entity Type</TableHead>
+                  <TableHead className="text-xs">CIN</TableHead>
+                  <TableHead className="text-xs">GSTIN</TableHead>
+                  <TableHead className="text-xs">Groups</TableHead>
+                  <TableHead className="text-xs w-12"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedItems.map(client => {
+                  const clientGroups = clientGroupMap[client.id] || [];
+                  return (
+                    <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
+                      <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                      <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
+                      <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
+                      <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
+                      <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {clientGroups.length > 0 ? clientGroups.map(g => (
+                            <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>{g.name}</Badge>
+                          )) : <span className="text-[10px] text-muted-foreground">—</span>}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                            <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <PaginationControls />
+        </>
+      ) : (
+        /* CARD VIEW */
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {paginatedItems.map(client => {
+              const clientGroups = clientGroupMap[client.id] || [];
+              const svcCount = serviceCountMap[client.id] || 0;
+              const initial = (client.name || "?")[0].toUpperCase();
+              return (
+                <Card key={client.id} className="group cursor-pointer hover:border-primary/40 transition-colors" onClick={() => navigate(`/clients/${client.id}`)}>
+                  <CardContent className="p-5 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg shrink-0">{initial}</div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-foreground truncate">{client.name || "Unnamed"}</h3>
+                        {client.pan && <p className="text-[11px] font-mono text-muted-foreground">{client.pan}</p>}
                       </div>
-                    </TableCell>
-                    <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
                           <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
@@ -321,56 +472,25 @@ const Clients = () => {
                           <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      ) : (
-        /* CARD VIEW */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(client => {
-            const clientGroups = clientGroupMap[client.id] || [];
-            const svcCount = serviceCountMap[client.id] || 0;
-            const initial = (client.name || "?")[0].toUpperCase();
-            return (
-              <Card key={client.id} className="group cursor-pointer hover:border-primary/40 transition-colors" onClick={() => navigate(`/clients/${client.id}`)}>
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg shrink-0">{initial}</div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground truncate">{client.name || "Unnamed"}</h3>
-                      {client.pan && <p className="text-[11px] font-mono text-muted-foreground">{client.pan}</p>}
                     </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
-                        <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}
-                    {svcCount > 0 && <Badge variant="secondary" className="text-[10px]">{svcCount} services</Badge>}
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {clientGroups.length > 0 ? clientGroups.map(g => (
-                      <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>
-                        <span className="w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: g.color || "#6B7280" }} />{g.name}
-                      </Badge>
-                    )) : <span className="text-[10px] text-muted-foreground">Ungrouped</span>}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}
+                      {svcCount > 0 && <Badge variant="secondary" className="text-[10px]">{svcCount} services</Badge>}
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {clientGroups.length > 0 ? clientGroups.map(g => (
+                        <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>
+                          <span className="w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: g.color || "#6B7280" }} />{g.name}
+                        </Badge>
+                      )) : <span className="text-[10px] text-muted-foreground">Ungrouped</span>}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+          <PaginationControls />
+        </>
       )}
 
       {/* Delete Confirmation */}

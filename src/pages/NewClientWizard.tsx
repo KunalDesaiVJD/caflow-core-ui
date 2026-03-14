@@ -341,7 +341,7 @@ const NewClientWizard = () => {
       } else {
         const insertPayload = {
           ...buildClientPayload(),
-          firm_id: user?.firm_id || null,
+          firm_id: basicInfo.firm_id || user?.firm_id || null,
           user_id: authUserId,
         };
 
