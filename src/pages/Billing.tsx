@@ -406,13 +406,18 @@ function TimesheetTab() {
 
   const handleAdd = async () => {
     if (!addDate || !addClient || !addDesc.trim()) return;
+    const hrs = parseFloat(addHours);
+    if (isNaN(hrs) || hrs < 0 || hrs > 24) {
+      toast({ title: "Hours must be between 0 and 24.", variant: "destructive" });
+      return;
+    }
     setAddSaving(true);
     const { error } = await supabase.from("timesheets").insert({
       user_id: selectedStaff || user?.id,
       client_id: addClient,
       work_date: format(addDate, "yyyy-MM-dd"),
       description: addDesc.trim(),
-      hours: parseFloat(addHours) || 1,
+      hours: hrs,
       billable: addBillable,
       is_billable: addBillable,
       firm_id: firmId,
