@@ -1317,6 +1317,15 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
                           placeholder="Remarks"
                         />
                       </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={async () => {
+                          const { error } = await supabase.from("tds_filings").delete().eq("id", filing.id);
+                          if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+                          else { toast({ title: "Filing deleted" }); fetchFilings(); }
+                        }}>
+                          <Trash2 size={14} className="text-destructive" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
