@@ -862,6 +862,25 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
         </div>
         <Button onClick={openAdd} size="sm" className="gap-1"><Plus size={14} /> Add Entry</Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+          const rows = filtered.map(e => ({
+            Client: clients.find(c => c.id === e.client_id)?.name || "",
+            "Deductee Name": e.party_name || "",
+            PAN: e.deductee_pan || e.pan || "",
+            Section: e.section_code || e.section || "",
+            Amount: e.amount || 0,
+            "TDS Rate": e.tds_rate || 0,
+            "TDS Amount": e.tds_amount || 0,
+            Date: e.date || "",
+            "BSR Code": e.challan_bsr_code || "",
+            Status: e.validation_status || "valid",
+          }));
+          const ws = (await import("xlsx")).utils.json_to_sheet(rows);
+          const wb = (await import("xlsx")).utils.book_new();
+          (await import("xlsx")).utils.book_append_sheet(wb, ws, "TDS Entries");
+          (await import("xlsx")).writeFile(wb, `TDS_Entries_${selectedForm}.xlsx`);
+          toast({ title: "Exported to Excel" });
+        }}><Download size={14} /> Export</Button>
+        <Button variant="outline" size="sm" className="gap-1" onClick={() => {
           const headers = selectedForm === "24Q"
             ? "Employee Name,PAN,Designation,Salary Amount,Standard Deduction,TDS Deducted,Payment Date,BSR Code,Challan Date,Challan Serial,Challan Amount"
             : selectedForm === "27EQ"
