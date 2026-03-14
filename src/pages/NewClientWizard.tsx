@@ -388,7 +388,7 @@ const NewClientWizard = () => {
   };
 
   const handleNext = async () => {
-    if (step === 0 && !validateBasicInfo()) return;
+    if (step === 0 && !(await validateBasicInfo())) return;
     if (step === STEPS.length - 1) {
       await handleFinalSubmit();
       return;
