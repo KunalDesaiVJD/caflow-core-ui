@@ -865,7 +865,8 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search deductee..." className="pl-9" />
         </div>
         <Button onClick={openAdd} size="sm" className="gap-1"><Plus size={14} /> Add Entry</Button>
-        <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+        <Button variant="outline" size="sm" className="gap-1" onClick={async () => {
+          const XLSX = await import("xlsx");
           const rows = filtered.map(e => ({
             Client: clients.find(c => c.id === e.client_id)?.name || "",
             "Deductee Name": e.party_name || "",
@@ -878,10 +879,10 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
             "BSR Code": e.challan_bsr_code || "",
             Status: e.validation_status || "valid",
           }));
-          const ws = (await import("xlsx")).utils.json_to_sheet(rows);
-          const wb = (await import("xlsx")).utils.book_new();
-          (await import("xlsx")).utils.book_append_sheet(wb, ws, "TDS Entries");
-          (await import("xlsx")).writeFile(wb, `TDS_Entries_${selectedForm}.xlsx`);
+          const ws = XLSX.utils.json_to_sheet(rows);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "TDS Entries");
+          XLSX.writeFile(wb, `TDS_Entries_${selectedForm}.xlsx`);
           toast({ title: "Exported to Excel" });
         }}><Download size={14} /> Export</Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => {
