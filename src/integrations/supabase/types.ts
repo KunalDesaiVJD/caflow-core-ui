@@ -3470,6 +3470,7 @@ export type Database = {
           lower_cert_no: string | null
           lower_cert_rate: number | null
           nature_of_payment: string | null
+          nil_deduction_reason: string | null
           pan: string | null
           party_name: string | null
           payment_mode: string | null
@@ -3509,6 +3510,7 @@ export type Database = {
           lower_cert_no?: string | null
           lower_cert_rate?: number | null
           nature_of_payment?: string | null
+          nil_deduction_reason?: string | null
           pan?: string | null
           party_name?: string | null
           payment_mode?: string | null
@@ -3548,6 +3550,7 @@ export type Database = {
           lower_cert_no?: string | null
           lower_cert_rate?: number | null
           nature_of_payment?: string | null
+          nil_deduction_reason?: string | null
           pan?: string | null
           party_name?: string | null
           payment_mode?: string | null
