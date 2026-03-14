@@ -1205,7 +1205,7 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <Table>
+             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
@@ -1221,6 +1221,7 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
                   <TableHead>Due Date</TableHead>
                   <TableHead>Assigned</TableHead>
                   <TableHead>Remarks</TableHead>
+                  <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
