@@ -1234,7 +1234,7 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
                     </TableRow>
                   ))
                 ) : filings.length === 0 ? (
-                  <TableRow><TableCell colSpan={13} className="text-center text-muted-foreground py-8">No filing records found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={14} className="text-center text-muted-foreground py-8">No filing records found. Click "Add Filing" to create one.</TableCell></TableRow>
                 ) : (
                   filings.map(filing => (
                     <TableRow key={filing.id}>
