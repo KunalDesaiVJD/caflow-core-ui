@@ -1226,9 +1226,9 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
+                  Array.from({ length: 14 }).map((_, i) => (
                     <TableRow key={i}>
-                      {Array.from({ length: 13 }).map((_, j) => (
+                      {Array.from({ length: 14 }).map((_, j) => (
                         <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                       ))}
                     </TableRow>
