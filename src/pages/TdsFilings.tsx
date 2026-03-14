@@ -1145,6 +1145,24 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           </Select>
         </div>
         <div className="flex-1" />
+        <Button size="sm" className="gap-1" onClick={async () => {
+          if (clients.length === 0) { toast({ title: "No TDS clients available", variant: "destructive" }); return; }
+          const firmId = await resolveFirmId();
+          const clientId = clientFilter !== "all" ? clientFilter : clients[0]?.id;
+          if (!clientId) return;
+          const fy = fyFilter !== "all" ? fyFilter : DEFAULT_FY;
+          const qtr = quarterFilter !== "all" ? quarterFilter : "Q1";
+          const { error } = await supabase.from("tds_filings").insert({
+            client_id: clientId,
+            firm_id: firmId,
+            financial_year: fy,
+            quarter: qtr,
+            tds_forms: ["26Q"],
+            work_status: "Not Started",
+          });
+          if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+          else { toast({ title: "Filing record created" }); fetchFilings(); }
+        }}><Plus size={14} /> Add Filing</Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => {
           // Generate filing sheet as printable HTML
           const rows = filings.map(f => `
@@ -1187,7 +1205,7 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <Table>
+             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="min-w-[150px] sticky left-0 bg-background z-10">Client</TableHead>
@@ -1203,19 +1221,20 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
                   <TableHead>Due Date</TableHead>
                   <TableHead>Assigned</TableHead>
                   <TableHead>Remarks</TableHead>
+                  <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
+                  Array.from({ length: 14 }).map((_, i) => (
                     <TableRow key={i}>
-                      {Array.from({ length: 13 }).map((_, j) => (
+                      {Array.from({ length: 14 }).map((_, j) => (
                         <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : filings.length === 0 ? (
-                  <TableRow><TableCell colSpan={13} className="text-center text-muted-foreground py-8">No filing records found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={14} className="text-center text-muted-foreground py-8">No filing records found. Click "Add Filing" to create one.</TableCell></TableRow>
                 ) : (
                   filings.map(filing => (
                     <TableRow key={filing.id}>
@@ -1297,6 +1316,15 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
                           onChange={e => handleInlineUpdate(filing, "remarks", e.target.value)}
                           placeholder="Remarks"
                         />
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={async () => {
+                          const { error } = await supabase.from("tds_filings").delete().eq("id", filing.id);
+                          if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+                          else { toast({ title: "Filing deleted" }); fetchFilings(); }
+                        }}>
+                          <Trash2 size={14} className="text-destructive" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))

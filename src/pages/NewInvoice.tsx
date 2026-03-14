@@ -753,7 +753,8 @@ const NewInvoice = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs">Invoice No</Label>
-                <Input value={invoiceNo} readOnly className="bg-muted font-mono" />
+                <Input value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} className="font-mono" disabled={isLocked} placeholder="e.g. 1/2025-26" />
+                {!isEdit && invoiceNo && <p className="text-[10px] text-muted-foreground mt-0.5">Suggested: {invoiceNo}</p>}
               </div>
               <div>
                 <Label className="text-xs">Invoice Date</Label>

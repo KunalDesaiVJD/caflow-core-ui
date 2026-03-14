@@ -165,12 +165,21 @@ export default function Documents() {
       const category = selectedFolder !== "all" ? selectedFolder : "other";
       const firmId = user?.firm_id;
 
-      // Insert document record
+      // Upload file to storage bucket
+      const r2Key = `documents/${firmId || "shared"}/${Date.now()}_${file.name}`;
+      const { error: uploadErr } = await supabase.storage.from("firm-assets").upload(r2Key, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+      if (uploadErr) throw uploadErr;
+
+      // Insert document record with r2_key
       const { error } = await supabase.from("documents").insert({
         filename: file.name,
         category,
         client_id: clientId,
         firm_id: firmId,
+        r2_key: r2Key,
         tags: [],
       } as any);
 
