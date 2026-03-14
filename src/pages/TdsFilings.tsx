@@ -510,7 +510,11 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
       }
       // NIL deduction warning
       if ((parseFloat(formData.tds_amount) || 0) === 0 && (parseFloat(formData.amount) || 0) > 0) {
-        warnings.push("NIL deduction on taxable payment");
+        if (!formData.nil_deduction_reason) {
+          warnings.push("NIL deduction on taxable payment — provide a reason");
+        } else {
+          warnings.push("NIL deduction: " + formData.nil_deduction_reason);
+        }
       }
 
       const payload = {

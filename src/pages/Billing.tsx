@@ -152,11 +152,11 @@ function InvoicesTab() {
   const enriched = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     return invoices.map(inv => {
-      let effectiveStatus = inv.status || "draft";
-      if (!["paid", "voided"].includes(effectiveStatus) && inv.due_date && new Date(inv.due_date) < today) {
-        effectiveStatus = "overdue";
+      let computedStatus = inv.status || "draft";
+      if (!["paid", "voided"].includes(computedStatus) && inv.due_date && new Date(inv.due_date) < today) {
+        computedStatus = "overdue";
       }
-      return { ...inv, effectiveStatus };
+      return { ...inv, effectiveStatus: computedStatus };
     });
   }, [invoices]);
 
