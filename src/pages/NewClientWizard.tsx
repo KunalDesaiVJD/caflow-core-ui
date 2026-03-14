@@ -199,11 +199,22 @@ const NewClientWizard = () => {
     };
   }, [clientId, isEditMode, toast]);
 
-  const validateBasicInfo = (): boolean => {
+  const validateBasicInfo = async (): Promise<boolean> => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
     if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
       errors.pan = "Invalid PAN format. Example: ABCDE1234F";
+    }
+    // Check duplicate PAN
+    if (basicInfo.pan && !errors.pan) {
+      const { data: existing } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("pan", basicInfo.pan)
+        .limit(1);
+      if (existing && existing.length > 0 && (!isEditMode || existing[0].id !== clientId)) {
+        errors.pan = "Client with this PAN already exists.";
+      }
     }
     basicInfo.gstins.forEach((g, i) => {
       if (g && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(g)) {
@@ -330,7 +341,7 @@ const NewClientWizard = () => {
       } else {
         const insertPayload = {
           ...buildClientPayload(),
-          firm_id: user?.firm_id || null,
+          firm_id: basicInfo.firm_id || user?.firm_id || null,
           user_id: authUserId,
         };
 
@@ -377,7 +388,7 @@ const NewClientWizard = () => {
   };
 
   const handleNext = async () => {
-    if (step === 0 && !validateBasicInfo()) return;
+    if (step === 0 && !(await validateBasicInfo())) return;
     if (step === STEPS.length - 1) {
       await handleFinalSubmit();
       return;

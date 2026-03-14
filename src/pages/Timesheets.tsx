@@ -189,6 +189,11 @@ const Timesheets = () => {
       toast({ title: "Fill required fields", variant: "destructive" });
       return;
     }
+    const hrs = parseFloat(addHours);
+    if (isNaN(hrs) || hrs < 0 || hrs > 24) {
+      toast({ title: "Hours must be between 0 and 24.", variant: "destructive" });
+      return;
+    }
     setAddSaving(true);
     try {
       const { error } = await supabase.from("timesheets").insert({
@@ -197,7 +202,7 @@ const Timesheets = () => {
         engagement_id: addEngagement || null,
         work_date: format(addDate, "yyyy-MM-dd"),
         description: addDescription.trim(),
-        hours: parseFloat(addHours) || 1,
+        hours: hrs,
         billable: addBillable,
       });
       if (error) throw error;

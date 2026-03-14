@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ export interface BasicInfoData {
   gstins: string[];
   cin: string;
   selectedGroupIds?: string[];
+  firm_id?: string;
 }
 
 const ENTITY_TYPES = [
@@ -56,6 +58,11 @@ interface GroupOption {
   color: string | null;
 }
 
+interface FirmOption {
+  id: string;
+  name: string;
+}
+
 interface Props {
   data: BasicInfoData;
   onChange: (d: BasicInfoData) => void;
@@ -63,13 +70,25 @@ interface Props {
 }
 
 export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
+  const { user } = useAuth();
   const [groups, setGroups] = useState<GroupOption[]>([]);
+  const [firms, setFirms] = useState<FirmOption[]>([]);
 
   useEffect(() => {
     supabase.from("client_groups").select("id, name, color").order("name").then(({ data: g }) => {
       setGroups((g as GroupOption[]) || []);
     });
+    supabase.from("firms").select("id, name").order("name").then(({ data: f }) => {
+      setFirms((f as FirmOption[]) || []);
+    });
   }, []);
+
+  // Default firm_id to user's firm
+  useEffect(() => {
+    if (!data.firm_id && user?.firm_id) {
+      onChange({ ...data, firm_id: user.firm_id });
+    }
+  }, [user?.firm_id]);
 
   const selectedGroupIds = data.selectedGroupIds || [];
 
@@ -100,6 +119,21 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold text-foreground">Step 1 — Basic Info</h2>
+
+      {/* Firm Assignment */}
+      {firms.length > 1 && (
+        <div className="space-y-1.5">
+          <Label>Firm <span className="text-destructive">*</span></Label>
+          <Select value={data.firm_id || ""} onValueChange={(v) => update("firm_id", v)}>
+            <SelectTrigger><SelectValue placeholder="Select Firm" /></SelectTrigger>
+            <SelectContent>
+              {firms.map((f) => (
+                <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {/* Name */}
       <div className="space-y-1.5">

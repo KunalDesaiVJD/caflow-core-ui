@@ -420,16 +420,24 @@ export default function Documents() {
                           size="icon"
                           className="h-7 w-7"
                           title="Download"
-                          onClick={() => {
-                            // Create a text blob with document info as download
-                            const content = `Document: ${doc.filename}\nCategory: ${doc.category}\n\n${doc.extracted_text || "No extracted text available."}`;
-                            const blob = new Blob([content], { type: "text/plain" });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                            a.download = doc.filename || "document.txt";
-                            a.click();
-                            URL.revokeObjectURL(url);
+                          onClick={async () => {
+                            if (doc.r2_key) {
+                              try {
+                                const { data, error } = await supabase.functions.invoke("get-document-url", {
+                                  body: { document_id: doc.id },
+                                });
+                                if (error || !data?.signed_url) throw new Error(error?.message || "Failed to get download URL");
+                                const a = document.createElement("a");
+                                a.href = data.signed_url;
+                                a.download = doc.filename || "document";
+                                a.target = "_blank";
+                                a.click();
+                              } catch (err: any) {
+                                toast({ title: "Download failed", description: err.message, variant: "destructive" });
+                              }
+                            } else {
+                              toast({ title: "No file stored", description: "This document has no associated file.", variant: "destructive" });
+                            }
                           }}
                         >
                           <Download className="h-3.5 w-3.5" />

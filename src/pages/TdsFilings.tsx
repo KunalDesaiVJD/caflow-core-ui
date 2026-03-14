@@ -510,7 +510,11 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
       }
       // NIL deduction warning
       if ((parseFloat(formData.tds_amount) || 0) === 0 && (parseFloat(formData.amount) || 0) > 0) {
-        warnings.push("NIL deduction on taxable payment");
+        if (!formData.nil_deduction_reason) {
+          warnings.push("NIL deduction on taxable payment — provide a reason");
+        } else {
+          warnings.push("NIL deduction: " + formData.nil_deduction_reason);
+        }
       }
 
       const payload = {
@@ -861,6 +865,26 @@ function TdsEntriesTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search deductee..." className="pl-9" />
         </div>
         <Button onClick={openAdd} size="sm" className="gap-1"><Plus size={14} /> Add Entry</Button>
+        <Button variant="outline" size="sm" className="gap-1" onClick={async () => {
+          const XLSX = await import("xlsx");
+          const rows = filtered.map(e => ({
+            Client: clients.find(c => c.id === e.client_id)?.name || "",
+            "Deductee Name": e.party_name || "",
+            PAN: e.deductee_pan || e.pan || "",
+            Section: e.section_code || e.section || "",
+            Amount: e.amount || 0,
+            "TDS Rate": e.tds_rate || 0,
+            "TDS Amount": e.tds_amount || 0,
+            Date: e.date || "",
+            "BSR Code": e.challan_bsr_code || "",
+            Status: e.validation_status || "valid",
+          }));
+          const ws = XLSX.utils.json_to_sheet(rows);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "TDS Entries");
+          XLSX.writeFile(wb, `TDS_Entries_${selectedForm}.xlsx`);
+          toast({ title: "Exported to Excel" });
+        }}><Download size={14} /> Export</Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => {
           const headers = selectedForm === "24Q"
             ? "Employee Name,PAN,Designation,Salary Amount,Standard Deduction,TDS Deducted,Payment Date,BSR Code,Challan Date,Challan Serial,Challan Amount"
