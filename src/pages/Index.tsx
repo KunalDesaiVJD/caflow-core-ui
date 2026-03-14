@@ -80,25 +80,38 @@ const Index = () => {
     const monthEnd = endOfMonth(now).toISOString().split("T")[0];
 
 
+    const firmId = user.firm_id;
+    const isSuperadmin = user.role === "superadmin";
+
+    let clientsQ = supabase.from("clients").select("*", { count: "exact", head: true });
+    if (!isSuperadmin && firmId) clientsQ = clientsQ.eq("firm_id", firmId);
+
+    let tdsQ = supabase.from("tds_entries").select("*", { count: "exact", head: true })
+      .gte("due_date", monthStart).lte("due_date", monthEnd).is("challan_no", null);
+    if (!isSuperadmin && firmId) tdsQ = tdsQ.eq("firm_id", firmId);
+
+    let itrQ = supabase.from("itr_profiles").select("*", { count: "exact", head: true })
+      .neq("filing_status", "filed");
+    if (!isSuperadmin && firmId) itrQ = itrQ.eq("firm_id", firmId);
+
+    let auditsQ = supabase.from("audit_engagements").select("*", { count: "exact", head: true })
+      .neq("status", "completed");
+    if (!isSuperadmin && firmId) auditsQ = auditsQ.eq("firm_id", firmId);
+
+    let dueQ = supabase.from("tds_entries").select("party_name, due_date")
+      .gte("due_date", now.toISOString().split("T")[0])
+      .lte("due_date", new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0])
+      .is("challan_no", null)
+      .order("due_date", { ascending: true })
+      .limit(5);
+    if (!isSuperadmin && firmId) dueQ = dueQ.eq("firm_id", firmId);
+
+    let activityQ = supabase.from("version_history").select("user_name, user_role, table_name, operation, created_at")
+      .order("created_at", { ascending: false })
+      .limit(10);
+
     const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, activityRes] = await Promise.all([
-      supabase.from("clients").select("*", { count: "exact", head: true }),
-      supabase.from("tds_entries").select("*", { count: "exact", head: true })
-        .gte("due_date", monthStart).lte("due_date", monthEnd).is("challan_no", null),
-      supabase.from("itr_profiles").select("*", { count: "exact", head: true })
-        .neq("filing_status", "filed"),
-      supabase.from("audit_engagements").select("*", { count: "exact", head: true })
-        .neq("status", "completed"),
-      // Due this week: TDS entries due in next 7 days
-      supabase.from("tds_entries").select("party_name, due_date")
-        .gte("due_date", now.toISOString().split("T")[0])
-        .lte("due_date", new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0])
-        .is("challan_no", null)
-        .order("due_date", { ascending: true })
-        .limit(5),
-      // Recent activity from version_history
-      supabase.from("version_history").select("user_name, user_role, table_name, operation, created_at")
-        .order("created_at", { ascending: false })
-        .limit(10),
+      clientsQ, tdsQ, itrQ, auditsQ, dueQ, activityQ,
     ]);
 
     setStats({

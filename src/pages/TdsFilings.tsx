@@ -1145,6 +1145,24 @@ function TdsFilingsTab({ clients, users, isSuperadmin, resolveFirmId }: TabProps
           </Select>
         </div>
         <div className="flex-1" />
+        <Button size="sm" className="gap-1" onClick={async () => {
+          if (clients.length === 0) { toast({ title: "No TDS clients available", variant: "destructive" }); return; }
+          const firmId = await resolveFirmId();
+          const clientId = clientFilter !== "all" ? clientFilter : clients[0]?.id;
+          if (!clientId) return;
+          const fy = fyFilter !== "all" ? fyFilter : DEFAULT_FY;
+          const qtr = quarterFilter !== "all" ? quarterFilter : "Q1";
+          const { error } = await supabase.from("tds_filings").insert({
+            client_id: clientId,
+            firm_id: firmId,
+            financial_year: fy,
+            quarter: qtr,
+            tds_forms: ["26Q"],
+            work_status: "Not Started",
+          });
+          if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+          else { toast({ title: "Filing record created" }); fetchFilings(); }
+        }}><Plus size={14} /> Add Filing</Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => {
           // Generate filing sheet as printable HTML
           const rows = filings.map(f => `
