@@ -2277,6 +2277,146 @@ export type Database = {
           },
         ]
       }
+      form_3cd: {
+        Row: {
+          assessment_year: string | null
+          cl_10: Json | null
+          cl_11: Json | null
+          cl_12: Json | null
+          cl_13: Json | null
+          cl_14: Json | null
+          cl_15_16: Json | null
+          cl_17: Json | null
+          cl_18: Json | null
+          cl_19: Json | null
+          cl_20: Json | null
+          cl_21: Json | null
+          cl_22: Json | null
+          cl_23: Json | null
+          cl_24_25: Json | null
+          cl_26: Json | null
+          cl_27: Json | null
+          cl_29: Json | null
+          cl_30: Json | null
+          cl_31: Json | null
+          cl_32: Json | null
+          cl_33: Json | null
+          cl_34: Json | null
+          cl_35: Json | null
+          cl_36: Json | null
+          cl_37_39: Json | null
+          cl_40: Json | null
+          cl_41: Json | null
+          cl_42_43: Json | null
+          cl_44: Json | null
+          cl_8: Json | null
+          cl_9: Json | null
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          last_saved_at: string | null
+          last_saved_by: string | null
+          status: string | null
+        }
+        Insert: {
+          assessment_year?: string | null
+          cl_10?: Json | null
+          cl_11?: Json | null
+          cl_12?: Json | null
+          cl_13?: Json | null
+          cl_14?: Json | null
+          cl_15_16?: Json | null
+          cl_17?: Json | null
+          cl_18?: Json | null
+          cl_19?: Json | null
+          cl_20?: Json | null
+          cl_21?: Json | null
+          cl_22?: Json | null
+          cl_23?: Json | null
+          cl_24_25?: Json | null
+          cl_26?: Json | null
+          cl_27?: Json | null
+          cl_29?: Json | null
+          cl_30?: Json | null
+          cl_31?: Json | null
+          cl_32?: Json | null
+          cl_33?: Json | null
+          cl_34?: Json | null
+          cl_35?: Json | null
+          cl_36?: Json | null
+          cl_37_39?: Json | null
+          cl_40?: Json | null
+          cl_41?: Json | null
+          cl_42_43?: Json | null
+          cl_44?: Json | null
+          cl_8?: Json | null
+          cl_9?: Json | null
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          last_saved_at?: string | null
+          last_saved_by?: string | null
+          status?: string | null
+        }
+        Update: {
+          assessment_year?: string | null
+          cl_10?: Json | null
+          cl_11?: Json | null
+          cl_12?: Json | null
+          cl_13?: Json | null
+          cl_14?: Json | null
+          cl_15_16?: Json | null
+          cl_17?: Json | null
+          cl_18?: Json | null
+          cl_19?: Json | null
+          cl_20?: Json | null
+          cl_21?: Json | null
+          cl_22?: Json | null
+          cl_23?: Json | null
+          cl_24_25?: Json | null
+          cl_26?: Json | null
+          cl_27?: Json | null
+          cl_29?: Json | null
+          cl_30?: Json | null
+          cl_31?: Json | null
+          cl_32?: Json | null
+          cl_33?: Json | null
+          cl_34?: Json | null
+          cl_35?: Json | null
+          cl_36?: Json | null
+          cl_37_39?: Json | null
+          cl_40?: Json | null
+          cl_41?: Json | null
+          cl_42_43?: Json | null
+          cl_44?: Json | null
+          cl_8?: Json | null
+          cl_9?: Json | null
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          last_saved_at?: string | null
+          last_saved_by?: string | null
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "form_3cd_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoice_item_masters: {
         Row: {
           created_at: string | null
