@@ -276,6 +276,8 @@ export default function Form3CD() {
         cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
         cl_14: cl14, cl_15_16: cl15_16, cl_17: cl17, cl_18: cl18,
         cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
+        cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
+        cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
         status: formStatus,
         last_saved_at: new Date().toISOString(),
         last_saved_by: user?.id,
