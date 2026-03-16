@@ -1452,28 +1452,219 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* Placeholder sections for clauses 35-44 */}
-            {CLAUSE_NAV.filter(c => !implementedKeys.has(c.key as any)).map(c => (
-              <div key={c.key} ref={el => { sectionRefs.current[c.key] = el; }}>
-                <AccordionItem value={c.key} className="border rounded-lg">
-                  <AccordionTrigger className="px-4">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className="font-mono text-xs">{c.label}</Badge>
-                      <span className="font-medium">{c.title}</span>
-                      <Badge variant="secondary" className="text-[10px]">Coming Soon</Badge>
+            {/* ═══════ CLAUSE 35 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_35"] = el; }}>
+              <AccordionItem value="cl_35" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">35</Badge>
+                    <span className="font-medium">Turnover / Receipts</span>
+                    {isClauseFilled(cl35) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {["a", "b"].map(sub => (
+                    <div key={sub} className="space-y-3 border-l-2 border-muted pl-4">
+                      <Label className="font-medium">35({sub}) — {sub === "a" ? "Gross turnover / receipts" : "Gross receipts from profession"}</Label>
+                      <RadioApplicable name={`cl35${sub}`} value={cl35[`${sub}_applicable`]} onChange={v => updateClause(setCl35, `${sub}_applicable`, v)} />
+                      {cl35[`${sub}_applicable`] === true && (
+                        <TurnoverTable rows={cl35[`${sub}_rows`] || []} onChange={rows => updateClause(setCl35, `${sub}_rows`, rows)} />
+                      )}
+                      {cl35[`${sub}_applicable`] === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                     </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pb-4">
-                    <div className="p-4 bg-muted/50 rounded text-sm text-muted-foreground text-center">
-                      This clause will be implemented in the next prompt batch.
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 36 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_36"] = el; }}>
+              <AccordionItem value="cl_36" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">36</Badge>
+                    <span className="font-medium">Amounts not credited to P&L</span>
+                    {isClauseFilled(cl36) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {["a", "b"].map(sub => (
+                    <div key={sub} className="space-y-3 border-l-2 border-muted pl-4">
+                      <Label className="font-medium">36({sub}) — {sub === "a" ? "Amounts not credited to P&L but taxable" : "Other amounts not credited"}</Label>
+                      <RadioYesNo name={`cl36${sub}`} value={cl36[`${sub}_yes`]} onChange={v => updateClause(setCl36, `${sub}_yes`, v)} />
+                      {cl36[`${sub}_yes`] === true && (
+                        <EditableTable
+                          columns={["Nature of Receipt", "Amount (₹)", "Remarks"]}
+                          rows={cl36[`${sub}_rows`] || []}
+                          onChange={rows => updateClause(setCl36, `${sub}_rows`, rows)}
+                        />
+                      )}
+                      {cl36[`${sub}_yes`] === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                     </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </div>
-            ))}
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSES 37-39 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_37_39"] = el; }}>
+              <AccordionItem value="cl_37_39" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">37-39</Badge>
+                    <span className="font-medium">Change in shareholding / Cost audit / Central Excise</span>
+                    {isClauseFilled(cl37_39) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 37 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">37 — Any change in shareholding?</Label>
+                    <RadioYesNo name="cl37" value={cl37_39.cl37_yes} onChange={v => updateClause(setCl37_39, "cl37_yes", v)} />
+                    {cl37_39.cl37_yes === true && (
+                      <Textarea value={cl37_39.cl37_particulars || ""} onChange={e => updateClause(setCl37_39, "cl37_particulars", e.target.value)} placeholder="Particulars of change in shareholding..." />
+                    )}
+                  </div>
+                  {/* 38 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">38 — Cost audit ordered?</Label>
+                    <RadioYesNo name="cl38" value={cl37_39.cl38_yes} onChange={v => updateClause(setCl37_39, "cl38_yes", v)} />
+                    {cl37_39.cl38_yes === true && (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div><Label className="text-xs">Name of Cost Auditor</Label><Input value={cl37_39.cl38_auditor || ""} onChange={e => updateClause(setCl37_39, "cl38_auditor", e.target.value)} /></div>
+                        <div><Label className="text-xs">Membership No</Label><Input value={cl37_39.cl38_membership || ""} onChange={e => updateClause(setCl37_39, "cl38_membership", e.target.value)} /></div>
+                        <div><Label className="text-xs">Date of Report</Label><Input type="date" value={cl37_39.cl38_date || ""} onChange={e => updateClause(setCl37_39, "cl38_date", e.target.value)} /></div>
+                      </div>
+                    )}
+                  </div>
+                  {/* 39 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">39 — Audit under Central Excise?</Label>
+                    <RadioYesNo name="cl39" value={cl37_39.cl39_yes} onChange={v => updateClause(setCl37_39, "cl39_yes", v)} />
+                    {cl37_39.cl39_yes === true && (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div><Label className="text-xs">Name of Auditor</Label><Input value={cl37_39.cl39_auditor || ""} onChange={e => updateClause(setCl37_39, "cl39_auditor", e.target.value)} /></div>
+                        <div><Label className="text-xs">Audit Period</Label><Input value={cl37_39.cl39_period || ""} onChange={e => updateClause(setCl37_39, "cl39_period", e.target.value)} /></div>
+                        <div><Label className="text-xs">Observations</Label><Input value={cl37_39.cl39_observations || ""} onChange={e => updateClause(setCl37_39, "cl39_observations", e.target.value)} /></div>
+                      </div>
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 40 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_40"] = el; }}>
+              <AccordionItem value="cl_40" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">40</Badge>
+                    <span className="font-medium">Fringe benefit details</span>
+                    {isClauseFilled(cl40) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <FringeBenefitTable rows={cl40.rows || []} onChange={rows => updateClause(setCl40, "rows", rows)} />
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 41 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_41"] = el; }}>
+              <AccordionItem value="cl_41" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">41</Badge>
+                    <span className="font-medium">MSME outstanding &gt; 45 days</span>
+                    {isClauseFilled(cl41) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioApplicable name="cl41" value={cl41.applicable} onChange={v => updateClause(setCl41, "applicable", v)} />
+                  {cl41.applicable === true && (
+                    <MSMETable rows={cl41.rows || []} onChange={rows => updateClause(setCl41, "rows", rows)} />
+                  )}
+                  {cl41.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSES 42-43 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_42_43"] = el; }}>
+              <AccordionItem value="cl_42_43" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">42-43</Badge>
+                    <span className="font-medium">Form 61 / Form 61A</span>
+                    {isClauseFilled(cl42_43) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 42 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">42 — Furnishing of Form 61?</Label>
+                    <RadioYesNo name="cl42" value={cl42_43.cl42_yes} onChange={v => updateClause(setCl42_43, "cl42_yes", v)} />
+                    {cl42_43.cl42_yes === true && (
+                      <EditableTable
+                        columns={["Transaction Type", "Amount (₹)", "PAN of Other Party", "Form 61 Filed (Yes/No)", "Date of Filing"]}
+                        rows={cl42_43.cl42_rows || []}
+                        onChange={rows => updateClause(setCl42_43, "cl42_rows", rows)}
+                      />
+                    )}
+                    {cl42_43.cl42_yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  {/* 43 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">43 — Furnishing of Form 61A?</Label>
+                    <RadioYesNo name="cl43" value={cl42_43.cl43_yes} onChange={v => updateClause(setCl42_43, "cl43_yes", v)} />
+                    {cl42_43.cl43_yes === true && (
+                      <EditableTable
+                        columns={["Nature of Transaction", "Amount (₹)", "Date of Filing Form 61A"]}
+                        rows={cl42_43.cl43_rows || []}
+                        onChange={rows => updateClause(setCl42_43, "cl43_rows", rows)}
+                      />
+                    )}
+                    {cl42_43.cl43_yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 44 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_44"] = el; }}>
+              <AccordionItem value="cl_44" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">44</Badge>
+                    <span className="font-medium">GST breakup of total expenditure</span>
+                    {isClauseFilled(cl44) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioApplicable name="cl44" value={cl44.applicable} onChange={v => updateClause(setCl44, "applicable", v)} />
+                  {cl44.applicable === true && (
+                    <GSTBreakupTable rows={cl44.rows || []} onChange={rows => updateClause(setCl44, "rows", rows)} />
+                  )}
+                  {cl44.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
           </Accordion>
         </div>
       </div>
+
+      {/* PRINT VIEW MODAL */}
+      {showPrintView && (
+        <Form3CDPrintView
+          client={client}
+          engagement={engagement}
+          fy={fy}
+          ay={ay}
+          clauseData={clauseStateMap}
+          onClose={() => setShowPrintView(false)}
+        />
+      )}
     </div>
   );
 }
