@@ -938,52 +938,103 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
   };
 
-  // ─── Parent Period Import ───
-  const handleImportPrevPeriod = async () => {
-    if (!engagement.parent_engagement_id) return;
+  // ─── Comparative TB Import ───
+  const handleComparativeImport = async () => {
+    if (!comparativeFile) return;
+    setComparativeProcessing(true);
     try {
-      const { data: parentTb } = await supabase
-        .from("trial_balance_snapshots")
-        .select("*")
-        .eq("engagement_id", engagement.parent_engagement_id)
-        .maybeSingle();
+      const arrayBuffer = await comparativeFile.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
 
-      if (!parentTb) {
-        toast.error("No TB snapshot found in parent engagement");
-        return;
+      const fy = engagement.financial_year || "2024-25";
+      const [startY, endY] = fy.split("-");
+      const priorFY = `${parseInt(startY) - 1}-${(parseInt(endY) - 1).toString().padStart(2, "0")}`;
+
+      const { data, error } = await supabase.functions.invoke("parse-tally-tb", {
+        body: {
+          engagementId: `${engagementId}_prior`,
+          firmId: user?.firm_id,
+          fileBase64: base64,
+          fileName: comparativeFile.name,
+          financialYear: priorFY,
+          isPriorYear: true,
+        },
+      });
+
+      if (error) throw new Error(error.message || "Prior year parse error");
+      if (!data?.success) throw new Error(data?.error || "Prior year parse failed");
+
+      const priorLeaves: any[] = (data.hierarchy || []).filter((n: any) => n.isLeaf);
+      const currentLeaves = (tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter(n => n.isLeaf);
+      const priorClosingMap = new Map<string, number>();
+      for (const n of priorLeaves) {
+        priorClosingMap.set(String(n.name).toLowerCase().trim(), n.closing || 0);
       }
 
-      const payload: any = {
-        client_id: engagement.client_id,
-        engagement_id: engagementId,
-        financial_year: engagement.financial_year,
-        normalised_data: (parentTb as any).normalised_data,
-        source_format: "carried_forward",
-        import_format: "generic_excel",
-        is_validated: true,
-        validation_status: "valid",
-        processing_status: "complete",
-      };
+      const verificationRows: any[] = [];
+      let matched = 0, mismatched = 0;
+      for (const n of currentLeaves) {
+        const key = n.name.toLowerCase().trim();
+        const pyClosing = priorClosingMap.get(key);
+        if (pyClosing === undefined) continue;
+        const cyOpening = n.opening || 0;
+        const diff = Math.abs(Math.abs(cyOpening) - Math.abs(pyClosing));
+        if (diff < 1) matched++; else mismatched++;
+        verificationRows.push({ name: n.name, pyClosing, cyOpening, diff: diff < 1 ? 0 : diff });
+      }
+      verificationRows.sort((a: any, b: any) => b.diff - a.diff);
 
-      await supabase.from("trial_balance_snapshots").insert(payload);
-      toast.success("Previous period data imported as opening balances");
-      queryClient.invalidateQueries({ queryKey: ["tb-snapshot-for-engagement"] });
+      setComparativeResult({
+        verificationRows: verificationRows.slice(0, 100),
+        matched,
+        mismatched,
+        total: matched + mismatched,
+        priorFY,
+      });
+      toast.success(`Prior year TB imported. ${mismatched} opening balance mismatches found.`);
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err.message || "Prior year import failed");
+    } finally {
+      setComparativeProcessing(false);
     }
+  };
+
+  // ─── Downstream push after TB import ───
+  const pushTbToDownstreamModules = async () => {
+    const { data: existingCoa } = await supabase
+      .from("audit_engagements")
+      .select("coa_mapping")
+      .eq("id", engagementId)
+      .single();
+    if (!existingCoa?.coa_mapping || Object.keys(existingCoa.coa_mapping as any || {}).length === 0) {
+      await supabase.from("audit_engagements").update({
+        re_evaluate_scrutiny: true,
+      } as any).eq("id", engagementId);
+    }
+    await supabase.from("audit_engagements").update({
+      pipeline_stage: Math.max(engagement.pipeline_stage || 2, 3),
+    } as any).eq("id", engagementId);
+    toast.success(
+      "TB imported. Stage 3 (COA Mapping) is now ready. Scrutiny rules have been tagged.",
+      { duration: 5000 }
+    );
   };
 
   // Check if stage 2 can be completed
   const canComplete = tbResult?.isValid || (existingTb as any)?.is_validated;
 
   const handleCompleteStage2 = async () => {
+    await pushTbToDownstreamModules();
     const newStatuses = { ...(engagement.stage_statuses || {}), "2": "complete" };
     await supabase.from("audit_engagements").update({
-      stage_statuses: newStatuses,
-      pipeline_stage: Math.max(engagement.pipeline_stage || 2, 3),
+      stage_statuses: newStatuses as any,
+      pipeline_stage: 3,
     } as any).eq("id", engagementId);
-    toast.success("Stage 2 completed — proceed to Scrutiny & Analysis");
     onStageComplete();
+    toast.success("Stage 2 complete — moving to COA & Financial Statements");
   };
 
   return (
