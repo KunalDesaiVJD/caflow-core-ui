@@ -35,6 +35,7 @@ import CoaMappings from "./pages/CoaMappings";
 import AuditFirms from "./pages/AuditFirms";
 import ClientGroups from "./pages/ClientGroups";
 import Form3CD from "./pages/Form3CD";
+import NotesToAccounts from "./pages/NotesToAccounts";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
@@ -150,6 +151,7 @@ const App = () => (
               <Route path="/audit/dispatch" element={<AuditQueryDispatch />} />
               <Route path="/audit/:clientId/queries/dispatch" element={<AuditQueryDispatch />} />
               <Route path="/audit/report" element={<AuditReportEngine />} />
+              <Route path="/audit/notes" element={<NotesToAccounts />} />
               <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
               <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
               <Route path="/audit/:engagementId" element={<EngagementDetail />} />
