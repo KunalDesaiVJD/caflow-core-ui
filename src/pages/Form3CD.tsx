@@ -56,13 +56,13 @@ const CLAUSE_NAV = [
   { key: "cl_32", label: "32", title: "Brought forward losses / deductions" },
   { key: "cl_33", label: "33", title: "Deductions u/s 80G/80GGA/80GGB/80GGC" },
   { key: "cl_34", label: "34", title: "TDS/TCS compliance" },
-  { key: "cl_35", label: "35", title: "Brought forward losses" },
-  { key: "cl_36", label: "36", title: "Sec 269SS/269T compliance" },
-  { key: "cl_37_39", label: "37-39", title: "Transfer pricing / GAAR" },
-  { key: "cl_40", label: "40", title: "Foreign income" },
-  { key: "cl_41", label: "41", title: "GST demand/refund" },
-  { key: "cl_42_43", label: "42-43", title: "Cash receipts / Expenditure" },
-  { key: "cl_44", label: "44", title: "Fees for technical services" },
+  { key: "cl_35", label: "35", title: "Turnover / Receipts" },
+  { key: "cl_36", label: "36", title: "Amounts not credited to P&L" },
+  { key: "cl_37_39", label: "37-39", title: "Change in shareholding / Cost audit / Central Excise" },
+  { key: "cl_40", label: "40", title: "Fringe benefit details" },
+  { key: "cl_41", label: "41", title: "MSME outstanding > 45 days" },
+  { key: "cl_42_43", label: "42-43", title: "Form 61 / Form 61A" },
+  { key: "cl_44", label: "44", title: "GST breakup of expenditure" },
 ];
 
 const SECTION_44AB_OPTIONS = [
