@@ -150,7 +150,14 @@ const CLAUSE_KEYS = [
   "cl_8","cl_9","cl_10","cl_11","cl_12","cl_13",
   "cl_14","cl_15_16","cl_17","cl_18","cl_19","cl_20","cl_21","cl_22",
   "cl_23","cl_24_25","cl_26","cl_27","cl_29","cl_30","cl_31","cl_32","cl_33","cl_34",
+  "cl_35","cl_36","cl_37_39","cl_40","cl_41","cl_42_43","cl_44",
 ] as const;
+
+const STOCK_UNIT_OPTIONS = ["KG", "MT", "Nos", "Ltrs", "Sq Ft", "Sq Mt", "Other"];
+
+const FRINGE_BENEFIT_CATEGORIES = [
+  "Motor Car", "Telephone", "Club", "Travel", "Medical", "Entertainment", "Guest House", "Festival", "Other",
+];
 
 /* ──────── main component ──────── */
 export default function Form3CD() {
