@@ -357,6 +357,8 @@ export type Database = {
           id: string
           manager_id: string | null
           materiality: Json | null
+          notes_finalized: boolean | null
+          notes_finalized_at: string | null
           notes_to_accounts: Json | null
           parent_engagement_id: string | null
           partner_id: string | null
@@ -406,6 +408,8 @@ export type Database = {
           id?: string
           manager_id?: string | null
           materiality?: Json | null
+          notes_finalized?: boolean | null
+          notes_finalized_at?: string | null
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
@@ -455,6 +459,8 @@ export type Database = {
           id?: string
           manager_id?: string | null
           materiality?: Json | null
+          notes_finalized?: boolean | null
+          notes_finalized_at?: string | null
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
@@ -3028,6 +3034,104 @@ export type Database = {
           xlsx_rows?: Json | null
         }
         Relationships: []
+      }
+      notes_to_accounts: {
+        Row: {
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          last_saved_at: string | null
+          note_1: Json | null
+          note_2: Json | null
+          note_29: Json | null
+          note_30: Json | null
+          note_31: Json | null
+          note_32: Json | null
+          note_33: Json | null
+          note_34: Json | null
+          note_35: Json | null
+          note_36: Json | null
+          note_37: Json | null
+          note_38: Json | null
+          note_39: Json | null
+          note_40: Json | null
+          note_41: Json | null
+          note_42: Json | null
+          note_43: Json | null
+          note_44: Json | null
+          note_45: Json | null
+          status: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          last_saved_at?: string | null
+          note_1?: Json | null
+          note_2?: Json | null
+          note_29?: Json | null
+          note_30?: Json | null
+          note_31?: Json | null
+          note_32?: Json | null
+          note_33?: Json | null
+          note_34?: Json | null
+          note_35?: Json | null
+          note_36?: Json | null
+          note_37?: Json | null
+          note_38?: Json | null
+          note_39?: Json | null
+          note_40?: Json | null
+          note_41?: Json | null
+          note_42?: Json | null
+          note_43?: Json | null
+          note_44?: Json | null
+          note_45?: Json | null
+          status?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          last_saved_at?: string | null
+          note_1?: Json | null
+          note_2?: Json | null
+          note_29?: Json | null
+          note_30?: Json | null
+          note_31?: Json | null
+          note_32?: Json | null
+          note_33?: Json | null
+          note_34?: Json | null
+          note_35?: Json | null
+          note_36?: Json | null
+          note_37?: Json | null
+          note_38?: Json | null
+          note_39?: Json | null
+          note_40?: Json | null
+          note_41?: Json | null
+          note_42?: Json | null
+          note_43?: Json | null
+          note_44?: Json | null
+          note_45?: Json | null
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_to_accounts_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       notification_log: {
         Row: {
