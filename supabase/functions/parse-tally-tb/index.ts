@@ -695,21 +695,46 @@ serve(async (req) => {
           }
         }
       } else {
-        if (row.bold) {
-          level = 1;
+        // Formatting fallback when indentation metadata is missing.
+        // Key insight: in a Tally TB export without indent signals, we must detect
+        // group subtotal rows by checking if the NEXT rows have smaller values.
+        const isKnownGroup = KNOWN_GROUP_NAMES.has(normalizedName);
+
+        if (row.bold || isKnownGroup) {
+          // Bold rows or known group names are always groups
+          level = row.bold ? 1 : 2;
           isGroupHint = true;
-        } else if (row.italic) {
-          level = 3;
-          isGroupHint = true;
-        } else if (!hasValues && !!nextRow) {
+        } else if (!hasValues) {
+          // Zero-value rows with a next row = group header
           level = 2;
           isGroupHint = true;
         } else {
-          level = 4;
-          isGroupHint = false;
+          // Has values: check if it looks like a subtotal row
+          const absClosing = Math.abs(row.closing);
+          let looksLikeSubtotal = false;
+
+          // Check next rows: if the FIRST next row with values has closing < this row's closing,
+          // this is probably a group subtotal.
+          for (let j = index + 1; j < Math.min(index + 8, dataRows.length); j++) {
+            const nr = dataRows[j];
+            if (!nr.name?.trim()) continue;
+            const nrClosing = Math.abs(nr.closing);
+            if (nrClosing > 0 && nrClosing < absClosing * 0.98) {
+              looksLikeSubtotal = true;
+            }
+            break; // only check the first non-empty next row
+          }
+
+          if (looksLikeSubtotal) {
+            level = 2;
+            isGroupHint = true;
+          } else {
+            level = 4;
+            isGroupHint = false;
+          }
         }
 
-        if (hasChildrenByIndent || (knownGroupByName && !hasValues)) {
+        if (hasChildrenByIndent) {
           isGroupHint = true;
         }
       }
