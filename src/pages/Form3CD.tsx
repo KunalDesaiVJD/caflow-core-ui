@@ -95,6 +95,35 @@ const SECTION_40A_OPTIONS = [
   "40(a)(i)", "40(a)(ia)", "40(a)(ib)", "40(a)(ii)", "40(a)(iia)", "40(a)(iii)", "40(a)(iv)", "40(a)(v)",
 ];
 
+const LIABILITY_NATURE_OPTIONS = [
+  "Interest", "Penalty", "Fine", "Litigation expenses", "Contribution to political party", "Other",
+];
+
+const SECTION_43B_OPTIONS = ["43B(a)", "43B(b)", "43B(c)", "43B(d)", "43B(e)", "43B(f)", "43B(h)"];
+
+const LOSS_NATURE_OPTIONS = ["Business Loss", "Speculation Loss", "Capital Loss", "House Property Loss", "Other"];
+
+const DONATION_SECTION_OPTIONS = ["80G", "80GGA", "80GGB", "80GGC"];
+
+const TDS_SECTIONS: Record<string, string> = {
+  "192": "Salary", "192A": "PF Withdrawal", "193": "Interest on Securities", "194": "Dividend",
+  "194A": "Interest other than Securities", "194B": "Lottery Winnings", "194BB": "Horse Race Winnings",
+  "194C": "Contractor Payments", "194D": "Insurance Commission", "194DA": "Life Insurance Maturity",
+  "194E": "Non-resident Sportsman", "194EE": "NSS Payments", "194F": "Repurchase by Mutual Fund",
+  "194G": "Commission on Lottery", "194H": "Commission/Brokerage", "194I": "Rent",
+  "194IA": "Transfer of Immovable Property", "194IB": "Rent by Individual",
+  "194IC": "Joint Development Agreement", "194J": "Professional/Technical Fees",
+  "194K": "Income from Units", "194LA": "Compensation on Compulsory Acquisition",
+  "194LB": "Interest from Infrastructure Bond", "194LC": "Interest from Indian Company",
+  "194LD": "Interest on Rupee Bond", "194M": "Payment by Individual/HUF to Contractor",
+  "194N": "Cash Withdrawal", "194O": "E-commerce", "194P": "Senior Citizen",
+  "194Q": "Purchase of Goods", "194R": "Benefit/Perquisite", "194S": "Cryptocurrency",
+  "195": "Non-resident Payments", "196B": "Income from offshore fund",
+  "196C": "Income from foreign currency bonds", "196D": "Income of FII from securities",
+};
+
+const TDS_SECTION_KEYS = Object.keys(TDS_SECTIONS);
+
 /* ──────── helpers ──────── */
 function computeAY(fy: string | null): string {
   if (!fy) return "";
