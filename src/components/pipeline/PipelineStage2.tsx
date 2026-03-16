@@ -257,6 +257,15 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<"tb" | "ledger">("tb");
 
+  // Guard: engagement may be undefined while loading
+  if (!engagement) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   // ─── TB Import State ───
   const [tbStep, setTbStep] = useState(1);
   const [tbFormat, setTbFormat] = useState<ImportFormat | "">("");
