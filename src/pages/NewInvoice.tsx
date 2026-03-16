@@ -564,9 +564,12 @@ const NewInvoice = () => {
         }
       </style></head><body>
 
+      <!-- Outer border -->
+      <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
+
       <!-- TAX INVOICE Header -->
-      <div style="text-align:center;margin-bottom:16px">
-        <h1 style="font-size:20px;font-weight:700;color:#1a56db;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
+      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:10px 0">
+        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
       </div>
 
       <!-- Firm Details + Invoice Details -->
