@@ -1796,3 +1796,262 @@ function Section40aTable({ rows, onChange }: {
     </div>
   );
 }
+
+/** Generic table with one dropdown column */
+function DropdownTable({ columns, rows, onChange, dropdownCol, dropdownLabel, dropdownOptions }: {
+  columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
+  dropdownCol: number; dropdownLabel: string; dropdownOptions: string[];
+}) {
+  function addRow() { onChange([...rows, columns.map(() => "")]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function updateCell(ri: number, ci: number, val: string) {
+    const next = rows.map((r, idx) => idx === ri ? r.map((c, j) => j === ci ? val : c) : [...r]);
+    onChange(next);
+  }
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {columns.map((c, i) => <TableHead key={i} className="text-xs">{c}</TableHead>)}
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={columns.length + 1} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, ri) => (
+            <TableRow key={ri}>
+              {row.map((cell, ci) => (
+                <TableCell key={ci} className="p-1">
+                  {ci === dropdownCol ? (
+                    <Select value={cell} onValueChange={v => updateCell(ri, ci, v)}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder={`Select ${dropdownLabel}`} /></SelectTrigger>
+                      <SelectContent>
+                        {dropdownOptions.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input value={cell} onChange={e => updateCell(ri, ci, e.target.value)} className="h-8 text-xs" />
+                  )}
+                </TableCell>
+              ))}
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(ri)}>
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Schedule table (Clause 31a) with section dropdown + auto-fill nature */
+function TDSScheduleTable({ rows, onChange, showDateOfDeposit = true }: {
+  rows: { section: string; nature: string; name: string; pan: string; amountPaid: string; tdsDeducted: string; tdsRate: string; dateDeduction: string; dateDeposit: string; remarks: string }[];
+  onChange: (r: any[]) => void;
+  showDateOfDeposit?: boolean;
+}) {
+  const emptyRow = { section: "", nature: "", name: "", pan: "", amountPaid: "", tdsDeducted: "", tdsRate: "", dateDeduction: "", dateDeposit: "", remarks: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    const updated = rows.map((r, idx) => {
+      if (idx !== i) return r;
+      const next = { ...r, [key]: val };
+      if (key === "section") next.nature = TDS_SECTIONS[val] || "";
+      return next;
+    });
+    onChange(updated);
+  }
+
+  const totalPaid = rows.reduce((s, r) => s + (parseFloat(r.amountPaid || "0") || 0), 0);
+  const totalTDS = rows.reduce((s, r) => s + (parseFloat(r.tdsDeducted || "0") || 0), 0);
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+
+  return (
+    <div className="space-y-2 overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-8">Sr</TableHead>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs w-40">Nature of Payment</TableHead>
+            <TableHead className="text-xs">Name of Party</TableHead>
+            <TableHead className="text-xs w-28">PAN</TableHead>
+            <TableHead className="text-xs w-28">Amount Paid (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Deducted (₹)</TableHead>
+            <TableHead className="text-xs w-20">Rate (%)</TableHead>
+            <TableHead className="text-xs w-28">Date of Deduction</TableHead>
+            {showDateOfDeposit && <TableHead className="text-xs w-28">Date of Deposit</TableHead>}
+            <TableHead className="text-xs w-28">Remarks</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={showDateOfDeposit ? 12 : 11} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
+              <TableCell className="p-1">
+                <Select value={row.section} onValueChange={v => update(i, "section", v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sec" /></SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {TDS_SECTION_KEYS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell className="p-1 text-xs text-muted-foreground">{row.nature || "—"}</TableCell>
+              <TableCell className="p-1"><Input value={row.name} onChange={e => update(i, "name", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.pan} onChange={e => update(i, "pan", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amountPaid} onChange={e => update(i, "amountPaid", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.tdsDeducted} onChange={e => update(i, "tdsDeducted", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.tdsRate} onChange={e => update(i, "tdsRate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dateDeduction} onChange={e => update(i, "dateDeduction", e.target.value)} className="h-8 text-xs" /></TableCell>
+              {showDateOfDeposit && <TableCell className="p-1"><Input type="date" value={row.dateDeposit} onChange={e => update(i, "dateDeposit", e.target.value)} className="h-8 text-xs" /></TableCell>}
+              <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {rows.length > 0 && (
+            <TableRow className="bg-muted/20 font-semibold text-xs">
+              <TableCell colSpan={5} className="p-1 text-right">Totals</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totalPaid)}</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totalTDS)}</TableCell>
+              <TableCell colSpan={showDateOfDeposit ? 5 : 4} />
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Compliance table (Clause 34a) with shortfall auto-calc */
+function TDSComplianceTable({ rows, onChange }: {
+  rows: { section: string; nature: string; amount: string; tdsDeducted: string; tdsRequired: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  const emptyRow = { section: "", nature: "", amount: "", tdsDeducted: "", tdsRequired: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    const updated = rows.map((r, idx) => {
+      if (idx !== i) return r;
+      const next = { ...r, [key]: val };
+      if (key === "section") next.nature = TDS_SECTIONS[val] || "";
+      return next;
+    });
+    onChange(updated);
+  }
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs">Nature</TableHead>
+            <TableHead className="text-xs w-28">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Deducted (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Required (₹)</TableHead>
+            <TableHead className="text-xs w-28 bg-muted/50">Shortfall (₹)</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => {
+            const shortfall = (parseFloat(row.tdsRequired || "0") || 0) - (parseFloat(row.tdsDeducted || "0") || 0);
+            return (
+              <TableRow key={i}>
+                <TableCell className="p-1">
+                  <Select value={row.section} onValueChange={v => update(i, "section", v)}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sec" /></SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {TDS_SECTION_KEYS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className="p-1 text-xs text-muted-foreground">{row.nature || "—"}</TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.tdsDeducted} onChange={e => update(i, "tdsDeducted", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.tdsRequired} onChange={e => update(i, "tdsRequired", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(shortfall)}</TableCell>
+                <TableCell className="p-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Timeliness table (Clause 34b) with delay auto-calc */
+function TDSTimeliness({ rows, onChange }: {
+  rows: { section: string; amount: string; dueDate: string; actualDate: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  function addRow() { onChange([...rows, { section: "", amount: "", dueDate: "", actualDate: "" }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  function calcDelay(due: string, actual: string): string {
+    if (!due || !actual) return "—";
+    const d = new Date(due); const a = new Date(actual);
+    const diff = Math.ceil((a.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? `${diff} days` : "On time";
+  }
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs w-28">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-32">Due Date</TableHead>
+            <TableHead className="text-xs w-32">Actual Date</TableHead>
+            <TableHead className="text-xs w-24 bg-muted/50">Delay</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1"><Input value={row.section} onChange={e => update(i, "section", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dueDate} onChange={e => update(i, "dueDate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.actualDate} onChange={e => update(i, "actualDate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1 bg-muted/30 text-xs text-center font-medium">{calcDelay(row.dueDate, row.actualDate)}</TableCell>
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
