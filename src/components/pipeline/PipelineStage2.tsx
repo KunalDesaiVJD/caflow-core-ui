@@ -309,17 +309,44 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const comparativeFileRef = useRef<HTMLInputElement>(null);
 
   // ─── Existing TB snapshot ───
+  // Fetch existing TB snapshots — Tally import creates N rows (one per ledger),
+  // generic import creates 1 row with normalised_data JSON.
   const { data: existingTb } = useQuery({
     queryKey: ["tb-snapshot-for-engagement", engagementId],
     queryFn: async () => {
       const { data } = await supabase
         .from("trial_balance_snapshots")
-        .select("id, debit_total, credit_total, difference, validation_status, is_validated, normalised_data, ledger_name, txn_debit, txn_credit")
+        .select("id, debit_total, credit_total, difference, validation_status, is_validated, normalised_data, ledger_name, txn_debit, txn_credit, primary_group, opening_balance, closing_balance, bs_pl_side")
         .eq("engagement_id", engagementId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      return data;
+        .order("id", { ascending: true })
+        .limit(500);
+      const rows = (data || []) as any[];
+      if (rows.length === 0) return null;
+      // Check if this is a single-row generic import (has normalised_data JSON)
+      if (rows.length === 1 && rows[0].normalised_data && Array.isArray(rows[0].normalised_data)) {
+        return rows[0]; // Single snapshot row with JSON data
+      }
+      // Multiple rows = Tally import (one row per ledger) — synthesize a summary
+      const totalDr = rows.reduce((s: number, r: any) => s + (r.txn_debit || 0), 0);
+      const totalCr = rows.reduce((s: number, r: any) => s + (r.txn_credit || 0), 0);
+      return {
+        id: rows[0].id,
+        debit_total: totalDr,
+        credit_total: totalCr,
+        difference: Math.abs(totalDr - totalCr),
+        validation_status: Math.abs(totalDr - totalCr) < 1 ? "valid" : "invalid",
+        is_validated: Math.abs(totalDr - totalCr) < 1,
+        normalised_data: rows.map((r: any) => ({
+          account_name: r.ledger_name,
+          debit: r.txn_debit || 0,
+          credit: r.txn_credit || 0,
+          opening_balance: r.opening_balance || 0,
+          closing_balance: r.closing_balance || 0,
+          account_group: r.primary_group || "",
+          bs_pl_side: r.bs_pl_side || "",
+        })),
+        _isSynthesized: true,
+      };
     },
     enabled: !!engagementId,
   });
