@@ -265,6 +265,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [showFlagged, setShowFlagged] = useState(false);
   const ledgerFileRef = useRef<HTMLInputElement>(null);
 
+  // ─── Comparative TB State ───
+  const [showComparativeTb, setShowComparativeTb] = useState(false);
+  const [comparativeFile, setComparativeFile] = useState<File | null>(null);
+  const [comparativeResult, setComparativeResult] = useState<any>(null);
+  const [comparativeProcessing, setComparativeProcessing] = useState(false);
+  const comparativeFileRef = useRef<HTMLInputElement>(null);
+
   // ─── Existing TB snapshot ───
   const { data: existingTb } = useQuery({
     queryKey: ["tb-snapshot-for-engagement", engagementId],
