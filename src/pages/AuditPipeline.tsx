@@ -807,37 +807,57 @@ export default function AuditPipeline() {
           />
         ) : activeStage === 8 ? (
           /* STAGE 8 — CARO / 3CD */
-          <div className="max-w-4xl space-y-6">
+          <div className="max-w-5xl space-y-6">
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
             <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
 
-            {/* CARO Section */}
-            {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
-              <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
-            ) : (
-              <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
-            )}
+            <Tabs defaultValue="caro">
+              <TabsList>
+                <TabsTrigger value="caro">CARO 2020</TabsTrigger>
+                <TabsTrigger
+                  value="3cd"
+                  disabled={!(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type)}
+                >
+                  Form 3CD
+                </TabsTrigger>
+              </TabsList>
 
-            {/* 3CD Section — show when tax audit is applicable */}
-            {(engagement?.requires_3cd || engagement?.clients?.tax_audit_type) && (
-              <Card>
-                <CardContent className="p-6 space-y-3">
-                  <h2 className="text-lg font-semibold">Form 3CD — Tax Audit Report</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {engagement?.clients?.tax_audit_type === "3cb_3cd"
-                      ? "3CB + 3CD applicable (Non-corporate entity)"
-                      : engagement?.clients?.tax_audit_type === "3ca_3cd"
-                      ? "3CA + 3CD applicable (Audited under other law)"
-                      : "Tax Audit — Form 3CD"}
-                  </p>
-                  <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
-                    <FileText size={16} /> Open Form 3CD Editor
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
+              <TabsContent value="caro" className="mt-4">
+                {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
+                  <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
+                ) : (
+                  <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
+                )}
+              </TabsContent>
+
+              <TabsContent value="3cd" className="mt-4">
+                {(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type) ? (
+                  <Card>
+                    <CardContent className="p-6 space-y-3">
+                      <h2 className="text-lg font-semibold">Form 3CD — Tax Audit Report</h2>
+                      <p className="text-sm text-muted-foreground">
+                        {engagement?.clients?.tax_audit_type === "3cb_3cd"
+                          ? "3CB + 3CD applicable (Non-corporate entity)"
+                          : engagement?.clients?.tax_audit_type === "3ca_3cd"
+                          ? "3CA + 3CD applicable (Audited under other law)"
+                          : "Tax Audit — Form 3CD"}
+                      </p>
+                      <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
+                        <FileText size={16} /> Open Form 3CD Editor
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card>
+                    <CardContent className="p-8 text-center text-muted-foreground">
+                      Form 3CD is applicable only for Tax Audit engagements (Section 44AB).
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
           </div>
         ) : activeStage === 9 ? (
           /* STAGE 9 — Review & QC */
