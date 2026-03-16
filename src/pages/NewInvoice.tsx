@@ -533,19 +533,19 @@ const NewInvoice = () => {
         </td>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code}</td>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">\u20B9${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${gstPct}%</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">\u20B9${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
     }).join("");
 
     const totalRow = `
       <tr style="background:#f0f0f0;font-weight:700">
         <td style="border:1px solid #bbb;padding:8px" colspan="5">Total</td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:11px">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:11px">${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #bbb;padding:8px"></td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:12px">\u20B9${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:12px">${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
 
     const halfGst = totalGst / 2;
@@ -564,9 +564,12 @@ const NewInvoice = () => {
         }
       </style></head><body>
 
+      <!-- Outer border -->
+      <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
+
       <!-- TAX INVOICE Header -->
-      <div style="text-align:center;margin-bottom:16px">
-        <h1 style="font-size:20px;font-weight:700;color:#1a56db;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
+      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:10px 0">
+        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
       </div>
 
       <!-- Firm Details + Invoice Details -->
@@ -600,7 +603,6 @@ const NewInvoice = () => {
         <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
         ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
         ${toGstin ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
-        <p style="margin:2px 0;font-size:11px"><strong>Tax Type:</strong> ${isIntraState ? "Intra-State (CGST + SGST)" : "Inter-State (IGST)"}</p>
       </div>
 
       <!-- Items Table -->
@@ -611,10 +613,10 @@ const NewInvoice = () => {
             <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left">Item</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">HSN/SAC</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">Quantity</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Rate / Item</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Taxable Value</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Rate / Item (\u20B9)</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Taxable Value (\u20B9)</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">GST %</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Total</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Total (\u20B9)</th>
           </tr>
         </thead>
         <tbody>
@@ -633,7 +635,8 @@ const NewInvoice = () => {
           ` : `
             <tr><td style="padding:3px 8px">IGST</td><td style="padding:3px 8px;text-align:right">\u20B9${totalGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
           `}
-          <tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px">Grand Total</td><td style="padding:6px 8px;text-align:right">\u20B9${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr><td style="padding:3px 8px">Round Off</td><td style="padding:3px 8px;text-align:right">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>
+          <tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px">Grand Total</td><td style="padding:6px 8px;text-align:right">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>
         </table>
       </div>
 
@@ -663,6 +666,8 @@ const NewInvoice = () => {
         <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
         <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
       </div>
+
+      </div><!-- close outer border -->
 
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,

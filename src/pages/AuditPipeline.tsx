@@ -166,7 +166,7 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const { data } = await supabase
         .from("audit_engagements")
-        .select("*, clients(name, entity_type)")
+        .select("*, clients(name, entity_type, caro_applicable)")
         .eq("id", selectedEngId)
         .single();
       return data as any;
@@ -811,7 +811,7 @@ export default function AuditPipeline() {
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
             <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
-            {engagement?.caro_applicable ? (
+            {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
               <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
             ) : (
               <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
