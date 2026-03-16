@@ -1078,7 +1078,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       } as any).eq("id", engagementId);
     }
     await supabase.from("audit_engagements").update({
-      pipeline_stage: Math.max(engagement.pipeline_stage || 2, 3),
+      pipeline_stage: Math.max(engagement?.pipeline_stage || 2, 3),
     } as any).eq("id", engagementId);
     toast.success(
       "TB imported. Stage 3 (COA Mapping) is now ready. Scrutiny rules have been tagged.",
