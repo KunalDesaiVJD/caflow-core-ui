@@ -1413,7 +1413,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         <span className="w-24 text-right">Closing CR</span>
                       </div>
                       {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
-                        .filter((n) => n.parentNodeId === null || n.level === 1)
+                        .filter((n) => n.parentNodeId === null)
                         .map((node) => (
                           <TbTreeRow
                             key={node.nodeId}
