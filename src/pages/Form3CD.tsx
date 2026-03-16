@@ -180,11 +180,23 @@ export default function Form3CD() {
   const [cl20, setCl20] = useState<ClauseData>({});
   const [cl21, setCl21] = useState<ClauseData>({});
   const [cl22, setCl22] = useState<ClauseData>({});
+  const [cl23, setCl23] = useState<ClauseData>({});
+  const [cl24_25, setCl24_25] = useState<ClauseData>({});
+  const [cl26, setCl26] = useState<ClauseData>({});
+  const [cl27, setCl27] = useState<ClauseData>({});
+  const [cl29, setCl29] = useState<ClauseData>({});
+  const [cl30, setCl30] = useState<ClauseData>({});
+  const [cl31, setCl31] = useState<ClauseData>({});
+  const [cl32, setCl32] = useState<ClauseData>({});
+  const [cl33, setCl33] = useState<ClauseData>({});
+  const [cl34, setCl34] = useState<ClauseData>({});
 
   const clauseStateMap: Record<string, ClauseData> = {
     cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
     cl_14: cl14, cl_15_16: cl15_16, cl_17: cl17, cl_18: cl18,
     cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
+    cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
+    cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
   };
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
