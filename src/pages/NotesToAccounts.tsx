@@ -170,8 +170,8 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [note41, setNote41] = useState<any>({});
   const [note42, setNote42] = useState<any>({});
   const [note43, setNote43] = useState<any>({});
-  const [note44, setNote44] = useState<any>({ text: "There are no significant events after the reporting period except as disclosed in note 20(f), that require adjustments or disclosures in the standalone Ind AS financial statements as on the balance sheet date." }));
-  const [note45, setNote45] = useState<any>({ text: "The figures for the corresponding previous year have been regrouped/ reclassified, wherever considered necessary, to make them comparable with current years classification." }));
+  const [note44, setNote44] = useState<any>({ text: "There are no significant events after the reporting period except as disclosed in note 20(f), that require adjustments or disclosures in the standalone Ind AS financial statements as on the balance sheet date." });
+  const [note45, setNote45] = useState<any>({ text: "The figures for the corresponding previous year have been regrouped/ reclassified, wherever considered necessary, to make them comparable with current years classification." });
 
   const stateMap: Record<string, [any, (v: any) => void]> = {
     note_1: [note1, setNote1], note_2: [note2, setNote2],

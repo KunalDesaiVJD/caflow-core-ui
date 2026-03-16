@@ -799,12 +799,23 @@ export default function AuditPipeline() {
             onSaveDraft={() => { refetchEng(); }}
           />
         ) : activeStage === 7 ? (
-          <PipelineStage7
-            engagementId={selectedEngId}
-            engagement={engagement}
-            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
-            onSaveDraft={() => { refetchEng(); }}
-          />
+          <Tabs defaultValue="notes_editor">
+            <TabsList>
+              <TabsTrigger value="notes_editor">Notes to Accounts</TabsTrigger>
+              <TabsTrigger value="accounting_policies">Accounting Policies (Note 1 & 2)</TabsTrigger>
+            </TabsList>
+            <TabsContent value="notes_editor" className="mt-4">
+              <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
+            </TabsContent>
+            <TabsContent value="accounting_policies" className="mt-4">
+              <PipelineStage7
+                engagementId={selectedEngId}
+                engagement={engagement}
+                onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+                onSaveDraft={() => { refetchEng(); }}
+              />
+            </TabsContent>
+          </Tabs>
         ) : activeStage === 8 ? (
           /* STAGE 8 — CARO / 3CD */
           <div className="max-w-5xl space-y-6">
