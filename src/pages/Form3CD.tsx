@@ -331,7 +331,7 @@ export default function Form3CD() {
           <div className="p-3 space-y-0.5">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Clauses</p>
             {CLAUSE_NAV.map(c => {
-              const filled = implementedKeys.has(c.key as any) ? isClauseFilled(clauseStateMap[c.key]) : false;
+              const filled = isClauseFilled(clauseStateMap[c.key]);
               return (
                 <button
                   key={c.key}
