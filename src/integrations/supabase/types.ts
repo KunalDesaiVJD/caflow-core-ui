@@ -3725,6 +3725,33 @@ export type Database = {
           },
         ]
       }
+      tb_upload_sessions: {
+        Row: {
+          chunk_data: string | null
+          chunk_index: number | null
+          created_at: string | null
+          engagement_id: string | null
+          id: string
+          total_chunks: number | null
+        }
+        Insert: {
+          chunk_data?: string | null
+          chunk_index?: number | null
+          created_at?: string | null
+          engagement_id?: string | null
+          id: string
+          total_chunks?: number | null
+        }
+        Update: {
+          chunk_data?: string | null
+          chunk_index?: number | null
+          created_at?: string | null
+          engagement_id?: string | null
+          id?: string
+          total_chunks?: number | null
+        }
+        Relationships: []
+      }
       tds_entries: {
         Row: {
           amount: number | null
