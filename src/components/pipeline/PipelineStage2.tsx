@@ -191,30 +191,57 @@ function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHier
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
-  const opening = splitDrCr(node.opening || 0);
-  const closing = splitDrCr(node.closing || 0);
+
+  // For balances: positive = Dr side, negative = Cr side
+  const openDr  = node.opening  >= 0 ? Math.abs(node.opening)  : 0;
+  const openCr  = node.opening  <  0 ? Math.abs(node.opening)  : 0;
+  const closDr  = node.closing  >= 0 ? Math.abs(node.closing)  : 0;
+  const closCr  = node.closing  <  0 ? Math.abs(node.closing)  : 0;
 
   return (
     <div>
       <button
         type="button"
         onClick={() => hasChildren && setOpen((prev) => !prev)}
-        className="flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40"
-        style={{ paddingLeft: `${(node.level - 1) * 16 + 10}px` }}
+        className={cn(
+          "flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40",
+          !node.isLeaf && "bg-muted/10"
+        )}
+        style={{ paddingLeft: `${(node.level - 1) * 18 + 10}px` }}
       >
         <ChevronDown
           size={14}
-          className={cn("shrink-0 text-muted-foreground transition-transform", !open && hasChildren ? "-rotate-90" : "", !hasChildren ? "opacity-0" : "")}
+          className={cn(
+            "shrink-0 text-muted-foreground transition-transform",
+            !open && hasChildren ? "-rotate-90" : "",
+            !hasChildren ? "opacity-0" : ""
+          )}
         />
-        <span className={cn("flex-1", node.isLeaf ? "text-foreground" : "font-semibold text-foreground")}>{node.name}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.dr)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(opening.cr)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnDebit || 0)}</span>
-        <span className="w-24 text-right font-mono text-muted-foreground">{formatTbNumber(node.txnCredit || 0)}</span>
-        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.dr)}</span>
-        <span className="w-24 text-right font-mono text-foreground">{formatTbNumber(closing.cr)}</span>
+        <span className={cn(
+          "flex-1 truncate",
+          !node.isLeaf ? "font-semibold text-foreground" : "text-foreground"
+        )}>
+          {node.name}
+        </span>
+        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
+          {openDr > 0 ? formatTbNumber(openDr) : '—'}
+        </span>
+        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
+          {openCr > 0 ? formatTbNumber(openCr) : '—'}
+        </span>
+        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
+          {node.txnDebit > 0 ? formatTbNumber(node.txnDebit) : '—'}
+        </span>
+        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
+          {node.txnCredit > 0 ? formatTbNumber(node.txnCredit) : '—'}
+        </span>
+        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
+          {closDr > 0 ? formatTbNumber(closDr) : '—'}
+        </span>
+        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
+          {closCr > 0 ? formatTbNumber(closCr) : '—'}
+        </span>
       </button>
-
       {open && hasChildren && children.map((child) => (
         <TbTreeRow key={child.nodeId} node={child} allNodes={allNodes} />
       ))}
@@ -1405,15 +1432,15 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       {/* Header row */}
                       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
                         <span className="flex-1 pl-6">Account / Group</span>
-                        <span className="w-24 text-right">Opening DR</span>
-                        <span className="w-24 text-right">Opening CR</span>
-                        <span className="w-24 text-right">TXN DR</span>
-                        <span className="w-24 text-right">TXN CR</span>
-                        <span className="w-24 text-right">Closing DR</span>
-                        <span className="w-24 text-right">Closing CR</span>
+                        <span className="w-28 text-right">Opening DR</span>
+                        <span className="w-28 text-right">Opening CR</span>
+                        <span className="w-28 text-right">TXN DR</span>
+                        <span className="w-28 text-right">TXN CR</span>
+                        <span className="w-28 text-right">Closing DR</span>
+                        <span className="w-28 text-right">Closing CR</span>
                       </div>
                       {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
-                        .filter((n) => n.parentNodeId === null || n.level === 1)
+                        .filter((n) => n.parentNodeId === null)
                         .map((node) => (
                           <TbTreeRow
                             key={node.nodeId}
