@@ -56,13 +56,13 @@ const CLAUSE_NAV = [
   { key: "cl_32", label: "32", title: "Brought forward losses / deductions" },
   { key: "cl_33", label: "33", title: "Deductions u/s 80G/80GGA/80GGB/80GGC" },
   { key: "cl_34", label: "34", title: "TDS/TCS compliance" },
-  { key: "cl_35", label: "35", title: "Brought forward losses" },
-  { key: "cl_36", label: "36", title: "Sec 269SS/269T compliance" },
-  { key: "cl_37_39", label: "37-39", title: "Transfer pricing / GAAR" },
-  { key: "cl_40", label: "40", title: "Foreign income" },
-  { key: "cl_41", label: "41", title: "GST demand/refund" },
-  { key: "cl_42_43", label: "42-43", title: "Cash receipts / Expenditure" },
-  { key: "cl_44", label: "44", title: "Fees for technical services" },
+  { key: "cl_35", label: "35", title: "Turnover / Receipts" },
+  { key: "cl_36", label: "36", title: "Amounts not credited to P&L" },
+  { key: "cl_37_39", label: "37-39", title: "Change in shareholding / Cost audit / Central Excise" },
+  { key: "cl_40", label: "40", title: "Fringe benefit details" },
+  { key: "cl_41", label: "41", title: "MSME outstanding > 45 days" },
+  { key: "cl_42_43", label: "42-43", title: "Form 61 / Form 61A" },
+  { key: "cl_44", label: "44", title: "GST breakup of expenditure" },
 ];
 
 const SECTION_44AB_OPTIONS = [
@@ -150,7 +150,14 @@ const CLAUSE_KEYS = [
   "cl_8","cl_9","cl_10","cl_11","cl_12","cl_13",
   "cl_14","cl_15_16","cl_17","cl_18","cl_19","cl_20","cl_21","cl_22",
   "cl_23","cl_24_25","cl_26","cl_27","cl_29","cl_30","cl_31","cl_32","cl_33","cl_34",
+  "cl_35","cl_36","cl_37_39","cl_40","cl_41","cl_42_43","cl_44",
 ] as const;
+
+const STOCK_UNIT_OPTIONS = ["KG", "MT", "Nos", "Ltrs", "Sq Ft", "Sq Mt", "Other"];
+
+const FRINGE_BENEFIT_CATEGORIES = [
+  "Motor Car", "Telephone", "Club", "Travel", "Medical", "Entertainment", "Guest House", "Festival", "Other",
+];
 
 /* ──────── main component ──────── */
 export default function Form3CD() {
@@ -190,6 +197,15 @@ export default function Form3CD() {
   const [cl32, setCl32] = useState<ClauseData>({});
   const [cl33, setCl33] = useState<ClauseData>({});
   const [cl34, setCl34] = useState<ClauseData>({});
+  const [cl35, setCl35] = useState<ClauseData>({});
+  const [cl36, setCl36] = useState<ClauseData>({});
+  const [cl37_39, setCl37_39] = useState<ClauseData>({});
+  const [cl40, setCl40] = useState<ClauseData>(() => ({
+    rows: FRINGE_BENEFIT_CATEGORIES.map(c => ({ nature: c, totalExp: "", pctFB: "", fbValue: "" })),
+  }));
+  const [cl41, setCl41] = useState<ClauseData>({});
+  const [cl42_43, setCl42_43] = useState<ClauseData>({});
+  const [cl44, setCl44] = useState<ClauseData>({});
 
   const clauseStateMap: Record<string, ClauseData> = {
     cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
@@ -197,6 +213,7 @@ export default function Form3CD() {
     cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
     cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
     cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
+    cl_35: cl35, cl_36: cl36, cl_37_39: cl37_39, cl_40: cl40, cl_41: cl41, cl_42_43: cl42_43, cl_44: cl44,
   };
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -238,6 +255,10 @@ export default function Form3CD() {
       setCl27(e.cl_27 || {}); setCl29(e.cl_29 || {}); setCl30(e.cl_30 || {});
       setCl31(e.cl_31 || {}); setCl32(e.cl_32 || {}); setCl33(e.cl_33 || {});
       setCl34(e.cl_34 || {});
+      setCl35(e.cl_35 || {}); setCl36(e.cl_36 || {});
+      setCl37_39(e.cl_37_39 || {});
+      if (e.cl_40 && Object.keys(e.cl_40).length > 0) setCl40(e.cl_40); 
+      setCl41(e.cl_41 || {}); setCl42_43(e.cl_42_43 || {}); setCl44(e.cl_44 || {});
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
@@ -278,6 +299,7 @@ export default function Form3CD() {
         cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
         cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
         cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
+        cl_35: cl35, cl_36: cl36, cl_37_39: cl37_39, cl_40: cl40, cl_41: cl41, cl_42_43: cl42_43, cl_44: cl44,
         status: formStatus,
         last_saved_at: new Date().toISOString(),
         last_saved_by: user?.id,
@@ -292,14 +314,14 @@ export default function Form3CD() {
     sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const [showPrintView, setShowPrintView] = useState(false);
+
   const fy = engagement?.financial_year || "";
   const ay = computeAY(fy);
 
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
   if (!engagementId) return <div className="p-8 text-center text-muted-foreground">Please open Form 3CD from an engagement pipeline (Stage 8).</div>;
 
-  // Implemented clause keys
-  const implementedKeys = new Set(CLAUSE_KEYS);
 
   return (
     <div className="flex gap-0 h-[calc(100vh-4rem)]">
@@ -309,7 +331,7 @@ export default function Form3CD() {
           <div className="p-3 space-y-0.5">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Clauses</p>
             {CLAUSE_NAV.map(c => {
-              const filled = implementedKeys.has(c.key as any) ? isClauseFilled(clauseStateMap[c.key]) : false;
+              const filled = isClauseFilled(clauseStateMap[c.key]);
               return (
                 <button
                   key={c.key}
@@ -340,7 +362,7 @@ export default function Form3CD() {
             {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => window.print()}>
+            <Button variant="outline" size="sm" onClick={() => setShowPrintView(true)}>
               <Printer className="h-4 w-4 mr-1" /> Print / Export
             </Button>
             <Button size="sm" onClick={() => saveAll(false)} disabled={saving}>
@@ -1428,28 +1450,219 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* Placeholder sections for clauses 35-44 */}
-            {CLAUSE_NAV.filter(c => !implementedKeys.has(c.key as any)).map(c => (
-              <div key={c.key} ref={el => { sectionRefs.current[c.key] = el; }}>
-                <AccordionItem value={c.key} className="border rounded-lg">
-                  <AccordionTrigger className="px-4">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className="font-mono text-xs">{c.label}</Badge>
-                      <span className="font-medium">{c.title}</span>
-                      <Badge variant="secondary" className="text-[10px]">Coming Soon</Badge>
+            {/* ═══════ CLAUSE 35 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_35"] = el; }}>
+              <AccordionItem value="cl_35" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">35</Badge>
+                    <span className="font-medium">Turnover / Receipts</span>
+                    {isClauseFilled(cl35) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {["a", "b"].map(sub => (
+                    <div key={sub} className="space-y-3 border-l-2 border-muted pl-4">
+                      <Label className="font-medium">35({sub}) — {sub === "a" ? "Gross turnover / receipts" : "Gross receipts from profession"}</Label>
+                      <RadioApplicable name={`cl35${sub}`} value={cl35[`${sub}_applicable`]} onChange={v => updateClause(setCl35, `${sub}_applicable`, v)} />
+                      {cl35[`${sub}_applicable`] === true && (
+                        <TurnoverTable rows={cl35[`${sub}_rows`] || []} onChange={rows => updateClause(setCl35, `${sub}_rows`, rows)} />
+                      )}
+                      {cl35[`${sub}_applicable`] === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                     </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pb-4">
-                    <div className="p-4 bg-muted/50 rounded text-sm text-muted-foreground text-center">
-                      This clause will be implemented in the next prompt batch.
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 36 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_36"] = el; }}>
+              <AccordionItem value="cl_36" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">36</Badge>
+                    <span className="font-medium">Amounts not credited to P&L</span>
+                    {isClauseFilled(cl36) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {["a", "b"].map(sub => (
+                    <div key={sub} className="space-y-3 border-l-2 border-muted pl-4">
+                      <Label className="font-medium">36({sub}) — {sub === "a" ? "Amounts not credited to P&L but taxable" : "Other amounts not credited"}</Label>
+                      <RadioYesNo name={`cl36${sub}`} value={cl36[`${sub}_yes`]} onChange={v => updateClause(setCl36, `${sub}_yes`, v)} />
+                      {cl36[`${sub}_yes`] === true && (
+                        <EditableTable
+                          columns={["Nature of Receipt", "Amount (₹)", "Remarks"]}
+                          rows={cl36[`${sub}_rows`] || []}
+                          onChange={rows => updateClause(setCl36, `${sub}_rows`, rows)}
+                        />
+                      )}
+                      {cl36[`${sub}_yes`] === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                     </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </div>
-            ))}
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSES 37-39 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_37_39"] = el; }}>
+              <AccordionItem value="cl_37_39" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">37-39</Badge>
+                    <span className="font-medium">Change in shareholding / Cost audit / Central Excise</span>
+                    {isClauseFilled(cl37_39) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 37 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">37 — Any change in shareholding?</Label>
+                    <RadioYesNo name="cl37" value={cl37_39.cl37_yes} onChange={v => updateClause(setCl37_39, "cl37_yes", v)} />
+                    {cl37_39.cl37_yes === true && (
+                      <Textarea value={cl37_39.cl37_particulars || ""} onChange={e => updateClause(setCl37_39, "cl37_particulars", e.target.value)} placeholder="Particulars of change in shareholding..." />
+                    )}
+                  </div>
+                  {/* 38 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">38 — Cost audit ordered?</Label>
+                    <RadioYesNo name="cl38" value={cl37_39.cl38_yes} onChange={v => updateClause(setCl37_39, "cl38_yes", v)} />
+                    {cl37_39.cl38_yes === true && (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div><Label className="text-xs">Name of Cost Auditor</Label><Input value={cl37_39.cl38_auditor || ""} onChange={e => updateClause(setCl37_39, "cl38_auditor", e.target.value)} /></div>
+                        <div><Label className="text-xs">Membership No</Label><Input value={cl37_39.cl38_membership || ""} onChange={e => updateClause(setCl37_39, "cl38_membership", e.target.value)} /></div>
+                        <div><Label className="text-xs">Date of Report</Label><Input type="date" value={cl37_39.cl38_date || ""} onChange={e => updateClause(setCl37_39, "cl38_date", e.target.value)} /></div>
+                      </div>
+                    )}
+                  </div>
+                  {/* 39 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">39 — Audit under Central Excise?</Label>
+                    <RadioYesNo name="cl39" value={cl37_39.cl39_yes} onChange={v => updateClause(setCl37_39, "cl39_yes", v)} />
+                    {cl37_39.cl39_yes === true && (
+                      <div className="grid grid-cols-3 gap-3">
+                        <div><Label className="text-xs">Name of Auditor</Label><Input value={cl37_39.cl39_auditor || ""} onChange={e => updateClause(setCl37_39, "cl39_auditor", e.target.value)} /></div>
+                        <div><Label className="text-xs">Audit Period</Label><Input value={cl37_39.cl39_period || ""} onChange={e => updateClause(setCl37_39, "cl39_period", e.target.value)} /></div>
+                        <div><Label className="text-xs">Observations</Label><Input value={cl37_39.cl39_observations || ""} onChange={e => updateClause(setCl37_39, "cl39_observations", e.target.value)} /></div>
+                      </div>
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 40 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_40"] = el; }}>
+              <AccordionItem value="cl_40" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">40</Badge>
+                    <span className="font-medium">Fringe benefit details</span>
+                    {isClauseFilled(cl40) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <FringeBenefitTable rows={cl40.rows || []} onChange={rows => updateClause(setCl40, "rows", rows)} />
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 41 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_41"] = el; }}>
+              <AccordionItem value="cl_41" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">41</Badge>
+                    <span className="font-medium">MSME outstanding &gt; 45 days</span>
+                    {isClauseFilled(cl41) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioApplicable name="cl41" value={cl41.applicable} onChange={v => updateClause(setCl41, "applicable", v)} />
+                  {cl41.applicable === true && (
+                    <MSMETable rows={cl41.rows || []} onChange={rows => updateClause(setCl41, "rows", rows)} />
+                  )}
+                  {cl41.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSES 42-43 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_42_43"] = el; }}>
+              <AccordionItem value="cl_42_43" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">42-43</Badge>
+                    <span className="font-medium">Form 61 / Form 61A</span>
+                    {isClauseFilled(cl42_43) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 42 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">42 — Furnishing of Form 61?</Label>
+                    <RadioYesNo name="cl42" value={cl42_43.cl42_yes} onChange={v => updateClause(setCl42_43, "cl42_yes", v)} />
+                    {cl42_43.cl42_yes === true && (
+                      <EditableTable
+                        columns={["Transaction Type", "Amount (₹)", "PAN of Other Party", "Form 61 Filed (Yes/No)", "Date of Filing"]}
+                        rows={cl42_43.cl42_rows || []}
+                        onChange={rows => updateClause(setCl42_43, "cl42_rows", rows)}
+                      />
+                    )}
+                    {cl42_43.cl42_yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  {/* 43 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">43 — Furnishing of Form 61A?</Label>
+                    <RadioYesNo name="cl43" value={cl42_43.cl43_yes} onChange={v => updateClause(setCl42_43, "cl43_yes", v)} />
+                    {cl42_43.cl43_yes === true && (
+                      <EditableTable
+                        columns={["Nature of Transaction", "Amount (₹)", "Date of Filing Form 61A"]}
+                        rows={cl42_43.cl43_rows || []}
+                        onChange={rows => updateClause(setCl42_43, "cl43_rows", rows)}
+                      />
+                    )}
+                    {cl42_43.cl43_yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 44 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_44"] = el; }}>
+              <AccordionItem value="cl_44" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">44</Badge>
+                    <span className="font-medium">GST breakup of total expenditure</span>
+                    {isClauseFilled(cl44) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioApplicable name="cl44" value={cl44.applicable} onChange={v => updateClause(setCl44, "applicable", v)} />
+                  {cl44.applicable === true && (
+                    <GSTBreakupTable rows={cl44.rows || []} onChange={rows => updateClause(setCl44, "rows", rows)} />
+                  )}
+                  {cl44.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
           </Accordion>
         </div>
       </div>
+
+      {/* PRINT VIEW MODAL */}
+      {showPrintView && (
+        <Form3CDPrintView
+          client={client}
+          engagement={engagement}
+          fy={fy}
+          ay={ay}
+          clauseData={clauseStateMap}
+          onClose={() => setShowPrintView(false)}
+        />
+      )}
     </div>
   );
 }
@@ -2052,6 +2265,475 @@ function TDSTimeliness({ rows, onChange }: {
         </TableBody>
       </Table>
       <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** Turnover table (Clause 35) with unit dropdown and totals */
+function TurnoverTable({ rows, onChange }: {
+  rows: { commodity: string; unit: string; openQty: string; openVal: string; purchQty: string; purchVal: string; salesQty: string; salesVal: string; closeQty: string; closeVal: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  const emptyRow = { commodity: "", unit: "", openQty: "", openVal: "", purchQty: "", purchVal: "", salesQty: "", salesVal: "", closeQty: "", closeVal: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  const totals = rows.reduce((acc, r) => ({
+    openVal: acc.openVal + (parseFloat(r.openVal) || 0),
+    purchVal: acc.purchVal + (parseFloat(r.purchVal) || 0),
+    salesVal: acc.salesVal + (parseFloat(r.salesVal) || 0),
+    closeVal: acc.closeVal + (parseFloat(r.closeVal) || 0),
+  }), { openVal: 0, purchVal: 0, salesVal: 0, closeVal: 0 });
+
+  return (
+    <div className="space-y-2 overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs">Sr</TableHead>
+            <TableHead className="text-xs">Commodity/Service</TableHead>
+            <TableHead className="text-xs w-24">Unit</TableHead>
+            <TableHead className="text-xs">Open Qty</TableHead>
+            <TableHead className="text-xs">Open Val (₹)</TableHead>
+            <TableHead className="text-xs">Purch Qty</TableHead>
+            <TableHead className="text-xs">Purch Val (₹)</TableHead>
+            <TableHead className="text-xs">Sales Qty</TableHead>
+            <TableHead className="text-xs">Sales Val (₹)</TableHead>
+            <TableHead className="text-xs">Close Qty</TableHead>
+            <TableHead className="text-xs">Close Val (₹)</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
+              <TableCell className="p-1"><Input value={row.commodity} onChange={e => update(i, "commodity", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1">
+                <Select value={row.unit} onValueChange={v => update(i, "unit", v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Unit" /></SelectTrigger>
+                  <SelectContent>{STOCK_UNIT_OPTIONS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.openQty} onChange={e => update(i, "openQty", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.openVal} onChange={e => update(i, "openVal", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.purchQty} onChange={e => update(i, "purchQty", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.purchVal} onChange={e => update(i, "purchVal", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.salesQty} onChange={e => update(i, "salesQty", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.salesVal} onChange={e => update(i, "salesVal", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.closeQty} onChange={e => update(i, "closeQty", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.closeVal} onChange={e => update(i, "closeVal", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
+            </TableRow>
+          ))}
+          {rows.length > 0 && (
+            <TableRow className="bg-muted/20 font-semibold text-xs">
+              <TableCell colSpan={4} className="p-1 text-right">Totals</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totals.openVal)}</TableCell>
+              <TableCell className="p-1" />
+              <TableCell className="p-1 text-right">{fmt(totals.purchVal)}</TableCell>
+              <TableCell className="p-1" />
+              <TableCell className="p-1 text-right">{fmt(totals.salesVal)}</TableCell>
+              <TableCell className="p-1" />
+              <TableCell className="p-1 text-right">{fmt(totals.closeVal)}</TableCell>
+              <TableCell />
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** Fringe Benefit table (Clause 40) with auto-calc */
+function FringeBenefitTable({ rows, onChange }: {
+  rows: { nature: string; totalExp: string; pctFB: string; fbValue: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  function update(i: number, key: string, val: string) {
+    const updated = rows.map((r, idx) => {
+      if (idx !== i) return r;
+      const next = { ...r, [key]: val };
+      if (key === "totalExp" || key === "pctFB") {
+        const total = parseFloat(key === "totalExp" ? val : next.totalExp) || 0;
+        const pct = parseFloat(key === "pctFB" ? val : next.pctFB) || 0;
+        next.fbValue = (total * pct / 100).toFixed(2);
+      }
+      return next;
+    });
+    onChange(updated);
+  }
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  const grandTotal = rows.reduce((s, r) => s + (parseFloat(r.fbValue) || 0), 0);
+
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs">Nature</TableHead>
+            <TableHead className="text-xs w-36">Total Expenditure (₹)</TableHead>
+            <TableHead className="text-xs w-28">% Attributable</TableHead>
+            <TableHead className="text-xs w-36 bg-muted/50">Fringe Benefit Value (₹)</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-sm">{row.nature}</TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.totalExp} onChange={e => update(i, "totalExp", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.pctFB} onChange={e => update(i, "pctFB", e.target.value)} className="h-8 text-xs" placeholder="%" /></TableCell>
+              <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(parseFloat(row.fbValue) || 0)}</TableCell>
+            </TableRow>
+          ))}
+          <TableRow className="bg-muted/20 font-semibold text-xs">
+            <TableCell colSpan={3} className="p-1 text-right">Grand Total</TableCell>
+            <TableCell className="p-1 text-right">{fmt(grandTotal)}</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** MSME outstanding table (Clause 41) with auto-calc days */
+function MSMETable({ rows, onChange }: {
+  rows: { name: string; amount: string; dueDate: string; remarks: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  function addRow() { onChange([...rows, { name: "", amount: "", dueDate: "", remarks: "" }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  function calcDays(dueDate: string): string {
+    if (!dueDate) return "—";
+    const diff = Math.ceil((Date.now() - new Date(dueDate).getTime()) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? `${diff} days` : "Not overdue";
+  }
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs">Name of Supplier</TableHead>
+            <TableHead className="text-xs w-32">Amount Outstanding (₹)</TableHead>
+            <TableHead className="text-xs w-32">Due Date</TableHead>
+            <TableHead className="text-xs w-28 bg-muted/50">Days Outstanding</TableHead>
+            <TableHead className="text-xs w-36">Remarks</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1"><Input value={row.name} onChange={e => update(i, "name", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dueDate} onChange={e => update(i, "dueDate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1 bg-muted/30 text-xs text-center font-medium">{calcDays(row.dueDate)}</TableCell>
+              <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** GST Breakup table (Clause 44) with totals */
+function GSTBreakupTable({ rows, onChange }: {
+  rows: { description: string; totalExp: string; gstExp: string; gstRate: string; itcAvailed: string; nonGstExp: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  function addRow() { onChange([...rows, { description: "", totalExp: "", gstExp: "", gstRate: "", itcAvailed: "", nonGstExp: "" }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  const totals = rows.reduce((acc, r) => ({
+    totalExp: acc.totalExp + (parseFloat(r.totalExp) || 0),
+    gstExp: acc.gstExp + (parseFloat(r.gstExp) || 0),
+    itcAvailed: acc.itcAvailed + (parseFloat(r.itcAvailed) || 0),
+    nonGstExp: acc.nonGstExp + (parseFloat(r.nonGstExp) || 0),
+  }), { totalExp: 0, gstExp: 0, itcAvailed: 0, nonGstExp: 0 });
+
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs">Sr</TableHead>
+            <TableHead className="text-xs">Description</TableHead>
+            <TableHead className="text-xs w-28">Total Exp (₹)</TableHead>
+            <TableHead className="text-xs w-28">GST Exp (₹)</TableHead>
+            <TableHead className="text-xs w-20">GST Rate</TableHead>
+            <TableHead className="text-xs w-28">ITC Availed (₹)</TableHead>
+            <TableHead className="text-xs w-28">Non-GST Exp (₹)</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
+              <TableCell className="p-1"><Input value={row.description} onChange={e => update(i, "description", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.totalExp} onChange={e => update(i, "totalExp", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.gstExp} onChange={e => update(i, "gstExp", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.gstRate} onChange={e => update(i, "gstRate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.itcAvailed} onChange={e => update(i, "itcAvailed", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.nonGstExp} onChange={e => update(i, "nonGstExp", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
+            </TableRow>
+          ))}
+          {rows.length > 0 && (
+            <TableRow className="bg-muted/20 font-semibold text-xs">
+              <TableCell colSpan={2} className="p-1 text-right">Totals</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totals.totalExp)}</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totals.gstExp)}</TableCell>
+              <TableCell className="p-1" />
+              <TableCell className="p-1 text-right">{fmt(totals.itcAvailed)}</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totals.nonGstExp)}</TableCell>
+              <TableCell />
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   PRINT VIEW
+   ══════════════════════════════════════════════════════ */
+function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
+  client: any; engagement: any; fy: string; ay: string;
+  clauseData: Record<string, ClauseData>; onClose: () => void;
+}) {
+  const printRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Auto-trigger print after render
+    const timer = setTimeout(() => window.print(), 500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const clauseQuestions: Record<string, string> = {
+    cl_8: "8. Indicate the relevant clause of section 44AB under which the audit has been conducted",
+    cl_9: "9. (a) Whether books of account are prescribed under section 44AA, if yes, list of books so prescribed. (b) List of books of account maintained and the address at which the books of account are kept",
+    cl_10: "10. Nature of business or profession",
+    cl_11: "11. (a)-(c) Whether there has been any change in the method of accounting employed vis-a-vis the method employed in the immediately preceding previous year",
+    cl_12: "12. (a) Whether any capital asset converted into stock-in-trade",
+    cl_13: "13. Method of accounting employed in respect of speculative transactions",
+    cl_14: "14. Method of valuation of closing stock employed in the previous year",
+    cl_15_16: "15-16. Amounts debited to the profit and loss account",
+    cl_17: "17. Amounts debited to the profit and loss account, being any amount paid by way of dual deduction",
+    cl_18: "18. Particulars of depreciation allowable as per the Income-tax Act, 1961",
+    cl_19: "19. Amounts inadmissible under section 40(a)",
+    cl_20: "20. Amounts inadmissible under section 40A",
+    cl_21: "21. Amounts allowable on payment basis under various sections",
+    cl_22: "22. Amounts debited to the profit and loss account, being expenditure of personal nature",
+    cl_23: "23. Particulars of payments made to persons specified under section 40A(2)(b)",
+    cl_24_25: "24-25. Amounts deemed as profits / Any amount chargeable to tax",
+    cl_26: "26. Any amount of loss or expenditure or deduction inadmissible under sections 26ABB, 40(a) etc.",
+    cl_27: "27. Amounts received or deemed income / Prior period items",
+    cl_29: "29. Deemed profits u/s 32AC/33AB/33ABA/35ABB/41",
+    cl_30: "30. Amounts received from Government / MSME payments / Tax paid / Hundi",
+    cl_31: "31. Particulars of each loan or deposit in an amount exceeding the specified limit / TDS-TCS",
+    cl_32: "32. Brought forward losses / Deemed deductions",
+    cl_33: "33. Deductions claimed under sections 80G / 80GGA / 80GGB / 80GGC",
+    cl_34: "34. Whether TDS / TCS has been deducted / collected as per the provisions",
+    cl_35: "35. Quantitative details of turnover / receipts",
+    cl_36: "36. Amounts not credited to the profit and loss account",
+    cl_37_39: "37-39. Change in shareholding / Cost audit / Central Excise audit",
+    cl_40: "40. Details of fringe benefit",
+    cl_41: "41. MSME payments outstanding for more than 45 days",
+    cl_42_43: "42-43. Furnishing of Form 61 / Form 61A",
+    cl_44: "44. GST breakup of total expenditure",
+  };
+
+  function renderClauseValue(key: string, data: ClauseData): React.ReactNode {
+    if (!data || Object.keys(data).length === 0) return <p className="print-nil">NIL</p>;
+    
+    // Render as formatted JSON-like key-value pairs for print
+    const entries = Object.entries(data);
+    const hasContent = entries.some(([, v]) => {
+      if (typeof v === "string") return v.trim().length > 0;
+      if (Array.isArray(v)) return v.length > 0;
+      if (typeof v === "boolean") return true;
+      return v !== null && v !== undefined;
+    });
+    
+    if (!hasContent) return <p className="print-nil">NIL</p>;
+
+    return (
+      <div className="print-clause-content">
+        {entries.map(([k, v]) => {
+          if (v === undefined || v === null || v === "") return null;
+          if (typeof v === "boolean") return <p key={k} className="print-field"><strong>{k}:</strong> {v ? "Yes" : "No"}</p>;
+          if (typeof v === "string") return <p key={k} className="print-field"><strong>{k}:</strong> {v}</p>;
+          if (Array.isArray(v) && v.length > 0) {
+            if (typeof v[0] === "object" && v[0] !== null) {
+              const cols = Object.keys(v[0]);
+              return (
+                <div key={k} className="print-table-wrapper">
+                  <p className="print-field-label"><strong>{k}:</strong></p>
+                  <table className="print-table">
+                    <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+                    <tbody>
+                      {v.map((row: any, ri: number) => (
+                        <tr key={ri} className={ri % 2 === 1 ? "print-row-alt" : ""}>
+                          {cols.map(c => <td key={c}>{String(row[c] ?? "")}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }
+            if (Array.isArray(v[0])) {
+              return (
+                <div key={k} className="print-table-wrapper">
+                  <p className="print-field-label"><strong>{k}:</strong></p>
+                  <table className="print-table">
+                    <tbody>
+                      {v.map((row: string[], ri: number) => (
+                        <tr key={ri} className={ri % 2 === 1 ? "print-row-alt" : ""}>
+                          {row.map((cell, ci) => <td key={ci}>{cell}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }
+          }
+          return null;
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-background overflow-auto print:static print:overflow-visible">
+      {/* Screen-only toolbar */}
+      <div className="sticky top-0 z-10 bg-background border-b px-6 py-3 flex items-center justify-between print:hidden">
+        <h2 className="text-lg font-bold">Form 3CD — Print Preview</h2>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()}>
+            <Printer className="h-4 w-4 mr-1" /> Download as PDF
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+
+      <div ref={printRef} className="print-view max-w-4xl mx-auto p-8 print:p-0 print:max-w-none">
+        {/* Print-specific styles */}
+        <style>{`
+          @media print {
+            body * { visibility: hidden; }
+            .print-view, .print-view * { visibility: visible; }
+            .print-view { position: absolute; left: 0; top: 0; width: 100%; }
+            @page { size: A4 portrait; margin: 2cm; }
+            .print-header { text-align: center; margin-bottom: 20px; }
+            .print-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 8px 0; }
+            .print-table th, .print-table td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
+            .print-table th { background: #f0f0f0; font-weight: 600; }
+            .print-row-alt { background: #f9f9f9; }
+            .print-clause { margin-bottom: 16px; page-break-inside: avoid; }
+            .print-clause-31, .print-clause-34 { page-break-before: always; }
+            .print-nil { color: #888; font-style: italic; }
+            .print-field { margin: 4px 0; font-size: 10pt; }
+            .print-field-label { font-size: 10pt; margin: 8px 0 4px; }
+            .print-declaration { page-break-before: always; margin-top: 40px; }
+            .print-footer { position: fixed; bottom: 0; left: 0; right: 0; text-align: center; font-size: 8pt; color: #666; border-top: 1px solid #ccc; padding: 4px; }
+            .no-print { display: none !important; }
+          }
+          .print-header { text-align: center; margin-bottom: 24px; }
+          .print-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0; }
+          .print-table th, .print-table td { border: 1px solid hsl(var(--border)); padding: 4px 8px; text-align: left; }
+          .print-table th { background: hsl(var(--muted)); font-weight: 600; }
+          .print-row-alt { background: hsl(var(--muted) / 0.3); }
+          .print-clause { margin-bottom: 20px; border-bottom: 1px solid hsl(var(--border)); padding-bottom: 16px; }
+          .print-nil { color: hsl(var(--muted-foreground)); font-style: italic; }
+          .print-field { margin: 4px 0; font-size: 12px; }
+          .print-field-label { font-size: 12px; margin: 8px 0 4px; }
+        `}</style>
+
+        {/* HEADER */}
+        <div className="print-header">
+          <h1 className="text-lg font-bold">FORM NO. 3CD</h1>
+          <p className="text-sm text-muted-foreground">[See rule 6G(2)]</p>
+          <p className="text-sm mt-1">Statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961</p>
+          <Separator className="my-4" />
+          <div className="grid grid-cols-2 gap-2 text-sm text-left">
+            <p><strong>Name:</strong> {client?.name || "—"}</p>
+            <p><strong>PAN:</strong> {client?.pan || "—"}</p>
+            <p><strong>GSTIN:</strong> {(client?.gstin || []).join(", ") || "—"}</p>
+            <p><strong>Status:</strong> {client?.entity_type || engagement?.entity_type || "—"}</p>
+            <p><strong>Previous Year:</strong> {fy}</p>
+            <p><strong>Assessment Year:</strong> {ay}</p>
+          </div>
+          <Separator className="my-4" />
+        </div>
+
+        {/* ALL CLAUSES */}
+        {CLAUSE_NAV.map(c => {
+          const data = clauseData[c.key] || {};
+          const filled = isClauseFilled(data);
+          const isPB = c.key === "cl_31" || c.key === "cl_34";
+          return (
+            <div key={c.key} className={`print-clause ${isPB ? `print-clause-${c.label.replace("-", "")}` : ""}`}>
+              <h3 className="font-bold text-sm mb-2">
+                Clause {c.label} — {c.title}
+              </h3>
+              <p className="text-xs text-muted-foreground mb-2">{clauseQuestions[c.key] || ""}</p>
+              {filled ? renderClauseValue(c.key, data) : <p className="print-nil">NIL / Not Applicable</p>}
+            </div>
+          );
+        })}
+
+        {/* DECLARATION */}
+        <div className="print-declaration mt-12 pt-8 border-t-2">
+          <h3 className="font-bold text-center mb-6">DECLARATION</h3>
+          <p className="text-sm mb-8">
+            I/We have examined the accounts and records of <strong>{client?.name || "________"}</strong> (PAN: {client?.pan || "________"}) 
+            for the previous year {fy || "________"} relevant to the Assessment Year {ay || "________"}, 
+            and certify that the information given above is true and correct to the best of my/our knowledge and belief.
+          </p>
+          <div className="grid grid-cols-2 gap-8 text-sm mt-12">
+            <div className="space-y-6">
+              <div className="border-b border-dashed pb-1"><strong>Name of the Chartered Accountant:</strong> ___________________________</div>
+              <div className="border-b border-dashed pb-1"><strong>Membership Number:</strong> ___________________________</div>
+              <div className="border-b border-dashed pb-1"><strong>FRN (Firm Reg No.):</strong> ___________________________</div>
+              <div className="border-b border-dashed pb-1"><strong>UDIN:</strong> ___________________________</div>
+            </div>
+            <div className="space-y-6">
+              <div className="border-b border-dashed pb-1"><strong>Place:</strong> ___________________________</div>
+              <div className="border-b border-dashed pb-1"><strong>Date:</strong> ___________________________</div>
+              <div className="mt-12 text-center">
+                <div className="border-b w-48 mx-auto mb-2" />
+                <p className="text-xs text-muted-foreground">Signature & Seal</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* FOOTER (visible on print) */}
+        <div className="print-footer hidden print:block">
+          {client?.name} | PAN: {client?.pan} | FY: {fy} | Generated by CAFlow
+        </div>
+      </div>
     </div>
   );
 }
