@@ -364,7 +364,7 @@ export default function Form3CD() {
             {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => window.print()}>
+            <Button variant="outline" size="sm" onClick={() => setShowPrintView(true)}>
               <Printer className="h-4 w-4 mr-1" /> Print / Export
             </Button>
             <Button size="sm" onClick={() => saveAll(false)} disabled={saving}>
