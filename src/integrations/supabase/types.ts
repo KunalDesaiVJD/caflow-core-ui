@@ -3035,6 +3035,39 @@ export type Database = {
         }
         Relationships: []
       }
+      notes_rollover_buffer: {
+        Row: {
+          applied: boolean | null
+          client_id: string | null
+          created_at: string | null
+          firm_id: string | null
+          from_financial_year: string | null
+          id: string
+          rolled_notes: Json | null
+          to_financial_year: string | null
+        }
+        Insert: {
+          applied?: boolean | null
+          client_id?: string | null
+          created_at?: string | null
+          firm_id?: string | null
+          from_financial_year?: string | null
+          id?: string
+          rolled_notes?: Json | null
+          to_financial_year?: string | null
+        }
+        Update: {
+          applied?: boolean | null
+          client_id?: string | null
+          created_at?: string | null
+          firm_id?: string | null
+          from_financial_year?: string | null
+          id?: string
+          rolled_notes?: Json | null
+          to_financial_year?: string | null
+        }
+        Relationships: []
+      }
       notes_to_accounts: {
         Row: {
           client_id: string | null
