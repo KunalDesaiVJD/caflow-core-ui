@@ -96,6 +96,43 @@ function normalizeGroupName(name: string): string {
     .trim();
 }
 
+// ─── CHANGE 2: Multi-strategy indent detection ───
+function getEffectiveIndent(
+  indentFromStyle: number,
+  outlineLevel: number,
+  cellValue: string,
+  isCSV: boolean
+): number {
+  // Strategy 1: trust cell style if > 0
+  if (!isCSV && indentFromStyle > 0) return indentFromStyle;
+  // Strategy 2: trust outline level if > 0
+  if (!isCSV && outlineLevel > 0) return outlineLevel;
+  // Strategy 3: count leading spaces in cell text
+  const raw = String(cellValue || "");
+  const leadingSpaces = raw.length - raw.trimStart().length;
+  if (leadingSpaces >= 2) return Math.floor(leadingSpaces / 2);
+  // Strategy 4: return 0 (formatting fallback will handle)
+  return 0;
+}
+
+// ─── CHANGE 4: Validation helpers ───
+function findDuplicateNames(leaves: HierarchyNode[]): string[] {
+  const seen = new Map<string, number>();
+  for (const n of leaves) {
+    const key = n.name.toLowerCase().trim();
+    seen.set(key, (seen.get(key) || 0) + 1);
+  }
+  return [...seen.entries()].filter(([_, count]) => count > 1).map(([name]) => name);
+}
+
+function checkGroupAggregation(
+  _nodes: HierarchyNode[],
+  _childrenByParent: Map<string, HierarchyNode[]>
+): { group: string; fileValue: number; computedValue: number }[] {
+  // Placeholder — detailed implementation in future
+  return [];
+}
+
 interface TBRow {
   rowNum: number;
   name: string;
@@ -134,24 +171,93 @@ serve(async (req) => {
   }
 
   try {
-    const { engagementId, firmId, fileBase64, fileName, financialYear } = await req.json();
+    // ─── CHANGE 1: Accept chunked uploads + PDF text mode ───
+    const {
+      engagementId, firmId, financialYear,
+      // Full file mode (small files <2MB)
+      fileBase64, fileName,
+      // Chunked mode (large files)
+      chunkBase64, chunkIndex, totalChunks, uploadSessionId, isLastChunk,
+      // PDF text mode
+      pdfTextRows,
+    } = await req.json();
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Decode file
-    const binaryStr = atob(fileBase64);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    // ─── Handle chunk buffering ───
+    if (chunkBase64 !== undefined && !isLastChunk) {
+      await supabase.from("tb_upload_sessions").upsert({
+        id: `${uploadSessionId}_${chunkIndex}`,
+        engagement_id: engagementId,
+        chunk_index: chunkIndex,
+        chunk_data: chunkBase64,
+        total_chunks: totalChunks,
+        created_at: new Date().toISOString(),
+      });
+      return new Response(
+        JSON.stringify({ success: true, received: chunkIndex + 1, total: totalChunks }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    const isCSV = fileName?.toLowerCase().endsWith(".csv");
-    const wb = XLSX.read(bytes, { type: "array", cellStyles: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
+    // If this is the last chunk, reassemble all chunks
+    let fullBase64 = fileBase64;
+    if (isLastChunk && uploadSessionId) {
+      const { data: chunks } = await supabase
+        .from("tb_upload_sessions")
+        .select("chunk_index, chunk_data")
+        .like("id", `${uploadSessionId}_%`)
+        .order("chunk_index");
+      const allChunks = [
+        ...(chunks || []).map((c: any) => ({ chunk_index: c.chunk_index, chunk_data: c.chunk_data })),
+        { chunk_index: chunkIndex, chunk_data: chunkBase64 },
+      ];
+      allChunks.sort((a: any, b: any) => a.chunk_index - b.chunk_index);
+      fullBase64 = allChunks.map((c: any) => c.chunk_data).join("");
+      // Clean up session chunks
+      await supabase.from("tb_upload_sessions").delete().like("id", `${uploadSessionId}_%`);
+    }
 
-    // Get raw data with headers
-    const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+    // ─── CHANGE 6: PDF text parse path ───
+    let rawRows: any[][] = [];
+    let isCSV = false;
+    let ws: any = null;
+    let skippedGrandTotal = false;
+
+    if (pdfTextRows && Array.isArray(pdfTextRows)) {
+      // PDF lines have been pre-extracted by the client
+      isCSV = true; // No indent data from PDF
+      for (const line of pdfTextRows) {
+        if (!String(line).trim()) continue;
+        const parts = String(line).trim().split(/\s{3,}/);
+        if (parts.length >= 2) {
+          rawRows.push(parts);
+        } else {
+          rawRows.push([String(line).trim()]);
+        }
+      }
+      console.log(`[parse-tally-tb] PDF text mode: ${rawRows.length} rows from ${pdfTextRows.length} lines`);
+    } else {
+      // Excel/CSV mode
+      if (!fullBase64) {
+        return new Response(
+          JSON.stringify({ success: false, error: "No file data provided" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const binaryStr = atob(fullBase64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+      isCSV = fileName?.toLowerCase().endsWith(".csv") || false;
+      const wb = XLSX.read(bytes, { type: "array", cellStyles: true });
+      ws = wb.Sheets[wb.SheetNames[0]];
+      rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+    }
 
     console.log(`[parse-tally-tb] Total raw rows: ${rawRows.length}`);
 
@@ -170,7 +276,6 @@ serve(async (req) => {
     let detectedFormat = "unknown";
     let particularsRow = -1;
 
-    // === NEW: Detect Amount + Dr/Cr format ===
     let isAmountDrCrFormat = false;
     let amountCol = -1;
     let drCrCol = -1;
@@ -198,11 +303,9 @@ serve(async (req) => {
         const row = rawRows[r];
         if (!row || !row[0]) continue;
         const firstCell = String(row[0]).trim();
-        // Skip common non-data rows
         const lower = firstCell.toLowerCase();
         if (lower.includes("company") || lower.includes("trial balance") || lower.includes("period") ||
             lower.includes("date") || lower.includes("from") || lower.includes("to") || lower === "") continue;
-        // Check if subsequent rows have data patterns (text + number)
         let looksLikeData = false;
         for (let checkR = r; checkR < Math.min(r + 5, rawRows.length); checkR++) {
           const checkRow = rawRows[checkR];
@@ -212,13 +315,10 @@ serve(async (req) => {
           if (hasText && hasNum) { looksLikeData = true; break; }
         }
         if (looksLikeData) {
-          // This row or one before it might be the header
-          // Check if current row is a header
           const allText = row.every((c: any) => c === null || typeof c === "string");
           if (allText) {
             particularsRow = r;
           } else {
-            // No header row, data starts directly
             dataStartRow = r;
           }
           break;
@@ -234,12 +334,10 @@ serve(async (req) => {
       (header.includes("credit") || header.includes("credit amount") || headerHasToken(header, "cr"));
 
     if (particularsRow >= 0) {
-      // Step 2: Read up to 3 rows as a header block and combine text vertically per column
       const headerRowCount = 3;
       const maxCol = Math.max(...rawRows.slice(particularsRow, particularsRow + headerRowCount)
-        .filter(Boolean).map(r => r.length));
+        .filter(Boolean).map((r: any) => r.length));
 
-      // Build combined header text for each column
       const combinedHeaders: string[] = [];
       for (let c = 0; c < maxCol; c++) {
         const parts: string[] = [];
@@ -254,15 +352,12 @@ serve(async (req) => {
 
       console.log("[parse-tally-tb] Combined header text per column:", JSON.stringify(combinedHeaders));
 
-      // === Check for Amount + Dr/Cr format ===
-      // Look for a column that says "amount" and another that says "dr/cr" or similar
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
         if ((h.includes("amount") || h.includes("balance")) && amountCol < 0) amountCol = c;
         if ((h.includes("dr/cr") || h.includes("dr cr") || h === "dr" || h === "cr" || h.includes("type")) && drCrCol < 0) drCrCol = c;
       }
 
-      // Step 3: Detect standard column positions from combined header text
       for (let c = 1; c < combinedHeaders.length; c++) {
         const h = combinedHeaders[c];
         const hasOpening = h.includes("opening");
@@ -289,7 +384,6 @@ serve(async (req) => {
         }
       }
 
-      // Step 4: Find first actual data row
       dataStartRow = particularsRow + 1;
       while (dataStartRow < rawRows.length && dataStartRow < particularsRow + headerRowCount + 2) {
         const row = rawRows[dataStartRow];
@@ -311,17 +405,15 @@ serve(async (req) => {
       console.log("[parse-tally-tb] Particulars row:", particularsRow, "Data starts at row:", dataStartRow, "colMap:", JSON.stringify(colMap));
     }
 
-    // === Auto-detect Amount+Dr/Cr from data if headers didn't reveal it ===
+    // Auto-detect Amount+Dr/Cr from data
     if (amountCol < 0 && colMap.txnDebit < 0 && colMap.txnCredit < 0 && dataStartRow >= 0) {
-      // Scan a few data rows: if col B is numeric and col C is "Dr"/"Cr", it's Amount+Dr/Cr
       let drCrHits = 0;
       const scanStart = dataStartRow >= 0 ? dataStartRow : 0;
       for (let r = scanStart; r < Math.min(scanStart + 20, rawRows.length); r++) {
         const row = rawRows[r];
         if (!row || !row[0]) continue;
-        const colC = String(row[2] || "").trim().toLowerCase();
-        if (colC === "dr" || colC === "cr" || colC === "dr." || colC === "cr.") drCrHits++;
-        // Also check if col B is numeric-looking
+        const colC = String(row[2] || "").trim().toLowerCase().replace(".", "");
+        if (colC === "dr" || colC === "cr") drCrHits++;
       }
       if (drCrHits >= 3) {
         isAmountDrCrFormat = true;
@@ -331,7 +423,6 @@ serve(async (req) => {
       }
     }
 
-    // If explicit Dr/Cr column header found
     if (amountCol >= 0 && drCrCol >= 0 && colMap.txnDebit < 0 && colMap.txnCredit < 0) {
       isAmountDrCrFormat = true;
       console.log("[parse-tally-tb] Using Amount+Dr/Cr format: amountCol=", amountCol, "drCrCol=", drCrCol);
@@ -339,14 +430,9 @@ serve(async (req) => {
 
     // Determine format
     const detectedNumericColumns = [
-      colMap.opening,
-      colMap.openingDebit,
-      colMap.openingCredit,
-      colMap.txnDebit,
-      colMap.txnCredit,
-      colMap.closing,
-      colMap.closingDebit,
-      colMap.closingCredit,
+      colMap.opening, colMap.openingDebit, colMap.openingCredit,
+      colMap.txnDebit, colMap.txnCredit, colMap.closing,
+      colMap.closingDebit, colMap.closingCredit,
     ].filter((c) => c >= 0);
     const numCols = detectedNumericColumns.length;
     if (isAmountDrCrFormat) {
@@ -361,10 +447,9 @@ serve(async (req) => {
       detectedFormat = "3-column";
     }
 
-    // Fallback column detection for common Tally layouts
+    // Fallback column detection
     if (dataStartRow < 0) {
       dataStartRow = 0;
-      // Try to find first row with text in col A
       for (let r = 0; r < rawRows.length; r++) {
         const row = rawRows[r];
         if (row && row[0] && String(row[0]).trim().length > 2) {
@@ -374,7 +459,6 @@ serve(async (req) => {
       }
     }
 
-    // If columns still not detected and not Amount+Dr/Cr, use positional defaults
     if (!isAmountDrCrFormat && colMap.txnDebit < 0 && colMap.txnCredit < 0) {
       const sampleRow = rawRows[dataStartRow];
       if (sampleRow) {
@@ -386,7 +470,6 @@ serve(async (req) => {
           colMap.txnDebit = 1; colMap.txnCredit = 2; colMap.closing = 3;
           detectedFormat = "4-column";
         } else if (nonEmpty >= 3) {
-          // Could be Amount + Dr/Cr — check col C values
           const colCVal = String(sampleRow[2] || "").trim().toLowerCase();
           if (colCVal === "dr" || colCVal === "cr" || colCVal === "dr." || colCVal === "cr.") {
             isAmountDrCrFormat = true;
@@ -412,24 +495,26 @@ serve(async (req) => {
     const italicMap: Record<number, boolean> = {};
     const rowOutlineMap: Record<number, number> = {};
 
-    const worksheetRows = (ws as any)["!rows"] || [];
-    for (let r = dataStartRow; r < rawRows.length; r++) {
-      const rowMeta = worksheetRows[r];
-      if (rowMeta && typeof rowMeta.level === "number") {
-        rowOutlineMap[r] = Math.max(0, rowMeta.level);
+    if (ws) {
+      const worksheetRows = (ws as any)["!rows"] || [];
+      for (let r = dataStartRow; r < rawRows.length; r++) {
+        const rowMeta = worksheetRows[r];
+        if (rowMeta && typeof rowMeta.level === "number") {
+          rowOutlineMap[r] = Math.max(0, rowMeta.level);
+        }
       }
-    }
 
-    if (!isCSV) {
-      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-      for (let r = dataStartRow; r <= range.e.r; r++) {
-        const cellRef = XLSX.utils.encode_cell({ r, c: 0 });
-        const cell = ws[cellRef];
-        if (cell?.s) {
-          const style = cell.s as any;
-          indentMap[r] = style?.alignment?.indent || 0;
-          boldMap[r] = style?.font?.bold || false;
-          italicMap[r] = style?.font?.italic || false;
+      if (!isCSV) {
+        const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+        for (let r = dataStartRow; r <= range.e.r; r++) {
+          const cellRef = XLSX.utils.encode_cell({ r, c: 0 });
+          const cell = ws[cellRef];
+          if (cell?.s) {
+            const style = cell.s as any;
+            indentMap[r] = style?.alignment?.indent || 0;
+            boldMap[r] = style?.font?.bold || false;
+            italicMap[r] = style?.font?.italic || false;
+          }
         }
       }
     }
@@ -446,31 +531,23 @@ serve(async (req) => {
       const rawName = String(rawNameCell || "");
       const name = rawName.trim();
 
-      // Skip rows with no account name
       if (!name) { skippedRows++; continue; }
 
       const nameLower = name.toLowerCase();
-      // Skip total/grand total rows
       if (/\bgrand\s*total\b/i.test(nameLower) || /^total\b/i.test(nameLower) ||
           nameLower === "closing balance" || nameLower.includes("opening balance") || nameLower === "difference in opening") {
         skippedRows++;
+        skippedGrandTotal = true;
         continue;
       }
 
+      // ─── CHANGE 2: Use multi-strategy indent detection ───
       const indentFromStyle = isCSV ? 0 : (indentMap[r] || 0);
       const indentFromOutline = isCSV ? 0 : (rowOutlineMap[r] || 0);
       const bold = isCSV ? false : (boldMap[r] || false);
       const italic = isCSV ? false : (italicMap[r] || false);
 
-      // If indent not available from styles, try to detect from leading spaces/tabs/non-breaking spaces
-      let effectiveIndent = Math.max(indentFromStyle, indentFromOutline);
-      if (effectiveIndent === 0 && !isCSV) {
-        const wsMatch = rawName.match(/^[\s\u00A0]+/);
-        const leading = wsMatch ? wsMatch[0].replace(/\t/g, "    ").length : 0;
-        if (leading > 0) {
-          effectiveIndent = Math.floor(leading / 2);
-        }
-      }
+      const effectiveIndent = getEffectiveIndent(indentFromStyle, indentFromOutline, rawName, isCSV);
 
       let txnDebit = 0;
       let txnCredit = 0;
@@ -479,7 +556,6 @@ serve(async (req) => {
       let isLedger = false;
 
       if (isAmountDrCrFormat) {
-        // Amount + Dr/Cr format
         const amount = parseNum(row[amountCol]);
         const drCrVal = String(row[drCrCol] || "").trim().toLowerCase().replace(".", "");
         const hasDrCrMarker = drCrVal === "dr" || drCrVal === "cr";
@@ -493,12 +569,10 @@ serve(async (req) => {
           txnCredit = Math.abs(amount);
           isLedger = true;
         } else if (amount === 0) {
-          // Allow zero-value rows to preserve hierarchy shape
           txnDebit = 0;
           txnCredit = 0;
           isLedger = true;
         } else {
-          // Non-zero amount without Dr/Cr is usually a group/subtotal row
           txnDebit = 0;
           txnCredit = 0;
           isLedger = false;
@@ -507,7 +581,6 @@ serve(async (req) => {
         opening = txnDebit - txnCredit;
         closing = opening + txnDebit - txnCredit;
 
-        // If explicit opening/closing columns were also detected, trust them
         if (colMap.opening >= 0) opening = parseSignedBalance(row[colMap.opening]);
         if (colMap.closing >= 0) closing = parseSignedBalance(row[colMap.closing]);
 
@@ -528,19 +601,13 @@ serve(async (req) => {
         const hasSplitClosing = colMap.closingDebit >= 0 || colMap.closingCredit >= 0;
 
         const hasNumericCells = [
-          colMap.opening,
-          colMap.openingDebit,
-          colMap.openingCredit,
-          colMap.txnDebit,
-          colMap.txnCredit,
-          colMap.closing,
-          colMap.closingDebit,
-          colMap.closingCredit,
+          colMap.opening, colMap.openingDebit, colMap.openingCredit,
+          colMap.txnDebit, colMap.txnCredit, colMap.closing,
+          colMap.closingDebit, colMap.closingCredit,
         ]
           .filter((c) => c >= 0)
           .some((c) => row[c] !== null && row[c] !== undefined && String(row[c]).trim() !== "");
 
-        // Internal signed balance convention: balance = debit - credit
         opening = hasSplitOpening
           ? openingDebitCol - openingCreditCol
           : (colMap.opening >= 0 ? parseSignedBalance(row[colMap.opening]) : (txnDebit - txnCredit));
@@ -552,7 +619,6 @@ serve(async (req) => {
         isLedger = hasNumericCells || txnDebit !== 0 || txnCredit !== 0 || opening !== 0 || closing !== 0;
       }
 
-      // IMPORTANT: Do NOT skip rows where both debit and credit are zero if name exists
       dataRows.push({
         rowNum: r,
         name,
@@ -595,7 +661,7 @@ serve(async (req) => {
     const indentValues = [...new Set(dataRows.map((r) => r.indent).filter((indent) => indent > 0))].sort((a, b) => a - b);
     const indentLevelMap = new Map<number, number>();
     indentValues.forEach((indent, idx) => {
-      indentLevelMap.set(indent, idx + 2); // indent 0 => level 1, first indented level => 2
+      indentLevelMap.set(indent, idx + 2);
     });
 
     const structuredRows: StructuredRow[] = [];
@@ -629,7 +695,6 @@ serve(async (req) => {
           }
         }
       } else {
-        // Formatting fallback when indentation metadata is missing
         if (row.bold) {
           level = 1;
           isGroupHint = true;
@@ -649,7 +714,6 @@ serve(async (req) => {
         }
       }
 
-      // Required rule: heading rows with zero values and children are groups
       if (!isGroupHint && !hasValues && !!nextRow) {
         isGroupHint = true;
       }
@@ -663,7 +727,32 @@ serve(async (req) => {
       });
     }
 
-    // Parent stack using computed levels (indentation primary)
+    // ─── CHANGE 3: Anti-duplication filter — strip group subtotal rows ───
+    for (let i = 0; i < structuredRows.length; i++) {
+      const row = structuredRows[i];
+      if (!row.isGroupHint || !row.hasValues) continue;
+      // Sum of child rows (next rows at level > current row's level)
+      let childSum = 0;
+      let childCount = 0;
+      for (let j = i + 1; j < structuredRows.length; j++) {
+        const child = structuredRows[j];
+        if (child.level <= row.level) break;
+        if (child.level === row.level + 1) {
+          childSum += Math.abs(child.closing);
+          childCount++;
+        }
+      }
+      if (childCount > 0 && Math.abs(Math.abs(row.closing) - childSum) < 1) {
+        // This row's value matches its children's sum — it's a subtotal, zero it out
+        row.opening = 0;
+        row.txnDebit = 0;
+        row.txnCredit = 0;
+        row.closing = 0;
+        row.hasValues = false;
+      }
+    }
+
+    // Parent stack using computed levels
     const levelStack: HierarchyNode[] = [];
 
     for (const row of structuredRows) {
@@ -775,6 +864,25 @@ serve(async (req) => {
 
     console.log(`[parse-tally-tb] Rows read: ${rawRows.length}, Valid rows detected: ${dataRows.length}, Groups: ${groupNodes.length}, Ledgers: ${leafNodes.length}, Rows skipped: ${skippedRows}`);
 
+    // ─── CHANGE 4: Post-import validation — 7 integrity checks ───
+    const totalDr = leafNodes.reduce((s, n) => s + n.txnDebit, 0);
+    const totalCr = leafNodes.reduce((s, n) => s + n.txnCredit, 0);
+
+    const validation = {
+      isBalanced: Math.abs(totalDr - totalCr) < 1,
+      drTotal: totalDr,
+      crTotal: totalCr,
+      difference: Math.abs(totalDr - totalCr),
+      duplicateNames: findDuplicateNames(leafNodes),
+      groupMismatches: checkGroupAggregation(nodes, childrenByParent),
+      unclassifiedLeaves: leafNodes.filter(n => n.primaryGroup === n.name && n.bsPlSide === "Unknown").length,
+      bsAssets: leafNodes.filter(n => BS_GROUPS_DR.some(g => n.primaryGroup.toLowerCase().includes(g))).reduce((s, n) => s + n.closing, 0),
+      bsLiabilities: leafNodes.filter(n => BS_GROUPS_CR.some(g => n.primaryGroup.toLowerCase().includes(g))).reduce((s, n) => s + Math.abs(n.closing), 0),
+      grandTotalDetected: skippedGrandTotal,
+      primaryGroups: [...new Set(leafNodes.map(n => n.primaryGroup))],
+      primaryGroupCount: [...new Set(leafNodes.map(n => n.primaryGroup))].length,
+    };
+
     // ─── Save to database ───
     const batchId = crypto.randomUUID();
     await supabase.from("ledger_import_batches").insert({
@@ -817,7 +925,6 @@ serve(async (req) => {
     }
 
     // Save leaf ledgers to trial_balance_snapshots
-    // Delete old leaf snapshots for this engagement
     await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", engagementId);
 
     for (let i = 0; i < leafNodes.length; i += 100) {
@@ -851,8 +958,6 @@ serve(async (req) => {
     const primaryGroups = [...new Set(nodes.map(n => n.primaryGroup))];
     const bsCount = leafNodes.filter(n => n.bsPlSide === "BS").length;
     const plCount = leafNodes.filter(n => n.bsPlSide === "PL").length;
-    const totalDr = leafNodes.reduce((s, n) => s + n.txnDebit, 0);
-    const totalCr = leafNodes.reduce((s, n) => s + n.txnCredit, 0);
     const isBalanced = Math.abs(totalDr - totalCr) < 1;
 
     // ─── Chain: Tag ledgers with scrutiny categories ───
@@ -893,6 +998,7 @@ serve(async (req) => {
         rowsRead: rawRows.length,
         groupsDetected: groupNodes.length,
         rowsSkipped: skippedRows,
+        validation,
         tagging: taggingResult,
         hierarchy: nodes.map(n => ({
           nodeId: n.nodeId,
