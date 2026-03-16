@@ -322,8 +322,6 @@ export default function Form3CD() {
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
   if (!engagementId) return <div className="p-8 text-center text-muted-foreground">Please open Form 3CD from an engagement pipeline (Stage 8).</div>;
 
-  // Implemented clause keys
-  const implementedKeys = new Set(CLAUSE_KEYS);
 
   return (
     <div className="flex gap-0 h-[calc(100vh-4rem)]">
