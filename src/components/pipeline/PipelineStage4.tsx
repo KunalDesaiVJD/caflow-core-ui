@@ -105,17 +105,30 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
   const { data: tbAccounts } = useQuery({
     queryKey: ["tb-accounts-stage4", engagementId],
     queryFn: async () => {
+      // First try: fetch all snapshot rows (Tally import creates one row per ledger)
       const { data } = await supabase
         .from("trial_balance_snapshots" as any)
-        .select("id, normalised_data")
+        .select("id, ledger_name, txn_debit, txn_credit, opening_balance, closing_balance, primary_group, bs_pl_side, normalised_data")
         .eq("engagement_id", engagementId)
-        .order("created_at", { ascending: false })
-        .limit(1);
-      const rows = data as any[];
-      if (rows?.[0]?.normalised_data && Array.isArray(rows[0].normalised_data)) {
+        .limit(500);
+      const rows = (data || []) as any[];
+      if (rows.length === 0) return [];
+      // Check if first row has normalised_data JSON (generic import format)
+      if (rows.length === 1 && rows[0].normalised_data && Array.isArray(rows[0].normalised_data)) {
         return rows[0].normalised_data as any[];
       }
-      return [];
+      // Multiple rows = Tally import — map to expected format
+      return rows
+        .filter((r: any) => r.ledger_name)
+        .map((r: any) => ({
+          account_name: r.ledger_name,
+          debit: r.txn_debit || 0,
+          credit: r.txn_credit || 0,
+          opening_balance: r.opening_balance || 0,
+          closing_balance: r.closing_balance || 0,
+          account_group: r.primary_group || "",
+          bs_pl_side: r.bs_pl_side || "",
+        }));
     },
     enabled: !!engagementId,
   });
