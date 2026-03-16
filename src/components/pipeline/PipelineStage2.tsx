@@ -1432,12 +1432,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       {/* Header row */}
                       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
                         <span className="flex-1 pl-6">Account / Group</span>
-                        <span className="w-24 text-right">Opening DR</span>
-                        <span className="w-24 text-right">Opening CR</span>
-                        <span className="w-24 text-right">TXN DR</span>
-                        <span className="w-24 text-right">TXN CR</span>
-                        <span className="w-24 text-right">Closing DR</span>
-                        <span className="w-24 text-right">Closing CR</span>
+                        <span className="w-28 text-right">Opening DR</span>
+                        <span className="w-28 text-right">Opening CR</span>
+                        <span className="w-28 text-right">TXN DR</span>
+                        <span className="w-28 text-right">TXN CR</span>
+                        <span className="w-28 text-right">Closing DR</span>
+                        <span className="w-28 text-right">Closing CR</span>
                       </div>
                       {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
                         .filter((n) => n.parentNodeId === null)
