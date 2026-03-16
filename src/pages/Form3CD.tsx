@@ -46,16 +46,16 @@ const CLAUSE_NAV = [
   { key: "cl_20", label: "20", title: "Amounts inadmissible u/s 40A" },
   { key: "cl_21", label: "21", title: "Amounts allowable on payment basis" },
   { key: "cl_22", label: "22", title: "Personal expenditure" },
-  { key: "cl_23", label: "23", title: "Interest payment u/s 40(b)" },
-  { key: "cl_24_25", label: "24-25", title: "Disallowance/deemed income" },
-  { key: "cl_26", label: "26", title: "Undisclosed investments" },
-  { key: "cl_27", label: "27", title: "Section 28 income" },
-  { key: "cl_29", label: "29", title: "Foreign remittances" },
-  { key: "cl_30", label: "30", title: "Transfer pricing adjustments" },
-  { key: "cl_31", label: "31", title: "TDS particulars" },
-  { key: "cl_32", label: "32", title: "Business receipts" },
-  { key: "cl_33", label: "33", title: "Conversion of assets" },
-  { key: "cl_34", label: "34", title: "Accounting standards" },
+  { key: "cl_23", label: "23", title: "Payments to specified persons" },
+  { key: "cl_24_25", label: "24-25", title: "Deemed profits / chargeable amounts" },
+  { key: "cl_26", label: "26", title: "Loss/expenditure disallowable" },
+  { key: "cl_27", label: "27", title: "Deemed income / prior period items" },
+  { key: "cl_29", label: "29", title: "Deemed profits u/s 32AC/33AB/41" },
+  { key: "cl_30", label: "30", title: "Govt receipts / MSME / Tax paid / Hundi" },
+  { key: "cl_31", label: "31", title: "TDS / TCS particulars" },
+  { key: "cl_32", label: "32", title: "Brought forward losses / deductions" },
+  { key: "cl_33", label: "33", title: "Deductions u/s 80G/80GGA/80GGB/80GGC" },
+  { key: "cl_34", label: "34", title: "TDS/TCS compliance" },
   { key: "cl_35", label: "35", title: "Brought forward losses" },
   { key: "cl_36", label: "36", title: "Sec 269SS/269T compliance" },
   { key: "cl_37_39", label: "37-39", title: "Transfer pricing / GAAR" },
@@ -95,6 +95,35 @@ const SECTION_40A_OPTIONS = [
   "40(a)(i)", "40(a)(ia)", "40(a)(ib)", "40(a)(ii)", "40(a)(iia)", "40(a)(iii)", "40(a)(iv)", "40(a)(v)",
 ];
 
+const LIABILITY_NATURE_OPTIONS = [
+  "Interest", "Penalty", "Fine", "Litigation expenses", "Contribution to political party", "Other",
+];
+
+const SECTION_43B_OPTIONS = ["43B(a)", "43B(b)", "43B(c)", "43B(d)", "43B(e)", "43B(f)", "43B(h)"];
+
+const LOSS_NATURE_OPTIONS = ["Business Loss", "Speculation Loss", "Capital Loss", "House Property Loss", "Other"];
+
+const DONATION_SECTION_OPTIONS = ["80G", "80GGA", "80GGB", "80GGC"];
+
+const TDS_SECTIONS: Record<string, string> = {
+  "192": "Salary", "192A": "PF Withdrawal", "193": "Interest on Securities", "194": "Dividend",
+  "194A": "Interest other than Securities", "194B": "Lottery Winnings", "194BB": "Horse Race Winnings",
+  "194C": "Contractor Payments", "194D": "Insurance Commission", "194DA": "Life Insurance Maturity",
+  "194E": "Non-resident Sportsman", "194EE": "NSS Payments", "194F": "Repurchase by Mutual Fund",
+  "194G": "Commission on Lottery", "194H": "Commission/Brokerage", "194I": "Rent",
+  "194IA": "Transfer of Immovable Property", "194IB": "Rent by Individual",
+  "194IC": "Joint Development Agreement", "194J": "Professional/Technical Fees",
+  "194K": "Income from Units", "194LA": "Compensation on Compulsory Acquisition",
+  "194LB": "Interest from Infrastructure Bond", "194LC": "Interest from Indian Company",
+  "194LD": "Interest on Rupee Bond", "194M": "Payment by Individual/HUF to Contractor",
+  "194N": "Cash Withdrawal", "194O": "E-commerce", "194P": "Senior Citizen",
+  "194Q": "Purchase of Goods", "194R": "Benefit/Perquisite", "194S": "Cryptocurrency",
+  "195": "Non-resident Payments", "196B": "Income from offshore fund",
+  "196C": "Income from foreign currency bonds", "196D": "Income of FII from securities",
+};
+
+const TDS_SECTION_KEYS = Object.keys(TDS_SECTIONS);
+
 /* ──────── helpers ──────── */
 function computeAY(fy: string | null): string {
   if (!fy) return "";
@@ -120,6 +149,7 @@ function isClauseFilled(data: ClauseData | undefined): boolean {
 const CLAUSE_KEYS = [
   "cl_8","cl_9","cl_10","cl_11","cl_12","cl_13",
   "cl_14","cl_15_16","cl_17","cl_18","cl_19","cl_20","cl_21","cl_22",
+  "cl_23","cl_24_25","cl_26","cl_27","cl_29","cl_30","cl_31","cl_32","cl_33","cl_34",
 ] as const;
 
 /* ──────── main component ──────── */
@@ -150,11 +180,23 @@ export default function Form3CD() {
   const [cl20, setCl20] = useState<ClauseData>({});
   const [cl21, setCl21] = useState<ClauseData>({});
   const [cl22, setCl22] = useState<ClauseData>({});
+  const [cl23, setCl23] = useState<ClauseData>({});
+  const [cl24_25, setCl24_25] = useState<ClauseData>({});
+  const [cl26, setCl26] = useState<ClauseData>({});
+  const [cl27, setCl27] = useState<ClauseData>({});
+  const [cl29, setCl29] = useState<ClauseData>({});
+  const [cl30, setCl30] = useState<ClauseData>({});
+  const [cl31, setCl31] = useState<ClauseData>({});
+  const [cl32, setCl32] = useState<ClauseData>({});
+  const [cl33, setCl33] = useState<ClauseData>({});
+  const [cl34, setCl34] = useState<ClauseData>({});
 
   const clauseStateMap: Record<string, ClauseData> = {
     cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
     cl_14: cl14, cl_15_16: cl15_16, cl_17: cl17, cl_18: cl18,
     cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
+    cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
+    cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
   };
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,6 +234,10 @@ export default function Form3CD() {
       setCl14(e.cl_14 || {}); setCl15_16(e.cl_15_16 || {}); setCl17(e.cl_17 || {});
       setCl18(e.cl_18 || {}); setCl19(e.cl_19 || {}); setCl20(e.cl_20 || {});
       setCl21(e.cl_21 || {}); setCl22(e.cl_22 || {});
+      setCl23(e.cl_23 || {}); setCl24_25(e.cl_24_25 || {}); setCl26(e.cl_26 || {});
+      setCl27(e.cl_27 || {}); setCl29(e.cl_29 || {}); setCl30(e.cl_30 || {});
+      setCl31(e.cl_31 || {}); setCl32(e.cl_32 || {}); setCl33(e.cl_33 || {});
+      setCl34(e.cl_34 || {});
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
@@ -230,6 +276,8 @@ export default function Form3CD() {
         cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
         cl_14: cl14, cl_15_16: cl15_16, cl_17: cl17, cl_18: cl18,
         cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
+        cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
+        cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
         status: formStatus,
         last_saved_at: new Date().toISOString(),
         last_saved_by: user?.id,
@@ -924,7 +972,463 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* Placeholder sections for clauses 23-44 */}
+            {/* ═══════ CLAUSE 23 — Payments to specified persons ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_23"] = el; }}>
+              <AccordionItem value="cl_23" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">23</Badge>
+                    <span className="font-medium">Payments to Specified Persons u/s 40A(2)(b)</span>
+                    {isClauseFilled(cl23) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioApplicable name="cl23" value={cl23.applicable} onChange={v => updateClause(setCl23, "applicable", v)} />
+                  {cl23.applicable === true && (
+                    <EditableTable
+                      columns={["Name", "PAN", "Relationship", "Nature of Payment", "Amount (₹)"]}
+                      rows={cl23.rows || []}
+                      onChange={rows => updateClause(setCl23, "rows", rows)}
+                    />
+                  )}
+                  {cl23.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSES 24 & 25 — Deemed profits / chargeable amounts ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_24_25"] = el; }}>
+              <AccordionItem value="cl_24_25" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">24-25</Badge>
+                    <span className="font-medium">Amounts Deemed as Profits / Chargeable to Tax</span>
+                    {isClauseFilled(cl24_25) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* Clause 24 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">Clause 24 — Amounts deemed as profits u/s 33AB/33ABA/33AC</Label>
+                    <RadioApplicable name="cl24" value={cl24_25.cl24_applicable} onChange={v => updateClause(setCl24_25, "cl24_applicable", v)} />
+                    {cl24_25.cl24_applicable === true && (
+                      <EditableTable columns={["Section", "Particulars", "Amount (₹)"]} rows={cl24_25.cl24_rows || []} onChange={rows => updateClause(setCl24_25, "cl24_rows", rows)} />
+                    )}
+                    {cl24_25.cl24_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* Clause 25 */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">Clause 25 — Any amount of profit chargeable to tax under the Act</Label>
+                    <RadioApplicable name="cl25" value={cl24_25.cl25_applicable} onChange={v => updateClause(setCl24_25, "cl25_applicable", v)} />
+                    {cl24_25.cl25_applicable === true && (
+                      <div className="space-y-2">
+                        <Textarea placeholder="Particulars..." value={cl24_25.cl25_particulars || ""} onChange={e => updateClause(setCl24_25, "cl25_particulars", e.target.value)} />
+                        <div className="grid grid-cols-[1fr_200px] gap-3 items-center">
+                          <Label>Amount (₹)</Label>
+                          <Input type="number" placeholder="₹ 0.00" value={cl24_25.cl25_amount || ""} onChange={e => updateClause(setCl24_25, "cl25_amount", e.target.value)} className="text-right" />
+                        </div>
+                      </div>
+                    )}
+                    {cl24_25.cl25_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 26 — Loss/expenditure disallowable ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_26"] = el; }}>
+              <AccordionItem value="cl_26" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">26</Badge>
+                    <span className="font-medium">Any Amount of Loss / Expenditure Disallowable</span>
+                    {isClauseFilled(cl26) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {[
+                    { key: "26ai", label: "26(a)(i) — Penalty / Fine for violation of law" },
+                    { key: "26aii", label: "26(a)(ii) — Penalty / Fine for violation of any enactment" },
+                    { key: "26aiii", label: "26(a)(iii) — Amount disallowed u/s 37(1)" },
+                    { key: "26aiv", label: "26(a)(iv) — Any expenditure by way of contribution to political party" },
+                  ].map(sub => (
+                    <div key={sub.key} className="space-y-3 border-l-2 border-muted pl-4">
+                      <Label className="font-medium">{sub.label}</Label>
+                      <RadioApplicable name={`cl26_${sub.key}`} value={cl26[`${sub.key}_applicable`]} onChange={v => updateClause(setCl26, `${sub.key}_applicable`, v)} />
+                      {cl26[`${sub.key}_applicable`] === true && (
+                        <DropdownTable
+                          dropdownCol={0}
+                          dropdownLabel="Nature of Liability"
+                          dropdownOptions={LIABILITY_NATURE_OPTIONS}
+                          columns={["Nature of Liability", "Amount (₹)"]}
+                          rows={cl26[`${sub.key}_rows`] || []}
+                          onChange={rows => updateClause(setCl26, `${sub.key}_rows`, rows)}
+                        />
+                      )}
+                      {cl26[`${sub.key}_applicable`] === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                    </div>
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 27 — Deemed income / Prior period items ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_27"] = el; }}>
+              <AccordionItem value="cl_27" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">27</Badge>
+                    <span className="font-medium">Deemed Income / Prior Period Items</span>
+                    {isClauseFilled(cl27) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 27(a) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">27(a) — Receipt of any amount taxable as deemed income</Label>
+                    <RadioYesNo name="cl27a" value={cl27.a_yes} onChange={v => updateClause(setCl27, "a_yes", v)} />
+                    {cl27.a_yes === true && (
+                      <EditableTable columns={["Nature of Receipt", "Section", "Amount (₹)", "Remarks"]} rows={cl27.a_rows || []} onChange={rows => updateClause(setCl27, "a_rows", rows)} />
+                    )}
+                    {cl27.a_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">No deemed income</div>}
+                  </div>
+                  <Separator />
+                  {/* 27(b) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">27(b) — Prior period items</Label>
+                    <RadioApplicable name="cl27b" value={cl27.b_applicable} onChange={v => updateClause(setCl27, "b_applicable", v)} />
+                    {cl27.b_applicable === true && (
+                      <DropdownTable
+                        dropdownCol={0}
+                        dropdownLabel="Type"
+                        dropdownOptions={["Income", "Expense"]}
+                        columns={["Type", "Particulars", "Amount (₹)", "Prior Period (yyyy-yy)"]}
+                        rows={cl27.b_rows || []}
+                        onChange={rows => updateClause(setCl27, "b_rows", rows)}
+                      />
+                    )}
+                    {cl27.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 29 — Deemed profits u/s 32AC/33AB/41 ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_29"] = el; }}>
+              <AccordionItem value="cl_29" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">29</Badge>
+                    <span className="font-medium">Deemed Profits u/s 32AC / 33AB / 41</span>
+                    {isClauseFilled(cl29) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 29(A) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">29(A) — Amount deemed as profits u/s 32AC/32AD/33AB/33ABA/35ABB</Label>
+                    <RadioYesNo name="cl29a" value={cl29.a_yes} onChange={v => updateClause(setCl29, "a_yes", v)} />
+                    {cl29.a_yes === true && (
+                      <EditableTable columns={["Section", "Amount of Deduction Earlier Claimed (₹)", "Amount Chargeable Now (₹)", "Remarks"]} rows={cl29.a_rows || []} onChange={rows => updateClause(setCl29, "a_rows", rows)} />
+                    )}
+                    {cl29.a_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">No deemed profits</div>}
+                  </div>
+                  <Separator />
+                  {/* 29(B) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">29(B) — Deemed profits u/s 41</Label>
+                    <RadioYesNo name="cl29b" value={cl29.b_yes} onChange={v => updateClause(setCl29, "b_yes", v)} />
+                    {cl29.b_yes === true && (
+                      <EditableTable columns={["Section", "Name of Person", "Amount (₹)"]} rows={cl29.b_rows || []} onChange={rows => updateClause(setCl29, "b_rows", rows)} />
+                    )}
+                    {cl29.b_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">No deemed profits u/s 41</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 30 — Govt receipts / MSME / Tax paid / Hundi ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_30"] = el; }}>
+              <AccordionItem value="cl_30" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">30</Badge>
+                    <span className="font-medium">Government Receipts / MSME / Tax Paid / Hundi</span>
+                    {isClauseFilled(cl30) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 30 — Govt scheme */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">Clause 30 — Amount received/receivable from Government</Label>
+                    <RadioYesNo name="cl30" value={cl30.govt_yes} onChange={v => updateClause(setCl30, "govt_yes", v)} />
+                    {cl30.govt_yes === true && (
+                      <div className="space-y-2">
+                        <Input placeholder="Name of Government scheme" value={cl30.govt_scheme || ""} onChange={e => updateClause(setCl30, "govt_scheme", e.target.value)} />
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input type="number" placeholder="Amount Received (₹)" value={cl30.govt_amount || ""} onChange={e => updateClause(setCl30, "govt_amount", e.target.value)} />
+                          <Input placeholder="Purpose" value={cl30.govt_purpose || ""} onChange={e => updateClause(setCl30, "govt_purpose", e.target.value)} />
+                        </div>
+                      </div>
+                    )}
+                    {cl30.govt_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  <Separator />
+                  {/* 30(A) — MSME */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">30(A) — MSME payments u/s 43B(h)</Label>
+                    <RadioYesNo name="cl30a" value={cl30.msme_yes} onChange={v => updateClause(setCl30, "msme_yes", v)} />
+                    {cl30.msme_yes === true && (
+                      <div className="space-y-2">
+                        <Select value={cl30.msme_section || ""} onValueChange={v => updateClause(setCl30, "msme_section", v)}>
+                          <SelectTrigger><SelectValue placeholder="Select section" /></SelectTrigger>
+                          <SelectContent>
+                            {SECTION_43B_OPTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input type="number" placeholder="Amount Due (₹)" value={cl30.msme_due || ""} onChange={e => updateClause(setCl30, "msme_due", e.target.value)} />
+                          <Input type="number" placeholder="Amount Paid (₹)" value={cl30.msme_paid || ""} onChange={e => updateClause(setCl30, "msme_paid", e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input type="date" value={cl30.msme_date || ""} onChange={e => updateClause(setCl30, "msme_date", e.target.value)} />
+                          <Input placeholder="Remarks" value={cl30.msme_remarks || ""} onChange={e => updateClause(setCl30, "msme_remarks", e.target.value)} />
+                        </div>
+                      </div>
+                    )}
+                    {cl30.msme_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  <Separator />
+                  {/* 30(B) — Tax paid */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">30(B) — Tax paid</Label>
+                    <RadioYesNo name="cl30b" value={cl30.tax_yes} onChange={v => updateClause(setCl30, "tax_yes", v)} />
+                    {cl30.tax_yes === true && (
+                      <EditableTable columns={["Sr No", "Nature of Tax", "Amount (₹)", "Date of Payment"]} rows={cl30.tax_rows || []} onChange={rows => updateClause(setCl30, "tax_rows", rows)} />
+                    )}
+                    {cl30.tax_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  <Separator />
+                  {/* 30(C) — Hundi */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">30(C) — Amount borrowed / repaid on hundi</Label>
+                    <RadioYesNo name="cl30c" value={cl30.hundi_yes} onChange={v => updateClause(setCl30, "hundi_yes", v)} />
+                    {cl30.hundi_yes === true && (
+                      <EditableTable columns={["Name of Payer/Payee", "Amount Borrowed (₹)", "Amount Repaid (₹)", "Date"]} rows={cl30.hundi_rows || []} onChange={rows => updateClause(setCl30, "hundi_rows", rows)} />
+                    )}
+                    {cl30.hundi_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 31 — TDS / TCS Particulars ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_31"] = el; }}>
+              <AccordionItem value="cl_31" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">31</Badge>
+                    <span className="font-medium">TDS / TCS Particulars</span>
+                    {isClauseFilled(cl31) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 31(a) — TDS Deductions */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">31(a) — TDS Deductions (Section 192 to 196D)</Label>
+                    <RadioApplicable name="cl31a" value={cl31.a_applicable} onChange={v => updateClause(setCl31, "a_applicable", v)} />
+                    {cl31.a_applicable === true && (
+                      <TDSScheduleTable rows={cl31.a_rows || []} onChange={rows => updateClause(setCl31, "a_rows", rows)} />
+                    )}
+                    {cl31.a_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 31(b) — TCS Collections */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">31(b) — TCS Collections</Label>
+                    <RadioApplicable name="cl31b" value={cl31.b_applicable} onChange={v => updateClause(setCl31, "b_applicable", v)} />
+                    {cl31.b_applicable === true && (
+                      <EditableTable columns={["Section", "Nature of Transaction", "Name of Buyer", "PAN", "Amount (₹)", "TCS Collected (₹)", "Date of Collection", "Date of Deposit"]} rows={cl31.b_rows || []} onChange={rows => updateClause(setCl31, "b_rows", rows)} />
+                    )}
+                    {cl31.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 31(c) — TDS where assessee is payer */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">31(c) — TDS where assessee is payer but deductee is payee</Label>
+                    <RadioApplicable name="cl31c" value={cl31.c_applicable} onChange={v => updateClause(setCl31, "c_applicable", v)} />
+                    {cl31.c_applicable === true && (
+                      <TDSScheduleTable rows={cl31.c_rows || []} onChange={rows => updateClause(setCl31, "c_rows", rows)} showDateOfDeposit={false} />
+                    )}
+                    {cl31.c_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 31(d) — Default in TDS */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">31(d) — Default in TDS deduction</Label>
+                    <RadioApplicable name="cl31d" value={cl31.d_applicable} onChange={v => updateClause(setCl31, "d_applicable", v)} />
+                    {cl31.d_applicable === true && (
+                      <EditableTable columns={["Section", "Name of Party", "PAN", "Amount on which TDS not deducted (₹)", "Reasons"]} rows={cl31.d_rows || []} onChange={rows => updateClause(setCl31, "d_rows", rows)} />
+                    )}
+                    {cl31.d_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                  <Separator />
+                  {/* 31(e) — Default in TCS */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">31(e) — Default in TCS collection</Label>
+                    <RadioApplicable name="cl31e" value={cl31.e_applicable} onChange={v => updateClause(setCl31, "e_applicable", v)} />
+                    {cl31.e_applicable === true && (
+                      <EditableTable columns={["Section", "Name of Party", "PAN", "Amount on which TCS not collected (₹)", "Reasons"]} rows={cl31.e_rows || []} onChange={rows => updateClause(setCl31, "e_rows", rows)} />
+                    )}
+                    {cl31.e_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 32 — Brought forward losses / deductions ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_32"] = el; }}>
+              <AccordionItem value="cl_32" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">32</Badge>
+                    <span className="font-medium">Brought Forward Losses / Deductions</span>
+                    {isClauseFilled(cl32) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 32(a) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">32(a) — Brought forward losses</Label>
+                    <RadioApplicable name="cl32a" value={cl32.a_applicable} onChange={v => updateClause(setCl32, "a_applicable", v)} />
+                    {cl32.a_applicable === true && (
+                      <DropdownTable
+                        dropdownCol={0}
+                        dropdownLabel="Nature of Loss"
+                        dropdownOptions={LOSS_NATURE_OPTIONS}
+                        columns={["Nature of Loss", "Assessment Year", "Amount (₹)", "Amount set off this year (₹)", "Balance carried forward (₹)"]}
+                        rows={cl32.a_rows || []}
+                        onChange={rows => updateClause(setCl32, "a_rows", rows)}
+                      />
+                    )}
+                    {cl32.a_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">N/A</div>}
+                  </div>
+                  <Separator />
+                  {/* 32(b) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">32(b) — Allowance under section 32(2) deemed deduction?</Label>
+                    <div className="flex gap-4">
+                      {["Yes", "No", "N/A"].map(opt => (
+                        <label key={opt} className="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="cl32b" checked={cl32.b_value === opt} onChange={() => updateClause(setCl32, "b_value", opt)} /> {opt}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <Separator />
+                  {/* 32(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">32(c) — Deduction claimed u/s 10AA/80HH/80HHC?</Label>
+                    <RadioYesNo name="cl32c" value={cl32.c_yes} onChange={v => updateClause(setCl32, "c_yes", v)} />
+                    {cl32.c_yes === true && (
+                      <div className="space-y-2">
+                        <Textarea placeholder="Details of deduction claimed..." value={cl32.c_text || ""} onChange={e => updateClause(setCl32, "c_text", e.target.value)} />
+                        <Input type="number" placeholder="Amount (₹)" value={cl32.c_amount || ""} onChange={e => updateClause(setCl32, "c_amount", e.target.value)} className="max-w-xs" />
+                      </div>
+                    )}
+                  </div>
+                  <Separator />
+                  {/* 32(d) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">32(d) — Loss from speculation business?</Label>
+                    <RadioYesNo name="cl32d" value={cl32.d_yes} onChange={v => updateClause(setCl32, "d_yes", v)} />
+                    {cl32.d_yes === true && (
+                      <Input type="number" placeholder="Amount (₹)" value={cl32.d_amount || ""} onChange={e => updateClause(setCl32, "d_amount", e.target.value)} className="max-w-xs" />
+                    )}
+                  </div>
+                  <Separator />
+                  {/* 32(e) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">32(e) — Loss from specified business?</Label>
+                    <RadioYesNo name="cl32e" value={cl32.e_yes} onChange={v => updateClause(setCl32, "e_yes", v)} />
+                    {cl32.e_yes === true && (
+                      <Input type="number" placeholder="Amount (₹)" value={cl32.e_amount || ""} onChange={e => updateClause(setCl32, "e_amount", e.target.value)} className="max-w-xs" />
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 33 — Deductions u/s 80G/80GGA/80GGB/80GGC ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_33"] = el; }}>
+              <AccordionItem value="cl_33" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">33</Badge>
+                    <span className="font-medium">Deductions u/s 80G / 80GGA / 80GGB / 80GGC</span>
+                    {isClauseFilled(cl33) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <RadioYesNo name="cl33" value={cl33.yes} onChange={v => updateClause(setCl33, "yes", v)} />
+                  {cl33.yes === true && (
+                    <DropdownTable
+                      dropdownCol={3}
+                      dropdownLabel="Section"
+                      dropdownOptions={DONATION_SECTION_OPTIONS}
+                      columns={["Donee Name", "Address", "PAN", "Section", "Amount Donated (₹)", "Qualifying Amount (₹)", "Deduction Amount (₹)"]}
+                      rows={cl33.rows || []}
+                      onChange={rows => updateClause(setCl33, "rows", rows)}
+                    />
+                  )}
+                  {cl33.yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* ═══════ CLAUSE 34 — TDS / TCS Compliance ═══════ */}
+            <div ref={el => { sectionRefs.current["cl_34"] = el; }}>
+              <AccordionItem value="cl_34" className="border rounded-lg">
+                <AccordionTrigger className="px-4">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs">34</Badge>
+                    <span className="font-medium">TDS / TCS Compliance</span>
+                    {isClauseFilled(cl34) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-6">
+                  {/* 34(a) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">34(a) — Tax deducted as per provisions?</Label>
+                    <RadioYesNo name="cl34a" value={cl34.a_yes} onChange={v => updateClause(setCl34, "a_yes", v)} />
+                    {cl34.a_yes === true && (
+                      <TDSComplianceTable rows={cl34.a_rows || []} onChange={rows => updateClause(setCl34, "a_rows", rows)} />
+                    )}
+                  </div>
+                  <Separator />
+                  {/* 34(b) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">34(b) — TDS deposited timely?</Label>
+                    <RadioYesNo name="cl34b" value={cl34.b_yes} onChange={v => updateClause(setCl34, "b_yes", v)} />
+                    {cl34.b_yes === true && (
+                      <TDSTimeliness rows={cl34.b_rows || []} onChange={rows => updateClause(setCl34, "b_rows", rows)} />
+                    )}
+                  </div>
+                  <Separator />
+                  {/* 34(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">34(c) — TCS as per provisions?</Label>
+                    <RadioYesNo name="cl34c" value={cl34.c_yes} onChange={v => updateClause(setCl34, "c_yes", v)} />
+                    {cl34.c_yes === true && (
+                      <TDSComplianceTable rows={cl34.c_rows || []} onChange={rows => updateClause(setCl34, "c_rows", rows)} />
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </div>
+
+            {/* Placeholder sections for clauses 35-44 */}
             {CLAUSE_NAV.filter(c => !implementedKeys.has(c.key as any)).map(c => (
               <div key={c.key} ref={el => { sectionRefs.current[c.key] = el; }}>
                 <AccordionItem value={c.key} className="border rounded-lg">
@@ -1283,6 +1787,265 @@ function Section40aTable({ rows, onChange }: {
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
                   <Trash2 className="h-3 w-3 text-destructive" />
                 </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** Generic table with one dropdown column */
+function DropdownTable({ columns, rows, onChange, dropdownCol, dropdownLabel, dropdownOptions }: {
+  columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
+  dropdownCol: number; dropdownLabel: string; dropdownOptions: string[];
+}) {
+  function addRow() { onChange([...rows, columns.map(() => "")]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function updateCell(ri: number, ci: number, val: string) {
+    const next = rows.map((r, idx) => idx === ri ? r.map((c, j) => j === ci ? val : c) : [...r]);
+    onChange(next);
+  }
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {columns.map((c, i) => <TableHead key={i} className="text-xs">{c}</TableHead>)}
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={columns.length + 1} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, ri) => (
+            <TableRow key={ri}>
+              {row.map((cell, ci) => (
+                <TableCell key={ci} className="p-1">
+                  {ci === dropdownCol ? (
+                    <Select value={cell} onValueChange={v => updateCell(ri, ci, v)}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder={`Select ${dropdownLabel}`} /></SelectTrigger>
+                      <SelectContent>
+                        {dropdownOptions.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input value={cell} onChange={e => updateCell(ri, ci, e.target.value)} className="h-8 text-xs" />
+                  )}
+                </TableCell>
+              ))}
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(ri)}>
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Schedule table (Clause 31a) with section dropdown + auto-fill nature */
+function TDSScheduleTable({ rows, onChange, showDateOfDeposit = true }: {
+  rows: { section: string; nature: string; name: string; pan: string; amountPaid: string; tdsDeducted: string; tdsRate: string; dateDeduction: string; dateDeposit: string; remarks: string }[];
+  onChange: (r: any[]) => void;
+  showDateOfDeposit?: boolean;
+}) {
+  const emptyRow = { section: "", nature: "", name: "", pan: "", amountPaid: "", tdsDeducted: "", tdsRate: "", dateDeduction: "", dateDeposit: "", remarks: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    const updated = rows.map((r, idx) => {
+      if (idx !== i) return r;
+      const next = { ...r, [key]: val };
+      if (key === "section") next.nature = TDS_SECTIONS[val] || "";
+      return next;
+    });
+    onChange(updated);
+  }
+
+  const totalPaid = rows.reduce((s, r) => s + (parseFloat(r.amountPaid || "0") || 0), 0);
+  const totalTDS = rows.reduce((s, r) => s + (parseFloat(r.tdsDeducted || "0") || 0), 0);
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+
+  return (
+    <div className="space-y-2 overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-8">Sr</TableHead>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs w-40">Nature of Payment</TableHead>
+            <TableHead className="text-xs">Name of Party</TableHead>
+            <TableHead className="text-xs w-28">PAN</TableHead>
+            <TableHead className="text-xs w-28">Amount Paid (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Deducted (₹)</TableHead>
+            <TableHead className="text-xs w-20">Rate (%)</TableHead>
+            <TableHead className="text-xs w-28">Date of Deduction</TableHead>
+            {showDateOfDeposit && <TableHead className="text-xs w-28">Date of Deposit</TableHead>}
+            <TableHead className="text-xs w-28">Remarks</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={showDateOfDeposit ? 12 : 11} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
+              <TableCell className="p-1">
+                <Select value={row.section} onValueChange={v => update(i, "section", v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sec" /></SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {TDS_SECTION_KEYS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell className="p-1 text-xs text-muted-foreground">{row.nature || "—"}</TableCell>
+              <TableCell className="p-1"><Input value={row.name} onChange={e => update(i, "name", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.pan} onChange={e => update(i, "pan", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amountPaid} onChange={e => update(i, "amountPaid", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.tdsDeducted} onChange={e => update(i, "tdsDeducted", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.tdsRate} onChange={e => update(i, "tdsRate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dateDeduction} onChange={e => update(i, "dateDeduction", e.target.value)} className="h-8 text-xs" /></TableCell>
+              {showDateOfDeposit && <TableCell className="p-1"><Input type="date" value={row.dateDeposit} onChange={e => update(i, "dateDeposit", e.target.value)} className="h-8 text-xs" /></TableCell>}
+              <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {rows.length > 0 && (
+            <TableRow className="bg-muted/20 font-semibold text-xs">
+              <TableCell colSpan={5} className="p-1 text-right">Totals</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totalPaid)}</TableCell>
+              <TableCell className="p-1 text-right">{fmt(totalTDS)}</TableCell>
+              <TableCell colSpan={showDateOfDeposit ? 5 : 4} />
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Compliance table (Clause 34a) with shortfall auto-calc */
+function TDSComplianceTable({ rows, onChange }: {
+  rows: { section: string; nature: string; amount: string; tdsDeducted: string; tdsRequired: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  const emptyRow = { section: "", nature: "", amount: "", tdsDeducted: "", tdsRequired: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    const updated = rows.map((r, idx) => {
+      if (idx !== i) return r;
+      const next = { ...r, [key]: val };
+      if (key === "section") next.nature = TDS_SECTIONS[val] || "";
+      return next;
+    });
+    onChange(updated);
+  }
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs">Nature</TableHead>
+            <TableHead className="text-xs w-28">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Deducted (₹)</TableHead>
+            <TableHead className="text-xs w-28">TDS Required (₹)</TableHead>
+            <TableHead className="text-xs w-28 bg-muted/50">Shortfall (₹)</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => {
+            const shortfall = (parseFloat(row.tdsRequired || "0") || 0) - (parseFloat(row.tdsDeducted || "0") || 0);
+            return (
+              <TableRow key={i}>
+                <TableCell className="p-1">
+                  <Select value={row.section} onValueChange={v => update(i, "section", v)}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sec" /></SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {TDS_SECTION_KEYS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className="p-1 text-xs text-muted-foreground">{row.nature || "—"}</TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.tdsDeducted} onChange={e => update(i, "tdsDeducted", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1"><Input type="number" value={row.tdsRequired} onChange={e => update(i, "tdsRequired", e.target.value)} className="h-8 text-xs" /></TableCell>
+                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(shortfall)}</TableCell>
+                <TableCell className="p-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
+/** TDS Timeliness table (Clause 34b) with delay auto-calc */
+function TDSTimeliness({ rows, onChange }: {
+  rows: { section: string; amount: string; dueDate: string; actualDate: string }[];
+  onChange: (r: any[]) => void;
+}) {
+  function addRow() { onChange([...rows, { section: "", amount: "", dueDate: "", actualDate: "" }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  function calcDelay(due: string, actual: string): string {
+    if (!due || !actual) return "—";
+    const d = new Date(due); const a = new Date(actual);
+    const diff = Math.ceil((a.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? `${diff} days` : "On time";
+  }
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs w-28">Section</TableHead>
+            <TableHead className="text-xs w-28">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-32">Due Date</TableHead>
+            <TableHead className="text-xs w-32">Actual Date</TableHead>
+            <TableHead className="text-xs w-24 bg-muted/50">Delay</TableHead>
+            <TableHead className="w-10" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+          )}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1"><Input value={row.section} onChange={e => update(i, "section", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dueDate} onChange={e => update(i, "dueDate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.actualDate} onChange={e => update(i, "actualDate", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1 bg-muted/30 text-xs text-center font-medium">{calcDelay(row.dueDate, row.actualDate)}</TableCell>
+              <TableCell className="p-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
               </TableCell>
             </TableRow>
           ))}
