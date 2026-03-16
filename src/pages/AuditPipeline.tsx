@@ -27,6 +27,7 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
+import NotesToAccountsEditor from "@/pages/NotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
