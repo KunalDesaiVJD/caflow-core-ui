@@ -1080,6 +1080,18 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   // Check if stage 2 can be completed
   const canComplete = tbResult?.isValid || (existingTb as any)?.is_validated;
 
+  const handleCompleteStage2 = async () => {
+    if (!engagement) return;
+    await pushTbToDownstreamModules();
+    const newStatuses = { ...(engagement.stage_statuses || {}), "2": "complete" };
+    await supabase.from("audit_engagements").update({
+      stage_statuses: newStatuses as any,
+      pipeline_stage: 3,
+    } as any).eq("id", engagementId);
+    onStageComplete();
+    toast.success("Stage 2 complete — moving to COA & Financial Statements");
+  };
+
   // Guard: engagement may be undefined while loading (must be after all hooks)
   if (!engagement) {
     return (
