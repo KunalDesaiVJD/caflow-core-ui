@@ -543,9 +543,9 @@ const NewInvoice = () => {
     const totalRow = `
       <tr style="background:#f0f0f0;font-weight:700">
         <td style="border:1px solid #bbb;padding:8px" colspan="5">Total</td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:11px">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:11px">${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #bbb;padding:8px"></td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:12px">\u20B9${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:12px">${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
 
     const halfGst = totalGst / 2;
