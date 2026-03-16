@@ -603,7 +603,6 @@ const NewInvoice = () => {
         <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
         ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
         ${toGstin ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
-        <p style="margin:2px 0;font-size:11px"><strong>Tax Type:</strong> ${isIntraState ? "Intra-State (CGST + SGST)" : "Inter-State (IGST)"}</p>
       </div>
 
       <!-- Items Table -->
