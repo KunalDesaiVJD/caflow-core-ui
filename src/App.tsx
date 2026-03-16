@@ -35,6 +35,7 @@ import CoaMappings from "./pages/CoaMappings";
 import AuditFirms from "./pages/AuditFirms";
 import ClientGroups from "./pages/ClientGroups";
 import Form3CD from "./pages/Form3CD";
+import NotesToAccounts from "./pages/NotesToAccounts";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
 import ChangePassword from "./pages/ChangePassword";
