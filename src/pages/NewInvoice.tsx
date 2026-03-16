@@ -613,10 +613,10 @@ const NewInvoice = () => {
             <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left">Item</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">HSN/SAC</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">Quantity</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Rate / Item</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Taxable Value</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Rate / Item (\u20B9)</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Taxable Value (\u20B9)</th>
             <th style="border:1px solid #bbb;padding:7px;font-size:10px">GST %</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Total</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Total (\u20B9)</th>
           </tr>
         </thead>
         <tbody>
