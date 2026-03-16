@@ -1045,11 +1045,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
         </div>
         <div className="flex gap-2">
-          {engagement.parent_engagement_id && (
-            <Button variant="outline" size="sm" onClick={handleImportPrevPeriod} className="gap-1">
-              <RefreshCw size={14} /> Import Previous Period
-            </Button>
-          )}
           <Button size="sm" onClick={handleCompleteStage2} disabled={!canComplete} className="gap-1">
             Complete Stage 2 <ArrowRight size={14} />
           </Button>
