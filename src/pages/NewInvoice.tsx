@@ -635,7 +635,8 @@ const NewInvoice = () => {
           ` : `
             <tr><td style="padding:3px 8px">IGST</td><td style="padding:3px 8px;text-align:right">\u20B9${totalGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
           `}
-          <tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px">Grand Total</td><td style="padding:6px 8px;text-align:right">\u20B9${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr><td style="padding:3px 8px">Round Off</td><td style="padding:3px 8px;text-align:right">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>
+          <tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px">Grand Total</td><td style="padding:6px 8px;text-align:right">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>
         </table>
       </div>
 
@@ -665,6 +666,8 @@ const NewInvoice = () => {
         <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
         <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
       </div>
+
+      </div><!-- close outer border -->
 
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
