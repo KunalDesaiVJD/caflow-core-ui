@@ -314,6 +314,8 @@ export default function Form3CD() {
     sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const [showPrintView, setShowPrintView] = useState(false);
+
   const fy = engagement?.financial_year || "";
   const ay = computeAY(fy);
 
