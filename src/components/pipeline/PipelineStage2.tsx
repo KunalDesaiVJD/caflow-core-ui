@@ -21,7 +21,7 @@ import * as XLSX from "xlsx";
 import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
-  Flag, RefreshCw, X, ChevronDown, FileUp
+  Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning
 } from "lucide-react";
 
 // ─── Types ───
@@ -32,7 +32,7 @@ interface PipelineStage2Props {
   onSaveDraft: () => void;
 }
 
-type ImportFormat = "tally_xml" | "tally_excel" | "expert_software_excel" | "generic_excel" | "generic_csv";
+type ImportFormat = "tally_xml" | "tally_excel" | "expert_software_excel" | "generic_excel" | "generic_csv" | "pdf";
 
 interface FormatOption {
   value: ImportFormat;
@@ -48,6 +48,7 @@ const FORMAT_OPTIONS: FormatOption[] = [
   { value: "expert_software_excel", label: "Expert Software", ext: ".xlsx", icon: Table2, description: "Expert Software Excel TB format" },
   { value: "generic_excel", label: "Generic Excel", ext: ".xlsx", icon: FileSpreadsheet, description: "Any Excel file — you map columns" },
   { value: "generic_csv", label: "Generic CSV", ext: ".csv", icon: FileText, description: "CSV file — you map columns" },
+  { value: "pdf", label: "PDF TB", ext: ".pdf", icon: FileText, description: "Tally PDF export — text extraction" },
 ];
 
 // Column mappings for known formats
@@ -159,6 +160,21 @@ interface TbHierarchyNode {
   primaryGroup: string;
 }
 
+interface ValidationResult {
+  isBalanced: boolean;
+  drTotal: number;
+  crTotal: number;
+  difference: number;
+  duplicateNames: string[];
+  groupMismatches: any[];
+  unclassifiedLeaves: number;
+  bsAssets: number;
+  bsLiabilities: number;
+  grandTotalDetected: boolean;
+  primaryGroups: string[];
+  primaryGroupCount: number;
+}
+
 const formatTbNumber = (value: number) =>
   Math.abs(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -166,6 +182,9 @@ const splitDrCr = (value: number) =>
   value >= 0
     ? { dr: value || 0, cr: 0 }
     : { dr: 0, cr: Math.abs(value || 0) };
+
+// ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
+const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
 function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
   const [open, setOpen] = useState(node.level <= 2);
@@ -219,10 +238,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [tbMapping, setTbMapping] = useState<Record<string, string>>({});
   const [tbProcessing, setTbProcessing] = useState(false);
   const [tbProgress, setTbProgress] = useState(0);
+  const [tbProgressLabel, setTbProgressLabel] = useState("");
   const [tbResult, setTbResult] = useState<{
     totalAccounts: number; debitTotal: number; creditTotal: number;
     difference: number; isValid: boolean; preview: any[];
   } | null>(null);
+  const [tbValidation, setTbValidation] = useState<ValidationResult | null>(null);
   const [tbHierarchyNodes, setTbHierarchyNodes] = useState<TbHierarchyNode[]>([]);
   const [tbViewMode, setTbViewMode] = useState<"tree" | "flat">("tree");
   const [tbOverrideJustification, setTbOverrideJustification] = useState("");
@@ -239,7 +260,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [ledgerResult, setLedgerResult] = useState<{
     totalTransactions: number; accountCount: number; dateRange: string; flaggedCount: number;
   } | null>(null);
-  const [ledgerStep, setLedgerStep] = useState(1); // 1=upload, 2=map, 3=processing, 4=result
+  const [ledgerStep, setLedgerStep] = useState(1);
   const [showFlagged, setShowFlagged] = useState(false);
   const ledgerFileRef = useRef<HTMLInputElement>(null);
 
@@ -361,11 +382,19 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [tbFileBase64, setTbFileBase64] = useState("");
 
   // Check if Tally format that should go through edge function
-  const isTallyFormat = tbFormat === "tally_excel" || tbFormat === "tally_xml";
+  const isTallyFormat = tbFormat === "tally_excel" || tbFormat === "tally_xml" || tbFormat === "pdf";
 
   // ═══════ TB IMPORT LOGIC ═══════
 
   const needsColumnMapping = tbFormat === "generic_excel" || tbFormat === "generic_csv";
+
+  // ─── Convert ArrayBuffer to base64 ───
+  function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
 
   const handleTbFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -376,13 +405,15 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     reader.onload = (evt) => {
       const data = evt.target?.result;
       try {
-        if (isTallyFormat) {
+        if (tbFormat === "pdf") {
+          // For PDF, store as base64 for now — will extract text client-side
+          const base64 = arrayBufferToBase64(data as ArrayBuffer);
+          setTbFileBase64(base64);
+          setTbStep(4);
+        } else if (isTallyFormat) {
           // For Tally formats, store base64 for edge function
-          const arrayBuffer = data as ArrayBuffer;
-          const bytes = new Uint8Array(arrayBuffer);
-          let binary = "";
-          for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-          setTbFileBase64(btoa(binary));
+          const base64 = arrayBufferToBase64(data as ArrayBuffer);
+          setTbFileBase64(base64);
           // Also parse locally for row count preview
           const wb = XLSX.read(data, { type: "array" });
           const ws = wb.Sheets[wb.SheetNames[0]];
@@ -461,6 +492,65 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       }));
   }, [tbParsedData, tbFormat, tbMapping]);
 
+  // ─── Chunked upload helper ───
+  async function sendChunked(base64: string, engId: string, firmId: string | null, fileName: string, financialYear: string): Promise<any> {
+    const totalLength = base64.length;
+    // Each chunk is ~1.5MB of base64 text
+    const chunkCharSize = Math.floor(CHUNK_SIZE_BYTES * 1.33); // base64 is ~33% larger
+    const totalChunks = Math.ceil(totalLength / chunkCharSize);
+    const uploadSessionId = crypto.randomUUID();
+
+    if (totalChunks <= 1) {
+      // Small file — send directly
+      const { data, error } = await supabase.functions.invoke("parse-tally-tb", {
+        body: {
+          engagementId: engId,
+          firmId,
+          fileBase64: base64,
+          fileName,
+          financialYear,
+        },
+      });
+      if (error) throw new Error(error.message || "Edge function error");
+      if (!data?.success) throw new Error(data?.error || "Parse failed");
+      return data;
+    }
+
+    // Large file — send in chunks
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * chunkCharSize;
+      const end = Math.min(start + chunkCharSize, totalLength);
+      const chunkData = base64.slice(start, end);
+      const isLast = i === totalChunks - 1;
+
+      setTbProgressLabel(`Uploading chunk ${i + 1}/${totalChunks}...`);
+      setTbProgress(10 + (i / totalChunks) * 50);
+
+      const { data, error } = await supabase.functions.invoke("parse-tally-tb", {
+        body: {
+          engagementId: engId,
+          firmId,
+          chunkBase64: chunkData,
+          chunkIndex: i,
+          totalChunks,
+          uploadSessionId,
+          isLastChunk: isLast,
+          fileName,
+          financialYear,
+        },
+      });
+
+      if (error) throw new Error(error.message || "Chunk upload error");
+
+      if (isLast) {
+        // Last chunk returns the full parse result
+        if (!data?.success) throw new Error(data?.error || "Parse failed");
+        return data;
+      }
+    }
+    throw new Error("Chunked upload completed without final response");
+  }
+
   const handleTbProcess = async () => {
     // Check for existing TB — show replace dialog
     if (existingTb && !showReplaceDialog) {
@@ -471,27 +561,73 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
     setTbProcessing(true);
     setTbProgress(10);
+    setTbProgressLabel("Starting...");
 
     try {
       if (isTallyFormat) {
-        // ─── Route through edge function for Tally formats ───
-        setTbProgress(20);
-        const { data, error: fnError } = await supabase.functions.invoke("parse-tally-tb", {
-          body: {
-            engagementId,
-            firmId: user?.firm_id || null,
-            fileBase64: tbFileBase64,
-            fileName: tbFile?.name,
-            financialYear: engagement.financial_year,
-          },
-        });
+        // ─── Route through edge function for Tally / PDF formats ───
+        setTbProgress(15);
+        setTbProgressLabel("Preparing upload...");
 
-        if (fnError) throw new Error(fnError.message || "Edge function error");
-        if (!data?.success) throw new Error(data?.error || "Parse failed");
+        let data: any;
+
+        if (tbFormat === "pdf") {
+          // PDF: extract text lines client-side (simple approach — split by newlines)
+          // For real PDF parsing, we'd use pdf.js but for now send as-is and let edge function handle
+          setTbProgressLabel("Extracting PDF text...");
+          // Decode base64 to text lines (basic approach)
+          const binaryStr = atob(tbFileBase64);
+          const textLines: string[] = [];
+          // Simple text extraction from PDF binary — look for readable text segments
+          let currentLine = "";
+          for (let i = 0; i < binaryStr.length; i++) {
+            const code = binaryStr.charCodeAt(i);
+            if (code >= 32 && code <= 126) {
+              currentLine += binaryStr[i];
+            } else if (currentLine.length > 3) {
+              textLines.push(currentLine.trim());
+              currentLine = "";
+            } else {
+              currentLine = "";
+            }
+          }
+          if (currentLine.length > 3) textLines.push(currentLine.trim());
+
+          // Filter to only lines that look like TB data
+          const tbLines = textLines.filter(line => {
+            const hasNumber = /\d/.test(line);
+            const hasText = /[a-zA-Z]/.test(line);
+            return hasText && hasNumber && line.length > 5;
+          });
+
+          setTbProgressLabel("Sending to parser...");
+          const { data: pdfData, error: pdfError } = await supabase.functions.invoke("parse-tally-tb", {
+            body: {
+              engagementId,
+              firmId: user?.firm_id || null,
+              pdfTextRows: tbLines,
+              fileName: tbFile?.name,
+              financialYear: engagement.financial_year,
+            },
+          });
+          if (pdfError) throw new Error(pdfError.message || "PDF parse error");
+          if (!pdfData?.success) throw new Error(pdfData?.error || "PDF parse failed");
+          data = pdfData;
+        } else {
+          // Excel/XML — use chunked upload
+          data = await sendChunked(
+            tbFileBase64,
+            engagementId,
+            user?.firm_id || null,
+            tbFile?.name || "file.xlsx",
+            engagement.financial_year
+          );
+        }
 
         setTbProgress(100);
+        setTbProgressLabel("Complete!");
 
-        const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row) => ({
+        const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row: any) => ({
           nodeId: row.nodeId,
           parentNodeId: row.parentNodeId,
           name: row.name,
@@ -505,6 +641,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         }));
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
         setTbHierarchyNodes(mappedHierarchy);
+
+        // Store validation result
+        if (data.validation) {
+          setTbValidation(data.validation);
+        }
 
         setTbResult({
           totalAccounts: data.leafLedgers,
@@ -523,6 +664,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         setTbStep(5);
         toast.success(`${data.leafLedgers} ledgers imported — ${data.detectedFormat} format detected. Groups: ${data.groupsDetected}, Skipped: ${data.rowsSkipped}`);
         queryClient.invalidateQueries({ queryKey: ["tb-snapshot-for-engagement"] });
+        queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes"] });
         return;
       }
 
@@ -583,6 +725,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       toast.error(err.message || "Processing failed");
     } finally {
       setTbProcessing(false);
+      setTbProgressLabel("");
     }
   };
 
@@ -592,7 +735,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       return;
     }
 
-    // Mark as validated with override
     await supabase
       .from("trial_balance_snapshots")
       .update({
@@ -615,7 +757,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     if (files.length === 0) return;
     setLedgerFiles(files);
 
-    // Parse first file for mapping
     const reader = new FileReader();
     reader.onload = (evt) => {
       const data = evt.target?.result;
@@ -650,12 +791,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         return parseFloat(String(v).replace(/,/g, "").trim()) || 0;
       };
 
-      // Process all files
       for (let fi = 0; fi < ledgerFiles.length; fi++) {
         const file = ledgerFiles[fi];
         const data = await file.arrayBuffer();
         const wb = XLSX.read(data, { type: "array" });
-        
+
         for (const sheetName of wb.SheetNames) {
           const ws = wb.Sheets[sheetName];
           const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
@@ -696,7 +836,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         return;
       }
 
-      // Create batch record
       const { data: batch } = await supabase
         .from("ledger_import_batches")
         .insert({
@@ -712,13 +851,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
       setLedgerProgress(55);
 
-      // Delete old transactions for this engagement
       await supabase
         .from("ledger_transactions")
         .delete()
         .eq("engagement_id", engagementId);
 
-      // Insert in chunks of 2000
       const CHUNK_SIZE = 2000;
       for (let i = 0; i < allRows.length; i += CHUNK_SIZE) {
         const chunk = allRows.slice(i, i + CHUNK_SIZE).map(r => ({
@@ -729,7 +866,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         setLedgerProgress(55 + ((i + CHUNK_SIZE) / allRows.length) * 35);
       }
 
-      // Update batch status
       if (batch?.id) {
         await supabase
           .from("ledger_import_batches")
@@ -739,12 +875,10 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
       setLedgerProgress(95);
 
-      // Flag suspicious narrations client-side (simple heuristic)
       const suspiciousPatterns = ["misc", "adjustment", "adj", "sundry", "other", "temp"];
       let flaggedCount = 0;
       const flagUpdates: { id: string; flag_reason: string }[] = [];
 
-      // Query inserted transactions to flag
       const { data: inserted } = await supabase
         .from("ledger_transactions")
         .select("id, narration, debit, credit")
@@ -765,7 +899,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         }
       }
 
-      // Batch update flags
       for (const upd of flagUpdates) {
         await supabase
           .from("ledger_transactions")
@@ -775,7 +908,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
       setLedgerProgress(100);
 
-      // Get date range
       const dates = allRows.map(r => r.date).filter(Boolean).sort();
       const dateRange = dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : "N/A";
       const accounts = new Set(allRows.map(r => r.account_name));
@@ -948,11 +1080,19 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 >
                   <FileUp size={40} className="mx-auto text-muted-foreground mb-3" />
                   <p className="text-sm font-medium">{tbFile?.name || "Click or drag file here"}</p>
-                  <p className="text-xs text-muted-foreground mt-1">Max 50MB • {FORMAT_OPTIONS.find(f => f.value === tbFormat)?.ext}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Max 50MB • {FORMAT_OPTIONS.find(f => f.value === tbFormat)?.ext}
+                    {tbFormat === "pdf" && " — Text will be extracted automatically"}
+                  </p>
                   <input
                     ref={tbFileRef}
                     type="file"
-                    accept={tbFormat === "generic_csv" ? ".csv" : tbFormat === "tally_xml" ? ".xml" : ".xlsx,.xls"}
+                    accept={
+                      tbFormat === "generic_csv" ? ".csv" :
+                      tbFormat === "tally_xml" ? ".xml" :
+                      tbFormat === "pdf" ? ".pdf" :
+                      ".xlsx,.xls"
+                    }
                     className="hidden"
                     onChange={handleTbFileUpload}
                   />
@@ -1017,6 +1157,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <div className="text-center space-y-3">
                     <Loader2 size={32} className="mx-auto animate-spin text-primary" />
                     <p className="text-sm font-medium">Processing Trial Balance...</p>
+                    {tbProgressLabel && <p className="text-xs text-muted-foreground">{tbProgressLabel}</p>}
                     <Progress value={tbProgress} className="h-2" />
                     <p className="text-xs text-muted-foreground">{Math.round(tbProgress)}% complete</p>
                   </div>
@@ -1024,9 +1165,16 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <div className="text-center space-y-4">
                     <FileSpreadsheet size={40} className="mx-auto text-primary opacity-60" />
                     <div>
-                      <p className="text-sm font-medium">Ready to process {tbParsedData.length - 1} rows</p>
+                      <p className="text-sm font-medium">
+                        Ready to process {tbFormat === "pdf" ? "PDF file" : `${tbParsedData.length - 1} rows`}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         Format: {FORMAT_OPTIONS.find(f => f.value === tbFormat)?.label} • File: {tbFile?.name}
+                        {tbFile && tbFile.size > 2 * 1024 * 1024 && (
+                          <span className="ml-1 text-amber-600">
+                            ({(tbFile.size / (1024 * 1024)).toFixed(1)}MB — chunked upload)
+                          </span>
+                        )}
                       </p>
                     </div>
                     <div className="flex justify-center gap-3">
@@ -1090,7 +1238,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <AlertDescription className="text-sm">
                     Difference of ₹{tbResult.difference.toLocaleString("en-IN")} detected between Debits and Credits.
                     <div className="flex gap-2 mt-2">
-                      <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); }}>
+                      <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
                         Re-upload
                       </Button>
                       <Button size="sm" variant="destructive" onClick={() => setTbShowOverride(true)}>
@@ -1099,6 +1247,75 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     </div>
                   </AlertDescription>
                 </Alert>
+              )}
+
+              {/* ─── Validation Checks Panel ─── */}
+              {tbValidation && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-primary" /> Integrity Checks
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {/* Check 1: TB Balanced */}
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.isBalanced ? "bg-primary/5" : "bg-destructive/5")}>
+                        {tbValidation.isBalanced ? <CheckCircle2 size={14} className="text-primary" /> : <AlertTriangle size={14} className="text-destructive" />}
+                        <span>TB Balanced: {tbValidation.isBalanced ? "Yes" : `No (₹${tbValidation.difference.toLocaleString("en-IN")})`}</span>
+                      </div>
+
+                      {/* Check 2: Duplicate Names */}
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.duplicateNames.length === 0 ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation.duplicateNames.length === 0 ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Duplicate Ledgers: {tbValidation.duplicateNames.length === 0 ? "None" : tbValidation.duplicateNames.length}</span>
+                      </div>
+
+                      {/* Check 3: Unclassified leaves */}
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.unclassifiedLeaves === 0 ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation.unclassifiedLeaves === 0 ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Unclassified: {tbValidation.unclassifiedLeaves}</span>
+                      </div>
+
+                      {/* Check 4: Grand Total Detected */}
+                      <div className="flex items-center gap-2 p-2 rounded bg-primary/5">
+                        <CheckCircle2 size={14} className="text-primary" />
+                        <span>Grand Total stripped: {tbValidation.grandTotalDetected ? "Yes" : "N/A"}</span>
+                      </div>
+
+                      {/* Check 5: Primary Groups */}
+                      <div className="flex items-center gap-2 p-2 rounded bg-primary/5">
+                        <CheckCircle2 size={14} className="text-primary" />
+                        <span>Primary Groups: {tbValidation.primaryGroupCount}</span>
+                      </div>
+
+                      {/* Check 6: BS check */}
+                      <div className={cn("flex items-center gap-2 p-2 rounded",
+                        Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1 ? "bg-primary/5" : "bg-amber-500/5"
+                      )}>
+                        {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1
+                          ? <CheckCircle2 size={14} className="text-primary" />
+                          : <FileWarning size={14} className="text-amber-600" />}
+                        <span>BS Assets ≈ Liabilities: {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1 ? "Yes" : "No"}</span>
+                      </div>
+                    </div>
+
+                    {/* Show duplicate names if any */}
+                    {tbValidation.duplicateNames.length > 0 && (
+                      <div className="mt-2 p-2 bg-amber-500/5 rounded text-xs">
+                        <p className="font-semibold text-amber-700 mb-1">Duplicate ledger names found:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {tbValidation.duplicateNames.slice(0, 10).map((name, i) => (
+                            <Badge key={i} variant="outline" className="text-[9px] border-amber-500/30 text-amber-700">{name}</Badge>
+                          ))}
+                          {tbValidation.duplicateNames.length > 10 && (
+                            <Badge variant="outline" className="text-[9px]">+{tbValidation.duplicateNames.length - 10} more</Badge>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               )}
 
               {/* View Toggle */}
@@ -1246,7 +1463,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     const files = Array.from(e.dataTransfer.files);
                     if (files.length > 0) {
                       setLedgerFiles(files);
-                      // Trigger parse of first file
                       const reader = new FileReader();
                       reader.onload = (evt) => {
                         const data = evt.target?.result;
@@ -1507,14 +1723,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 // ─── Helper ───
 function parseDate(val: any): string | null {
   if (!val) return null;
-  // Excel serial date
   if (typeof val === "number") {
     const d = new Date((val - 25569) * 86400 * 1000);
     return d.toISOString().split("T")[0];
   }
-  // String date
   const s = String(val).trim();
-  // dd/mm/yyyy
   const parts = s.split(/[\/\-\.]/);
   if (parts.length === 3) {
     const [a, b, c] = parts;
