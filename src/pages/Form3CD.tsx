@@ -255,6 +255,10 @@ export default function Form3CD() {
       setCl27(e.cl_27 || {}); setCl29(e.cl_29 || {}); setCl30(e.cl_30 || {});
       setCl31(e.cl_31 || {}); setCl32(e.cl_32 || {}); setCl33(e.cl_33 || {});
       setCl34(e.cl_34 || {});
+      setCl35(e.cl_35 || {}); setCl36(e.cl_36 || {});
+      setCl37_39(e.cl_37_39 || {});
+      if (e.cl_40 && Object.keys(e.cl_40).length > 0) setCl40(e.cl_40); 
+      setCl41(e.cl_41 || {}); setCl42_43(e.cl_42_43 || {}); setCl44(e.cl_44 || {});
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
