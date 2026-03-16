@@ -197,6 +197,15 @@ export default function Form3CD() {
   const [cl32, setCl32] = useState<ClauseData>({});
   const [cl33, setCl33] = useState<ClauseData>({});
   const [cl34, setCl34] = useState<ClauseData>({});
+  const [cl35, setCl35] = useState<ClauseData>({});
+  const [cl36, setCl36] = useState<ClauseData>({});
+  const [cl37_39, setCl37_39] = useState<ClauseData>({});
+  const [cl40, setCl40] = useState<ClauseData>(() => ({
+    rows: FRINGE_BENEFIT_CATEGORIES.map(c => ({ nature: c, totalExp: "", pctFB: "", fbValue: "" })),
+  }));
+  const [cl41, setCl41] = useState<ClauseData>({});
+  const [cl42_43, setCl42_43] = useState<ClauseData>({});
+  const [cl44, setCl44] = useState<ClauseData>({});
 
   const clauseStateMap: Record<string, ClauseData> = {
     cl_8: cl8, cl_9: cl9, cl_10: cl10, cl_11: cl11, cl_12: cl12, cl_13: cl13,
@@ -204,6 +213,7 @@ export default function Form3CD() {
     cl_19: cl19, cl_20: cl20, cl_21: cl21, cl_22: cl22,
     cl_23: cl23, cl_24_25: cl24_25, cl_26: cl26, cl_27: cl27,
     cl_29: cl29, cl_30: cl30, cl_31: cl31, cl_32: cl32, cl_33: cl33, cl_34: cl34,
+    cl_35: cl35, cl_36: cl36, cl_37_39: cl37_39, cl_40: cl40, cl_41: cl41, cl_42_43: cl42_43, cl_44: cl44,
   };
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
