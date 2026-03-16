@@ -831,7 +831,7 @@ export default function AuditPipeline() {
                       ? "3CA + 3CD applicable (Audited under other law)"
                       : "Tax Audit — Form 3CD"}
                   </p>
-                  <Button onClick={() => navigate(`/audit/3cd?engagementId=${engId}`)} className="gap-2">
+                  <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
                     <FileText size={16} /> Open Form 3CD Editor
                   </Button>
                 </CardContent>
