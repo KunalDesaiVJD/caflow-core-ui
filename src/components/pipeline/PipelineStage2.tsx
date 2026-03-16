@@ -21,7 +21,8 @@ import * as XLSX from "xlsx";
 import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
-  Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning
+  Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
+  CalendarDays
 } from "lucide-react";
 
 // ─── Types ───
@@ -263,6 +264,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [ledgerStep, setLedgerStep] = useState(1);
   const [showFlagged, setShowFlagged] = useState(false);
   const ledgerFileRef = useRef<HTMLInputElement>(null);
+
+  // ─── Comparative TB State ───
+  const [showComparativeTb, setShowComparativeTb] = useState(false);
+  const [comparativeFile, setComparativeFile] = useState<File | null>(null);
+  const [comparativeResult, setComparativeResult] = useState<any>(null);
+  const [comparativeProcessing, setComparativeProcessing] = useState(false);
+  const comparativeFileRef = useRef<HTMLInputElement>(null);
 
   // ─── Existing TB snapshot ───
   const { data: existingTb } = useQuery({
@@ -930,52 +938,103 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
   };
 
-  // ─── Parent Period Import ───
-  const handleImportPrevPeriod = async () => {
-    if (!engagement.parent_engagement_id) return;
+  // ─── Comparative TB Import ───
+  const handleComparativeImport = async () => {
+    if (!comparativeFile) return;
+    setComparativeProcessing(true);
     try {
-      const { data: parentTb } = await supabase
-        .from("trial_balance_snapshots")
-        .select("*")
-        .eq("engagement_id", engagement.parent_engagement_id)
-        .maybeSingle();
+      const arrayBuffer = await comparativeFile.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
 
-      if (!parentTb) {
-        toast.error("No TB snapshot found in parent engagement");
-        return;
+      const fy = engagement.financial_year || "2024-25";
+      const [startY, endY] = fy.split("-");
+      const priorFY = `${parseInt(startY) - 1}-${(parseInt(endY) - 1).toString().padStart(2, "0")}`;
+
+      const { data, error } = await supabase.functions.invoke("parse-tally-tb", {
+        body: {
+          engagementId: `${engagementId}_prior`,
+          firmId: user?.firm_id,
+          fileBase64: base64,
+          fileName: comparativeFile.name,
+          financialYear: priorFY,
+          isPriorYear: true,
+        },
+      });
+
+      if (error) throw new Error(error.message || "Prior year parse error");
+      if (!data?.success) throw new Error(data?.error || "Prior year parse failed");
+
+      const priorLeaves: any[] = (data.hierarchy || []).filter((n: any) => n.isLeaf);
+      const currentLeaves = (tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter(n => n.isLeaf);
+      const priorClosingMap = new Map<string, number>();
+      for (const n of priorLeaves) {
+        priorClosingMap.set(String(n.name).toLowerCase().trim(), n.closing || 0);
       }
 
-      const payload: any = {
-        client_id: engagement.client_id,
-        engagement_id: engagementId,
-        financial_year: engagement.financial_year,
-        normalised_data: (parentTb as any).normalised_data,
-        source_format: "carried_forward",
-        import_format: "generic_excel",
-        is_validated: true,
-        validation_status: "valid",
-        processing_status: "complete",
-      };
+      const verificationRows: any[] = [];
+      let matched = 0, mismatched = 0;
+      for (const n of currentLeaves) {
+        const key = n.name.toLowerCase().trim();
+        const pyClosing = priorClosingMap.get(key);
+        if (pyClosing === undefined) continue;
+        const cyOpening = n.opening || 0;
+        const diff = Math.abs(Math.abs(cyOpening) - Math.abs(pyClosing));
+        if (diff < 1) matched++; else mismatched++;
+        verificationRows.push({ name: n.name, pyClosing, cyOpening, diff: diff < 1 ? 0 : diff });
+      }
+      verificationRows.sort((a: any, b: any) => b.diff - a.diff);
 
-      await supabase.from("trial_balance_snapshots").insert(payload);
-      toast.success("Previous period data imported as opening balances");
-      queryClient.invalidateQueries({ queryKey: ["tb-snapshot-for-engagement"] });
+      setComparativeResult({
+        verificationRows: verificationRows.slice(0, 100),
+        matched,
+        mismatched,
+        total: matched + mismatched,
+        priorFY,
+      });
+      toast.success(`Prior year TB imported. ${mismatched} opening balance mismatches found.`);
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err.message || "Prior year import failed");
+    } finally {
+      setComparativeProcessing(false);
     }
+  };
+
+  // ─── Downstream push after TB import ───
+  const pushTbToDownstreamModules = async () => {
+    const { data: existingCoa } = await supabase
+      .from("audit_engagements")
+      .select("coa_mapping")
+      .eq("id", engagementId)
+      .single();
+    if (!existingCoa?.coa_mapping || Object.keys(existingCoa.coa_mapping as any || {}).length === 0) {
+      await supabase.from("audit_engagements").update({
+        re_evaluate_scrutiny: true,
+      } as any).eq("id", engagementId);
+    }
+    await supabase.from("audit_engagements").update({
+      pipeline_stage: Math.max(engagement.pipeline_stage || 2, 3),
+    } as any).eq("id", engagementId);
+    toast.success(
+      "TB imported. Stage 3 (COA Mapping) is now ready. Scrutiny rules have been tagged.",
+      { duration: 5000 }
+    );
   };
 
   // Check if stage 2 can be completed
   const canComplete = tbResult?.isValid || (existingTb as any)?.is_validated;
 
   const handleCompleteStage2 = async () => {
+    await pushTbToDownstreamModules();
     const newStatuses = { ...(engagement.stage_statuses || {}), "2": "complete" };
     await supabase.from("audit_engagements").update({
-      stage_statuses: newStatuses,
-      pipeline_stage: Math.max(engagement.pipeline_stage || 2, 3),
+      stage_statuses: newStatuses as any,
+      pipeline_stage: 3,
     } as any).eq("id", engagementId);
-    toast.success("Stage 2 completed — proceed to Scrutiny & Analysis");
     onStageComplete();
+    toast.success("Stage 2 complete — moving to COA & Financial Statements");
   };
 
   return (
@@ -986,11 +1045,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
         </div>
         <div className="flex gap-2">
-          {engagement.parent_engagement_id && (
-            <Button variant="outline" size="sm" onClick={handleImportPrevPeriod} className="gap-1">
-              <RefreshCw size={14} /> Import Previous Period
-            </Button>
-          )}
           <Button size="sm" onClick={handleCompleteStage2} disabled={!canComplete} className="gap-1">
             Complete Stage 2 <ArrowRight size={14} />
           </Button>
@@ -1437,6 +1491,95 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   </CardContent>
                 </Card>
               )}
+              {/* ─── Comparative / Prior Period TB ─── */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <CalendarDays size={14} /> Comparative / Prior Period TB
+                    </CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowComparativeTb(!showComparativeTb)}>
+                      {showComparativeTb ? "Hide" : "Add Prior Year TB"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                {showComparativeTb && (
+                  <CardContent className="space-y-4">
+                    <Alert className="py-2">
+                      <AlertDescription className="text-xs">
+                        Upload the previous year's Trial Balance to enable:
+                        opening balance verification, comparative financial statements,
+                        and year-on-year scrutiny rules.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div
+                      className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/30"
+                      onClick={() => comparativeFileRef.current?.click()}
+                    >
+                      <Upload size={20} className="mx-auto mb-2 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">
+                        {comparativeFile ? comparativeFile.name : "Upload Prior Year TB (Excel or PDF)"}
+                      </p>
+                      <input ref={comparativeFileRef} type="file" className="hidden"
+                        accept=".xlsx,.xls,.pdf"
+                        onChange={e => setComparativeFile(e.target.files?.[0] || null)} />
+                    </div>
+
+                    {comparativeFile && (
+                      <Button size="sm" onClick={handleComparativeImport} disabled={comparativeProcessing} className="w-full gap-1">
+                        {comparativeProcessing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                        Import Prior Year TB
+                      </Button>
+                    )}
+
+                    {comparativeResult && (
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-semibold">Opening Balance Verification</h4>
+                        <p className="text-xs text-muted-foreground">
+                          Comparing current year opening balances against prior year closing balances.
+                          Mismatches indicate regrouping or data entry errors.
+                        </p>
+                        <div className="border rounded-lg overflow-auto max-h-64">
+                          <table className="w-full text-xs">
+                            <thead className="bg-muted">
+                              <tr>
+                                <th className="text-left p-2">Ledger Name</th>
+                                <th className="text-right p-2">Prior Year Closing</th>
+                                <th className="text-right p-2">Current Year Opening</th>
+                                <th className="text-right p-2">Difference</th>
+                                <th className="text-center p-2">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comparativeResult.verificationRows.map((row: any, i: number) => (
+                                <tr key={i} className={cn("border-t", row.diff !== 0 && "bg-destructive/5")}>
+                                  <td className="p-2">{row.name}</td>
+                                  <td className="p-2 text-right font-mono">{row.pyClosing?.toLocaleString("en-IN")}</td>
+                                  <td className="p-2 text-right font-mono">{row.cyOpening?.toLocaleString("en-IN")}</td>
+                                  <td className={cn("p-2 text-right font-mono", row.diff !== 0 ? "text-destructive font-bold" : "text-primary")}>
+                                    {row.diff !== 0 ? `₹${Math.abs(row.diff).toLocaleString("en-IN")}` : "✓"}
+                                  </td>
+                                  <td className="p-2 text-center">
+                                    <Badge className={row.diff === 0 ? "bg-primary/10 text-primary text-[9px]" : "bg-destructive/10 text-destructive text-[9px]"}>
+                                      {row.diff === 0 ? "Match" : "Mismatch"}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="flex gap-4 text-xs">
+                          <span className="text-primary">✓ Matched: {comparativeResult.matched}</span>
+                          <span className="text-destructive">✗ Mismatched: {comparativeResult.mismatched}</span>
+                          <span className="text-muted-foreground">Total compared: {comparativeResult.total}</span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
             </div>
           )}
         </TabsContent>
