@@ -777,6 +777,20 @@ serve(async (req) => {
       }
     }
 
+    // ─── Anti-duplication pass 2: zero ALL group nodes with values ───
+    // When a Tally TB includes group subtotal rows with aggregated values,
+    // and we also aggregate from children, we get double-counted totals.
+    // Solution: if a row is isGroupHint=true AND still has values, zero them.
+    for (const row of structuredRows) {
+      if (row.isGroupHint && row.hasValues) {
+        row.opening = 0;
+        row.txnDebit = 0;
+        row.txnCredit = 0;
+        row.closing = 0;
+        row.hasValues = false;
+      }
+    }
+
     // Parent stack using computed levels
     const levelStack: HierarchyNode[] = [];
 
