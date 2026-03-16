@@ -1496,6 +1496,95 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   </CardContent>
                 </Card>
               )}
+              {/* ─── Comparative / Prior Period TB ─── */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <CalendarDays size={14} /> Comparative / Prior Period TB
+                    </CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowComparativeTb(!showComparativeTb)}>
+                      {showComparativeTb ? "Hide" : "Add Prior Year TB"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                {showComparativeTb && (
+                  <CardContent className="space-y-4">
+                    <Alert className="py-2">
+                      <AlertDescription className="text-xs">
+                        Upload the previous year's Trial Balance to enable:
+                        opening balance verification, comparative financial statements,
+                        and year-on-year scrutiny rules.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div
+                      className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/30"
+                      onClick={() => comparativeFileRef.current?.click()}
+                    >
+                      <Upload size={20} className="mx-auto mb-2 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">
+                        {comparativeFile ? comparativeFile.name : "Upload Prior Year TB (Excel or PDF)"}
+                      </p>
+                      <input ref={comparativeFileRef} type="file" className="hidden"
+                        accept=".xlsx,.xls,.pdf"
+                        onChange={e => setComparativeFile(e.target.files?.[0] || null)} />
+                    </div>
+
+                    {comparativeFile && (
+                      <Button size="sm" onClick={handleComparativeImport} disabled={comparativeProcessing} className="w-full gap-1">
+                        {comparativeProcessing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                        Import Prior Year TB
+                      </Button>
+                    )}
+
+                    {comparativeResult && (
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-semibold">Opening Balance Verification</h4>
+                        <p className="text-xs text-muted-foreground">
+                          Comparing current year opening balances against prior year closing balances.
+                          Mismatches indicate regrouping or data entry errors.
+                        </p>
+                        <div className="border rounded-lg overflow-auto max-h-64">
+                          <table className="w-full text-xs">
+                            <thead className="bg-muted">
+                              <tr>
+                                <th className="text-left p-2">Ledger Name</th>
+                                <th className="text-right p-2">Prior Year Closing</th>
+                                <th className="text-right p-2">Current Year Opening</th>
+                                <th className="text-right p-2">Difference</th>
+                                <th className="text-center p-2">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comparativeResult.verificationRows.map((row: any, i: number) => (
+                                <tr key={i} className={cn("border-t", row.diff !== 0 && "bg-destructive/5")}>
+                                  <td className="p-2">{row.name}</td>
+                                  <td className="p-2 text-right font-mono">{row.pyClosing?.toLocaleString("en-IN")}</td>
+                                  <td className="p-2 text-right font-mono">{row.cyOpening?.toLocaleString("en-IN")}</td>
+                                  <td className={cn("p-2 text-right font-mono", row.diff !== 0 ? "text-destructive font-bold" : "text-primary")}>
+                                    {row.diff !== 0 ? `₹${Math.abs(row.diff).toLocaleString("en-IN")}` : "✓"}
+                                  </td>
+                                  <td className="p-2 text-center">
+                                    <Badge className={row.diff === 0 ? "bg-primary/10 text-primary text-[9px]" : "bg-destructive/10 text-destructive text-[9px]"}>
+                                      {row.diff === 0 ? "Match" : "Mismatch"}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="flex gap-4 text-xs">
+                          <span className="text-primary">✓ Matched: {comparativeResult.matched}</span>
+                          <span className="text-destructive">✗ Mismatched: {comparativeResult.mismatched}</span>
+                          <span className="text-muted-foreground">Total compared: {comparativeResult.total}</span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
             </div>
           )}
         </TabsContent>
