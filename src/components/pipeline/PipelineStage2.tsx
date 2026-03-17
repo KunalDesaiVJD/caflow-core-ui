@@ -909,6 +909,34 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     toast.success("Override applied — proceeding with difference noted");
   };
 
+  const handleDeleteTb = async () => {
+    if (!window.confirm(
+      'Delete the imported Trial Balance? This will remove all ledger hierarchy data for this engagement. You can re-upload a new file.'
+    )) return;
+    setDeletingTb(true);
+    try {
+      await supabase.from('tb_hierarchy_nodes')
+        .delete().eq('engagement_id', engagementId);
+      await supabase.from('trial_balance_snapshots')
+        .delete().eq('engagement_id', engagementId);
+      setTbResult(null);
+      setTbHierarchyNodes([]);
+      setTbStep(1);
+      setTbFormat('');
+      setTbFile(null);
+      setTbFileBase64('');
+      setTbParsedData([]);
+      setTbProgress(0);
+      queryClient.invalidateQueries({ queryKey: ['tb-snapshot-for-engagement'] });
+      queryClient.invalidateQueries({ queryKey: ['tb-hierarchy-nodes', engagementId] });
+      toast.success('Trial Balance deleted. You can now upload a new file.');
+    } catch (err: any) {
+      toast.error(err.message || 'Delete failed');
+    } finally {
+      setDeletingTb(false);
+    }
+  };
+
   // ═══════ LEDGER IMPORT LOGIC ═══════
 
   const handleLedgerFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
