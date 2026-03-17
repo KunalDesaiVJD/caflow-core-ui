@@ -35,8 +35,8 @@ const auditStages = [
   { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
   { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },
   { title: "Workpapers & Risk",         path: "/audit/pipeline", icon: Shield,       stage: 6  },
-  { title: "Notes to Accounts",         path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
-  { title: "CARO / 3CD Reports",        path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
+  { title: "Notes to Accounts/CARO",    path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
+  { title: "3CD Reports",               path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
   { title: "Review & QC",               path: "/audit/pipeline", icon: Layers,       stage: 9  },
   { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 10 },
 ];

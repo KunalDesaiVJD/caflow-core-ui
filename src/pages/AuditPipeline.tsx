@@ -35,6 +35,7 @@ import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
 import PipelineStage7 from "@/components/pipeline/PipelineStage7";
+import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
 const STAGES = [

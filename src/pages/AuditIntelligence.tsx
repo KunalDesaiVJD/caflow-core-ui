@@ -41,8 +41,8 @@ const STAGES = [
   { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
   { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
   { num: 6,  label: "Workpapers & Risk",           icon: Shield         },
-  { num: 7,  label: "Notes to Accounts",           icon: BookMarked     },
-  { num: 8,  label: "CARO / 3CD Reports",          icon: FileText       },
+  { num: 7,  label: "Notes to Accounts/CARO",       icon: BookMarked     },
+  { num: 8,  label: "3CD Reports",                  icon: FileText       },
   { num: 9,  label: "Review & QC",                 icon: Layers         },
   { num: 10, label: "Sign-off & UDIN",             icon: Award          },
 ];
