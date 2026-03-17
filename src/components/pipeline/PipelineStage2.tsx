@@ -195,10 +195,13 @@ function TbTreeRow({ node, allNodes, depth = 0 }:
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
 
+  const presentation = buildTbPresentationModel(allNodes);
   const vals = node.isLeaf
     ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
         txnCredit: node.txnCredit||0, closing: node.closing||0 }
-    : sumLeafDescendants(node.nodeId, allNodes);
+    : presentation.activeNodes.find((item) => item.nodeId === node.nodeId)
+      ? buildTbPresentationModel(allNodes).activeNodes.find((item) => item.nodeId === node.nodeId)
+      : { opening: node.opening||0, txnDebit: node.txnDebit||0, txnCredit: node.txnCredit||0, closing: node.closing||0 };
 
   const indent = depth * 24 + 12;
 
