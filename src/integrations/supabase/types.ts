@@ -941,7 +941,7 @@ export type Database = {
           clause_number: number
           clause_title: string | null
           default_content: string | null
-          firm_id: string
+          firm_id: string | null
           id: string
           is_applicable_default: boolean | null
           updated_at: string | null
@@ -950,7 +950,7 @@ export type Database = {
           clause_number: number
           clause_title?: string | null
           default_content?: string | null
-          firm_id: string
+          firm_id?: string | null
           id?: string
           is_applicable_default?: boolean | null
           updated_at?: string | null
@@ -959,7 +959,7 @@ export type Database = {
           clause_number?: number
           clause_title?: string | null
           default_content?: string | null
-          firm_id?: string
+          firm_id?: string | null
           id?: string
           is_applicable_default?: boolean | null
           updated_at?: string | null
