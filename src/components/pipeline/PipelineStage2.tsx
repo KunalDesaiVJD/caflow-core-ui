@@ -1525,14 +1525,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         <span>BS Assets = Liabilities & Equity: {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1 ? "Yes" : "No"}</span>
                       </div>
 
-                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.onlyGroupsCollapsible ? "bg-primary/5" : "bg-amber-500/5")}>
-                        {tbValidation.onlyGroupsCollapsible ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
-                        <span>Only groups collapsible: {tbValidation.onlyGroupsCollapsible ? "Yes" : "No"}</span>
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation?.onlyGroupsCollapsible ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation?.onlyGroupsCollapsible ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Only groups collapsible: {tbValidation?.onlyGroupsCollapsible ? "Yes" : "No"}</span>
                       </div>
 
-                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.groupTotalsTallied ? "bg-primary/5" : "bg-amber-500/5")}>
-                        {tbValidation.groupTotalsTallied ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
-                        <span>Group totals tallied: {tbValidation.groupTotalsTallied ? "Yes" : "No"}</span>
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation?.groupTotalsTallied ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation?.groupTotalsTallied ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Group totals tallied: {tbValidation?.groupTotalsTallied ? "Yes" : "No"}</span>
                       </div>
                     </div>
 
