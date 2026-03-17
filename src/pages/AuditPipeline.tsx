@@ -34,7 +34,7 @@ import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
-import PipelineStage7 from "@/components/pipeline/PipelineStage7";
+// PipelineStage7 removed — Notes to Accounts now uses NotesToAccountsEditor only
 import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
