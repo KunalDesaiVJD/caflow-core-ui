@@ -151,6 +151,20 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [rolledFromFy, setRolledFromFy] = useState("");
   const [showPrint, setShowPrint] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
+  const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(NOTE_LIST.map(nl => [nl.key, true]))
+  );
+  const [sp] = useSearchParams();
+  const engagementId = engagementIdProp || sp.get("engagementId") || "";
+  const { user } = useAuth();
+  const [recordId, setRecordId] = useState("");
+  const [activeNote, setActiveNote] = useState("note_1");
+  const [saving, setSaving] = useState(false);
+  const [finalising, setFinalising] = useState(false);
+  const [rolledFromFy, setRolledFromFy] = useState("");
+  const [showPrint, setShowPrint] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // All note states
   const [note1, setNote1] = useState<any>({});
