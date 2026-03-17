@@ -1345,10 +1345,19 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 {tbProcessing ? (
                   <div className="text-center space-y-3">
                     <Loader2 size={32} className="mx-auto animate-spin text-primary" />
-                    <p className="text-sm font-medium">Processing Trial Balance...</p>
-                    {tbProgressLabel && <p className="text-xs text-muted-foreground">{tbProgressLabel}</p>}
+                    <p className="text-sm font-medium">
+                      {tbStatusMsg || 'Processing Trial Balance...'}
+                    </p>
                     <Progress value={tbProgress} className="h-2" />
-                    <p className="text-xs text-muted-foreground">{Math.round(tbProgress)}% complete</p>
+                    <div className='flex items-center justify-between text-xs text-muted-foreground px-1'>
+                      <span>{tbStatusMsg}</span>
+                      <span>{Math.round(tbProgress)}%</span>
+                    </div>
+                    {tbProgress > 18 && tbProgress < 100 && (
+                      <p className='text-[10px] text-muted-foreground italic'>
+                        Large files may take 30–60 seconds. Do not close this page.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center space-y-4">
