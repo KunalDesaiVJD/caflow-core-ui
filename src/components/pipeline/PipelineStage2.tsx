@@ -462,7 +462,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async (): Promise<TbHierarchyNode[]> => {
       const { data, error } = await supabase
         .from("tb_hierarchy_nodes")
-        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group")
+        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
         .eq("engagement_id", engagementId)
         .order("row_number", { ascending: true });
 
@@ -479,6 +479,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         txnCredit: row.txn_credit || 0,
         closing: row.closing_balance || 0,
         primaryGroup: row.primary_group || row.tally_group_name,
+        bsPlSide: row.bs_pl_side || 'Unknown',
       }));
     },
     enabled: !!engagementId,
