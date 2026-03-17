@@ -330,18 +330,30 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       <div className="w-64 border-r border-border bg-card flex-shrink-0">
-        <div className="p-4 border-b border-border">
+       <div className="p-4 border-b border-border">
           <h2 className="font-semibold text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Notes to Accounts</h2>
+          <p className="text-[10px] text-muted-foreground mt-1">{selectedNotes.length} of {NOTE_LIST.length} selected</p>
         </div>
-        <ScrollArea className="h-[calc(100%-3.5rem)]">
+        <ScrollArea className="h-[calc(100%-4.5rem)]">
           <div className="p-2 space-y-0.5">
-            {NOTE_LIST.map((nl) => (
-              <button key={nl.key} onClick={() => setActiveNote(nl.key)}
-                className={`w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 transition-colors ${activeNote === nl.key ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/50 text-foreground"}`}>
-                {isFilled(nl.key) ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-                <span className="truncate">Note {nl.num} — {nl.title}</span>
-              </button>
-            ))}
+            {NOTE_LIST.map((nl) => {
+              const isSelected = noteSelection[nl.key] !== false;
+              const displayNum = displayNumberMap.get(nl.key);
+              return (
+                <div key={nl.key} className="flex items-center gap-1">
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => toggleNoteSelection(nl.key)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <button onClick={() => setActiveNote(nl.key)}
+                    className={`flex-1 text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-2 transition-colors ${activeNote === nl.key ? "bg-primary/10 text-primary font-medium" : isSelected ? "hover:bg-muted/50 text-foreground" : "hover:bg-muted/50 text-muted-foreground line-through"}`}>
+                    {isFilled(nl.key) ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
+                    <span className="truncate">{isSelected && displayNum ? `Note ${displayNum}` : `Note ${nl.num}`} — {nl.title}</span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </ScrollArea>
       </div>
