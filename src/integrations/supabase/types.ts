@@ -3157,6 +3157,51 @@ export type Database = {
         }
         Relationships: []
       }
+      notes_selection: {
+        Row: {
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string
+          financial_year: string | null
+          id: string
+          selected_notes: Json | null
+          updated_at: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id: string
+          financial_year?: string | null
+          id?: string
+          selected_notes?: Json | null
+          updated_at?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string
+          financial_year?: string | null
+          id?: string
+          selected_notes?: Json | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_selection_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notes_selection_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notes_to_accounts: {
         Row: {
           client_id: string | null
