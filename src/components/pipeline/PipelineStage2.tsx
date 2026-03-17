@@ -211,6 +211,10 @@ function sumDisplayedNode(nodeId: string, allNodes: TbHierarchyNode[]): { openin
     };
   }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
 }
+function fmtTb(v: number): string {
+  if (!v && v !== 0) return '—';
+  return v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function TbTreeRow({ node, allNodes, depth = 0 }:
   { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
