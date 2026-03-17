@@ -941,7 +941,7 @@ export type Database = {
           clause_number: number
           clause_title: string | null
           default_content: string | null
-          firm_id: string
+          firm_id: string | null
           id: string
           is_applicable_default: boolean | null
           updated_at: string | null
@@ -950,7 +950,7 @@ export type Database = {
           clause_number: number
           clause_title?: string | null
           default_content?: string | null
-          firm_id: string
+          firm_id?: string | null
           id?: string
           is_applicable_default?: boolean | null
           updated_at?: string | null
@@ -959,7 +959,7 @@ export type Database = {
           clause_number?: number
           clause_title?: string | null
           default_content?: string | null
-          firm_id?: string
+          firm_id?: string | null
           id?: string
           is_applicable_default?: boolean | null
           updated_at?: string | null
@@ -3156,6 +3156,51 @@ export type Database = {
           to_financial_year?: string | null
         }
         Relationships: []
+      }
+      notes_selection: {
+        Row: {
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string
+          financial_year: string | null
+          id: string
+          selected_notes: Json | null
+          updated_at: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id: string
+          financial_year?: string | null
+          id?: string
+          selected_notes?: Json | null
+          updated_at?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string
+          financial_year?: string | null
+          id?: string
+          selected_notes?: Json | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_selection_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notes_selection_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       notes_to_accounts: {
         Row: {

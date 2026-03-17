@@ -108,25 +108,32 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       .order("clause_number");
 
     if (data && data.length > 0) {
-      // Use master title for display (always synced), keep saved data for content
-      setRows(data.map((d: any) => ({
-        id: d.id,
-        clause_number: d.clause_number,
-        clause_title: getTitle(d.clause_number), // ALWAYS from master
-        auto_draft: d.auto_draft || "",
-        user_response: d.user_response || "",
-        status: d.status || "not_started",
-        is_applicable: d.is_applicable ?? true,
-        inapplicability_reason: d.inapplicability_reason || "",
-        is_locked: d.is_locked || false,
-      })));
+      // Use master title for display (always synced), auto-load default content into user_response if empty
+      setRows(data.map((d: any) => {
+        const defaultContent = getContent(d.clause_number);
+        const userResp = d.user_response || "";
+        // Auto-load: if user_response is empty but we have default content, pre-fill it
+        const autoLoaded = !userResp && defaultContent ? defaultContent : userResp;
+        return {
+          id: d.id,
+          clause_number: d.clause_number,
+          clause_title: getTitle(d.clause_number),
+          auto_draft: d.auto_draft || defaultContent || "",
+          user_response: autoLoaded,
+          status: d.status || (autoLoaded ? "drafted" : "not_started"),
+          is_applicable: d.is_applicable ?? true,
+          inapplicability_reason: d.inapplicability_reason || "",
+          is_locked: d.is_locked || false,
+        };
+      }));
     } else {
-      // Seed all 21 clauses from master templates
+      // Seed all 21 clauses from master templates — auto-fill user_response with default content
       const seeds = Array.from({ length: 21 }, (_, i) => i + 1).map(num => ({
         engagement_id: engagement.id,
         clause_number: num,
         clause_title: getTitle(num),
         auto_draft: getContent(num),
+        user_response: getContent(num), // Pre-fill user response with default
         status: getContent(num) ? "drafted" : "not_started",
         is_applicable: getApplicable(num),
         is_locked: false,
@@ -316,34 +323,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
               {row.is_applicable && (
                 <>
-                  {row.auto_draft && (
-                    <div className="bg-blue-50 dark:bg-blue-950/20 rounded-md p-3 text-xs">
-                      <p className="font-semibold text-blue-700 mb-1">Default / AI Draft:</p>
-                      <p className="whitespace-pre-wrap text-muted-foreground">{row.auto_draft}</p>
-                      {!row.is_locked && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 text-xs h-7"
-                          onClick={() => updateRow(idx, "user_response", row.auto_draft)}
-                        >
-                          Use Default Content
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {!row.auto_draft && CARO_DEFAULT_CONTENT[row.clause_number] && !row.is_locked && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-7 gap-1"
-                      onClick={() => {
-                        updateRow(idx, "auto_draft", CARO_DEFAULT_CONTENT[row.clause_number]);
-                        updateRow(idx, "user_response", CARO_DEFAULT_CONTENT[row.clause_number]);
-                      }}
-                    >
-                      Load Default Content
-                    </Button>
+                  {row.user_response && (
+                    <p className="text-[10px] text-muted-foreground italic">Default content loaded — you can edit below</p>
                   )}
                   <Textarea
                     value={row.user_response}
