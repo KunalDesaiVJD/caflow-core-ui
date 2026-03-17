@@ -55,7 +55,10 @@ export function MasterConfigPanel({ firmId }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!firmId) return;
+    if (!firmId) {
+      setLoading(false);
+      return;
+    }
     loadAll();
   }, [firmId]);
 
@@ -125,6 +128,7 @@ export function MasterConfigPanel({ firmId }: Props) {
     setSaving(false);
   }
 
+  if (!firmId) return <div className="py-8 text-center text-muted-foreground">No firm context available. Please ensure you are logged in.</div>;
   if (loading) return <div className="py-8 text-center text-muted-foreground">Loading master configuration...</div>;
 
   return (
