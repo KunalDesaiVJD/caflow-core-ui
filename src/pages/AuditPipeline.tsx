@@ -819,7 +819,7 @@ export default function AuditPipeline() {
               )}
             </TabsContent>
             <TabsContent value="master_config" className="mt-4">
-              <MasterConfigPanel firmId={user?.firm_id || ""} />
+              <MasterConfigPanel />
             </TabsContent>
           </Tabs>
         ) : activeStage === 8 ? (

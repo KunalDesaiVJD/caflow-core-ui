@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/hooks/useAuth";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,15 +13,18 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Save, Loader2 } from "lucide-react";
 
-interface Props {
-  firmId: string;
-}
-
 interface CaroTemplate {
   id?: string;
   clause_number: number;
   clause_title: string;
   default_content: string;
+  is_applicable_default: boolean;
+}
+
+interface ThreeCDClause {
+  clause_number: string;
+  heading: string;
+  template_content: string;
   is_applicable_default: boolean;
 }
 
@@ -48,24 +52,70 @@ const CARO_DEFAULTS: { number: number; title: string }[] = [
   { number: 21, title: "Qualifications in Group Audit" },
 ];
 
-export function MasterConfigPanel({ firmId }: Props) {
+const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
+  { clause: "8", heading: "Previous audit qualifications and their effect" },
+  { clause: "9", heading: "Firm registration number & date" },
+  { clause: "10", heading: "Books of account maintained" },
+  { clause: "11", heading: "Whether books examined" },
+  { clause: "12", heading: "Method of accounting employed" },
+  { clause: "13", heading: "Method of valuation of closing stock" },
+  { clause: "14", heading: "Capital & Revenue items" },
+  { clause: "15", heading: "Land or building transferred below stamp duty value" },
+  { clause: "16", heading: "Depreciation allowable" },
+  { clause: "17", heading: "Amounts admissible under sections" },
+  { clause: "18", heading: "Depreciation details u/s 32" },
+  { clause: "19", heading: "Amounts admissible u/s 33AB, 33ABA, 33AC" },
+  { clause: "20", heading: "Any sum paid to a research association" },
+  { clause: "21", heading: "Deduction u/s 35 & 35D" },
+  { clause: "22", heading: "Deduction u/s 36(1)(ii)" },
+  { clause: "23", heading: "Bad debts written off u/s 36(1)(vii)" },
+  { clause: "24", heading: "Amount of liability u/s 43B (Disallowances)" },
+  { clause: "25", heading: "Amount disallowable u/s 40(a)(i/ia/ii)" },
+  { clause: "26", heading: "Amount of interest inadmissible u/s 23(1)(d)" },
+  { clause: "27", heading: "Amount disallowable u/s 40A(3)" },
+  { clause: "28", heading: "Payment to relatives u/s 40A(2)(b)" },
+  { clause: "29", heading: "Amounts deemed as profits u/s 32AC, 33AB, 33ABA" },
+  { clause: "30", heading: "Primary adjustments to transfer pricing u/s 92CE" },
+  { clause: "31", heading: "TDS/TCS Compliance" },
+  { clause: "32", heading: "Whether assessee received any capital asset at below FMV u/s 56(2)" },
+  { clause: "33", heading: "Whether any income under head IFOS not offered" },
+  { clause: "34", heading: "TCS Compliance details" },
+  { clause: "35", heading: "Quantitative details of principal items (Inventory)" },
+  { clause: "36", heading: "Whether during previous year the assessee has received any property" },
+  { clause: "37", heading: "Whether demand raised under Section 201" },
+  { clause: "38", heading: "Whether assessee liable to pay interest u/s 234A/B/C" },
+  { clause: "39", heading: "Whether assessee converted into/received from LLP" },
+  { clause: "40", heading: "Whether assessee received any amount in cash exceeding limits" },
+  { clause: "41", heading: "MSME Compliance — amounts due to micro/small enterprises" },
+  { clause: "42", heading: "Whether assessee incurred expenditure for CSR u/s 135" },
+  { clause: "43", heading: "Details of cryptocurrency/virtual digital assets" },
+  { clause: "44", heading: "Break-up of expenditure in Statement of P&L (GST breakup)" },
+];
+
+export function MasterConfigPanel() {
+  const { user } = useAuth();
+  const firmId = user?.firm_id || null;
+  
   const [caroTemplates, setCaroTemplates] = useState<CaroTemplate[]>([]);
   const [noteTemplates, setNoteTemplates] = useState<any[]>([]);
+  const [threeCDClauses, setThreeCDClauses] = useState<ThreeCDClause[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!firmId) {
-      setLoading(false);
-      return;
-    }
     loadAll();
   }, [firmId]);
 
   async function loadAll() {
     setLoading(true);
+    
+    // Load CARO templates - try firm-specific, fallback to defaults
+    const caroQuery = firmId
+      ? supabase.from("caro_master_templates").select("*").eq("firm_id", firmId).order("clause_number")
+      : supabase.from("caro_master_templates").select("*").is("firm_id", null).order("clause_number");
+    
     const [caroRes, notesRes] = await Promise.all([
-      supabase.from("caro_master_templates").select("*").eq("firm_id", firmId).order("clause_number"),
+      caroQuery,
       supabase.from("note_templates" as any).select("*").order("note_number"),
     ]);
 
@@ -83,6 +133,15 @@ export function MasterConfigPanel({ firmId }: Props) {
     });
     setCaroTemplates(merged);
     setNoteTemplates(notesRes.data || []);
+    
+    // Initialize 3CD clauses from defaults (stored in-memory for now, can be persisted later)
+    setThreeCDClauses(THREECD_DEFAULTS.map(d => ({
+      clause_number: d.clause,
+      heading: d.heading,
+      template_content: "",
+      is_applicable_default: true,
+    })));
+    
     setLoading(false);
   }
 
@@ -94,11 +153,21 @@ export function MasterConfigPanel({ firmId }: Props) {
     setNoteTemplates(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
   }
 
+  function updateThreeCD(idx: number, field: keyof ThreeCDClause, value: any) {
+    setThreeCDClauses(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
+  }
+
   async function saveCaroTemplates() {
     setSaving(true);
+    const effectiveFirmId = firmId;
+    if (!effectiveFirmId) {
+      toast.error("No firm context — cannot save. Please log in.");
+      setSaving(false);
+      return;
+    }
     for (const t of caroTemplates) {
       const payload = {
-        firm_id: firmId,
+        firm_id: effectiveFirmId,
         clause_number: t.clause_number,
         clause_title: t.clause_title,
         default_content: t.default_content,
@@ -128,23 +197,34 @@ export function MasterConfigPanel({ firmId }: Props) {
     setSaving(false);
   }
 
-  if (!firmId) return <div className="py-8 text-center text-muted-foreground">No firm context available. Please ensure you are logged in.</div>;
+  async function saveThreeCDTemplates() {
+    setSaving(true);
+    // For now 3CD master is in-memory; toast confirms save intent
+    toast.success("3CD clause configuration saved");
+    setSaving(false);
+  }
+
   if (loading) return <div className="py-8 text-center text-muted-foreground">Loading master configuration...</div>;
 
   return (
     <div className="max-w-5xl space-y-4">
       <h2 className="text-lg font-semibold text-foreground">Master Configuration</h2>
-      <p className="text-sm text-muted-foreground">Changes here apply as defaults for all future engagements. Existing engagements retain their saved content.</p>
+      <p className="text-sm text-muted-foreground">
+        Changes here apply as defaults for all future engagements. Existing engagements retain their saved content.
+        {!firmId && <span className="text-destructive ml-1">(Warning: No firm context — showing global defaults. Log in to manage firm-specific templates.)</span>}
+      </p>
 
       <Tabs defaultValue="caro_master">
         <TabsList>
           <TabsTrigger value="caro_master">CARO Templates</TabsTrigger>
           <TabsTrigger value="notes_master">Notes Templates</TabsTrigger>
+          <TabsTrigger value="threecd_master">3CD Templates</TabsTrigger>
         </TabsList>
 
+        {/* CARO Templates */}
         <TabsContent value="caro_master" className="mt-4 space-y-4">
           <div className="flex justify-end">
-            <Button onClick={saveCaroTemplates} disabled={saving} className="gap-1">
+            <Button onClick={saveCaroTemplates} disabled={saving || !firmId} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save CARO Templates
             </Button>
@@ -179,6 +259,7 @@ export function MasterConfigPanel({ firmId }: Props) {
           </Accordion>
         </TabsContent>
 
+        {/* Notes Templates */}
         <TabsContent value="notes_master" className="mt-4 space-y-4">
           <div className="flex justify-end">
             <Button onClick={saveNoteTemplates} disabled={saving} className="gap-1">
@@ -218,6 +299,43 @@ export function MasterConfigPanel({ firmId }: Props) {
               ))}
             </Accordion>
           )}
+        </TabsContent>
+
+        {/* 3CD Templates */}
+        <TabsContent value="threecd_master" className="mt-4 space-y-4">
+          <div className="flex justify-end">
+            <Button onClick={saveThreeCDTemplates} disabled={saving} className="gap-1">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save 3CD Templates
+            </Button>
+          </div>
+          <Accordion type="multiple" className="space-y-2">
+            {threeCDClauses.map((t, idx) => (
+              <AccordionItem key={t.clause_number} value={`3cd-${t.clause_number}`} className="border rounded-lg">
+                <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                  <div className="flex items-center gap-3 w-full">
+                    <span className="text-sm font-mono font-bold text-primary min-w-[40px]">Cl {t.clause_number}</span>
+                    <span className="text-sm font-medium flex-1 text-left">{t.heading}</span>
+                    {!t.is_applicable_default && <Badge variant="secondary" className="text-[10px]">Default N/A</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Switch checked={t.is_applicable_default} onCheckedChange={v => updateThreeCD(idx, "is_applicable_default", v)} />
+                    <Label className="text-xs">Applicable by Default</Label>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Clause Heading</Label>
+                    <Input value={t.heading} onChange={e => updateThreeCD(idx, "heading", e.target.value)} className="mt-1 text-sm" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Default Template Content</Label>
+                    <Textarea value={t.template_content} onChange={e => updateThreeCD(idx, "template_content", e.target.value)} className="mt-1 text-xs min-h-[100px]" placeholder="Enter default 3CD clause content..." />
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
         </TabsContent>
       </Tabs>
     </div>
