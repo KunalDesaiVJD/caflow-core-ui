@@ -187,63 +187,134 @@ const splitDrCr = (value: number) =>
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
-function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
-  const [open, setOpen] = useState(node.level <= 2);
-  const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
+// Helper: recursively sum all leaf descendants of a node
+function sumLeafDescendants(
+  nodeId: string,
+  allNodes: TbHierarchyNode[]
+): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
+  const children = allNodes.filter(n => n.parentNodeId === nodeId);
+  if (children.length === 0) {
+    // This is effectively a leaf — return its own values
+    const self = allNodes.find(n => n.nodeId === nodeId);
+    return {
+      opening:   self?.opening   || 0,
+      txnDebit:  self?.txnDebit  || 0,
+      txnCredit: self?.txnCredit || 0,
+      closing:   self?.closing   || 0,
+    };
+  }
+  // Sum across all children recursively
+  return children.reduce(
+    (acc, child) => {
+      const childSum = child.isLeaf
+        ? { opening: child.opening||0, txnDebit: child.txnDebit||0,
+            txnCredit: child.txnCredit||0, closing: child.closing||0 }
+        : sumLeafDescendants(child.nodeId, allNodes);
+      return {
+        opening:   acc.opening   + childSum.opening,
+        txnDebit:  acc.txnDebit  + childSum.txnDebit,
+        txnCredit: acc.txnCredit + childSum.txnCredit,
+        closing:   acc.closing   + childSum.closing,
+      };
+    },
+    { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 }
+  );
+}
+
+// Format: show dash when value is zero, Indian number format otherwise
+const fmtTb = (v: number) =>
+  v === 0 ? '—'
+  : Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function TbTreeRow({ node, allNodes, depth = 0 }:
+  { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
+
+  const [open, setOpen] = useState(depth < 2);
+  const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
 
-  // For balances: positive = Dr side, negative = Cr side
-  const openDr  = node.opening  >= 0 ? Math.abs(node.opening)  : 0;
-  const openCr  = node.opening  <  0 ? Math.abs(node.opening)  : 0;
-  const closDr  = node.closing  >= 0 ? Math.abs(node.closing)  : 0;
-  const closCr  = node.closing  <  0 ? Math.abs(node.closing)  : 0;
+  // For group nodes: compute totals by summing all leaf descendants
+  // For leaf nodes: use the node's own stored values
+  const vals = node.isLeaf
+    ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
+        txnCredit: node.txnCredit||0, closing: node.closing||0 }
+    : sumLeafDescendants(node.nodeId, allNodes);
+
+  // Split each value into DR and CR sides
+  // Positive = DR side, Negative = CR side
+  const openDr  = vals.opening  > 0 ? vals.opening  : 0;
+  const openCr  = vals.opening  < 0 ? Math.abs(vals.opening)  : 0;
+  const closeDr = vals.closing  > 0 ? vals.closing  : 0;
+  const closeCr = vals.closing  < 0 ? Math.abs(vals.closing)  : 0;
+
+  const indent = depth * 20 + 8;
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => hasChildren && setOpen((prev) => !prev)}
+      <div
         className={cn(
-          "flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40",
-          !node.isLeaf && "bg-muted/10"
+          'flex w-full items-center border-b border-border/30 py-1.5 text-xs hover:bg-muted/30',
+          !node.isLeaf && 'bg-muted/10',
         )}
-        style={{ paddingLeft: `${(node.level - 1) * 18 + 10}px` }}
+        style={{ paddingLeft: `${indent}px` }}
       >
-        <ChevronDown
-          size={14}
+        {/* +/- expand/collapse button */}
+        <button
+          type='button'
+          onClick={() => hasChildren && setOpen(p => !p)}
           className={cn(
-            "shrink-0 text-muted-foreground transition-transform",
-            !open && hasChildren ? "-rotate-90" : "",
-            !hasChildren ? "opacity-0" : ""
+            'mr-2 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold leading-none',
+            hasChildren
+              ? 'cursor-pointer border-border bg-background text-foreground hover:bg-primary hover:text-primary-foreground'
+              : 'invisible',
           )}
-        />
+        >
+          {open ? '−' : '+'}
+        </button>
+
+        {/* Account / Group name */}
         <span className={cn(
-          "flex-1 truncate",
-          !node.isLeaf ? "font-semibold text-foreground" : "text-foreground"
+          'flex-1 truncate pr-2',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground/80',
         )}>
           {node.name}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {openDr > 0 ? formatTbNumber(openDr) : '—'}
+
+        {/* 6 numeric columns */}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(openDr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {openCr > 0 ? formatTbNumber(openCr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(openCr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {node.txnDebit > 0 ? formatTbNumber(node.txnDebit) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(vals.txnDebit)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {node.txnCredit > 0 ? formatTbNumber(node.txnCredit) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(vals.txnCredit)}
         </span>
-        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
-          {closDr > 0 ? formatTbNumber(closDr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
+          {fmtTb(closeDr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
-          {closCr > 0 ? formatTbNumber(closCr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium pr-2',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
+          {fmtTb(closeCr)}
         </span>
-      </button>
-      {open && hasChildren && children.map((child) => (
-        <TbTreeRow key={child.nodeId} node={child} allNodes={allNodes} />
+      </div>
+
+      {/* Render children when expanded */}
+      {open && hasChildren && children.map(child => (
+        <TbTreeRow
+          key={child.nodeId}
+          node={child}
+          allNodes={allNodes}
+          depth={depth + 1}
+        />
       ))}
     </div>
   );
@@ -298,6 +369,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [comparativeResult, setComparativeResult] = useState<any>(null);
   const [comparativeProcessing, setComparativeProcessing] = useState(false);
   const comparativeFileRef = useRef<HTMLInputElement>(null);
+  const [deletingTb, setDeletingTb] = useState(false);
+  const [tbStatusMsg, setTbStatusMsg] = useState('');
 
   // ─── Existing TB snapshot ───
   // Fetch existing TB snapshots — Tally import creates N rows (one per ledger),
@@ -627,67 +700,91 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
     try {
       if (isTallyFormat) {
-        // ─── Route through edge function for Tally / PDF formats ───
-        setTbProgress(15);
-        setTbProgressLabel("Preparing upload...");
+        // ── Stage 1: Encoding file ──────────────────────────────
+        setTbStatusMsg('Encoding file for upload...');
+        setTbProgress(10);
+
+        // ── Stage 2: Uploading to server ────────────────────────
+        setTbStatusMsg('Uploading to server...');
+        setTbProgress(18);
+
+        // Start a simulated progress ticker so the bar never freezes.
+        // It advances from 20% to 82% over ~45 seconds while the Edge
+        // Function processes the file server-side.
+        let simProgress = 20;
+        const progressMessages = [
+          { pct: 20, msg: 'Parsing Excel file on server...' },
+          { pct: 35, msg: 'Detecting column headers and format...' },
+          { pct: 48, msg: 'Building account hierarchy...' },
+          { pct: 60, msg: 'Detecting group vs ledger rows...' },
+          { pct: 70, msg: 'Aggregating group totals...' },
+          { pct: 78, msg: 'Saving to database...' },
+          { pct: 82, msg: 'Tagging ledgers with scrutiny rules...' },
+        ];
+        const ticker = setInterval(() => {
+          simProgress = Math.min(simProgress + 1, 82);
+          setTbProgress(simProgress);
+          const stage = progressMessages.filter(m => m.pct <= simProgress).pop();
+          if (stage) setTbStatusMsg(stage.msg);
+        }, 600); // advance 1% every 600ms (~48 seconds to reach 82%)
 
         let data: any;
 
-        if (tbFormat === "pdf") {
-          // PDF: extract text lines client-side (simple approach — split by newlines)
-          // For real PDF parsing, we'd use pdf.js but for now send as-is and let edge function handle
-          setTbProgressLabel("Extracting PDF text...");
-          // Decode base64 to text lines (basic approach)
-          const binaryStr = atob(tbFileBase64);
-          const textLines: string[] = [];
-          // Simple text extraction from PDF binary — look for readable text segments
-          let currentLine = "";
-          for (let i = 0; i < binaryStr.length; i++) {
-            const code = binaryStr.charCodeAt(i);
-            if (code >= 32 && code <= 126) {
-              currentLine += binaryStr[i];
-            } else if (currentLine.length > 3) {
-              textLines.push(currentLine.trim());
-              currentLine = "";
-            } else {
-              currentLine = "";
+        try {
+          if (tbFormat === "pdf") {
+            // PDF: extract text lines client-side (simple approach — split by newlines)
+            setTbStatusMsg("Extracting PDF text...");
+            // Decode base64 to text lines (basic approach)
+            const binaryStr = atob(tbFileBase64);
+            const textLines: string[] = [];
+            let currentLine = "";
+            for (let i = 0; i < binaryStr.length; i++) {
+              const code = binaryStr.charCodeAt(i);
+              if (code >= 32 && code <= 126) {
+                currentLine += binaryStr[i];
+              } else if (currentLine.length > 3) {
+                textLines.push(currentLine.trim());
+                currentLine = "";
+              } else {
+                currentLine = "";
+              }
             }
-          }
-          if (currentLine.length > 3) textLines.push(currentLine.trim());
+            if (currentLine.length > 3) textLines.push(currentLine.trim());
 
-          // Filter to only lines that look like TB data
-          const tbLines = textLines.filter(line => {
-            const hasNumber = /\d/.test(line);
-            const hasText = /[a-zA-Z]/.test(line);
-            return hasText && hasNumber && line.length > 5;
-          });
+            const tbLines = textLines.filter(line => {
+              const hasNumber = /\d/.test(line);
+              const hasText = /[a-zA-Z]/.test(line);
+              return hasText && hasNumber && line.length > 5;
+            });
 
-          setTbProgressLabel("Sending to parser...");
-          const { data: pdfData, error: pdfError } = await supabase.functions.invoke("parse-tally-tb", {
-            body: {
+            const { data: pdfData, error: pdfError } = await supabase.functions.invoke("parse-tally-tb", {
+              body: {
+                engagementId,
+                firmId: user?.firm_id || null,
+                pdfTextRows: tbLines,
+                fileName: tbFile?.name,
+                financialYear: engagement.financial_year,
+              },
+            });
+            if (pdfError) throw new Error(pdfError.message || "PDF parse error");
+            if (!pdfData?.success) throw new Error(pdfData?.error || "PDF parse failed");
+            data = pdfData;
+          } else {
+            // Excel/XML — use chunked upload
+            data = await sendChunked(
+              tbFileBase64,
               engagementId,
-              firmId: user?.firm_id || null,
-              pdfTextRows: tbLines,
-              fileName: tbFile?.name,
-              financialYear: engagement.financial_year,
-            },
-          });
-          if (pdfError) throw new Error(pdfError.message || "PDF parse error");
-          if (!pdfData?.success) throw new Error(pdfData?.error || "PDF parse failed");
-          data = pdfData;
-        } else {
-          // Excel/XML — use chunked upload
-          data = await sendChunked(
-            tbFileBase64,
-            engagementId,
-            user?.firm_id || null,
-            tbFile?.name || "file.xlsx",
-            engagement.financial_year
-          );
+              user?.firm_id || null,
+              tbFile?.name || "file.xlsx",
+              engagement.financial_year
+            );
+          }
+        } finally {
+          clearInterval(ticker);
         }
 
+        setTbStatusMsg('Import complete!');
         setTbProgress(100);
-        setTbProgressLabel("Complete!");
 
         const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row: any) => ({
           nodeId: row.nodeId,
@@ -810,6 +907,34 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
     setTbShowOverride(false);
     toast.success("Override applied — proceeding with difference noted");
+  };
+
+  const handleDeleteTb = async () => {
+    if (!window.confirm(
+      'Delete the imported Trial Balance? This will remove all ledger hierarchy data for this engagement. You can re-upload a new file.'
+    )) return;
+    setDeletingTb(true);
+    try {
+      await supabase.from('tb_hierarchy_nodes')
+        .delete().eq('engagement_id', engagementId);
+      await supabase.from('trial_balance_snapshots')
+        .delete().eq('engagement_id', engagementId);
+      setTbResult(null);
+      setTbHierarchyNodes([]);
+      setTbStep(1);
+      setTbFormat('');
+      setTbFile(null);
+      setTbFileBase64('');
+      setTbParsedData([]);
+      setTbProgress(0);
+      queryClient.invalidateQueries({ queryKey: ['tb-snapshot-for-engagement'] });
+      queryClient.invalidateQueries({ queryKey: ['tb-hierarchy-nodes', engagementId] });
+      toast.success('Trial Balance deleted. You can now upload a new file.');
+    } catch (err: any) {
+      toast.error(err.message || 'Delete failed');
+    } finally {
+      setDeletingTb(false);
+    }
   };
 
   // ═══════ LEDGER IMPORT LOGIC ═══════
@@ -1274,10 +1399,19 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 {tbProcessing ? (
                   <div className="text-center space-y-3">
                     <Loader2 size={32} className="mx-auto animate-spin text-primary" />
-                    <p className="text-sm font-medium">Processing Trial Balance...</p>
-                    {tbProgressLabel && <p className="text-xs text-muted-foreground">{tbProgressLabel}</p>}
+                    <p className="text-sm font-medium">
+                      {tbStatusMsg || 'Processing Trial Balance...'}
+                    </p>
                     <Progress value={tbProgress} className="h-2" />
-                    <p className="text-xs text-muted-foreground">{Math.round(tbProgress)}% complete</p>
+                    <div className='flex items-center justify-between text-xs text-muted-foreground px-1'>
+                      <span>{tbStatusMsg}</span>
+                      <span>{Math.round(tbProgress)}%</span>
+                    </div>
+                    {tbProgress > 18 && tbProgress < 100 && (
+                      <p className='text-[10px] text-muted-foreground italic'>
+                        Large files may take 30–60 seconds. Do not close this page.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center space-y-4">
@@ -1438,57 +1572,113 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
               {/* View Toggle */}
               {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2 flex-wrap'>
                   <Button
-                    variant={tbViewMode === "tree" ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs gap-1"
-                    onClick={() => setTbViewMode("tree")}
+                    variant={tbViewMode === 'tree' ? 'default' : 'outline'}
+                    size='sm'
+                    className='text-xs gap-1'
+                    onClick={() => setTbViewMode('tree')}
                   >
                     <ChevronDown size={14} /> Hierarchy Tree
                   </Button>
                   <Button
-                    variant={tbViewMode === "flat" ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs gap-1"
-                    onClick={() => setTbViewMode("flat")}
+                    variant={tbViewMode === 'flat' ? 'default' : 'outline'}
+                    size='sm'
+                    className='text-xs gap-1'
+                    onClick={() => setTbViewMode('flat')}
                   >
                     <Table2 size={14} /> Flat Preview
+                  </Button>
+                  {/* Spacer */}
+                  <div className='flex-1' />
+                  {/* Delete & Re-upload button */}
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    className='text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground'
+                    onClick={handleDeleteTb}
+                    disabled={deletingTb}
+                  >
+                    {deletingTb
+                      ? <><Loader2 size={13} className='animate-spin' /> Deleting...</>
+                      : <><X size={13} /> Delete TB &amp; Re-upload</>
+                    }
                   </Button>
                 </div>
               )}
 
               {/* Hierarchy Tree View */}
-              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Trial Balance Hierarchy</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <div className="max-h-[500px] overflow-auto">
-                      {/* Header row */}
-                      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
-                        <span className="flex-1 pl-6">Account / Group</span>
-                        <span className="w-28 text-right">Opening DR</span>
-                        <span className="w-28 text-right">Opening CR</span>
-                        <span className="w-28 text-right">TXN DR</span>
-                        <span className="w-28 text-right">TXN CR</span>
-                        <span className="w-28 text-right">Closing DR</span>
-                        <span className="w-28 text-right">Closing CR</span>
-                      </div>
-                      {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
-                        .filter((n) => n.parentNodeId === null)
-                        .map((node) => (
+              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (() => {
+                const activeNodes = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                const rootNodes = activeNodes.filter(n => n.parentNodeId === null);
+
+                // Compute grand total across all root nodes
+                const grandTotal = rootNodes.reduce((acc, root) => {
+                  const v = sumLeafDescendants(root.nodeId, activeNodes);
+                  return {
+                    opening:   acc.opening   + v.opening,
+                    txnDebit:  acc.txnDebit  + v.txnDebit,
+                    txnCredit: acc.txnCredit + v.txnCredit,
+                    closing:   acc.closing   + v.closing,
+                  };
+                }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
+
+                const gtOpenDr  = grandTotal.opening  > 0 ? grandTotal.opening  : 0;
+                const gtOpenCr  = grandTotal.opening  < 0 ? Math.abs(grandTotal.opening)  : 0;
+                const gtCloseDr = grandTotal.closing  > 0 ? grandTotal.closing  : 0;
+                const gtCloseCr = grandTotal.closing  < 0 ? Math.abs(grandTotal.closing)  : 0;
+
+                return (
+                  <Card>
+                    <CardHeader className='pb-2'>
+                      <CardTitle className='text-sm flex items-center gap-2'>
+                        Trial Balance Hierarchy
+                        <span className='text-xs font-normal text-muted-foreground'>
+                          — {activeNodes.filter(n => n.isLeaf).length} ledgers,
+                          {rootNodes.length} primary groups
+                        </span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className='p-0'>
+                      <div className='max-h-[600px] overflow-auto'>
+                        {/* Sticky header */}
+                        <div className='flex items-center border-b-2 border-border bg-muted/50 px-2 py-2 text-[10px] font-bold text-muted-foreground uppercase sticky top-0 z-10'>
+                          <div className='mr-2 w-4 shrink-0' />
+                          <span className='flex-1'>Account / Group</span>
+                          <span className='w-28 shrink-0 text-right'>Opening DR</span>
+                          <span className='w-28 shrink-0 text-right'>Opening CR</span>
+                          <span className='w-28 shrink-0 text-right'>TXN DR</span>
+                          <span className='w-28 shrink-0 text-right'>TXN CR</span>
+                          <span className='w-28 shrink-0 text-right'>Closing DR</span>
+                          <span className='w-28 shrink-0 text-right pr-2'>Closing CR</span>
+                        </div>
+
+                        {/* Tree rows */}
+                        {rootNodes.map(node => (
                           <TbTreeRow
                             key={node.nodeId}
                             node={node}
-                            allNodes={tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy}
+                            allNodes={activeNodes}
+                            depth={0}
                           />
                         ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+
+                        {/* Grand Total row */}
+                        <div className='flex items-center border-t-2 border-border bg-primary/10 px-2 py-2 text-xs font-bold text-foreground sticky bottom-0'>
+                          <div className='mr-2 w-4 shrink-0' />
+                          <span className='flex-1'>GRAND TOTAL</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenDr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenCr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnDebit)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnCredit)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtCloseDr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono pr-2'>{fmtTb(gtCloseCr)}</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
               {/* Flat Preview Table */}
               {tbViewMode === "flat" && tbResult.preview.length > 0 && (
