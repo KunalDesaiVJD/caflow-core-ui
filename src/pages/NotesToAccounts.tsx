@@ -920,7 +920,7 @@ function PrintView({ notes, onClose }: { notes: Record<string, [any, any]>; onCl
         </div>
 
         {/* Notes 29-45 */}
-        {NOTE_LIST.filter(n => parseInt(String(n.num)) >= 29).map(nl => {
+        {NOTE_LIST_FALLBACK.filter(n => parseInt(String(n.num)) >= 29).map(nl => {
           const d = notes[nl.key]?.[0] || {};
           const hasData = Object.values(d).some(v => v !== "" && v !== undefined && v !== null);
           return (
