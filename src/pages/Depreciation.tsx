@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -13,10 +13,12 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Calculator, Lock, Plus, Trash2, ArrowRight, AlertTriangle,
-CheckCircle2, Settings, Info, Loader2 } from 'lucide-react';
+CheckCircle2, Settings, Info, Loader2, Pencil, X } from 'lucide-react';
 
 const FY_OPTIONS = ['2025-26','2024-25','2023-24','2022-23','2021-22','2020-21'];
 
@@ -56,6 +58,12 @@ method === 'SLM'
 )}>{method || 'WDV'}</Badge>
 );
 
+const emptyBulkRow = () => ({
+  asset_name: '', category_id: '', location: '', date_of_purchase: '',
+  gross_block_opening: '0', accumulated_dep_opening: '0', residual_value: '',
+  additions_during_year: '0', addition_date: '', narration: '',
+});
+
 export default function Depreciation() {
 const { user } = useAuth();
 const qc = useQueryClient();
@@ -70,6 +78,13 @@ const [showAddCat, setShowAddCat] = useState(false);
 const [calcResult, setCalcResult] = useState<any>(null);
 const [calculating, setCalculating] = useState(false);
 const [assetErrs, setAssetErrs] = useState<string[]>([]);
+const [finalizing, setFinalizing] = useState(false);
+const [registerView, setRegisterView] = useState<'flat'|'category'>('flat');
+const [showBulkAdd, setShowBulkAdd] = useState(false);
+const [bulkRows, setBulkRows] = useState(Array.from({length:5}, emptyBulkRow));
+const [bulkSaving, setBulkSaving] = useState(false);
+const [editAsset, setEditAsset] = useState<any>(null);
+const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 const [na, setNa] = useState({
 asset_name:'', category_id:'', location:'', date_of_purchase:'',
 gross_block_opening:'0', accumulated_dep_opening:'0',
@@ -230,6 +245,39 @@ setNa({asset_name:'',category_id:'',location:'',date_of_purchase:'',
 onError: (e:any) => { if(e.message!=='validation') toast.error(e.message); },
 });
 
+// CHANGE 7 — Edit asset mutation
+const editMut = useMutation({
+mutationFn: async () => {
+if (!editAsset) return;
+const errs = validateAsset(editAsset, fy);
+if (errs.length > 0) { toast.error(errs[0]); throw new Error('validation'); }
+const { error } = await supabase.from('fa_assets').update({
+  asset_name:              editAsset.asset_name,
+  category_id:             editAsset.category_id,
+  location:                editAsset.location || null,
+  date_of_purchase:        editAsset.date_of_purchase,
+  gross_block_opening:     parseFloat(editAsset.gross_block_opening)    || 0,
+  accumulated_dep_opening: parseFloat(editAsset.accumulated_dep_opening) || 0,
+  residual_value:          editAsset.residual_value
+                             ? parseFloat(editAsset.residual_value) : null,
+  additions_during_year:   parseFloat(editAsset.additions_during_year)  || 0,
+  addition_date:           editAsset.addition_date || null,
+  disposals_during_year:   parseFloat(editAsset.disposals_during_year)  || 0,
+  disposal_date:           editAsset.disposal_date || null,
+  narration:               editAsset.narration || null,
+  depreciation_for_year:   null,
+  wdv_closing:             null,
+} as any).eq('id', editAsset.id);
+if (error) throw error;
+},
+onSuccess: () => {
+toast.success('Asset updated. Run Calculate Depreciation to refresh.');
+qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+setEditAsset(null);
+},
+onError: (e: any) => { if (e.message !== 'validation') toast.error(e.message); },
+});
+
 const handleCalc = async () => {
 setCalculating(true); setShowConfirm(false);
 try {
@@ -243,6 +291,35 @@ setCalcResult(data);
   qc.invalidateQueries({queryKey:[k,clientId,fy]}));
 } catch(e:any) { toast.error(e.message||'Failed'); }
 finally { setCalculating(false); }
+};
+
+// CHANGE 2 — Finalize handler
+const handleFinalize = async () => {
+if (!window.confirm(
+  `Finalize depreciation for ${fy}?\n\n` +
+  `This will lock all ${assets?.length} assets and prevent further edits.\n` +
+  `Calculation must be run before finalizing. This action cannot be undone.`
+)) return;
+const uncalculated = (assets || []).filter((a: any) => a.depreciation_for_year == null);
+if (uncalculated.length > 0) {
+  toast.error(
+    `Cannot finalize — ${uncalculated.length} asset(s) have no depreciation calculated.`,
+    { description: 'Run Calculate Depreciation first.' }
+  );
+  return;
+}
+setFinalizing(true);
+try {
+  const ids = (assets || []).map((a: any) => a.id);
+  const { error } = await supabase
+    .from('fa_assets')
+    .update({ is_locked: true, is_finalized: true } as any)
+    .in('id', ids);
+  if (error) throw error;
+  toast.success(`FY ${fy} depreciation finalized and locked.`);
+  qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+} catch (e: any) { toast.error(e.message); }
+finally { setFinalizing(false); }
 };
 
 const dispMut = useMutation({
@@ -298,10 +375,76 @@ onError: (e:any) => toast.error(e.message),
 });
 
 const deleteAsset = async (id:string) => {
+if (!window.confirm('Delete this asset? This cannot be undone.')) return;
 const {error} = await supabase.from('fa_assets').delete().eq('id',id);
 if (error) { toast.error(error.message); return; }
 toast.success('Asset deleted');
 qc.invalidateQueries({queryKey:['dep-assets',clientId,fy]});
+};
+
+// CHANGE 1 — Delete category handler
+const handleDeleteCategory = async (catId: string, catName: string) => {
+const { count, error: countErr } = await supabase
+  .from('fa_assets')
+  .select('id', { count: 'exact', head: true })
+  .eq('category_id', catId);
+if (countErr) { toast.error(countErr.message); return; }
+if ((count ?? 0) > 0) {
+  toast.error(
+    `Cannot delete '${catName}' — ${count} asset(s) are assigned to this category.`,
+    { description: 'Reassign or delete those assets first.' }
+  );
+  return;
+}
+if (!window.confirm(`Delete category '${catName}'? This cannot be undone.`)) return;
+const { error } = await supabase.from('fa_categories').delete().eq('id', catId);
+if (error) { toast.error(error.message); return; }
+toast.success(`Category '${catName}' deleted.`);
+refetchCats();
+};
+
+// CHANGE 3 — Bulk save handler
+const handleBulkSave = async () => {
+const validRows = bulkRows.filter(r => r.asset_name.trim() && r.category_id);
+if (validRows.length === 0) {
+  toast.error('No valid rows to save. Asset Name and Category are required.');
+  return;
+}
+const errors: string[] = [];
+validRows.forEach((r, i) => {
+  if (!r.date_of_purchase) errors.push(`Row ${i+1}: Date of Purchase is required.`);
+  const gb = parseFloat(r.gross_block_opening) || 0;
+  const ad = parseFloat(r.accumulated_dep_opening) || 0;
+  if (ad > gb) errors.push(`Row ${i+1}: Accumulated Dep cannot exceed Gross Block.`);
+});
+if (errors.length > 0) { toast.error(errors[0]); return; }
+
+setBulkSaving(true);
+try {
+  const baseCount = assets?.length || 0;
+  const inserts = validRows.map((r, i) => ({
+    client_id: clientId, fy,
+    asset_code: `FA-${fy.replace('-','')}-${String(baseCount+i+1).padStart(4,'0')}`,
+    asset_name: r.asset_name.trim(),
+    category_id: r.category_id,
+    location: r.location || null,
+    date_of_purchase: r.date_of_purchase,
+    gross_block_opening:     parseFloat(r.gross_block_opening)    || 0,
+    accumulated_dep_opening: parseFloat(r.accumulated_dep_opening) || 0,
+    residual_value:          r.residual_value ? parseFloat(r.residual_value) : null,
+    additions_during_year:   parseFloat(r.additions_during_year)  || 0,
+    addition_date:           r.addition_date || null,
+    narration:               r.narration || null,
+    created_by:              user?.id,
+  }));
+  const { error } = await supabase.from('fa_assets').insert(inserts as any);
+  if (error) throw error;
+  toast.success(`${inserts.length} asset(s) saved successfully.`);
+  qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+  setShowBulkAdd(false);
+  setBulkRows(Array.from({length:5}, emptyBulkRow));
+} catch(e:any) { toast.error(e.message); }
+finally { setBulkSaving(false); }
 };
 
 return (
@@ -341,7 +484,13 @@ return (
         {calculating ? 'Calculating...' : 'Calculate Depreciation'}
       </Button>
     )}
-    {isLocked && <Badge variant='outline' className='gap-1 border-amber-400 text-amber-600'><Lock size={14} />Locked</Badge>}
+    {clientId && assets && assets.length > 0 && !isLocked && (
+      <Button variant='outline' onClick={handleFinalize} disabled={finalizing} className='gap-2'>
+        {finalizing ? <Loader2 size={16} className='animate-spin' /> : <Lock size={16} />}
+        {finalizing ? 'Finalizing...' : 'Save & Finalize FY'}
+      </Button>
+    )}
+    {isLocked && <Badge variant='outline' className='gap-1 border-amber-400 text-amber-600'><Lock size={14} /> FY Finalized &amp; Locked</Badge>}
   </CardContent>
 </Card>
 
@@ -360,6 +509,7 @@ return (
     <TabsTrigger value='disposals'>Disposal Log</TabsTrigger>
   </TabsList>
 
+  {/* ═══ ASSET REGISTER TAB ═══ */}
   <TabsContent value='register'>
     <Card>
       <CardHeader className='flex flex-row items-center justify-between pb-2'>
@@ -367,9 +517,19 @@ return (
           <CardTitle className='text-base'>Asset Register — {fy}</CardTitle>
           <CardDescription className='text-xs'>WDV Opening = Gross Block Opening minus Accumulated Dep Opening</CardDescription>
         </div>
-        {!isLocked && <Button size='sm' onClick={() => setShowAdd(true)} className='gap-1'><Plus size={14} />Add Asset</Button>}
+        <div className='flex items-center gap-2'>
+          <div className='flex border rounded-md overflow-hidden'>
+            <Button variant={registerView==='flat'?'default':'ghost'} size='sm' className='rounded-none h-8 text-xs' onClick={()=>setRegisterView('flat')}>All Assets</Button>
+            <Button variant={registerView==='category'?'default':'ghost'} size='sm' className='rounded-none h-8 text-xs' onClick={()=>setRegisterView('category')}>Category View</Button>
+          </div>
+          {!isLocked && <Button size='sm' onClick={() => setShowAdd(true)} className='gap-1'><Plus size={14} />Add Asset</Button>}
+          {!isLocked && <Button size='sm' variant='outline' onClick={() => setShowBulkAdd(true)} className='gap-1'><Plus size={14} />Bulk Add</Button>}
+        </div>
       </CardHeader>
       <CardContent className='p-0'><div className='overflow-auto'>
+
+        {/* ── FLAT VIEW ── */}
+        {registerView === 'flat' && (
         <Table>
           <TableHeader><TableRow className='bg-muted/50 text-xs'>
             <TableHead className='w-8'>#</TableHead>
@@ -386,7 +546,7 @@ return (
             <TableHead className='text-right w-16'>Rate %</TableHead>
             <TableHead className='text-right font-semibold'>Dep for Year</TableHead>
             <TableHead className='text-right font-bold'>WDV Closing</TableHead>
-            <TableHead className='w-20'></TableHead>
+            <TableHead className='w-24'></TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {loadingAssets ? (
@@ -430,6 +590,14 @@ return (
                   </TableCell>
                   <TableCell>
                     {!a.is_locked&&(<div className='flex gap-1'>
+                      <Button variant='ghost' size='icon' className='h-7 w-7' title='Edit' onClick={()=>setEditAsset({
+                        ...a,
+                        gross_block_opening:     String(a.gross_block_opening || '0'),
+                        accumulated_dep_opening: String(a.accumulated_dep_opening || '0'),
+                        additions_during_year:   String(a.additions_during_year || '0'),
+                        disposals_during_year:   String(a.disposals_during_year || '0'),
+                        residual_value:          a.residual_value ? String(a.residual_value) : '',
+                      })}><Pencil size={13}/></Button>
                       <Button variant='ghost' size='icon' className='h-7 w-7' title='Dispose' onClick={()=>setShowDispose(a.id)}><ArrowRight size={13}/></Button>
                       <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' title='Delete' onClick={()=>deleteAsset(a.id)}><Trash2 size={13}/></Button>
                     </div>)}
@@ -453,10 +621,127 @@ return (
             )}
           </TableBody>
         </Table>
+        )}
+
+        {/* ── CATEGORY VIEW ── */}
+        {registerView === 'category' && (() => {
+          const grouped: Record<string, any[]> = {};
+          (assets||[]).forEach((a:any) => {
+            const cat = a.fa_categories?.name || 'Uncategorized';
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push(a);
+          });
+          const grandTotals = (assets||[]).reduce((acc:any, a:any) => ({
+            gb:   acc.gb   + (parseFloat(a.gross_block_opening)||0),
+            add:  acc.add  + (parseFloat(a.additions_during_year)||0),
+            disp: acc.disp + (parseFloat(a.disposals_during_year)||0),
+            acDep:acc.acDep+ (parseFloat(a.accumulated_dep_opening)||0),
+            wdvO: acc.wdvO + ((parseFloat(a.gross_block_opening)||0)-(parseFloat(a.accumulated_dep_opening)||0)),
+            dep:  acc.dep  + (parseFloat(a.depreciation_for_year)||0),
+            wdvC: acc.wdvC + (parseFloat(a.wdv_closing)||0),
+          }), {gb:0,add:0,disp:0,acDep:0,wdvO:0,dep:0,wdvC:0});
+
+          return (
+          <Table>
+            <TableHeader><TableRow className='bg-muted/50 text-xs'>
+              <TableHead className='w-8'>#</TableHead>
+              <TableHead className='w-24'>Code</TableHead>
+              <TableHead className='min-w-[140px]'>Name</TableHead>
+              <TableHead className='w-24'>Purch Date</TableHead>
+              <TableHead className='text-right'>Gross Block</TableHead>
+              <TableHead className='text-right'>Additions</TableHead>
+              <TableHead className='text-right'>Acc Dep Open</TableHead>
+              <TableHead className='text-right'>WDV Opening</TableHead>
+              <TableHead className='text-right'>Depreciation</TableHead>
+              <TableHead className='text-right'>WDV Closing</TableHead>
+              <TableHead className='w-20'></TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {Object.entries(grouped).map(([catName, catAssets]) => {
+                const sub = catAssets.reduce((acc:any, a:any) => ({
+                  gb:   acc.gb   + (parseFloat(a.gross_block_opening)||0),
+                  add:  acc.add  + (parseFloat(a.additions_during_year)||0),
+                  acDep:acc.acDep+ (parseFloat(a.accumulated_dep_opening)||0),
+                  wdvO: acc.wdvO + ((parseFloat(a.gross_block_opening)||0)-(parseFloat(a.accumulated_dep_opening)||0)),
+                  dep:  acc.dep  + (parseFloat(a.depreciation_for_year)||0),
+                  wdvC: acc.wdvC + (parseFloat(a.wdv_closing)||0),
+                }), {gb:0,add:0,acDep:0,wdvO:0,dep:0,wdvC:0});
+                return (
+                  <Fragment key={catName}>
+                    <TableRow className='bg-primary/5 border-t-2 border-border'>
+                      <TableCell colSpan={11} className='font-semibold text-sm py-2'>
+                        {catName} — {catAssets.length} asset(s)
+                      </TableCell>
+                    </TableRow>
+                    {catAssets.map((a:any, i:number) => {
+                      const gb  = parseFloat(a.gross_block_opening)||0;
+                      const ad  = parseFloat(a.accumulated_dep_opening)||0;
+                      const wdvO = gb - ad;
+                      const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
+                      const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
+                      return (
+                        <TableRow key={a.id}>
+                          <TableCell className='text-xs text-muted-foreground'>{i+1}</TableCell>
+                          <TableCell className='font-mono text-xs'>{a.asset_code}</TableCell>
+                          <TableCell className='text-sm'>{a.asset_name}</TableCell>
+                          <TableCell className='text-xs'>{a.date_of_purchase}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{fmt(gb)}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(a.additions_during_year)||0)}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{fmt(ad)}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{fmt(wdvO)}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>
+                            {dep!=null?fmt(dep):<span className='text-muted-foreground text-xs italic'>pending</span>}
+                          </TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{wdvC!=null?fmt(wdvC):'—'}</TableCell>
+                          <TableCell>
+                            {!a.is_locked&&(<div className='flex gap-1'>
+                              <Button variant='ghost' size='icon' className='h-7 w-7' title='Edit' onClick={()=>setEditAsset({
+                                ...a,
+                                gross_block_opening: String(a.gross_block_opening||'0'),
+                                accumulated_dep_opening: String(a.accumulated_dep_opening||'0'),
+                                additions_during_year: String(a.additions_during_year||'0'),
+                                disposals_during_year: String(a.disposals_during_year||'0'),
+                                residual_value: a.residual_value ? String(a.residual_value) : '',
+                              })}><Pencil size={13}/></Button>
+                              <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' title='Delete' onClick={()=>deleteAsset(a.id)}><Trash2 size={13}/></Button>
+                            </div>)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow className='bg-muted/40 font-semibold text-xs border-b-2'>
+                      <TableCell colSpan={4}>Subtotal — {catName}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.gb)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.add)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.acDep)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.wdvO)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.dep)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.wdvC)}</TableCell>
+                      <TableCell/>
+                    </TableRow>
+                  </Fragment>
+                );
+              })}
+              <TableRow className='bg-muted font-bold border-t-2 border-border text-sm'>
+                <TableCell colSpan={4}>GRAND TOTAL — {assets?.length} Assets</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.gb)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.add)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.acDep)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.wdvO)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.dep)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(grandTotals.wdvC)}</TableCell>
+                <TableCell/>
+              </TableRow>
+            </TableBody>
+          </Table>
+          );
+        })()}
+
       </div></CardContent>
     </Card>
   </TabsContent>
 
+  {/* ═══ DEPRECIATION SCHEDULE TAB ═══ */}
   <TabsContent value='schedule'>
     <Card>
       <CardHeader>
@@ -505,15 +790,17 @@ return (
     </Card>
   </TabsContent>
 
+  {/* ═══ BLOCK-WISE SUMMARY TAB (CHANGE 5 — expandable) ═══ */}
   <TabsContent value='summary'>
     <Card>
       <CardHeader>
         <CardTitle className='text-base'>Block-wise Summary — {fy}</CardTitle>
-        <CardDescription className='text-xs'>Category-wise | Schedule II format | Method per category</CardDescription>
+        <CardDescription className='text-xs'>Category-wise | Schedule II format | Click + to expand assets</CardDescription>
       </CardHeader>
       <CardContent className='p-0'>
         <Table>
           <TableHeader><TableRow className='bg-muted/50 text-xs'>
+            <TableHead className='w-10'></TableHead>
             <TableHead>Category</TableHead><TableHead className='text-center'>Method</TableHead>
             <TableHead className='text-right w-10'>Life</TableHead><TableHead className='text-right w-16'>Rate%</TableHead>
             <TableHead className='text-right'>Gross Blk Open</TableHead><TableHead className='text-right'>Additions</TableHead>
@@ -525,27 +812,70 @@ return (
           </TableRow></TableHeader>
           <TableBody>
             {!summary?.length ? (
-              <TableRow><TableCell colSpan={12} className='text-center py-8 text-muted-foreground'>No data</TableCell></TableRow>
-            ) : summary.map((s:any,i:number) => (
-              <TableRow key={i} className={i%2===0?'bg-muted/20':''}>
-                <TableCell className='font-medium text-sm'>{s.category_name}</TableCell>
-                <TableCell className='text-center'><MethodBadge method={s.depreciation_method}/></TableCell>
-                <TableCell className='text-right text-xs'>{s.useful_life_years}yr</TableCell>
-                <TableCell className='text-right text-xs'>{fmtPct(parseFloat(s.depreciation_method==='SLM'?s.slm_rate:s.wdv_rate))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.gross_block_opening))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.additions))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.disposals))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.gross_block_closing))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.acc_dep_opening))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(parseFloat(s.depreciation))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.acc_dep_closing))}</TableCell>
-                <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(parseFloat(s.net_block))}</TableCell>
-              </TableRow>
-            ))}
+              <TableRow><TableCell colSpan={13} className='text-center py-8 text-muted-foreground'>No data</TableCell></TableRow>
+            ) : summary.map((s:any,i:number) => {
+              const catKey = s.category_name;
+              const isOpen = expandedCategories.has(catKey);
+              const catAssets = (assets||[]).filter((a:any) =>
+                a.fa_categories?.name === s.category_name);
+              return (
+                <Fragment key={i}>
+                  <TableRow className={cn(i%2===0?'bg-muted/20':'', 'font-medium')}>
+                    <TableCell className='text-center'>
+                      <Button variant='ghost' size='icon' className='h-6 w-6 text-xs' onClick={() => setExpandedCategories(prev => {
+                        const next = new Set(prev);
+                        next.has(catKey) ? next.delete(catKey) : next.add(catKey);
+                        return next;
+                      })}>
+                        {isOpen ? '\u2212' : '+'}
+                      </Button>
+                    </TableCell>
+                    <TableCell className='font-medium text-sm'>{s.category_name}</TableCell>
+                    <TableCell className='text-center'><MethodBadge method={s.depreciation_method}/></TableCell>
+                    <TableCell className='text-right text-xs'>{s.useful_life_years}yr</TableCell>
+                    <TableCell className='text-right text-xs'>{fmtPct(parseFloat(s.depreciation_method==='SLM'?s.slm_rate:s.wdv_rate))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.gross_block_opening))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.additions))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.disposals))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.gross_block_closing))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.acc_dep_opening))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(parseFloat(s.depreciation))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.acc_dep_closing))}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(parseFloat(s.net_block))}</TableCell>
+                  </TableRow>
+                  {isOpen && catAssets.map((a:any) => {
+                    const gb  = parseFloat(a.gross_block_opening)||0;
+                    const ad  = parseFloat(a.accumulated_dep_opening)||0;
+                    const addV = parseFloat(a.additions_during_year)||0;
+                    const disV = parseFloat(a.disposals_during_year)||0;
+                    const dep = parseFloat(a.depreciation_for_year)||0;
+                    const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : gb-ad-dep;
+                    return (
+                      <TableRow key={a.id} className='bg-muted/10 text-xs'>
+                        <TableCell/>
+                        <TableCell className='pl-8 text-muted-foreground'>{a.asset_name}</TableCell>
+                        <TableCell className='text-center text-muted-foreground'>{a.date_of_purchase||'—'}</TableCell>
+                        <TableCell/>
+                        <TableCell/>
+                        <TableCell className='text-right tabular-nums'>{fmt(gb)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(addV)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(disV)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(gb+addV-disV)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(ad)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(dep)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(ad+dep)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(wdvC)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
             {summary&&summary.length>0&&(()=>{
               const tot=(f:string)=>summary.reduce((s:number,r:any)=>s+(parseFloat(r[f])||0),0);
               return (
                 <TableRow className='bg-muted font-bold border-t-2 border-border'>
+                  <TableCell/>
                   <TableCell colSpan={4} className='text-sm'>GRAND TOTAL</TableCell>
                   <TableCell className='text-right tabular-nums'>{fmt(tot('gross_block_opening'))}</TableCell>
                   <TableCell className='text-right tabular-nums'>{fmt(tot('additions'))}</TableCell>
@@ -564,6 +894,7 @@ return (
     </Card>
   </TabsContent>
 
+  {/* ═══ DISPOSAL LOG TAB ═══ */}
   <TabsContent value='disposals'>
     <Card>
       <CardHeader><CardTitle className='text-base'>Disposal Log — {fy}</CardTitle></CardHeader>
@@ -606,19 +937,28 @@ return (
 </Tabs>
 )}
 
-{/* CATEGORY MASTER DIALOG */}
+{/* ═══ CATEGORY MASTER DIALOG (CHANGE 1) ═══ */}
 <Dialog open={showCats} onOpenChange={setShowCats}>
   <DialogContent className='max-w-5xl max-h-[80vh] overflow-y-auto'>
     <DialogHeader>
       <DialogTitle>Asset Category Master — Schedule II Companies Act 2013</DialogTitle>
-      <DialogDescription>Global categories are Schedule II defaults. Firm-specific categories can have their method changed.</DialogDescription>
+      <DialogDescription>
+        Global categories are Schedule II defaults (read-only). Firm-specific categories can be deleted if unused.
+      </DialogDescription>
     </DialogHeader>
+    <Alert className='mb-2'>
+      <Info size={14} className='mr-2'/>
+      <AlertDescription className='text-xs'>
+        To change a rate, create a new category. Existing categories cannot be edited to protect historical calculations.
+      </AlertDescription>
+    </Alert>
     <Table>
       <TableHeader><TableRow className='text-xs bg-muted'>
         <TableHead>Name</TableHead><TableHead>Asset Class</TableHead><TableHead>Part</TableHead>
         <TableHead className='text-right'>Life</TableHead><TableHead className='text-right'>WDV%</TableHead>
         <TableHead className='text-right'>SLM%</TableHead><TableHead className='text-right'>Residual%</TableHead>
         <TableHead>Method</TableHead><TableHead>Scope</TableHead>
+        <TableHead className='w-12'></TableHead>
       </TableRow></TableHeader>
       <TableBody>
         {(cats||[]).map((c:any) => (
@@ -630,18 +970,22 @@ return (
             <TableCell className='text-right font-mono text-xs'>{fmtPct(c.wdv_rate)}</TableCell>
             <TableCell className='text-right font-mono text-xs'>{fmtPct(c.slm_rate)}</TableCell>
             <TableCell className='text-right text-xs'>{c.residual_value_pct}%</TableCell>
-            <TableCell>
-              {c.firm_id ? (
-                <Select value={c.depreciation_method||'WDV'} onValueChange={async(val)=>{
-                  await supabase.from('fa_categories').update({depreciation_method:val} as any).eq('id',c.id);
-                  refetchCats(); toast.success(`${c.name} → ${val}`);
-                }}>
-                  <SelectTrigger className='h-7 text-xs w-20'><SelectValue/></SelectTrigger>
-                  <SelectContent><SelectItem value='WDV'>WDV</SelectItem><SelectItem value='SLM'>SLM</SelectItem></SelectContent>
-                </Select>
-              ) : <MethodBadge method={c.depreciation_method||'WDV'}/>}
-            </TableCell>
+            <TableCell><MethodBadge method={c.depreciation_method||'WDV'}/></TableCell>
             <TableCell><Badge variant='outline' className='text-[10px]'>{c.firm_id?'Firm':'Global'}</Badge></TableCell>
+            <TableCell>
+              {c.firm_id && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' onClick={()=>handleDeleteCategory(c.id, c.name)}>
+                        <Trash2 size={13}/>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete category</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -676,14 +1020,14 @@ return (
         <div><Label>Useful Life (yrs) *</Label><Input type='number' value={nc.useful_life_years} onChange={e=>setNc(p=>({...p,useful_life_years:e.target.value}))}/></div>
       </div>
       <div className='grid grid-cols-3 gap-3'>
-        <div><Label>WDV Rate % *</Label><Input type='number' step='0.01' value={nc.wdv_rate} onChange={e=>setNc(p=>({...p,wdv_rate:e.target.value}))}/></div>
+        <div><Label>WDV Rate %</Label><Input type='number' step='0.01' value={nc.wdv_rate} onChange={e=>setNc(p=>({...p,wdv_rate:e.target.value}))}/></div>
         <div><Label>SLM Rate %</Label><Input type='number' step='0.01' value={nc.slm_rate} onChange={e=>setNc(p=>({...p,slm_rate:e.target.value}))}/></div>
         <div><Label>Residual %</Label><Input type='number' value={nc.residual_value_pct} onChange={e=>setNc(p=>({...p,residual_value_pct:e.target.value}))}/></div>
       </div>
     </div>
     <DialogFooter>
       <Button variant='outline' onClick={()=>setShowAddCat(false)}>Cancel</Button>
-      <Button onClick={()=>addCatMut.mutate()} disabled={!nc.name||!nc.wdv_rate||addCatMut.isPending}>Add Category</Button>
+      <Button onClick={()=>addCatMut.mutate()} disabled={!nc.name||!nc.useful_life_years||addCatMut.isPending}>Add Category</Button>
     </DialogFooter>
   </DialogContent>
 </Dialog>
@@ -749,13 +1093,193 @@ return (
   </DialogContent>
 </Dialog>
 
+{/* ═══ EDIT ASSET DIALOG (CHANGE 7) ═══ */}
+<Dialog open={!!editAsset} onOpenChange={() => setEditAsset(null)}>
+  <DialogContent className='max-w-xl'>
+    <DialogHeader>
+      <DialogTitle>Edit Asset — {editAsset?.asset_name}</DialogTitle>
+      <DialogDescription>
+        <Alert className='mt-2 border-amber-300 bg-amber-50 dark:bg-amber-950/30'>
+          <AlertTriangle size={14} className='mr-2 text-amber-600'/>
+          <AlertDescription className='text-xs text-amber-700 dark:text-amber-300'>
+            Depreciation will be cleared and must be recalculated after saving.
+          </AlertDescription>
+        </Alert>
+      </DialogDescription>
+    </DialogHeader>
+    {editAsset && (
+      <div className='grid gap-3'>
+        <div><Label>Asset Name *</Label><Input value={editAsset.asset_name} onChange={e=>setEditAsset((p:any)=>({...p,asset_name:e.target.value}))}/></div>
+        <div>
+          <Label>Category *</Label>
+          <Select value={editAsset.category_id} onValueChange={v=>setEditAsset((p:any)=>({...p,category_id:v}))}>
+            <SelectTrigger><SelectValue placeholder='Select category'/></SelectTrigger>
+            <SelectContent>
+              {(cats||[]).map((c:any)=>(
+                <SelectItem key={c.id} value={c.id}>{c.name} — {c.depreciation_method||'WDV'} ({c.useful_life_years}yr)</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className='grid grid-cols-2 gap-3'>
+          <div><Label>Date of Purchase *</Label><Input type='date' value={editAsset.date_of_purchase} onChange={e=>setEditAsset((p:any)=>({...p,date_of_purchase:e.target.value}))}/></div>
+          <div><Label>Location</Label><Input value={editAsset.location||''} onChange={e=>setEditAsset((p:any)=>({...p,location:e.target.value}))}/></div>
+        </div>
+        <Separator/>
+        <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Opening Balances</p>
+        <div className='grid grid-cols-3 gap-3'>
+          <div><Label>Gross Block Opening (₹)</Label><Input type='number' value={editAsset.gross_block_opening} onChange={e=>setEditAsset((p:any)=>({...p,gross_block_opening:e.target.value}))}/></div>
+          <div><Label>Acc Dep Opening (₹)</Label><Input type='number' value={editAsset.accumulated_dep_opening} onChange={e=>setEditAsset((p:any)=>({...p,accumulated_dep_opening:e.target.value}))}/></div>
+          <div><Label>Residual Value (₹)</Label><Input type='number' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from cat'/></div>
+        </div>
+        <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Movements</p>
+        <div className='grid grid-cols-2 gap-3'>
+          <div><Label>Additions (₹)</Label><Input type='number' value={editAsset.additions_during_year} onChange={e=>setEditAsset((p:any)=>({...p,additions_during_year:e.target.value}))}/></div>
+          <div><Label>Addition Date</Label><Input type='date' value={editAsset.addition_date||''} onChange={e=>setEditAsset((p:any)=>({...p,addition_date:e.target.value}))}/></div>
+          <div><Label>Disposals (₹)</Label><Input type='number' value={editAsset.disposals_during_year} onChange={e=>setEditAsset((p:any)=>({...p,disposals_during_year:e.target.value}))}/></div>
+          <div><Label>Disposal Date</Label><Input type='date' value={editAsset.disposal_date||''} onChange={e=>setEditAsset((p:any)=>({...p,disposal_date:e.target.value}))}/></div>
+        </div>
+        <div><Label>Narration</Label><Input value={editAsset.narration||''} onChange={e=>setEditAsset((p:any)=>({...p,narration:e.target.value}))}/></div>
+      </div>
+    )}
+    <DialogFooter>
+      <Button variant='outline' onClick={() => setEditAsset(null)}>Cancel</Button>
+      <Button onClick={() => editMut.mutate()} disabled={editMut.isPending}>
+        {editMut.isPending && <Loader2 size={14} className='mr-1 animate-spin'/>}
+        Save Changes
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+{/* ═══ BULK ADD DIALOG (CHANGE 3) ═══ */}
+<Dialog open={showBulkAdd} onOpenChange={setShowBulkAdd}>
+  <DialogContent className='max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col'>
+    <DialogHeader>
+      <DialogTitle>Bulk Add Assets — {fy}</DialogTitle>
+      <DialogDescription>
+        Fill in asset details. Rows with Asset Name and Category filled are saved. Empty rows are skipped.
+      </DialogDescription>
+    </DialogHeader>
+    <ScrollArea className='flex-1 max-h-[55vh]'>
+      <div className='overflow-auto'>
+        <Table>
+          <TableHeader><TableRow className='text-xs bg-muted'>
+            <TableHead className='w-8'>#</TableHead>
+            <TableHead className='min-w-[140px]'>Asset Name *</TableHead>
+            <TableHead className='min-w-[160px]'>Category *</TableHead>
+            <TableHead className='min-w-[120px]'>Date of Purchase *</TableHead>
+            <TableHead className='min-w-[100px]'>Location</TableHead>
+            <TableHead className='min-w-[110px]'>Gross Blk Open</TableHead>
+            <TableHead className='min-w-[110px]'>Acc Dep Open</TableHead>
+            <TableHead className='min-w-[100px]'>Residual (₹)</TableHead>
+            <TableHead className='min-w-[100px]'>Additions</TableHead>
+            <TableHead className='min-w-[120px]'>Addition Date</TableHead>
+            <TableHead className='min-w-[120px]'>Narration</TableHead>
+            <TableHead className='w-8'></TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {bulkRows.map((row, idx) => (
+              <TableRow key={idx}>
+                <TableCell className='text-xs text-muted-foreground'>{idx+1}</TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' value={row.asset_name}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, asset_name: e.target.value} : r))}
+                    placeholder='Asset name' />
+                </TableCell>
+                <TableCell>
+                  <Select value={row.category_id} onValueChange={v => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, category_id: v} : r))}>
+                    <SelectTrigger className='h-8 text-xs'>
+                      <SelectValue placeholder='Category'/>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(cats||[]).map((c:any) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='date' value={row.date_of_purchase}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, date_of_purchase: e.target.value} : r))} />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' value={row.location}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, location: e.target.value} : r))}
+                    placeholder='Optional' />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='number' value={row.gross_block_opening}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, gross_block_opening: e.target.value} : r))} />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='number' value={row.accumulated_dep_opening}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, accumulated_dep_opening: e.target.value} : r))} />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='number' value={row.residual_value}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, residual_value: e.target.value} : r))}
+                    placeholder='Default from cat' />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='number' value={row.additions_during_year}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, additions_during_year: e.target.value} : r))} />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' type='date' value={row.addition_date}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, addition_date: e.target.value} : r))} />
+                </TableCell>
+                <TableCell>
+                  <Input className='h-8 text-xs' value={row.narration}
+                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
+                      i===idx ? {...r, narration: e.target.value} : r))}
+                    placeholder='Optional' />
+                </TableCell>
+                <TableCell>
+                  <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' onClick={() => setBulkRows(rows => rows.filter((_,i)=>i!==idx))}>
+                    <X size={13}/>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </ScrollArea>
+    <div className='flex items-center justify-between pt-2'>
+      <Button variant='ghost' size='sm' onClick={() => setBulkRows(r => [...r, ...Array.from({length:5}, emptyBulkRow)])}>
+        + Add 5 More Rows
+      </Button>
+      <span className='text-xs text-muted-foreground'>
+        {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length} valid rows to save
+      </span>
+    </div>
+    <DialogFooter>
+      <Button variant='outline' onClick={() => setShowBulkAdd(false)}>Cancel</Button>
+      <Button onClick={handleBulkSave} disabled={bulkSaving || bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length===0}>
+        {bulkSaving && <Loader2 size={14} className='mr-1 animate-spin'/>}
+        Save {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length} Assets
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
 {/* CALCULATE CONFIRM DIALOG */}
 <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
   <DialogContent>
     <DialogHeader><DialogTitle>Calculate Depreciation — {fy}</DialogTitle></DialogHeader>
     <Alert><Info size={14} className='mr-2'/>
       <AlertDescription className='text-xs'>
-        WDV: rate on Written Down Value. SLM: rate on original Gross Block.
+        WDV: rate on Written Down Value. SLM: (Cost − Residual) ÷ Useful Life.
         Additions proportionate from addition date. Disposal: to end of disposal month.
       </AlertDescription>
     </Alert>
@@ -782,10 +1306,8 @@ return (
       {(calcResult as any).warnings?.length>0&&(<Alert><AlertTriangle size={14} className='mr-1'/><AlertDescription className='text-xs'>{(calcResult as any).warnings.length} asset(s) have warnings — check below.</AlertDescription></Alert>)}
       <Table>
         <TableHeader><TableRow className='text-xs'>
-          <TableHead>Asset</TableHead><TableHead>Category</TableHead>
+          <TableHead>Asset</TableHead>
           <TableHead className='text-center'>Method</TableHead>
-          <TableHead className='text-right'>Rate%</TableHead>
-          <TableHead className='text-right'>WDV Open</TableHead>
           <TableHead className='text-right'>Dep on Open</TableHead>
           <TableHead className='text-right'>Dep on Add</TableHead>
           <TableHead className='text-right'>Total Dep</TableHead>
@@ -796,10 +1318,7 @@ return (
           {((calcResult as any).results||[]).map((r:any)=>(
             <TableRow key={r.asset_id} className={r.status==='warning'?'bg-amber-50 dark:bg-amber-950/20':''}>
               <TableCell className='text-xs font-medium'>{r.asset_name}</TableCell>
-              <TableCell className='text-xs'>{r.category}</TableCell>
               <TableCell className='text-center'><MethodBadge method={r.method}/></TableCell>
-              <TableCell className='text-right text-xs'>{fmtPct(r.rate_used)}</TableCell>
-              <TableCell className='text-right text-xs tabular-nums'>{fmt(r.wdv_opening)}</TableCell>
               <TableCell className='text-right text-xs tabular-nums'>{fmt(r.dep_on_opening)}</TableCell>
               <TableCell className='text-right text-xs tabular-nums'>{fmt(r.dep_on_additions)}</TableCell>
               <TableCell className='text-right text-xs tabular-nums font-semibold'>{fmt(r.total_depreciation)}</TableCell>
