@@ -108,25 +108,32 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       .order("clause_number");
 
     if (data && data.length > 0) {
-      // Use master title for display (always synced), keep saved data for content
-      setRows(data.map((d: any) => ({
-        id: d.id,
-        clause_number: d.clause_number,
-        clause_title: getTitle(d.clause_number), // ALWAYS from master
-        auto_draft: d.auto_draft || "",
-        user_response: d.user_response || "",
-        status: d.status || "not_started",
-        is_applicable: d.is_applicable ?? true,
-        inapplicability_reason: d.inapplicability_reason || "",
-        is_locked: d.is_locked || false,
-      })));
+      // Use master title for display (always synced), auto-load default content into user_response if empty
+      setRows(data.map((d: any) => {
+        const defaultContent = getContent(d.clause_number);
+        const userResp = d.user_response || "";
+        // Auto-load: if user_response is empty but we have default content, pre-fill it
+        const autoLoaded = !userResp && defaultContent ? defaultContent : userResp;
+        return {
+          id: d.id,
+          clause_number: d.clause_number,
+          clause_title: getTitle(d.clause_number),
+          auto_draft: d.auto_draft || defaultContent || "",
+          user_response: autoLoaded,
+          status: d.status || (autoLoaded ? "drafted" : "not_started"),
+          is_applicable: d.is_applicable ?? true,
+          inapplicability_reason: d.inapplicability_reason || "",
+          is_locked: d.is_locked || false,
+        };
+      }));
     } else {
-      // Seed all 21 clauses from master templates
+      // Seed all 21 clauses from master templates — auto-fill user_response with default content
       const seeds = Array.from({ length: 21 }, (_, i) => i + 1).map(num => ({
         engagement_id: engagement.id,
         clause_number: num,
         clause_title: getTitle(num),
         auto_draft: getContent(num),
+        user_response: getContent(num), // Pre-fill user response with default
         status: getContent(num) ? "drafted" : "not_started",
         is_applicable: getApplicable(num),
         is_locked: false,
