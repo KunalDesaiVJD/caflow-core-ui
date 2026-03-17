@@ -187,63 +187,134 @@ const splitDrCr = (value: number) =>
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
-function TbTreeRow({ node, allNodes }: { node: TbHierarchyNode; allNodes: TbHierarchyNode[] }) {
-  const [open, setOpen] = useState(node.level <= 2);
-  const children = allNodes.filter((item) => item.parentNodeId === node.nodeId);
+// Helper: recursively sum all leaf descendants of a node
+function sumLeafDescendants(
+  nodeId: string,
+  allNodes: TbHierarchyNode[]
+): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
+  const children = allNodes.filter(n => n.parentNodeId === nodeId);
+  if (children.length === 0) {
+    // This is effectively a leaf — return its own values
+    const self = allNodes.find(n => n.nodeId === nodeId);
+    return {
+      opening:   self?.opening   || 0,
+      txnDebit:  self?.txnDebit  || 0,
+      txnCredit: self?.txnCredit || 0,
+      closing:   self?.closing   || 0,
+    };
+  }
+  // Sum across all children recursively
+  return children.reduce(
+    (acc, child) => {
+      const childSum = child.isLeaf
+        ? { opening: child.opening||0, txnDebit: child.txnDebit||0,
+            txnCredit: child.txnCredit||0, closing: child.closing||0 }
+        : sumLeafDescendants(child.nodeId, allNodes);
+      return {
+        opening:   acc.opening   + childSum.opening,
+        txnDebit:  acc.txnDebit  + childSum.txnDebit,
+        txnCredit: acc.txnCredit + childSum.txnCredit,
+        closing:   acc.closing   + childSum.closing,
+      };
+    },
+    { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 }
+  );
+}
+
+// Format: show dash when value is zero, Indian number format otherwise
+const fmtTb = (v: number) =>
+  v === 0 ? '—'
+  : Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function TbTreeRow({ node, allNodes, depth = 0 }:
+  { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
+
+  const [open, setOpen] = useState(depth < 2);
+  const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
 
-  // For balances: positive = Dr side, negative = Cr side
-  const openDr  = node.opening  >= 0 ? Math.abs(node.opening)  : 0;
-  const openCr  = node.opening  <  0 ? Math.abs(node.opening)  : 0;
-  const closDr  = node.closing  >= 0 ? Math.abs(node.closing)  : 0;
-  const closCr  = node.closing  <  0 ? Math.abs(node.closing)  : 0;
+  // For group nodes: compute totals by summing all leaf descendants
+  // For leaf nodes: use the node's own stored values
+  const vals = node.isLeaf
+    ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
+        txnCredit: node.txnCredit||0, closing: node.closing||0 }
+    : sumLeafDescendants(node.nodeId, allNodes);
+
+  // Split each value into DR and CR sides
+  // Positive = DR side, Negative = CR side
+  const openDr  = vals.opening  > 0 ? vals.opening  : 0;
+  const openCr  = vals.opening  < 0 ? Math.abs(vals.opening)  : 0;
+  const closeDr = vals.closing  > 0 ? vals.closing  : 0;
+  const closeCr = vals.closing  < 0 ? Math.abs(vals.closing)  : 0;
+
+  const indent = depth * 20 + 8;
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => hasChildren && setOpen((prev) => !prev)}
+      <div
         className={cn(
-          "flex w-full items-center gap-2 border-b border-border/40 px-2 py-1.5 text-left text-xs hover:bg-muted/40",
-          !node.isLeaf && "bg-muted/10"
+          'flex w-full items-center border-b border-border/30 py-1.5 text-xs hover:bg-muted/30',
+          !node.isLeaf && 'bg-muted/10',
         )}
-        style={{ paddingLeft: `${(node.level - 1) * 18 + 10}px` }}
+        style={{ paddingLeft: `${indent}px` }}
       >
-        <ChevronDown
-          size={14}
+        {/* +/- expand/collapse button */}
+        <button
+          type='button'
+          onClick={() => hasChildren && setOpen(p => !p)}
           className={cn(
-            "shrink-0 text-muted-foreground transition-transform",
-            !open && hasChildren ? "-rotate-90" : "",
-            !hasChildren ? "opacity-0" : ""
+            'mr-2 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold leading-none',
+            hasChildren
+              ? 'cursor-pointer border-border bg-background text-foreground hover:bg-primary hover:text-primary-foreground'
+              : 'invisible',
           )}
-        />
+        >
+          {open ? '−' : '+'}
+        </button>
+
+        {/* Account / Group name */}
         <span className={cn(
-          "flex-1 truncate",
-          !node.isLeaf ? "font-semibold text-foreground" : "text-foreground"
+          'flex-1 truncate pr-2',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground/80',
         )}>
           {node.name}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {openDr > 0 ? formatTbNumber(openDr) : '—'}
+
+        {/* 6 numeric columns */}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(openDr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {openCr > 0 ? formatTbNumber(openCr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(openCr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {node.txnDebit > 0 ? formatTbNumber(node.txnDebit) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(vals.txnDebit)}
         </span>
-        <span className="w-28 text-right font-mono text-xs text-muted-foreground">
-          {node.txnCredit > 0 ? formatTbNumber(node.txnCredit) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
+          {fmtTb(vals.txnCredit)}
         </span>
-        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
-          {closDr > 0 ? formatTbNumber(closDr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
+          {fmtTb(closeDr)}
         </span>
-        <span className="w-28 text-right font-mono text-xs font-medium text-foreground">
-          {closCr > 0 ? formatTbNumber(closCr) : '—'}
+        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium pr-2',
+          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
+          {fmtTb(closeCr)}
         </span>
-      </button>
-      {open && hasChildren && children.map((child) => (
-        <TbTreeRow key={child.nodeId} node={child} allNodes={allNodes} />
+      </div>
+
+      {/* Render children when expanded */}
+      {open && hasChildren && children.map(child => (
+        <TbTreeRow
+          key={child.nodeId}
+          node={child}
+          allNodes={allNodes}
+          depth={depth + 1}
+        />
       ))}
     </div>
   );
