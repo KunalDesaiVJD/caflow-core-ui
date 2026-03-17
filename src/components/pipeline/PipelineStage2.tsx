@@ -1445,13 +1445,10 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Validation Failed</AlertTitle>
                   <AlertDescription className="text-sm">
-                    Difference of ₹{tbResult.difference.toLocaleString("en-IN")} detected between Debits and Credits.
+                    Trial Balance preview is blocked until all validation rules pass, including BS Assets = BS Liabilities & Equity and zero unclassified groups.
                     <div className="flex gap-2 mt-2">
                       <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
                         Re-upload
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => setTbShowOverride(true)}>
-                        Override with Justification
                       </Button>
                     </div>
                   </AlertDescription>
