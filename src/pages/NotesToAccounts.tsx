@@ -273,13 +273,23 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const saveAll = useCallback(async () => {
     if (!recordId) return;
     setSaving(true);
-    const payload: any = { last_saved_at: new Date().toISOString(), note_selection: noteSelection };
+    // Save note data (without note_selection)
+    const payload: any = { last_saved_at: new Date().toISOString() };
     NOTE_LIST.forEach((nl) => { payload[nl.key] = stateMap[nl.key][0]; });
     const { error } = await supabase.from("notes_to_accounts" as any).update(payload).eq("id", recordId);
+
+    // Save note selection separately
+    const { data: existing } = await supabase.from("notes_selection" as any).select("id").eq("engagement_id", engagementId).maybeSingle();
+    if (existing) {
+      await supabase.from("notes_selection" as any).update({ selected_notes: noteSelection, updated_at: new Date().toISOString() } as any).eq("id", (existing as any).id);
+    } else {
+      await supabase.from("notes_selection" as any).insert({ engagement_id: engagementId, selected_notes: noteSelection } as any);
+    }
+
     setSaving(false);
     if (error) toast.error("Save failed: " + error.message);
     else toast.success("Saved");
-  }, [recordId, noteSelection, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
+  }, [recordId, engagementId, noteSelection, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
 
   const triggerAutoSave = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

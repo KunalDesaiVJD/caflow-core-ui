@@ -323,34 +323,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
               {row.is_applicable && (
                 <>
-                  {row.auto_draft && (
-                    <div className="bg-blue-50 dark:bg-blue-950/20 rounded-md p-3 text-xs">
-                      <p className="font-semibold text-blue-700 mb-1">Default / AI Draft:</p>
-                      <p className="whitespace-pre-wrap text-muted-foreground">{row.auto_draft}</p>
-                      {!row.is_locked && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 text-xs h-7"
-                          onClick={() => updateRow(idx, "user_response", row.auto_draft)}
-                        >
-                          Use Default Content
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {!row.auto_draft && CARO_DEFAULT_CONTENT[row.clause_number] && !row.is_locked && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-7 gap-1"
-                      onClick={() => {
-                        updateRow(idx, "auto_draft", CARO_DEFAULT_CONTENT[row.clause_number]);
-                        updateRow(idx, "user_response", CARO_DEFAULT_CONTENT[row.clause_number]);
-                      }}
-                    >
-                      Load Default Content
-                    </Button>
+                  {row.user_response && (
+                    <p className="text-[10px] text-muted-foreground italic">Default content loaded — you can edit below</p>
                   )}
                   <Textarea
                     value={row.user_response}
