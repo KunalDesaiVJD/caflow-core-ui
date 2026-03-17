@@ -288,12 +288,21 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     return <div className="p-8 text-center text-muted-foreground">No engagement selected. Open from Audit Pipeline → Stage 7.</div>;
   }
 
+  // Dynamic numbering: only selected notes, renumbered sequentially
+  const selectedNotes = NOTE_LIST.filter(nl => noteSelection[nl.key] !== false);
+  const displayNumberMap = new Map(selectedNotes.map((nl, i) => [nl.key, i + 1]));
+
+  const toggleNoteSelection = (key: string) => {
+    setNoteSelection(prev => ({ ...prev, [key]: !prev[key] }));
+    triggerAutoSave();
+  };
+
   const renderNote = () => {
     const noteKey = activeNote;
     const data = stateMap[noteKey]?.[0] || {};
     const onChange = (f: string, v: string) => updateField(noteKey, f, v);
     switch (noteKey) {
-      case "note_1": return <Note1 data={data} onChange={onChange} />;
+      case "note_1": return <Note1 data={data} onChange={onChange} clientData={clientData} />;
       case "note_2": return <Note2 data={data} onChange={onChange} />;
       case "note_29": return <Note29 data={data} onChange={onChange} rolloverFy={rolledFromFy} />;
       case "note_30": return <Note30 data={data} onChange={onChange} />;
