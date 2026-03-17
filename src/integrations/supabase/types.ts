@@ -936,6 +936,44 @@ export type Database = {
           },
         ]
       }
+      caro_master_templates: {
+        Row: {
+          clause_number: number
+          clause_title: string | null
+          default_content: string | null
+          firm_id: string
+          id: string
+          is_applicable_default: boolean | null
+          updated_at: string | null
+        }
+        Insert: {
+          clause_number: number
+          clause_title?: string | null
+          default_content?: string | null
+          firm_id: string
+          id?: string
+          is_applicable_default?: boolean | null
+          updated_at?: string | null
+        }
+        Update: {
+          clause_number?: number
+          clause_title?: string | null
+          default_content?: string | null
+          firm_id?: string
+          id?: string
+          is_applicable_default?: boolean | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "caro_master_templates_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       carry_forward_queries: {
         Row: {
           carried_at: string | null
@@ -1392,6 +1430,7 @@ export type Database = {
       clients: {
         Row: {
           audit_config: Json | null
+          business_activity: string | null
           caro_applicable: boolean | null
           cin: string | null
           compliance_flags: Json | null
@@ -1403,6 +1442,7 @@ export type Database = {
           internal_audit_applicable: boolean | null
           name: string | null
           pan: string | null
+          registered_office: string | null
           statutory_audit_applicable: boolean | null
           stock_audit_applicable: boolean | null
           tax_audit_type: string | null
@@ -1410,6 +1450,7 @@ export type Database = {
         }
         Insert: {
           audit_config?: Json | null
+          business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
           compliance_flags?: Json | null
@@ -1421,6 +1462,7 @@ export type Database = {
           internal_audit_applicable?: boolean | null
           name?: string | null
           pan?: string | null
+          registered_office?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
           tax_audit_type?: string | null
@@ -1428,6 +1470,7 @@ export type Database = {
         }
         Update: {
           audit_config?: Json | null
+          business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
           compliance_flags?: Json | null
@@ -1439,6 +1482,7 @@ export type Database = {
           internal_audit_applicable?: boolean | null
           name?: string | null
           pan?: string | null
+          registered_office?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
           tax_audit_type?: string | null
