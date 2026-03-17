@@ -111,12 +111,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         is_locked: d.is_locked || false,
       })));
     } else {
-      // Seed all 21 clauses
+      // Seed all 21 clauses with default content
       const seeds = CARO_CLAUSES.map(c => ({
         engagement_id: engagement.id,
         clause_number: c.number,
         clause_title: c.title,
-        status: "not_started",
+        auto_draft: CARO_DEFAULT_CONTENT[c.number] || "",
+        status: CARO_DEFAULT_CONTENT[c.number] ? "drafted" : "not_started",
         is_applicable: true,
         is_locked: false,
       }));
