@@ -698,67 +698,91 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
     try {
       if (isTallyFormat) {
-        // ─── Route through edge function for Tally / PDF formats ───
-        setTbProgress(15);
-        setTbProgressLabel("Preparing upload...");
+        // ── Stage 1: Encoding file ──────────────────────────────
+        setTbStatusMsg('Encoding file for upload...');
+        setTbProgress(10);
+
+        // ── Stage 2: Uploading to server ────────────────────────
+        setTbStatusMsg('Uploading to server...');
+        setTbProgress(18);
+
+        // Start a simulated progress ticker so the bar never freezes.
+        // It advances from 20% to 82% over ~45 seconds while the Edge
+        // Function processes the file server-side.
+        let simProgress = 20;
+        const progressMessages = [
+          { pct: 20, msg: 'Parsing Excel file on server...' },
+          { pct: 35, msg: 'Detecting column headers and format...' },
+          { pct: 48, msg: 'Building account hierarchy...' },
+          { pct: 60, msg: 'Detecting group vs ledger rows...' },
+          { pct: 70, msg: 'Aggregating group totals...' },
+          { pct: 78, msg: 'Saving to database...' },
+          { pct: 82, msg: 'Tagging ledgers with scrutiny rules...' },
+        ];
+        const ticker = setInterval(() => {
+          simProgress = Math.min(simProgress + 1, 82);
+          setTbProgress(simProgress);
+          const stage = progressMessages.filter(m => m.pct <= simProgress).pop();
+          if (stage) setTbStatusMsg(stage.msg);
+        }, 600); // advance 1% every 600ms (~48 seconds to reach 82%)
 
         let data: any;
 
-        if (tbFormat === "pdf") {
-          // PDF: extract text lines client-side (simple approach — split by newlines)
-          // For real PDF parsing, we'd use pdf.js but for now send as-is and let edge function handle
-          setTbProgressLabel("Extracting PDF text...");
-          // Decode base64 to text lines (basic approach)
-          const binaryStr = atob(tbFileBase64);
-          const textLines: string[] = [];
-          // Simple text extraction from PDF binary — look for readable text segments
-          let currentLine = "";
-          for (let i = 0; i < binaryStr.length; i++) {
-            const code = binaryStr.charCodeAt(i);
-            if (code >= 32 && code <= 126) {
-              currentLine += binaryStr[i];
-            } else if (currentLine.length > 3) {
-              textLines.push(currentLine.trim());
-              currentLine = "";
-            } else {
-              currentLine = "";
+        try {
+          if (tbFormat === "pdf") {
+            // PDF: extract text lines client-side (simple approach — split by newlines)
+            setTbStatusMsg("Extracting PDF text...");
+            // Decode base64 to text lines (basic approach)
+            const binaryStr = atob(tbFileBase64);
+            const textLines: string[] = [];
+            let currentLine = "";
+            for (let i = 0; i < binaryStr.length; i++) {
+              const code = binaryStr.charCodeAt(i);
+              if (code >= 32 && code <= 126) {
+                currentLine += binaryStr[i];
+              } else if (currentLine.length > 3) {
+                textLines.push(currentLine.trim());
+                currentLine = "";
+              } else {
+                currentLine = "";
+              }
             }
-          }
-          if (currentLine.length > 3) textLines.push(currentLine.trim());
+            if (currentLine.length > 3) textLines.push(currentLine.trim());
 
-          // Filter to only lines that look like TB data
-          const tbLines = textLines.filter(line => {
-            const hasNumber = /\d/.test(line);
-            const hasText = /[a-zA-Z]/.test(line);
-            return hasText && hasNumber && line.length > 5;
-          });
+            const tbLines = textLines.filter(line => {
+              const hasNumber = /\d/.test(line);
+              const hasText = /[a-zA-Z]/.test(line);
+              return hasText && hasNumber && line.length > 5;
+            });
 
-          setTbProgressLabel("Sending to parser...");
-          const { data: pdfData, error: pdfError } = await supabase.functions.invoke("parse-tally-tb", {
-            body: {
+            const { data: pdfData, error: pdfError } = await supabase.functions.invoke("parse-tally-tb", {
+              body: {
+                engagementId,
+                firmId: user?.firm_id || null,
+                pdfTextRows: tbLines,
+                fileName: tbFile?.name,
+                financialYear: engagement.financial_year,
+              },
+            });
+            if (pdfError) throw new Error(pdfError.message || "PDF parse error");
+            if (!pdfData?.success) throw new Error(pdfData?.error || "PDF parse failed");
+            data = pdfData;
+          } else {
+            // Excel/XML — use chunked upload
+            data = await sendChunked(
+              tbFileBase64,
               engagementId,
-              firmId: user?.firm_id || null,
-              pdfTextRows: tbLines,
-              fileName: tbFile?.name,
-              financialYear: engagement.financial_year,
-            },
-          });
-          if (pdfError) throw new Error(pdfError.message || "PDF parse error");
-          if (!pdfData?.success) throw new Error(pdfData?.error || "PDF parse failed");
-          data = pdfData;
-        } else {
-          // Excel/XML — use chunked upload
-          data = await sendChunked(
-            tbFileBase64,
-            engagementId,
-            user?.firm_id || null,
-            tbFile?.name || "file.xlsx",
-            engagement.financial_year
-          );
+              user?.firm_id || null,
+              tbFile?.name || "file.xlsx",
+              engagement.financial_year
+            );
+          }
+        } finally {
+          clearInterval(ticker);
         }
 
+        setTbStatusMsg('Import complete!');
         setTbProgress(100);
-        setTbProgressLabel("Complete!");
 
         const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row: any) => ({
           nodeId: row.nodeId,
