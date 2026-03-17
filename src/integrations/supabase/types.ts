@@ -1828,6 +1828,7 @@ export type Database = {
       }
       fa_assets: {
         Row: {
+          accumulated_dep_closing: number | null
           accumulated_dep_opening: number
           addition_date: string | null
           additions_during_year: number
@@ -1838,19 +1839,30 @@ export type Database = {
           created_at: string | null
           created_by: string | null
           date_of_purchase: string
+          dep_days_addition: number | null
+          dep_days_opening: number | null
+          dep_on_additions: number | null
+          dep_on_opening_block: number | null
           depreciation_for_year: number | null
+          depreciation_method_used: string | null
           disposal_date: string | null
           disposal_proceeds: number
           disposals_during_year: number
           engagement_id: string | null
           fy: string | null
+          gross_block_closing: number | null
           gross_block_opening: number
           id: string
           is_carried_forward: boolean
+          is_fully_depreciated: boolean | null
           is_locked: boolean
           location: string | null
+          narration: string | null
+          residual_value: number | null
+          wdv_closing: number | null
         }
         Insert: {
+          accumulated_dep_closing?: number | null
           accumulated_dep_opening?: number
           addition_date?: string | null
           additions_during_year?: number
@@ -1861,19 +1873,30 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           date_of_purchase: string
+          dep_days_addition?: number | null
+          dep_days_opening?: number | null
+          dep_on_additions?: number | null
+          dep_on_opening_block?: number | null
           depreciation_for_year?: number | null
+          depreciation_method_used?: string | null
           disposal_date?: string | null
           disposal_proceeds?: number
           disposals_during_year?: number
           engagement_id?: string | null
           fy?: string | null
+          gross_block_closing?: number | null
           gross_block_opening?: number
           id?: string
           is_carried_forward?: boolean
+          is_fully_depreciated?: boolean | null
           is_locked?: boolean
           location?: string | null
+          narration?: string | null
+          residual_value?: number | null
+          wdv_closing?: number | null
         }
         Update: {
+          accumulated_dep_closing?: number | null
           accumulated_dep_opening?: number
           addition_date?: string | null
           additions_during_year?: number
@@ -1884,17 +1907,27 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           date_of_purchase?: string
+          dep_days_addition?: number | null
+          dep_days_opening?: number | null
+          dep_on_additions?: number | null
+          dep_on_opening_block?: number | null
           depreciation_for_year?: number | null
+          depreciation_method_used?: string | null
           disposal_date?: string | null
           disposal_proceeds?: number
           disposals_during_year?: number
           engagement_id?: string | null
           fy?: string | null
+          gross_block_closing?: number | null
           gross_block_opening?: number
           id?: string
           is_carried_forward?: boolean
+          is_fully_depreciated?: boolean | null
           is_locked?: boolean
           location?: string | null
+          narration?: string | null
+          residual_value?: number | null
+          wdv_closing?: number | null
         }
         Relationships: [
           {
@@ -1929,31 +1962,43 @@ export type Database = {
       }
       fa_categories: {
         Row: {
+          asset_class: string | null
           created_at: string | null
           depreciation_method: string
           firm_id: string | null
           id: string
           name: string
           residual_value_pct: number
+          schedule_ii_part: string | null
+          slm_rate: number | null
           useful_life_years: number
+          wdv_rate: number | null
         }
         Insert: {
+          asset_class?: string | null
           created_at?: string | null
           depreciation_method?: string
           firm_id?: string | null
           id?: string
           name: string
           residual_value_pct?: number
+          schedule_ii_part?: string | null
+          slm_rate?: number | null
           useful_life_years: number
+          wdv_rate?: number | null
         }
         Update: {
+          asset_class?: string | null
           created_at?: string | null
           depreciation_method?: string
           firm_id?: string | null
           id?: string
           name?: string
           residual_value_pct?: number
+          schedule_ii_part?: string | null
+          slm_rate?: number | null
           useful_life_years?: number
+          wdv_rate?: number | null
         }
         Relationships: [
           {
@@ -4343,15 +4388,21 @@ export type Database = {
           acc_dep_closing: number | null
           acc_dep_opening: number | null
           additions: number | null
+          asset_class: string | null
+          asset_count: number | null
           category_name: string | null
           client_id: string | null
           depreciation: number | null
+          depreciation_method: string | null
           disposals: number | null
           fy: string | null
           gross_block_closing: number | null
           gross_block_opening: number | null
           net_block: number | null
+          schedule_ii_part: string | null
+          slm_rate: number | null
           useful_life_years: number | null
+          wdv_rate: number | null
         }
         Relationships: [
           {
