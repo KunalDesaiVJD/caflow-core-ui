@@ -187,10 +187,30 @@ interface ValidationResult {
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
-// Format: show dash when value is zero, Indian number format otherwise
-const fmtTb = (v: number) =>
-  v === 0 ? '—'
-  : v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+function sumDisplayedNode(nodeId: string, allNodes: TbHierarchyNode[]): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
+  const children = allNodes.filter((n) => n.parentNodeId === nodeId);
+  if (children.length === 0) {
+    const self = allNodes.find((n) => n.nodeId === nodeId);
+    return {
+      opening: self?.opening || 0,
+      txnDebit: self?.txnDebit || 0,
+      txnCredit: self?.txnCredit || 0,
+      closing: self?.closing || 0,
+    };
+  }
+
+  return children.reduce((acc, child) => {
+    const childTotals = child.isLeaf
+      ? { opening: child.opening || 0, txnDebit: child.txnDebit || 0, txnCredit: child.txnCredit || 0, closing: child.closing || 0 }
+      : sumDisplayedNode(child.nodeId, allNodes);
+    return {
+      opening: acc.opening + childTotals.opening,
+      txnDebit: acc.txnDebit + childTotals.txnDebit,
+      txnCredit: acc.txnCredit + childTotals.txnCredit,
+      closing: acc.closing + childTotals.closing,
+    };
+  }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
+}
 
 function TbTreeRow({ node, allNodes, depth = 0 }:
   { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
@@ -199,13 +219,9 @@ function TbTreeRow({ node, allNodes, depth = 0 }:
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
 
-  const presentation = buildTbPresentationModel(allNodes);
   const vals = node.isLeaf
-    ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
-        txnCredit: node.txnCredit||0, closing: node.closing||0 }
-    : presentation.activeNodes.find((item) => item.nodeId === node.nodeId)
-      ? buildTbPresentationModel(allNodes).activeNodes.find((item) => item.nodeId === node.nodeId)
-      : { opening: node.opening||0, txnDebit: node.txnDebit||0, txnCredit: node.txnCredit||0, closing: node.closing||0 };
+    ? { opening: node.opening || 0, txnDebit: node.txnDebit || 0, txnCredit: node.txnCredit || 0, closing: node.closing || 0 }
+    : sumDisplayedNode(node.nodeId, allNodes);
 
   const indent = depth * 24 + 12;
 
