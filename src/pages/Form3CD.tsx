@@ -2689,7 +2689,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
         </div>
 
         {/* ALL CLAUSES */}
-        {CLAUSE_NAV.map(c => {
+        {CLAUSE_NAV_FALLBACK.map(c => {
           const data = clauseData[c.key] || {};
           const filled = isClauseFilled(data);
           const isPB = c.key === "cl_31" || c.key === "cl_34";
