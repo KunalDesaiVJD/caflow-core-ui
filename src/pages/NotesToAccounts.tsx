@@ -389,24 +389,47 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
 /* ══════════════════════════════════════════════
    NOTE 1 — BACKGROUND
    ══════════════════════════════════════════════ */
-function Note1({ data, onChange }: { data: any; onChange: (f: string, v: string) => void }) {
+function Note1({ data, onChange, clientData }: { data: any; onChange: (f: string, v: string) => void; clientData?: { name?: string; cin?: string; registered_office?: string; business_activity?: string } | null }) {
+  const companyName = clientData?.name || data.company_name || "[Company Name]";
+  const cin = clientData?.cin || data.reg_number || "[CIN]";
+  const regOffice = data.registered_office || clientData?.registered_office || "";
+  const bizActivity = data.business_activity || clientData?.business_activity || "";
+
   return (
     <div className="space-y-6 max-w-3xl">
       <Card>
         <CardHeader><CardTitle className="text-base">a. Overview of the Reporting Entity</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <div><label className="text-sm font-medium text-foreground">Company Name</label><Input value={data.company_name || ""} onChange={(e) => onChange("company_name", e.target.value)} placeholder="Enter company name" className="mt-1" /></div>
-          <div><label className="text-sm font-medium text-foreground">Registered Office Address</label><Textarea value={data.address || ""} onChange={(e) => onChange("address", e.target.value)} placeholder="Enter registered office address" className="mt-1" rows={2} /></div>
+          <div className="p-4 bg-muted/30 rounded-md text-sm leading-relaxed">
+            <span className="font-semibold">{companyName}</span> incorporated under the Companies Act, 2013 vide CIN{" "}
+            <span className="font-semibold">{cin}</span> having its registered office at{" "}
+            <Input value={regOffice} onChange={(e) => onChange("registered_office", e.target.value)} placeholder="Enter registered office address" className="inline-block w-64 h-7 text-sm mx-1" />
+            {" "}and engaged in business of{" "}
+            <Input value={bizActivity} onChange={(e) => onChange("business_activity", e.target.value)} placeholder="Enter business activity" className="inline-block w-64 h-7 text-sm mx-1" />.
+          </div>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="text-sm font-medium text-foreground">Registration Number</label><Input value={data.reg_number || ""} onChange={(e) => onChange("reg_number", e.target.value)} placeholder="CIN / Registration No." className="mt-1" /></div>
             <div><label className="text-sm font-medium text-foreground">Date of Incorporation</label><Input type="date" value={data.incorporation_date || ""} onChange={(e) => onChange("incorporation_date", e.target.value)} className="mt-1" /></div>
           </div>
-          <div><label className="text-sm font-medium text-foreground">Principal Activity</label><Textarea value={data.principal_activity || ""} onChange={(e) => onChange("principal_activity", e.target.value)} placeholder="Describe principal activities" className="mt-1" rows={2} /></div>
         </CardContent>
       </Card>
-      <Card><CardHeader><CardTitle className="text-base">b. Basis of Preparation</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.basis_of_preparation}</p></CardContent></Card>
-      <Card><CardHeader><CardTitle className="text-base">c. Basis of Measurement</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.basis_of_measurement}</p></CardContent></Card>
-      <Card><CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.use_of_estimates}</p></CardContent></Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">b. Basis of Preparation</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.basis_of_preparation || STANDARD_TEXTS.basis_of_preparation} onChange={(e) => onChange("basis_of_preparation", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">c. Basis of Measurement</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.basis_of_measurement || STANDARD_TEXTS.basis_of_measurement} onChange={(e) => onChange("basis_of_measurement", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.use_of_estimates || STANDARD_TEXTS.use_of_estimates} onChange={(e) => onChange("use_of_estimates", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
     </div>
   );
 }
