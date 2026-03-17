@@ -204,7 +204,22 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     })();
   }, [engagementId]);
 
-  /* ── Load ── */
+  /* ── Load note titles from master templates ── */
+  useEffect(() => {
+    (async () => {
+      const { data: templates } = await supabase.from("note_templates" as any).select("note_number, note_title").order("note_number");
+      if (templates && templates.length > 0) {
+        const titleMap = new Map<number, string>();
+        (templates as any[]).forEach((t: any) => titleMap.set(t.note_number, t.note_title));
+        setNOTE_LIST(prev => prev.map(nl => {
+          const masterTitle = titleMap.get(typeof nl.num === "string" ? parseInt(nl.num) : nl.num);
+          return masterTitle ? { ...nl, title: masterTitle } : nl;
+        }));
+      }
+    })();
+  }, []);
+
+
   useEffect(() => {
     if (!engagementId) return;
     (async () => {
