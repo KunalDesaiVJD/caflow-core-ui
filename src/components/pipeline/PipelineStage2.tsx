@@ -1509,22 +1509,37 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
               {/* View Toggle */}
               {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2 flex-wrap'>
                   <Button
-                    variant={tbViewMode === "tree" ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs gap-1"
-                    onClick={() => setTbViewMode("tree")}
+                    variant={tbViewMode === 'tree' ? 'default' : 'outline'}
+                    size='sm'
+                    className='text-xs gap-1'
+                    onClick={() => setTbViewMode('tree')}
                   >
                     <ChevronDown size={14} /> Hierarchy Tree
                   </Button>
                   <Button
-                    variant={tbViewMode === "flat" ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs gap-1"
-                    onClick={() => setTbViewMode("flat")}
+                    variant={tbViewMode === 'flat' ? 'default' : 'outline'}
+                    size='sm'
+                    className='text-xs gap-1'
+                    onClick={() => setTbViewMode('flat')}
                   >
                     <Table2 size={14} /> Flat Preview
+                  </Button>
+                  {/* Spacer */}
+                  <div className='flex-1' />
+                  {/* Delete & Re-upload button */}
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    className='text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground'
+                    onClick={handleDeleteTb}
+                    disabled={deletingTb}
+                  >
+                    {deletingTb
+                      ? <><Loader2 size={13} className='animate-spin' /> Deleting...</>
+                      : <><X size={13} /> Delete TB &amp; Re-upload</>
+                    }
                   </Button>
                 </div>
               )}
