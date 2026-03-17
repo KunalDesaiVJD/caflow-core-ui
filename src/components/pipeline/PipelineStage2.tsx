@@ -761,12 +761,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           setTbValidation(data.validation);
         }
 
+        const strictPresentation = buildTbPresentationModel(mappedHierarchy);
+        setTbValidation(strictPresentation.validation as any);
         setTbResult({
-          totalAccounts: data.leafLedgers,
-          debitTotal: Math.round(data.totalDr * 100) / 100,
-          creditTotal: Math.round(data.totalCr * 100) / 100,
-          difference: Math.round(Math.abs(data.totalDr - data.totalCr) * 100) / 100,
-          isValid: data.isBalanced,
+          totalAccounts: strictPresentation.leafCount,
+          debitTotal: Math.round(strictPresentation.grandTotal.txnDebit * 100) / 100,
+          creditTotal: Math.round(strictPresentation.grandTotal.txnCredit * 100) / 100,
+          difference: Math.round(Math.abs(strictPresentation.grandTotal.txnDebit - strictPresentation.grandTotal.txnCredit) * 100) / 100,
+          isValid: strictPresentation.validation.allRulesPassed,
           preview: leafPreview.map((n) => ({
             account_name: n.name,
             account_group: n.primaryGroup,
