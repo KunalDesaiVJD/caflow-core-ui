@@ -792,6 +792,13 @@ serve(async (req) => {
 
     const structuredRows: StructuredRow[] = [];
 
+    // Pre-compute value-matching hierarchy when no indent signals exist
+    const vmResult = hasIndentSignals ? null : detectHierarchyByValueMatching(dataRows);
+    if (vmResult) {
+      const groupCount = vmResult.isGroup.filter(Boolean).length;
+      console.log(`[parse-tally-tb] Value-matching detected ${groupCount} groups out of ${dataRows.length} rows`);
+    }
+
     for (let index = 0; index < dataRows.length; index++) {
       const row = dataRows[index];
       const normalizedName = normalizeGroupName(row.name);
