@@ -13,8 +13,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
-/* ───────────── constants ───────────── */
-const NOTE_LIST: { key: string; num: number | string; title: string }[] = [
+/* ───────────── constants (fallback) ───────────── */
+const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string }[] = [
   { key: "note_1", num: 1, title: "Background" },
   { key: "note_2", num: 2, title: "Significant Accounting Policies" },
   { key: "note_29", num: 29, title: "Construction Contracts" },
