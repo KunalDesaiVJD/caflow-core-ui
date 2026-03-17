@@ -220,6 +220,21 @@ export default function Form3CD() {
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
+  // Fetch 3CD master templates for dynamic titles
+  useEffect(() => {
+    (async () => {
+      const { data: templates } = await supabase.from("threecd_master_templates").select("clause_number, heading").order("clause_number");
+      if (templates && templates.length > 0) {
+        const headingMap = new Map<string, string>();
+        (templates as any[]).forEach((t: any) => headingMap.set(t.clause_number, t.heading));
+        setCLAUSE_NAV(prev => prev.map(c => {
+          const masterHeading = headingMap.get(c.label);
+          return masterHeading ? { ...c, title: masterHeading } : c;
+        }));
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (!engagementId) { setLoading(false); return; }
     loadData();
