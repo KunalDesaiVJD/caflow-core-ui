@@ -424,20 +424,21 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   });
 
   // Load existing TB result if available
-  useEffect(() => {
-    if (storedTbHierarchy.length > 0) {
-      const leafRows = storedTbHierarchy.filter((row) => row.isLeaf);
-      const debitTotal = leafRows.reduce((sum, row) => sum + (row.txnDebit || 0), 0);
-      const creditTotal = leafRows.reduce((sum, row) => sum + (row.txnCredit || 0), 0);
-      const difference = Math.abs(debitTotal - creditTotal);
+  const tbPresentation: TbPresentationModel | null = useMemo(() => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    return source.length > 0 ? buildTbPresentationModel(source) : null;
+  }, [tbHierarchyNodes, storedTbHierarchy]);
 
-      setTbHierarchyNodes(storedTbHierarchy);
+  useEffect(() => {
+    if (tbPresentation) {
+      const leafRows = tbPresentation.activeNodes.filter((row) => row.isLeaf);
+      setTbValidation(tbPresentation.validation as any);
       setTbResult((prev) => prev || {
         totalAccounts: leafRows.length,
-        debitTotal: Math.round(debitTotal * 100) / 100,
-        creditTotal: Math.round(creditTotal * 100) / 100,
-        difference: Math.round(difference * 100) / 100,
-        isValid: difference <= 1,
+        debitTotal: Math.round(tbPresentation.grandTotal.txnDebit * 100) / 100,
+        creditTotal: Math.round(tbPresentation.grandTotal.txnCredit * 100) / 100,
+        difference: Math.round(Math.abs(tbPresentation.grandTotal.txnDebit - tbPresentation.grandTotal.txnCredit) * 100) / 100,
+        isValid: tbPresentation.validation.allRulesPassed,
         preview: leafRows.slice(0, 20).map((row) => ({
           account_name: row.name,
           account_group: row.primaryGroup,
@@ -461,7 +462,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       });
       setTbStep(5);
     }
-  }, [existingTb, storedTbHierarchy]);
+  }, [existingTb, tbPresentation]);
 
   // ─── Replace confirmation state ───
   const [showReplaceDialog, setShowReplaceDialog] = useState(false);
