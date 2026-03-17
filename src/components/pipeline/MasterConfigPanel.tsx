@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +21,7 @@ interface CaroTemplate {
 }
 
 interface ThreeCDClause {
+  id?: string;
   clause_number: string;
   heading: string;
   template_content: string;
@@ -93,36 +93,28 @@ const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
 ];
 
 export function MasterConfigPanel() {
-  const { user } = useAuth();
-  const firmId = user?.firm_id || null;
-  
   const [caroTemplates, setCaroTemplates] = useState<CaroTemplate[]>([]);
   const [noteTemplates, setNoteTemplates] = useState<any[]>([]);
   const [threeCDClauses, setThreeCDClauses] = useState<ThreeCDClause[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadAll();
-  }, [firmId]);
+  useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
-    
-    // Load CARO templates - try firm-specific, fallback to defaults
-    const caroQuery = firmId
-      ? supabase.from("caro_master_templates").select("*").eq("firm_id", firmId).order("clause_number")
-      : supabase.from("caro_master_templates").select("*").is("firm_id", null).order("clause_number");
-    
-    const [caroRes, notesRes] = await Promise.all([
-      caroQuery,
+
+    // Load GLOBAL templates (firm_id IS NULL for CARO)
+    const [caroRes, notesRes, threecdRes] = await Promise.all([
+      supabase.from("caro_master_templates").select("*").is("firm_id", null).order("clause_number"),
       supabase.from("note_templates" as any).select("*").order("note_number"),
+      supabase.from("threecd_master_templates").select("*").order("clause_number"),
     ]);
 
-    // Merge CARO defaults with saved
-    const saved = (caroRes.data || []) as any[];
-    const merged = CARO_DEFAULTS.map(d => {
-      const existing = saved.find(s => s.clause_number === d.number);
+    // Merge CARO defaults with saved global templates
+    const caroSaved = (caroRes.data || []) as any[];
+    const caroMerged = CARO_DEFAULTS.map(d => {
+      const existing = caroSaved.find(s => s.clause_number === d.number);
       return {
         id: existing?.id,
         clause_number: d.number,
@@ -131,17 +123,23 @@ export function MasterConfigPanel() {
         is_applicable_default: existing?.is_applicable_default ?? true,
       };
     });
-    setCaroTemplates(merged);
+    setCaroTemplates(caroMerged);
     setNoteTemplates(notesRes.data || []);
-    
-    // Initialize 3CD clauses from defaults (stored in-memory for now, can be persisted later)
-    setThreeCDClauses(THREECD_DEFAULTS.map(d => ({
-      clause_number: d.clause,
-      heading: d.heading,
-      template_content: "",
-      is_applicable_default: true,
-    })));
-    
+
+    // Merge 3CD defaults with saved
+    const threecdSaved = (threecdRes.data || []) as any[];
+    const threecdMerged = THREECD_DEFAULTS.map(d => {
+      const existing = threecdSaved.find(s => s.clause_number === d.clause);
+      return {
+        id: existing?.id,
+        clause_number: d.clause,
+        heading: existing?.heading || d.heading,
+        template_content: existing?.template_content || "",
+        is_applicable_default: existing?.is_applicable_default ?? true,
+      };
+    });
+    setThreeCDClauses(threecdMerged);
+
     setLoading(false);
   }
 
@@ -159,15 +157,9 @@ export function MasterConfigPanel() {
 
   async function saveCaroTemplates() {
     setSaving(true);
-    const effectiveFirmId = firmId;
-    if (!effectiveFirmId) {
-      toast.error("No firm context — cannot save. Please log in.");
-      setSaving(false);
-      return;
-    }
     for (const t of caroTemplates) {
-      const payload = {
-        firm_id: effectiveFirmId,
+      const payload: any = {
+        firm_id: null, // GLOBAL
         clause_number: t.clause_number,
         clause_title: t.clause_title,
         default_content: t.default_content,
@@ -177,10 +169,10 @@ export function MasterConfigPanel() {
       if (t.id) {
         await supabase.from("caro_master_templates").update(payload).eq("id", t.id);
       } else {
-        await supabase.from("caro_master_templates").insert(payload as any);
+        await supabase.from("caro_master_templates").insert(payload);
       }
     }
-    toast.success("CARO master templates saved");
+    toast.success("CARO master templates saved (global)");
     setSaving(false);
     loadAll();
   }
@@ -193,15 +185,29 @@ export function MasterConfigPanel() {
         template_content: t.template_content,
       } as any).eq("id", t.id);
     }
-    toast.success("Note templates saved");
+    toast.success("Note templates saved (global)");
     setSaving(false);
   }
 
   async function saveThreeCDTemplates() {
     setSaving(true);
-    // For now 3CD master is in-memory; toast confirms save intent
-    toast.success("3CD clause configuration saved");
+    for (const t of threeCDClauses) {
+      const payload: any = {
+        clause_number: t.clause_number,
+        heading: t.heading,
+        template_content: t.template_content,
+        is_applicable_default: t.is_applicable_default,
+        updated_at: new Date().toISOString(),
+      };
+      if (t.id) {
+        await supabase.from("threecd_master_templates").update(payload).eq("id", t.id);
+      } else {
+        await supabase.from("threecd_master_templates").insert(payload);
+      }
+    }
+    toast.success("3CD master templates saved (global)");
     setSaving(false);
+    loadAll();
   }
 
   if (loading) return <div className="py-8 text-center text-muted-foreground">Loading master configuration...</div>;
@@ -210,8 +216,7 @@ export function MasterConfigPanel() {
     <div className="max-w-5xl space-y-4">
       <h2 className="text-lg font-semibold text-foreground">Master Configuration</h2>
       <p className="text-sm text-muted-foreground">
-        Changes here apply as defaults for all future engagements. Existing engagements retain their saved content.
-        {!firmId && <span className="text-destructive ml-1">(Warning: No firm context — showing global defaults. Log in to manage firm-specific templates.)</span>}
+        Global templates — changes here apply as defaults for <strong>all firms and all future engagements</strong>. Existing engagements retain their saved content.
       </p>
 
       <Tabs defaultValue="caro_master">
@@ -224,7 +229,7 @@ export function MasterConfigPanel() {
         {/* CARO Templates */}
         <TabsContent value="caro_master" className="mt-4 space-y-4">
           <div className="flex justify-end">
-            <Button onClick={saveCaroTemplates} disabled={saving || !firmId} className="gap-1">
+            <Button onClick={saveCaroTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save CARO Templates
             </Button>

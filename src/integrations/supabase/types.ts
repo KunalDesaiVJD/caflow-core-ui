@@ -4111,6 +4111,33 @@ export type Database = {
           },
         ]
       }
+      threecd_master_templates: {
+        Row: {
+          clause_number: string
+          heading: string | null
+          id: string
+          is_applicable_default: boolean | null
+          template_content: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          clause_number: string
+          heading?: string | null
+          id?: string
+          is_applicable_default?: boolean | null
+          template_content?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          clause_number?: string
+          heading?: string | null
+          id?: string
+          is_applicable_default?: boolean | null
+          template_content?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       timesheets: {
         Row: {
           approved_at: string | null

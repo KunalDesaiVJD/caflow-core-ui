@@ -13,8 +13,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 
-/* ───────────── constants ───────────── */
-const NOTE_LIST: { key: string; num: number | string; title: string }[] = [
+/* ───────────── constants (fallback) ───────────── */
+const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string }[] = [
   { key: "note_1", num: 1, title: "Background" },
   { key: "note_2", num: 2, title: "Significant Accounting Policies" },
   { key: "note_29", num: 29, title: "Construction Contracts" },
@@ -153,8 +153,12 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [showPrint, setShowPrint] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
+
+  // Dynamic note list: fetched from note_templates master, fallback to hardcoded
+  const [NOTE_LIST, setNOTE_LIST] = useState(NOTE_LIST_FALLBACK);
+
   const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(NOTE_LIST.map(nl => [nl.key, true]))
+    Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, true]))
   );
 
   // All note states
@@ -200,7 +204,22 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     })();
   }, [engagementId]);
 
-  /* ── Load ── */
+  /* ── Load note titles from master templates ── */
+  useEffect(() => {
+    (async () => {
+      const { data: templates } = await supabase.from("note_templates" as any).select("note_number, note_title").order("note_number");
+      if (templates && templates.length > 0) {
+        const titleMap = new Map<number, string>();
+        (templates as any[]).forEach((t: any) => titleMap.set(t.note_number, t.note_title));
+        setNOTE_LIST(prev => prev.map(nl => {
+          const masterTitle = titleMap.get(typeof nl.num === "string" ? parseInt(nl.num) : nl.num);
+          return masterTitle ? { ...nl, title: masterTitle } : nl;
+        }));
+      }
+    })();
+  }, []);
+
+
   useEffect(() => {
     if (!engagementId) return;
     (async () => {
@@ -916,7 +935,7 @@ function PrintView({ notes, onClose }: { notes: Record<string, [any, any]>; onCl
         </div>
 
         {/* Notes 29-45 */}
-        {NOTE_LIST.filter(n => parseInt(String(n.num)) >= 29).map(nl => {
+        {NOTE_LIST_FALLBACK.filter(n => parseInt(String(n.num)) >= 29).map(nl => {
           const d = notes[nl.key]?.[0] || {};
           const hasData = Object.values(d).some(v => v !== "" && v !== undefined && v !== null);
           return (

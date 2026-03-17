@@ -30,8 +30,8 @@ interface Form3CDRow {
   [key: string]: any;
 }
 
-/* ──────── clause meta ──────── */
-const CLAUSE_NAV = [
+/* ──────── clause meta (fallback) ──────── */
+const CLAUSE_NAV_FALLBACK = [
   { key: "cl_8", label: "8", title: "Relevant clause of section 44AB" },
   { key: "cl_9", label: "9", title: "Books of Account" },
   { key: "cl_10", label: "10", title: "Nature of Business (Sector/Code)" },
@@ -164,6 +164,7 @@ export default function Form3CD() {
   const [searchParams] = useSearchParams();
   const engagementId = searchParams.get("engagementId");
   const { user } = useAuth();
+  const [CLAUSE_NAV, setCLAUSE_NAV] = useState(CLAUSE_NAV_FALLBACK);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -218,6 +219,21 @@ export default function Form3CD() {
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Fetch 3CD master templates for dynamic titles
+  useEffect(() => {
+    (async () => {
+      const { data: templates } = await supabase.from("threecd_master_templates").select("clause_number, heading").order("clause_number");
+      if (templates && templates.length > 0) {
+        const headingMap = new Map<string, string>();
+        (templates as any[]).forEach((t: any) => headingMap.set(t.clause_number, t.heading));
+        setCLAUSE_NAV(prev => prev.map(c => {
+          const masterHeading = headingMap.get(c.label);
+          return masterHeading ? { ...c, title: masterHeading } : c;
+        }));
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!engagementId) { setLoading(false); return; }
@@ -2688,7 +2704,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
         </div>
 
         {/* ALL CLAUSES */}
-        {CLAUSE_NAV.map(c => {
+        {CLAUSE_NAV_FALLBACK.map(c => {
           const data = clauseData[c.key] || {};
           const filled = isClauseFilled(data);
           const isPB = c.key === "cl_31" || c.key === "cl_34";

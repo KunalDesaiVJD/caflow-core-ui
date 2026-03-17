@@ -9,33 +9,20 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Lock, Download, CheckCircle2 } from "lucide-react";
+import { Sparkles, Loader2, Save, Lock, CheckCircle2 } from "lucide-react";
 
-const CARO_CLAUSES = [
-  { number: 1, title: "Immovable Properties" },
-  { number: 2, title: "Inventory Physical Verification" },
-  { number: 3, title: "Investments/Guarantees/Security" },
-  { number: 4, title: "Loans, Advances, Guarantees Compliance (Sec 185/186)" },
-  { number: 5, title: "Deposits Compliance" },
-  { number: 6, title: "Cost Records" },
-  { number: 7, title: "Statutory Dues (TDS/ESI/PF/IT/GST)" },
-  { number: 8, title: "Unrecorded Income/Surrendered" },
-  { number: 9, title: "Default on Loans/Debentures" },
-  { number: 10, title: "IPO/FPO Fund Utilization" },
-  { number: 11, title: "Fraud Reported" },
-  { number: 12, title: "Nidhi Company Compliance" },
-  { number: 13, title: "Related Party Transactions" },
-  { number: 14, title: "Internal Audit" },
-  { number: 15, title: "Non-Cash Transactions with Directors" },
-  { number: 16, title: "RBI Registration if NBFC" },
-  { number: 17, title: "Cash Losses" },
-  { number: 18, title: "Resignation of Auditors" },
-  { number: 19, title: "Going Concern Doubt" },
-  { number: 20, title: "CSR Compliance" },
-  { number: 21, title: "Qualifications in Group Audit" },
-];
+// Hardcoded fallback titles — used ONLY if master templates don't exist
+const CARO_CLAUSES_FALLBACK: Record<number, string> = {
+  1: "Immovable Properties", 2: "Inventory Physical Verification", 3: "Investments/Guarantees/Security",
+  4: "Loans, Advances, Guarantees Compliance (Sec 185/186)", 5: "Deposits Compliance", 6: "Cost Records",
+  7: "Statutory Dues (TDS/ESI/PF/IT/GST)", 8: "Unrecorded Income/Surrendered", 9: "Default on Loans/Debentures",
+  10: "IPO/FPO Fund Utilization", 11: "Fraud Reported", 12: "Nidhi Company Compliance",
+  13: "Related Party Transactions", 14: "Internal Audit", 15: "Non-Cash Transactions with Directors",
+  16: "RBI Registration if NBFC", 17: "Cash Losses", 18: "Resignation of Auditors",
+  19: "Going Concern Doubt", 20: "CSR Compliance", 21: "Qualifications in Group Audit",
+};
 
-// Default CARO content from standard audit report template
+// Hardcoded fallback default content
 const CARO_DEFAULT_CONTENT: Record<number, string> = {
   1: `(A) The company has maintained proper records showing full particulars including, quantitative details and situation of the Property, Plant and Equipment.\n(B) The company does not have any intangible assets and hence, the para is not applicable to the company.\n(b) As explained to us, the Property, Plant and Equipment were physically verified by the management during the year at reasonable interval. No material discrepancies were noticed on such verification.\n(c) The title of the immovable properties is held in the name of the company.\n(d) The company has not revalued its Property, Plant and Equipment (including Right of Use assets) or intangible assets or both during the year.\n(e) No any proceedings have been initiated or are pending against the company for holding any benami property under the Benami Transactions (Prohibition) Act, 1988 (45 of 1988) and rules made there under.`,
   2: `The Inventory were physically verified by the management during the year at reasonable interval. No material discrepancies were noticed on such verification.\n(b) During the year, the company has not been sanctioned working capital limits in excess of five crore rupees, in aggregate, from banks or financial institutions on the basis of security of current assets.`,
@@ -92,6 +79,28 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
 
   async function loadRows() {
     setLoading(true);
+
+    // Fetch global master templates to get current titles and default content
+    const { data: masterData } = await supabase
+      .from("caro_master_templates")
+      .select("clause_number, clause_title, default_content, is_applicable_default")
+      .is("firm_id", null)
+      .order("clause_number");
+
+    const masterMap = new Map<number, { title: string; content: string; applicable: boolean }>();
+    (masterData || []).forEach((m: any) => {
+      masterMap.set(m.clause_number, {
+        title: m.clause_title,
+        content: m.default_content || "",
+        applicable: m.is_applicable_default ?? true,
+      });
+    });
+
+    // Helper to get title from master → fallback
+    const getTitle = (num: number) => masterMap.get(num)?.title || CARO_CLAUSES_FALLBACK[num] || `Clause ${num}`;
+    const getContent = (num: number) => masterMap.get(num)?.content || CARO_DEFAULT_CONTENT[num] || "";
+    const getApplicable = (num: number) => masterMap.get(num)?.applicable ?? true;
+
     const { data } = await supabase
       .from("audit_caro_responses")
       .select("*")
@@ -99,10 +108,11 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       .order("clause_number");
 
     if (data && data.length > 0) {
+      // Use master title for display (always synced), keep saved data for content
       setRows(data.map((d: any) => ({
         id: d.id,
         clause_number: d.clause_number,
-        clause_title: d.clause_title,
+        clause_title: getTitle(d.clause_number), // ALWAYS from master
         auto_draft: d.auto_draft || "",
         user_response: d.user_response || "",
         status: d.status || "not_started",
@@ -111,14 +121,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         is_locked: d.is_locked || false,
       })));
     } else {
-      // Seed all 21 clauses with default content
-      const seeds = CARO_CLAUSES.map(c => ({
+      // Seed all 21 clauses from master templates
+      const seeds = Array.from({ length: 21 }, (_, i) => i + 1).map(num => ({
         engagement_id: engagement.id,
-        clause_number: c.number,
-        clause_title: c.title,
-        auto_draft: CARO_DEFAULT_CONTENT[c.number] || "",
-        status: CARO_DEFAULT_CONTENT[c.number] ? "drafted" : "not_started",
-        is_applicable: true,
+        clause_number: num,
+        clause_title: getTitle(num),
+        auto_draft: getContent(num),
+        status: getContent(num) ? "drafted" : "not_started",
+        is_applicable: getApplicable(num),
         is_locked: false,
       }));
       await supabase.from("audit_caro_responses").insert(seeds as any);
@@ -149,7 +159,6 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       const findings = findingsRes.data || [];
       const tdsEntries = tdsRes.data || [];
 
-      // Send to AI for drafting
       const clausesForAI = rows.filter(r => r.is_applicable && !r.is_locked && r.status !== "approved").map(r => ({
         clause_number: r.clause_number,
         clause_title: r.clause_title,
@@ -201,6 +210,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
     try {
       for (const r of rows) {
         const payload: any = {
+          clause_title: r.clause_title, // sync title back to DB
           auto_draft: r.auto_draft,
           user_response: r.user_response,
           status: r.status,
