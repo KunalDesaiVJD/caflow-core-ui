@@ -153,8 +153,12 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [showPrint, setShowPrint] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
+
+  // Dynamic note list: fetched from note_templates master, fallback to hardcoded
+  const [NOTE_LIST, setNOTE_LIST] = useState(NOTE_LIST_FALLBACK);
+
   const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(NOTE_LIST.map(nl => [nl.key, true]))
+    Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, true]))
   );
 
   // All note states
