@@ -30,8 +30,8 @@ interface Form3CDRow {
   [key: string]: any;
 }
 
-/* ──────── clause meta ──────── */
-const CLAUSE_NAV = [
+/* ──────── clause meta (fallback) ──────── */
+const CLAUSE_NAV_FALLBACK = [
   { key: "cl_8", label: "8", title: "Relevant clause of section 44AB" },
   { key: "cl_9", label: "9", title: "Books of Account" },
   { key: "cl_10", label: "10", title: "Nature of Business (Sector/Code)" },
