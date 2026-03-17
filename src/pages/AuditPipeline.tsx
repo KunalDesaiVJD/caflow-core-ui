@@ -35,6 +35,7 @@ import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
 import PipelineStage7 from "@/components/pipeline/PipelineStage7";
+import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
 const STAGES = [
@@ -44,8 +45,8 @@ const STAGES = [
   { num: 4, label: "Scrutiny Engine", icon: Eye },
   { num: 5, label: "Query Tracker", icon: ClipboardCheck },
   { num: 6, label: "Workpapers & Risk", icon: Shield },
-  { num: 7, label: "Notes to Accounts", icon: BookMarked },
-  { num: 8, label: "CARO / 3CD Reports", icon: FileText },
+  { num: 7, label: "Notes to Accounts/CARO", icon: BookMarked },
+  { num: 8, label: "3CD Reports", icon: FileText },
   { num: 9, label: "Review & QC", icon: Layers },
   { num: 10, label: "Sign-off & UDIN", icon: Award },
 ];
@@ -800,76 +801,64 @@ export default function AuditPipeline() {
             onSaveDraft={() => { refetchEng(); }}
           />
         ) : activeStage === 7 ? (
+          /* STAGE 7 — Notes to Accounts/CARO */
           <Tabs defaultValue="notes_editor">
             <TabsList>
               <TabsTrigger value="notes_editor">Notes to Accounts</TabsTrigger>
-              <TabsTrigger value="accounting_policies">Accounting Policies (Note 1 & 2)</TabsTrigger>
+              <TabsTrigger value="caro">CARO</TabsTrigger>
+              <TabsTrigger value="master_config">Master Config</TabsTrigger>
             </TabsList>
             <TabsContent value="notes_editor" className="mt-4">
-              <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
-            </TabsContent>
-            <TabsContent value="accounting_policies" className="mt-4">
               <PipelineStage7
                 engagementId={selectedEngId}
                 engagement={engagement}
                 onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
                 onSaveDraft={() => { refetchEng(); }}
               />
+              <Separator className="my-6" />
+              <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
+            </TabsContent>
+            <TabsContent value="caro" className="mt-4">
+              {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
+                <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
+              ) : (
+                <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
+              )}
+            </TabsContent>
+            <TabsContent value="master_config" className="mt-4">
+              <MasterConfigPanel firmId={user?.firm_id || ""} />
             </TabsContent>
           </Tabs>
         ) : activeStage === 8 ? (
-          /* STAGE 8 — CARO / 3CD */
+          /* STAGE 8 — 3CD Reports */
           <div className="max-w-5xl space-y-6">
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-xl font-bold text-foreground">CARO / 3CD Reports</h1>
-
-            <Tabs defaultValue="caro">
-              <TabsList>
-                <TabsTrigger value="caro">CARO 2020</TabsTrigger>
-                <TabsTrigger
-                  value="3cd"
-                  disabled={!(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type)}
-                >
-                  Form 3CD
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="caro" className="mt-4">
-                {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
-                  <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
-                ) : (
-                  <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
-                )}
-              </TabsContent>
-
-              <TabsContent value="3cd" className="mt-4">
-                {(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type) ? (
-                  <Card>
-                    <CardContent className="p-6 space-y-3">
-                      <h2 className="text-lg font-semibold">Form 3CD — Tax Audit Report</h2>
-                      <p className="text-sm text-muted-foreground">
-                        {engagement?.clients?.tax_audit_type === "3cb_3cd"
-                          ? "3CB + 3CD applicable (Non-corporate entity)"
-                          : engagement?.clients?.tax_audit_type === "3ca_3cd"
-                          ? "3CA + 3CD applicable (Audited under other law)"
-                          : "Tax Audit — Form 3CD"}
-                      </p>
-                      <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
-                        <FileText size={16} /> Open Form 3CD Editor
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <Card>
-                    <CardContent className="p-8 text-center text-muted-foreground">
-                      Form 3CD is applicable only for Tax Audit engagements (Section 44AB).
-                    </CardContent>
-                  </Card>
-                )}
-              </TabsContent>
-            </Tabs>
+            <h1 className="text-xl font-bold text-foreground">3CD Reports</h1>
+            {(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type) ? (
+              <Card>
+                <CardContent className="p-6 space-y-3">
+                  <h2 className="text-lg font-semibold">Form 3CD — Tax Audit Report</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {engagement?.clients?.tax_audit_type === "3cb_3cd"
+                      ? "3CB + 3CD applicable (Non-corporate entity)"
+                      : engagement?.clients?.tax_audit_type === "3ca_3cd"
+                      ? "3CA + 3CD applicable (Audited under other law)"
+                      : "Tax Audit — Form 3CD"}
+                  </p>
+                  <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
+                    <FileText size={16} /> Open Form 3CD Editor
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="p-8 text-center text-muted-foreground">
+                  Form 3CD is applicable only for Tax Audit engagements (Section 44AB).
+                </CardContent>
+              </Card>
+            )}
           </div>
         ) : activeStage === 9 ? (
           /* STAGE 9 — Review & QC */

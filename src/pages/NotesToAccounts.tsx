@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 /* ───────────── constants ───────────── */
 const NOTE_LIST: { key: string; num: number | string; title: string }[] = [
@@ -151,6 +152,10 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [rolledFromFy, setRolledFromFy] = useState("");
   const [showPrint, setShowPrint] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
+  const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(NOTE_LIST.map(nl => [nl.key, true]))
+  );
 
   // All note states
   const [note1, setNote1] = useState<any>({});
@@ -183,6 +188,18 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     note_44: [note44, setNote44], note_45: [note45, setNote45],
   };
 
+  /* ── Load client data ── */
+  useEffect(() => {
+    if (!engagementId) return;
+    (async () => {
+      const { data: eng } = await supabase.from("audit_engagements").select("client_id").eq("id", engagementId).single();
+      if (eng?.client_id) {
+        const { data: cl } = await supabase.from("clients").select("name, cin, registered_office, business_activity").eq("id", eng.client_id).single();
+        if (cl) setClientData(cl as any);
+      }
+    })();
+  }, [engagementId]);
+
   /* ── Load ── */
   useEffect(() => {
     if (!engagementId) return;
@@ -190,6 +207,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       const { data } = await supabase.from("notes_to_accounts" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
       if (data) {
         setRecordId((data as any).id);
+        if ((data as any).note_selection) setNoteSelection((data as any).note_selection);
         NOTE_LIST.forEach((nl) => {
           const val = (data as any)[nl.key];
           if (val && typeof val === "object") {
@@ -211,11 +229,9 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
           const rolled = (buffer as any).rolled_notes;
           Object.assign(insertPayload, rolled);
           setRolledFromFy((buffer as any).from_financial_year);
-          // Apply buffer data to state
           NOTE_LIST.forEach((nl) => {
             if (rolled[nl.key]) stateMap[nl.key][1](rolled[nl.key]);
           });
-          // Mark buffer as applied
           await supabase.from("notes_rollover_buffer" as any).update({ applied: true }).eq("id", (buffer as any).id);
         }
         const { data: newRec } = await supabase.from("notes_to_accounts" as any).insert(insertPayload as any).select().single();
@@ -228,13 +244,13 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const saveAll = useCallback(async () => {
     if (!recordId) return;
     setSaving(true);
-    const payload: any = { last_saved_at: new Date().toISOString() };
+    const payload: any = { last_saved_at: new Date().toISOString(), note_selection: noteSelection };
     NOTE_LIST.forEach((nl) => { payload[nl.key] = stateMap[nl.key][0]; });
     const { error } = await supabase.from("notes_to_accounts" as any).update(payload).eq("id", recordId);
     setSaving(false);
     if (error) toast.error("Save failed: " + error.message);
     else toast.success("Saved");
-  }, [recordId, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
+  }, [recordId, noteSelection, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
 
   const triggerAutoSave = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -273,12 +289,21 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     return <div className="p-8 text-center text-muted-foreground">No engagement selected. Open from Audit Pipeline → Stage 7.</div>;
   }
 
+  // Dynamic numbering: only selected notes, renumbered sequentially
+  const selectedNotes = NOTE_LIST.filter(nl => noteSelection[nl.key] !== false);
+  const displayNumberMap = new Map(selectedNotes.map((nl, i) => [nl.key, i + 1]));
+
+  const toggleNoteSelection = (key: string) => {
+    setNoteSelection(prev => ({ ...prev, [key]: !prev[key] }));
+    triggerAutoSave();
+  };
+
   const renderNote = () => {
     const noteKey = activeNote;
     const data = stateMap[noteKey]?.[0] || {};
     const onChange = (f: string, v: string) => updateField(noteKey, f, v);
     switch (noteKey) {
-      case "note_1": return <Note1 data={data} onChange={onChange} />;
+      case "note_1": return <Note1 data={data} onChange={onChange} clientData={clientData} />;
       case "note_2": return <Note2 data={data} onChange={onChange} />;
       case "note_29": return <Note29 data={data} onChange={onChange} rolloverFy={rolledFromFy} />;
       case "note_30": return <Note30 data={data} onChange={onChange} />;
@@ -306,24 +331,36 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       <div className="w-64 border-r border-border bg-card flex-shrink-0">
-        <div className="p-4 border-b border-border">
+       <div className="p-4 border-b border-border">
           <h2 className="font-semibold text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Notes to Accounts</h2>
+          <p className="text-[10px] text-muted-foreground mt-1">{selectedNotes.length} of {NOTE_LIST.length} selected</p>
         </div>
-        <ScrollArea className="h-[calc(100%-3.5rem)]">
+        <ScrollArea className="h-[calc(100%-4.5rem)]">
           <div className="p-2 space-y-0.5">
-            {NOTE_LIST.map((nl) => (
-              <button key={nl.key} onClick={() => setActiveNote(nl.key)}
-                className={`w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 transition-colors ${activeNote === nl.key ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/50 text-foreground"}`}>
-                {isFilled(nl.key) ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-                <span className="truncate">Note {nl.num} — {nl.title}</span>
-              </button>
-            ))}
+            {NOTE_LIST.map((nl) => {
+              const isSelected = noteSelection[nl.key] !== false;
+              const displayNum = displayNumberMap.get(nl.key);
+              return (
+                <div key={nl.key} className="flex items-center gap-1">
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => toggleNoteSelection(nl.key)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <button onClick={() => setActiveNote(nl.key)}
+                    className={`flex-1 text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-2 transition-colors ${activeNote === nl.key ? "bg-primary/10 text-primary font-medium" : isSelected ? "hover:bg-muted/50 text-foreground" : "hover:bg-muted/50 text-muted-foreground line-through"}`}>
+                    {isFilled(nl.key) ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
+                    <span className="truncate">{isSelected && displayNum ? `Note ${displayNum}` : `Note ${nl.num}`} — {nl.title}</span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </ScrollArea>
       </div>
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
-          <h1 className="text-lg font-semibold">Note {NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
+          <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
             <Button variant="outline" size="sm" onClick={() => setShowPrint(true)}><Printer className="h-4 w-4 mr-1" /> Print</Button>
@@ -353,24 +390,47 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
 /* ══════════════════════════════════════════════
    NOTE 1 — BACKGROUND
    ══════════════════════════════════════════════ */
-function Note1({ data, onChange }: { data: any; onChange: (f: string, v: string) => void }) {
+function Note1({ data, onChange, clientData }: { data: any; onChange: (f: string, v: string) => void; clientData?: { name?: string; cin?: string; registered_office?: string; business_activity?: string } | null }) {
+  const companyName = clientData?.name || data.company_name || "[Company Name]";
+  const cin = clientData?.cin || data.reg_number || "[CIN]";
+  const regOffice = data.registered_office || clientData?.registered_office || "";
+  const bizActivity = data.business_activity || clientData?.business_activity || "";
+
   return (
     <div className="space-y-6 max-w-3xl">
       <Card>
         <CardHeader><CardTitle className="text-base">a. Overview of the Reporting Entity</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <div><label className="text-sm font-medium text-foreground">Company Name</label><Input value={data.company_name || ""} onChange={(e) => onChange("company_name", e.target.value)} placeholder="Enter company name" className="mt-1" /></div>
-          <div><label className="text-sm font-medium text-foreground">Registered Office Address</label><Textarea value={data.address || ""} onChange={(e) => onChange("address", e.target.value)} placeholder="Enter registered office address" className="mt-1" rows={2} /></div>
+          <div className="p-4 bg-muted/30 rounded-md text-sm leading-relaxed">
+            <span className="font-semibold">{companyName}</span> incorporated under the Companies Act, 2013 vide CIN{" "}
+            <span className="font-semibold">{cin}</span> having its registered office at{" "}
+            <Input value={regOffice} onChange={(e) => onChange("registered_office", e.target.value)} placeholder="Enter registered office address" className="inline-block w-64 h-7 text-sm mx-1" />
+            {" "}and engaged in business of{" "}
+            <Input value={bizActivity} onChange={(e) => onChange("business_activity", e.target.value)} placeholder="Enter business activity" className="inline-block w-64 h-7 text-sm mx-1" />.
+          </div>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="text-sm font-medium text-foreground">Registration Number</label><Input value={data.reg_number || ""} onChange={(e) => onChange("reg_number", e.target.value)} placeholder="CIN / Registration No." className="mt-1" /></div>
             <div><label className="text-sm font-medium text-foreground">Date of Incorporation</label><Input type="date" value={data.incorporation_date || ""} onChange={(e) => onChange("incorporation_date", e.target.value)} className="mt-1" /></div>
           </div>
-          <div><label className="text-sm font-medium text-foreground">Principal Activity</label><Textarea value={data.principal_activity || ""} onChange={(e) => onChange("principal_activity", e.target.value)} placeholder="Describe principal activities" className="mt-1" rows={2} /></div>
         </CardContent>
       </Card>
-      <Card><CardHeader><CardTitle className="text-base">b. Basis of Preparation</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.basis_of_preparation}</p></CardContent></Card>
-      <Card><CardHeader><CardTitle className="text-base">c. Basis of Measurement</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.basis_of_measurement}</p></CardContent></Card>
-      <Card><CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader><CardContent><p className="text-sm text-muted-foreground leading-relaxed">{STANDARD_TEXTS.use_of_estimates}</p></CardContent></Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">b. Basis of Preparation</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.basis_of_preparation || STANDARD_TEXTS.basis_of_preparation} onChange={(e) => onChange("basis_of_preparation", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">c. Basis of Measurement</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.basis_of_measurement || STANDARD_TEXTS.basis_of_measurement} onChange={(e) => onChange("basis_of_measurement", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea value={data.use_of_estimates || STANDARD_TEXTS.use_of_estimates} onChange={(e) => onChange("use_of_estimates", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
     </div>
   );
 }
