@@ -159,6 +159,7 @@ interface TbHierarchyNode {
   txnCredit: number;
   closing: number;
   primaryGroup: string;
+  bsPlSide: string;
 }
 
 interface ValidationResult {
@@ -187,6 +188,42 @@ const splitDrCr = (value: number) =>
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
+// ─── Tally primary group → BS/PL section classification ───
+const BS_ASSET_GROUPS = new Set([
+  'fixed assets', 'current assets', 'investments', 'sundry debtors',
+  'cash-in-hand', 'bank accounts', 'deposits (asset)', 'loans & advances (asset)',
+  'stock-in-hand', 'bank od a/c', 'deposits', 'loans and advances (asset)',
+  'miscellaneous expenditure (asset)',
+]);
+const BS_LIABILITY_GROUPS = new Set([
+  'capital account', 'loans (liability)', 'current liabilities',
+  'duties & taxes', 'provisions', 'secured loans', 'unsecured loans',
+  'reserves & surplus', 'sundry creditors', 'bank od a/c',
+  'suspense a/c', 'branch / divisions',
+]);
+const PL_INCOME_GROUPS = new Set([
+  'sales accounts', 'direct incomes', 'indirect incomes', 'income (direct)',
+  'income (indirect)',
+]);
+const PL_EXPENSE_GROUPS = new Set([
+  'purchase accounts', 'direct expenses', 'indirect expenses',
+  'manufacturing expenses', 'expense (direct)', 'expense (indirect)',
+]);
+
+type SectionType = 'bs_asset' | 'bs_liability' | 'pl_income' | 'pl_expense' | 'unknown';
+
+function classifyGroup(groupName: string, bsPlSide: string): SectionType {
+  const lower = groupName.toLowerCase().trim();
+  if (BS_ASSET_GROUPS.has(lower)) return 'bs_asset';
+  if (BS_LIABILITY_GROUPS.has(lower)) return 'bs_liability';
+  if (PL_INCOME_GROUPS.has(lower)) return 'pl_income';
+  if (PL_EXPENSE_GROUPS.has(lower)) return 'pl_expense';
+  // Fallback to bs_pl_side from DB
+  if (bsPlSide === 'BS') return 'bs_asset'; // will be refined
+  if (bsPlSide === 'PL') return 'pl_expense'; // will be refined
+  return 'unknown';
+}
+
 // Helper: recursively sum all leaf descendants of a node
 function sumLeafDescendants(
   nodeId: string,
@@ -194,7 +231,6 @@ function sumLeafDescendants(
 ): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
   const children = allNodes.filter(n => n.parentNodeId === nodeId);
   if (children.length === 0) {
-    // This is effectively a leaf — return its own values
     const self = allNodes.find(n => n.nodeId === nodeId);
     return {
       opening:   self?.opening   || 0,
@@ -203,7 +239,6 @@ function sumLeafDescendants(
       closing:   self?.closing   || 0,
     };
   }
-  // Sum across all children recursively
   return children.reduce(
     (acc, child) => {
       const childSum = child.isLeaf
@@ -221,40 +256,55 @@ function sumLeafDescendants(
   );
 }
 
+// Reconstruct parent-child from row order (flat DB data).
+// Level 2 groups become parents; subsequent level 4 rows are children.
+function buildVirtualHierarchy(nodes: TbHierarchyNode[]): TbHierarchyNode[] {
+  const rebuilt: TbHierarchyNode[] = [];
+  let currentGroup: TbHierarchyNode | null = null;
+  for (const n of nodes) {
+    if (!n.isLeaf && n.level <= 2) {
+      // This is a group node
+      currentGroup = { ...n, parentNodeId: null };
+      rebuilt.push(currentGroup);
+    } else if (n.isLeaf && currentGroup) {
+      rebuilt.push({ ...n, parentNodeId: currentGroup.nodeId });
+    } else {
+      // Subgroup under current group
+      if (currentGroup && !n.isLeaf) {
+        rebuilt.push({ ...n, parentNodeId: currentGroup.nodeId });
+      } else {
+        rebuilt.push({ ...n, parentNodeId: null });
+      }
+    }
+  }
+  return rebuilt;
+}
+
 // Format: show dash when value is zero, Indian number format otherwise
 const fmtTb = (v: number) =>
   v === 0 ? '—'
-  : Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  : v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 function TbTreeRow({ node, allNodes, depth = 0 }:
   { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
 
-  const [open, setOpen] = useState(depth < 2);
+  const [open, setOpen] = useState(depth < 1);
   const children = allNodes.filter(n => n.parentNodeId === node.nodeId);
   const hasChildren = children.length > 0;
 
-  // For group nodes: compute totals by summing all leaf descendants
-  // For leaf nodes: use the node's own stored values
   const vals = node.isLeaf
     ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
         txnCredit: node.txnCredit||0, closing: node.closing||0 }
     : sumLeafDescendants(node.nodeId, allNodes);
 
-  // Split each value into DR and CR sides
-  // Positive = DR side, Negative = CR side
-  const openDr  = vals.opening  > 0 ? vals.opening  : 0;
-  const openCr  = vals.opening  < 0 ? Math.abs(vals.opening)  : 0;
-  const closeDr = vals.closing  > 0 ? vals.closing  : 0;
-  const closeCr = vals.closing  < 0 ? Math.abs(vals.closing)  : 0;
-
-  const indent = depth * 20 + 8;
+  const indent = depth * 24 + 12;
 
   return (
     <div>
       <div
         className={cn(
           'flex w-full items-center border-b border-border/30 py-1.5 text-xs hover:bg-muted/30',
-          !node.isLeaf && 'bg-muted/10',
+          !node.isLeaf && 'bg-muted/10 font-semibold',
         )}
         style={{ paddingLeft: `${indent}px` }}
       >
@@ -275,35 +325,27 @@ function TbTreeRow({ node, allNodes, depth = 0 }:
         {/* Account / Group name */}
         <span className={cn(
           'flex-1 truncate pr-2',
-          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground/80',
+          !node.isLeaf ? 'text-foreground' : 'text-foreground/80 font-normal',
         )}>
           {node.name}
         </span>
 
-        {/* 6 numeric columns */}
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+        {/* 4 numeric columns: Opening Bal | Txn Dr | Txn Cr | Closing Bal */}
+        <span className={cn('w-32 shrink-0 text-right tabular-nums font-mono text-[11px] pr-3',
           !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
-          {fmtTb(openDr)}
+          {fmtTb(vals.opening)}
         </span>
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
-          !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
-          {fmtTb(openCr)}
-        </span>
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+        <span className={cn('w-32 shrink-0 text-right tabular-nums font-mono text-[11px] pr-3',
           !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
           {fmtTb(vals.txnDebit)}
         </span>
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px]',
+        <span className={cn('w-32 shrink-0 text-right tabular-nums font-mono text-[11px] pr-3',
           !node.isLeaf ? 'font-semibold' : 'text-muted-foreground')}>
           {fmtTb(vals.txnCredit)}
         </span>
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium',
+        <span className={cn('w-32 shrink-0 text-right tabular-nums font-mono text-[11px] pr-3 font-medium',
           !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
-          {fmtTb(closeDr)}
-        </span>
-        <span className={cn('w-28 shrink-0 text-right tabular-nums font-mono text-[11px] font-medium pr-2',
-          !node.isLeaf ? 'font-semibold text-foreground' : 'text-foreground')}>
-          {fmtTb(closeCr)}
+          {fmtTb(vals.closing)}
         </span>
       </div>
 
@@ -420,7 +462,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async (): Promise<TbHierarchyNode[]> => {
       const { data, error } = await supabase
         .from("tb_hierarchy_nodes")
-        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group")
+        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
         .eq("engagement_id", engagementId)
         .order("row_number", { ascending: true });
 
@@ -437,6 +479,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         txnCredit: row.txn_credit || 0,
         closing: row.closing_balance || 0,
         primaryGroup: row.primary_group || row.tally_group_name,
+        bsPlSide: row.bs_pl_side || 'Unknown',
       }));
     },
     enabled: !!engagementId,
@@ -797,6 +840,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           txnCredit: row.txnCredit || 0,
           closing: row.closing || 0,
           primaryGroup: row.primaryGroup || row.name,
+          bsPlSide: row.bsPlSide || 'Unknown',
         }));
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
         setTbHierarchyNodes(mappedHierarchy);
@@ -1609,24 +1653,42 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
               {/* Hierarchy Tree View */}
               {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (() => {
-                const activeNodes = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                const rawNodes = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                // Reconstruct parent-child from row order if hierarchy is flat
+                const hasParents = rawNodes.some(n => n.parentNodeId !== null);
+                const activeNodes = hasParents ? rawNodes : buildVirtualHierarchy(rawNodes);
                 const rootNodes = activeNodes.filter(n => n.parentNodeId === null);
 
-                // Compute grand total across all root nodes
+                // Classify root groups into sections
+                const sections: { key: SectionType; label: string; colorClass: string; subtotalLabel: string; nodes: TbHierarchyNode[] }[] = [
+                  { key: 'bs_asset', label: 'BALANCE SHEET — ASSETS', colorClass: 'bg-emerald-600/15 text-emerald-400 border-emerald-600/30', subtotalLabel: 'TOTAL ASSETS', nodes: [] },
+                  { key: 'bs_liability', label: 'BALANCE SHEET — LIABILITIES & EQUITY', colorClass: 'bg-emerald-600/15 text-emerald-400 border-emerald-600/30', subtotalLabel: 'TOTAL LIABILITIES & EQUITY', nodes: [] },
+                  { key: 'pl_income', label: 'P&L — INCOME', colorClass: 'bg-amber-600/15 text-amber-400 border-amber-600/30', subtotalLabel: 'TOTAL INCOME', nodes: [] },
+                  { key: 'pl_expense', label: 'P&L — EXPENSES', colorClass: 'bg-purple-600/15 text-purple-400 border-purple-600/30', subtotalLabel: 'TOTAL EXPENSES', nodes: [] },
+                  { key: 'unknown', label: 'UNCLASSIFIED', colorClass: 'bg-muted/30 text-muted-foreground border-border', subtotalLabel: 'TOTAL UNCLASSIFIED', nodes: [] },
+                ];
+                for (const node of rootNodes) {
+                  const section = classifyGroup(node.name, node.bsPlSide);
+                  const s = sections.find(s => s.key === section);
+                  if (s) s.nodes.push(node);
+                }
+                // Filter out empty sections
+                const activeSections = sections.filter(s => s.nodes.length > 0);
+
+                // Grand total across ALL leaves
                 const grandTotal = rootNodes.reduce((acc, root) => {
                   const v = sumLeafDescendants(root.nodeId, activeNodes);
                   return {
-                    opening:   acc.opening   + v.opening,
-                    txnDebit:  acc.txnDebit  + v.txnDebit,
+                    opening: acc.opening + v.opening,
+                    txnDebit: acc.txnDebit + v.txnDebit,
                     txnCredit: acc.txnCredit + v.txnCredit,
-                    closing:   acc.closing   + v.closing,
+                    closing: acc.closing + v.closing,
                   };
                 }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
 
-                const gtOpenDr  = grandTotal.opening  > 0 ? grandTotal.opening  : 0;
-                const gtOpenCr  = grandTotal.opening  < 0 ? Math.abs(grandTotal.opening)  : 0;
-                const gtCloseDr = grandTotal.closing  > 0 ? grandTotal.closing  : 0;
-                const gtCloseCr = grandTotal.closing  < 0 ? Math.abs(grandTotal.closing)  : 0;
+                const isBalanced = Math.abs(grandTotal.txnDebit - grandTotal.txnCredit) < 1;
+
+                const leafCount = activeNodes.filter(n => n.isLeaf).length;
 
                 return (
                   <Card>
@@ -1634,8 +1696,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       <CardTitle className='text-sm flex items-center gap-2'>
                         Trial Balance Hierarchy
                         <span className='text-xs font-normal text-muted-foreground'>
-                          — {activeNodes.filter(n => n.isLeaf).length} ledgers,
-                          {rootNodes.length} primary groups
+                          {leafCount} ledgers · {rootNodes.length} primary groups
                         </span>
                       </CardTitle>
                     </CardHeader>
@@ -1645,34 +1706,69 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         <div className='flex items-center border-b-2 border-border bg-muted/50 px-2 py-2 text-[10px] font-bold text-muted-foreground uppercase sticky top-0 z-10'>
                           <div className='mr-2 w-4 shrink-0' />
                           <span className='flex-1'>Account / Group</span>
-                          <span className='w-28 shrink-0 text-right'>Opening DR</span>
-                          <span className='w-28 shrink-0 text-right'>Opening CR</span>
-                          <span className='w-28 shrink-0 text-right'>TXN DR</span>
-                          <span className='w-28 shrink-0 text-right'>TXN CR</span>
-                          <span className='w-28 shrink-0 text-right'>Closing DR</span>
-                          <span className='w-28 shrink-0 text-right pr-2'>Closing CR</span>
+                          <span className='w-32 shrink-0 text-right pr-3'>Opening Bal</span>
+                          <span className='w-32 shrink-0 text-right pr-3'>TXN DR</span>
+                          <span className='w-32 shrink-0 text-right pr-3'>TXN CR</span>
+                          <span className='w-32 shrink-0 text-right pr-3'>Closing Bal</span>
                         </div>
 
-                        {/* Tree rows */}
-                        {rootNodes.map(node => (
-                          <TbTreeRow
-                            key={node.nodeId}
-                            node={node}
-                            allNodes={activeNodes}
-                            depth={0}
-                          />
-                        ))}
+                        {/* Sections with headers & subtotals */}
+                        {activeSections.map(section => {
+                          const sectionTotal = section.nodes.reduce((acc, root) => {
+                            const v = sumLeafDescendants(root.nodeId, activeNodes);
+                            return {
+                              opening: acc.opening + v.opening,
+                              txnDebit: acc.txnDebit + v.txnDebit,
+                              txnCredit: acc.txnCredit + v.txnCredit,
+                              closing: acc.closing + v.closing,
+                            };
+                          }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
+
+                          return (
+                            <div key={section.key}>
+                              {/* Section header */}
+                              <div className={cn('flex items-center px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b', section.colorClass)}>
+                                {section.label}
+                              </div>
+
+                              {/* Group rows */}
+                              {section.nodes.map(node => (
+                                <TbTreeRow
+                                  key={node.nodeId}
+                                  node={node}
+                                  allNodes={activeNodes}
+                                  depth={0}
+                                />
+                              ))}
+
+                              {/* Section subtotal */}
+                              <div className={cn('flex items-center border-b-2 px-2 py-1.5 text-[11px] font-bold', section.colorClass)}>
+                                <div className='mr-2 w-4 shrink-0' />
+                                <span className='flex-1 pl-1'>{section.subtotalLabel}</span>
+                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.opening)}</span>
+                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.txnDebit)}</span>
+                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.txnCredit)}</span>
+                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.closing)}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
 
                         {/* Grand Total row */}
                         <div className='flex items-center border-t-2 border-border bg-primary/10 px-2 py-2 text-xs font-bold text-foreground sticky bottom-0'>
                           <div className='mr-2 w-4 shrink-0' />
-                          <span className='flex-1'>GRAND TOTAL</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenDr)}</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenCr)}</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnDebit)}</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnCredit)}</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtCloseDr)}</span>
-                          <span className='w-28 shrink-0 text-right tabular-nums font-mono pr-2'>{fmtTb(gtCloseCr)}</span>
+                          <span className='flex-1 flex items-center gap-2'>
+                            GRAND TOTAL
+                            {isBalanced && (
+                              <Badge variant='outline' className='text-[9px] border-emerald-500/50 text-emerald-500 font-semibold'>
+                                ✓ BALANCED
+                              </Badge>
+                            )}
+                          </span>
+                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.opening)}</span>
+                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.txnDebit)}</span>
+                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.txnCredit)}</span>
+                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.closing)}</span>
                         </div>
                       </div>
                     </CardContent>
