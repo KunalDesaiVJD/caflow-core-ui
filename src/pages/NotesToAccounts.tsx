@@ -243,13 +243,13 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const saveAll = useCallback(async () => {
     if (!recordId) return;
     setSaving(true);
-    const payload: any = { last_saved_at: new Date().toISOString() };
+    const payload: any = { last_saved_at: new Date().toISOString(), note_selection: noteSelection };
     NOTE_LIST.forEach((nl) => { payload[nl.key] = stateMap[nl.key][0]; });
     const { error } = await supabase.from("notes_to_accounts" as any).update(payload).eq("id", recordId);
     setSaving(false);
     if (error) toast.error("Save failed: " + error.message);
     else toast.success("Saved");
-  }, [recordId, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
+  }, [recordId, noteSelection, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
 
   const triggerAutoSave = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
