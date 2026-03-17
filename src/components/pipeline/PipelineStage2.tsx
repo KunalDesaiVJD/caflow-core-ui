@@ -24,6 +24,7 @@ import {
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
   CalendarDays
 } from "lucide-react";
+import { buildTbPresentationModel, type TbPresentationModel } from "@/lib/tb-hierarchy";
 
 // ─── Types ───
 interface PipelineStage2Props {
