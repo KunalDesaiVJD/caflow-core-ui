@@ -828,47 +828,28 @@ serve(async (req) => {
           }
         }
       } else {
-        // Formatting fallback when indentation metadata is missing.
-        // Key insight: in a Tally TB export without indent signals, we must detect
-        // group subtotal rows by checking if the NEXT rows have smaller values.
-        const isKnownGroup = KNOWN_GROUP_NAMES.has(normalizedName);
+        // ── No indent signals: use VALUE-MATCHING hierarchy detection ──
+        // This algorithm detects groups by checking if consecutive following
+        // rows' values sum to the current row (Tally DFS property).
+        if (vmResult) {
+          isGroupHint = vmResult.isGroup[index];
 
-        if (row.bold || isKnownGroup) {
-          // Bold rows or known group names are always groups
-          level = row.bold ? 1 : 2;
-          isGroupHint = true;
-        } else if (!hasValues) {
-          // Zero-value rows with a next row = group header
-          level = 2;
-          isGroupHint = true;
-        } else {
-          // Has values: check if it looks like a subtotal row
-          const absClosing = Math.abs(row.closing);
-          let looksLikeSubtotal = false;
-
-          // Check next rows: if the FIRST next row with values has closing < this row's closing,
-          // this is probably a group subtotal.
-          for (let j = index + 1; j < Math.min(index + 8, dataRows.length); j++) {
-            const nr = dataRows[j];
-            if (!nr.name?.trim()) continue;
-            const nrClosing = Math.abs(nr.closing);
-            if (nrClosing > 0 && nrClosing < absClosing * 0.98) {
-              looksLikeSubtotal = true;
-            }
-            break; // only check the first non-empty next row
-          }
-
-          if (looksLikeSubtotal) {
-            level = 2;
-            isGroupHint = true;
+          // Compute level by walking up the parent chain
+          if (vmResult.parentIdx[index] === -1) {
+            level = 1;
           } else {
-            level = 4;
-            isGroupHint = false;
+            let lv = 1;
+            let pidx = vmResult.parentIdx[index];
+            while (pidx !== -1 && lv < 20) {
+              lv++;
+              pidx = vmResult.parentIdx[pidx];
+            }
+            level = lv;
           }
-        }
-
-        if (hasChildrenByIndent) {
-          isGroupHint = true;
+        } else {
+          // Ultimate fallback
+          level = KNOWN_GROUP_NAMES.has(normalizedName) ? 1 : 4;
+          isGroupHint = !hasValues || KNOWN_GROUP_NAMES.has(normalizedName);
         }
       }
 
