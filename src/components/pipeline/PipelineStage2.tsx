@@ -161,6 +161,8 @@ interface TbHierarchyNode {
   closing: number;
   primaryGroup: string;
   bsPlSide: string;
+  normalBal?: string | null;
+  rowNumber?: number | null;
 }
 
 interface ValidationResult {
