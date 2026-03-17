@@ -1530,36 +1530,77 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
 
               {/* Hierarchy Tree View */}
-              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Trial Balance Hierarchy</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <div className="max-h-[500px] overflow-auto">
-                      {/* Header row */}
-                      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase bg-muted/30 sticky top-0 z-10">
-                        <span className="flex-1 pl-6">Account / Group</span>
-                        <span className="w-28 text-right">Opening DR</span>
-                        <span className="w-28 text-right">Opening CR</span>
-                        <span className="w-28 text-right">TXN DR</span>
-                        <span className="w-28 text-right">TXN CR</span>
-                        <span className="w-28 text-right">Closing DR</span>
-                        <span className="w-28 text-right">Closing CR</span>
-                      </div>
-                      {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
-                        .filter((n) => n.parentNodeId === null)
-                        .map((node) => (
+              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (() => {
+                const activeNodes = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                const rootNodes = activeNodes.filter(n => n.parentNodeId === null);
+
+                // Compute grand total across all root nodes
+                const grandTotal = rootNodes.reduce((acc, root) => {
+                  const v = sumLeafDescendants(root.nodeId, activeNodes);
+                  return {
+                    opening:   acc.opening   + v.opening,
+                    txnDebit:  acc.txnDebit  + v.txnDebit,
+                    txnCredit: acc.txnCredit + v.txnCredit,
+                    closing:   acc.closing   + v.closing,
+                  };
+                }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
+
+                const gtOpenDr  = grandTotal.opening  > 0 ? grandTotal.opening  : 0;
+                const gtOpenCr  = grandTotal.opening  < 0 ? Math.abs(grandTotal.opening)  : 0;
+                const gtCloseDr = grandTotal.closing  > 0 ? grandTotal.closing  : 0;
+                const gtCloseCr = grandTotal.closing  < 0 ? Math.abs(grandTotal.closing)  : 0;
+
+                return (
+                  <Card>
+                    <CardHeader className='pb-2'>
+                      <CardTitle className='text-sm flex items-center gap-2'>
+                        Trial Balance Hierarchy
+                        <span className='text-xs font-normal text-muted-foreground'>
+                          — {activeNodes.filter(n => n.isLeaf).length} ledgers,
+                          {rootNodes.length} primary groups
+                        </span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className='p-0'>
+                      <div className='max-h-[600px] overflow-auto'>
+                        {/* Sticky header */}
+                        <div className='flex items-center border-b-2 border-border bg-muted/50 px-2 py-2 text-[10px] font-bold text-muted-foreground uppercase sticky top-0 z-10'>
+                          <div className='mr-2 w-4 shrink-0' />
+                          <span className='flex-1'>Account / Group</span>
+                          <span className='w-28 shrink-0 text-right'>Opening DR</span>
+                          <span className='w-28 shrink-0 text-right'>Opening CR</span>
+                          <span className='w-28 shrink-0 text-right'>TXN DR</span>
+                          <span className='w-28 shrink-0 text-right'>TXN CR</span>
+                          <span className='w-28 shrink-0 text-right'>Closing DR</span>
+                          <span className='w-28 shrink-0 text-right pr-2'>Closing CR</span>
+                        </div>
+
+                        {/* Tree rows */}
+                        {rootNodes.map(node => (
                           <TbTreeRow
                             key={node.nodeId}
                             node={node}
-                            allNodes={tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy}
+                            allNodes={activeNodes}
+                            depth={0}
                           />
                         ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+
+                        {/* Grand Total row */}
+                        <div className='flex items-center border-t-2 border-border bg-primary/10 px-2 py-2 text-xs font-bold text-foreground sticky bottom-0'>
+                          <div className='mr-2 w-4 shrink-0' />
+                          <span className='flex-1'>GRAND TOTAL</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenDr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtOpenCr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnDebit)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(grandTotal.txnCredit)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono'>{fmtTb(gtCloseDr)}</span>
+                          <span className='w-28 shrink-0 text-right tabular-nums font-mono pr-2'>{fmtTb(gtCloseCr)}</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
               {/* Flat Preview Table */}
               {tbViewMode === "flat" && tbResult.preview.length > 0 && (
