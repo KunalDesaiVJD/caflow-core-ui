@@ -34,7 +34,7 @@ import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
-import PipelineStage7 from "@/components/pipeline/PipelineStage7";
+// PipelineStage7 removed — Notes to Accounts now uses NotesToAccountsEditor only
 import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
@@ -809,13 +809,6 @@ export default function AuditPipeline() {
               <TabsTrigger value="master_config">Master Config</TabsTrigger>
             </TabsList>
             <TabsContent value="notes_editor" className="mt-4">
-              <PipelineStage7
-                engagementId={selectedEngId}
-                engagement={engagement}
-                onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
-                onSaveDraft={() => { refetchEng(); }}
-              />
-              <Separator className="my-6" />
               <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
             </TabsContent>
             <TabsContent value="caro" className="mt-4">
@@ -826,7 +819,7 @@ export default function AuditPipeline() {
               )}
             </TabsContent>
             <TabsContent value="master_config" className="mt-4">
-              <MasterConfigPanel firmId={user?.firm_id || ""} />
+              <MasterConfigPanel />
             </TabsContent>
           </Tabs>
         ) : activeStage === 8 ? (
