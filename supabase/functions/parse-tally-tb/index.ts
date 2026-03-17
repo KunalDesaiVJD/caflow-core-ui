@@ -165,6 +165,132 @@ interface HierarchyNode {
   rowNumber: number;
 }
 
+// ─── Value-matching hierarchy detection (for files without indent metadata) ───
+// Detects groups by checking if consecutive following rows' closing balances
+// sum to the current row's value — exploiting Tally's DFS output property.
+function detectHierarchyByValueMatching(dataRows: TBRow[]): {
+  isGroup: boolean[]; groupSpanEnd: number[]; parentIdx: number[];
+} {
+  const n = dataRows.length;
+  const isGroup = new Array(n).fill(false);
+  const groupSpanEnd = new Array(n).fill(-1);
+  const parentIdx = new Array(n).fill(-1);
+  const TOLERANCE = 2.0;
+
+  // Bottom-up pass: inner groups are detected before outer ones
+  for (let i = n - 2; i >= 0; i--) {
+    const target = dataRows[i];
+    const hasClosing = Math.abs(target.closing) > TOLERANCE;
+    const hasTxn = target.txnDebit > TOLERANCE || target.txnCredit > TOLERANCE;
+    const hasOpening = Math.abs(target.opening) > TOLERANCE;
+    const hasAnyValue = hasClosing || hasTxn || hasOpening;
+
+    if (!hasAnyValue) {
+      // Zero-value row: could be a group header. Check if next rows form a block.
+      // We'll handle these after the main value-matching pass.
+      continue;
+    }
+
+    let sumClosing = 0, sumOpening = 0, sumTxnDr = 0, sumTxnCr = 0;
+    let directChildCount = 0;
+    let j = i + 1;
+
+    while (j < n && j - i < 600) {
+      sumClosing += dataRows[j].closing;
+      sumOpening += dataRows[j].opening;
+      sumTxnDr += dataRows[j].txnDebit;
+      sumTxnCr += dataRows[j].txnCredit;
+      directChildCount++;
+
+      // Skip identified sub-group's descendants
+      const nextJ = (isGroup[j] && groupSpanEnd[j] >= 0) ? groupSpanEnd[j] + 1 : j + 1;
+      j = nextJ;
+
+      // Check closing match
+      const closingMatch = Math.abs(sumClosing - target.closing) < TOLERANCE;
+      // For zero-closing targets, try txnDebit match instead
+      const txnDrMatch = !hasClosing && hasTxn && target.txnDebit > TOLERANCE &&
+        Math.abs(sumTxnDr - target.txnDebit) < TOLERANCE;
+
+      if (directChildCount >= 1 && (closingMatch || txnDrMatch)) {
+        // Single-child: require secondary confirmation to avoid false positives
+        if (directChildCount === 1) {
+          const openOk = Math.abs(sumOpening - target.opening) < TOLERANCE;
+          const txnOk = Math.abs(sumTxnDr - target.txnDebit) < TOLERANCE &&
+                        Math.abs(sumTxnCr - target.txnCredit) < TOLERANCE;
+          if (!openOk && !txnOk) continue; // keep scanning
+        }
+
+        // Extend span to include trailing zero-closing rows (e.g. TDS with Dr=Cr)
+        while (j < n && Math.abs(dataRows[j].closing) < TOLERANCE && !isGroup[j]) {
+          // Only include if it doesn't overshoot txn totals
+          const newTxnDr = sumTxnDr + dataRows[j].txnDebit;
+          if (hasTxn && newTxnDr > target.txnDebit + TOLERANCE + 1) break;
+          sumTxnDr = newTxnDr;
+          sumTxnCr += dataRows[j].txnCredit;
+          j++;
+        }
+
+        isGroup[i] = true;
+        groupSpanEnd[i] = j - 1;
+        break;
+      }
+
+      // Safety: stop if sum overshoots target significantly
+      if (hasClosing && directChildCount > 2 &&
+          Math.abs(sumClosing) > Math.abs(target.closing) * 2.5 + 100000) break;
+    }
+  }
+
+  // Second pass: handle zero-value group headers
+  // These rows have no values but are followed by children that do
+  for (let i = n - 2; i >= 0; i--) {
+    if (isGroup[i]) continue;
+    const target = dataRows[i];
+    const hasAnyValue = Math.abs(target.closing) > TOLERANCE ||
+      Math.abs(target.opening) > TOLERANCE ||
+      target.txnDebit > TOLERANCE || target.txnCredit > TOLERANCE;
+    if (hasAnyValue) continue;
+
+    // Check if next rows are children (have values or are identified groups)
+    let spanEnd = -1;
+    for (let k = i + 1; k < n && k - i < 300; k++) {
+      const kVal = Math.abs(dataRows[k].closing) > TOLERANCE ||
+        Math.abs(dataRows[k].opening) > TOLERANCE ||
+        dataRows[k].txnDebit > TOLERANCE || dataRows[k].txnCredit > TOLERANCE;
+      if (kVal || isGroup[k]) {
+        spanEnd = isGroup[k] && groupSpanEnd[k] >= 0 ? groupSpanEnd[k] : k;
+        if (isGroup[k] && groupSpanEnd[k] >= 0) k = groupSpanEnd[k];
+      } else {
+        break;
+      }
+    }
+    if (spanEnd > i) {
+      isGroup[i] = true;
+      groupSpanEnd[i] = spanEnd;
+    }
+  }
+
+  // Assign parent indices: each group's direct children
+  for (let i = 0; i < n; i++) {
+    if (!isGroup[i] || groupSpanEnd[i] < 0) continue;
+    let j = i + 1;
+    while (j <= groupSpanEnd[i]) {
+      if (parentIdx[j] === -1) {
+        parentIdx[j] = i;
+      }
+      // Skip sub-group spans to only assign DIRECT children
+      if (isGroup[j] && groupSpanEnd[j] >= 0) {
+        j = groupSpanEnd[j] + 1;
+      } else {
+        j++;
+      }
+    }
+  }
+
+  return { isGroup, groupSpanEnd, parentIdx };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -666,6 +792,13 @@ serve(async (req) => {
 
     const structuredRows: StructuredRow[] = [];
 
+    // Pre-compute value-matching hierarchy when no indent signals exist
+    const vmResult = hasIndentSignals ? null : detectHierarchyByValueMatching(dataRows);
+    if (vmResult) {
+      const groupCount = vmResult.isGroup.filter(Boolean).length;
+      console.log(`[parse-tally-tb] Value-matching detected ${groupCount} groups out of ${dataRows.length} rows`);
+    }
+
     for (let index = 0; index < dataRows.length; index++) {
       const row = dataRows[index];
       const normalizedName = normalizeGroupName(row.name);
@@ -695,47 +828,28 @@ serve(async (req) => {
           }
         }
       } else {
-        // Formatting fallback when indentation metadata is missing.
-        // Key insight: in a Tally TB export without indent signals, we must detect
-        // group subtotal rows by checking if the NEXT rows have smaller values.
-        const isKnownGroup = KNOWN_GROUP_NAMES.has(normalizedName);
+        // ── No indent signals: use VALUE-MATCHING hierarchy detection ──
+        // This algorithm detects groups by checking if consecutive following
+        // rows' values sum to the current row (Tally DFS property).
+        if (vmResult) {
+          isGroupHint = vmResult.isGroup[index];
 
-        if (row.bold || isKnownGroup) {
-          // Bold rows or known group names are always groups
-          level = row.bold ? 1 : 2;
-          isGroupHint = true;
-        } else if (!hasValues) {
-          // Zero-value rows with a next row = group header
-          level = 2;
-          isGroupHint = true;
-        } else {
-          // Has values: check if it looks like a subtotal row
-          const absClosing = Math.abs(row.closing);
-          let looksLikeSubtotal = false;
-
-          // Check next rows: if the FIRST next row with values has closing < this row's closing,
-          // this is probably a group subtotal.
-          for (let j = index + 1; j < Math.min(index + 8, dataRows.length); j++) {
-            const nr = dataRows[j];
-            if (!nr.name?.trim()) continue;
-            const nrClosing = Math.abs(nr.closing);
-            if (nrClosing > 0 && nrClosing < absClosing * 0.98) {
-              looksLikeSubtotal = true;
-            }
-            break; // only check the first non-empty next row
-          }
-
-          if (looksLikeSubtotal) {
-            level = 2;
-            isGroupHint = true;
+          // Compute level by walking up the parent chain
+          if (vmResult.parentIdx[index] === -1) {
+            level = 1;
           } else {
-            level = 4;
-            isGroupHint = false;
+            let lv = 1;
+            let pidx = vmResult.parentIdx[index];
+            while (pidx !== -1 && lv < 20) {
+              lv++;
+              pidx = vmResult.parentIdx[pidx];
+            }
+            level = lv;
           }
-        }
-
-        if (hasChildrenByIndent) {
-          isGroupHint = true;
+        } else {
+          // Ultimate fallback
+          level = KNOWN_GROUP_NAMES.has(normalizedName) ? 1 : 4;
+          isGroupHint = !hasValues || KNOWN_GROUP_NAMES.has(normalizedName);
         }
       }
 

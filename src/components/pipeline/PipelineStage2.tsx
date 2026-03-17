@@ -200,10 +200,12 @@ const BS_LIABILITY_GROUPS = new Set([
   'duties & taxes', 'provisions', 'secured loans', 'unsecured loans',
   'reserves & surplus', 'sundry creditors', 'bank od a/c',
   'suspense a/c', 'branch / divisions',
+  'share holder funds', 'shareholders funds', 'share capital',
+  'reserves and surplus', 'partners capital', 'other liabilities',
 ]);
 const PL_INCOME_GROUPS = new Set([
   'sales accounts', 'direct incomes', 'indirect incomes', 'income (direct)',
-  'income (indirect)',
+  'income (indirect)', 'other income',
 ]);
 const PL_EXPENSE_GROUPS = new Set([
   'purchase accounts', 'direct expenses', 'indirect expenses',
