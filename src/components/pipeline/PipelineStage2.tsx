@@ -178,6 +178,10 @@ interface ValidationResult {
   grandTotalDetected: boolean;
   primaryGroups: string[];
   primaryGroupCount: number;
+  onlyGroupsCollapsible?: boolean;
+  groupTotalsTallied?: boolean;
+  unclassifiedNodes?: number;
+  allRulesPassed?: boolean;
 }
 
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
