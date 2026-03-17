@@ -220,13 +220,23 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   }, []);
 
 
+  /* ── Load note selection from separate table ── */
+  useEffect(() => {
+    if (!engagementId) return;
+    (async () => {
+      const { data: sel } = await supabase.from("notes_selection" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
+      if (sel && (sel as any).selected_notes) {
+        setNoteSelection((sel as any).selected_notes);
+      }
+    })();
+  }, [engagementId]);
+
   useEffect(() => {
     if (!engagementId) return;
     (async () => {
       const { data } = await supabase.from("notes_to_accounts" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
       if (data) {
         setRecordId((data as any).id);
-        if ((data as any).note_selection) setNoteSelection((data as any).note_selection);
         NOTE_LIST.forEach((nl) => {
           const val = (data as any)[nl.key];
           if (val && typeof val === "object") {
