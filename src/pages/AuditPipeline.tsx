@@ -809,13 +809,6 @@ export default function AuditPipeline() {
               <TabsTrigger value="master_config">Master Config</TabsTrigger>
             </TabsList>
             <TabsContent value="notes_editor" className="mt-4">
-              <PipelineStage7
-                engagementId={selectedEngId}
-                engagement={engagement}
-                onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
-                onSaveDraft={() => { refetchEng(); }}
-              />
-              <Separator className="my-6" />
               <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
             </TabsContent>
             <TabsContent value="caro" className="mt-4">
