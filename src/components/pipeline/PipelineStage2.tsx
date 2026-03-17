@@ -159,6 +159,7 @@ interface TbHierarchyNode {
   txnCredit: number;
   closing: number;
   primaryGroup: string;
+  bsPlSide: string;
 }
 
 interface ValidationResult {
