@@ -1898,6 +1898,7 @@ export type Database = {
           gross_block_opening: number
           id: string
           is_carried_forward: boolean
+          is_finalized: boolean | null
           is_fully_depreciated: boolean | null
           is_locked: boolean
           location: string | null
@@ -1932,6 +1933,7 @@ export type Database = {
           gross_block_opening?: number
           id?: string
           is_carried_forward?: boolean
+          is_finalized?: boolean | null
           is_fully_depreciated?: boolean | null
           is_locked?: boolean
           location?: string | null
@@ -1966,6 +1968,7 @@ export type Database = {
           gross_block_opening?: number
           id?: string
           is_carried_forward?: boolean
+          is_finalized?: boolean | null
           is_fully_depreciated?: boolean | null
           is_locked?: boolean
           location?: string | null
