@@ -359,7 +359,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       </div>
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card">
-          <h1 className="text-lg font-semibold">Note {NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
+          <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
             <Button variant="outline" size="sm" onClick={() => setShowPrint(true)}><Printer className="h-4 w-4 mr-1" /> Print</Button>
