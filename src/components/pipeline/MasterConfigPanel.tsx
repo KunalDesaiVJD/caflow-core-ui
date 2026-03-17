@@ -55,7 +55,10 @@ export function MasterConfigPanel({ firmId }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!firmId) return;
+    if (!firmId) {
+      setLoading(false);
+      return;
+    }
     loadAll();
   }, [firmId]);
 

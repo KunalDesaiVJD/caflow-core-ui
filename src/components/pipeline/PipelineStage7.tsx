@@ -443,15 +443,7 @@ export default function PipelineStage7({ engagementId, engagement, onStageComple
             ) : (
               /* Standard note editor */
               <div className="space-y-3">
-                {current.content_auto && !current.content_user && (
-                  <div className="bg-muted/50 rounded p-3 text-xs text-muted-foreground">
-                    <p className="font-semibold mb-1">Template Text:</p>
-                    <p className="whitespace-pre-wrap">{current.content_auto}</p>
-                    <Button size="sm" variant="outline" className="mt-2 text-xs" onClick={() => updateNoteContent(selectedIdx, current.content_auto)}>
-                      Use as Starting Point
-                    </Button>
-                  </div>
-                )}
+                {/* Template text auto-populates into the textarea directly if no user content */}
 
                 <Textarea
                   value={current.content_user}
