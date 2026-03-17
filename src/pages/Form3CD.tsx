@@ -164,6 +164,7 @@ export default function Form3CD() {
   const [searchParams] = useSearchParams();
   const engagementId = searchParams.get("engagementId");
   const { user } = useAuth();
+  const [CLAUSE_NAV, setCLAUSE_NAV] = useState(CLAUSE_NAV_FALLBACK);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
