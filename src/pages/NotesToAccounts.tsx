@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 /* ───────────── constants ───────────── */
 const NOTE_LIST: { key: string; num: number | string; title: string }[] = [
