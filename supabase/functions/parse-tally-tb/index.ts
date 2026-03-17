@@ -1169,6 +1169,7 @@ serve(async (req) => {
           primaryGroup: n.primaryGroup,
           bsPlSide: n.bsPlSide,
           normalBal: n.normalBal,
+          rowNumber: n.rowNumber,
         })),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

@@ -24,6 +24,7 @@ import {
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
   CalendarDays
 } from "lucide-react";
+import { buildTbPresentationModel, type TbPresentationModel } from "@/lib/tb-hierarchy";
 
 // ─── Types ───
 interface PipelineStage2Props {
@@ -160,6 +161,8 @@ interface TbHierarchyNode {
   closing: number;
   primaryGroup: string;
   bsPlSide: string;
+  normalBal?: string | null;
+  rowNumber?: number | null;
 }
 
 interface ValidationResult {
@@ -175,117 +178,39 @@ interface ValidationResult {
   grandTotalDetected: boolean;
   primaryGroups: string[];
   primaryGroupCount: number;
+  onlyGroupsCollapsible?: boolean;
+  groupTotalsTallied?: boolean;
+  unclassifiedNodes?: number;
+  allRulesPassed?: boolean;
 }
-
-const formatTbNumber = (value: number) =>
-  Math.abs(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-const splitDrCr = (value: number) =>
-  value >= 0
-    ? { dr: value || 0, cr: 0 }
-    : { dr: 0, cr: Math.abs(value || 0) };
 
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
 
-// ─── Tally primary group → BS/PL section classification ───
-const BS_ASSET_GROUPS = new Set([
-  'fixed assets', 'current assets', 'investments', 'sundry debtors',
-  'cash-in-hand', 'bank accounts', 'deposits (asset)', 'loans & advances (asset)',
-  'stock-in-hand', 'bank od a/c', 'deposits', 'loans and advances (asset)',
-  'miscellaneous expenditure (asset)',
-]);
-const BS_LIABILITY_GROUPS = new Set([
-  'capital account', 'loans (liability)', 'current liabilities',
-  'duties & taxes', 'provisions', 'secured loans', 'unsecured loans',
-  'reserves & surplus', 'sundry creditors', 'bank od a/c',
-  'suspense a/c', 'branch / divisions',
-  'share holder funds', 'shareholders funds', 'share capital',
-  'reserves and surplus', 'partners capital', 'other liabilities',
-]);
-const PL_INCOME_GROUPS = new Set([
-  'sales accounts', 'direct incomes', 'indirect incomes', 'income (direct)',
-  'income (indirect)', 'other income',
-]);
-const PL_EXPENSE_GROUPS = new Set([
-  'purchase accounts', 'direct expenses', 'indirect expenses',
-  'manufacturing expenses', 'expense (direct)', 'expense (indirect)',
-]);
-
-type SectionType = 'bs_asset' | 'bs_liability' | 'pl_income' | 'pl_expense' | 'unknown';
-
-function classifyGroup(groupName: string, bsPlSide: string): SectionType {
-  const lower = groupName.toLowerCase().trim();
-  if (BS_ASSET_GROUPS.has(lower)) return 'bs_asset';
-  if (BS_LIABILITY_GROUPS.has(lower)) return 'bs_liability';
-  if (PL_INCOME_GROUPS.has(lower)) return 'pl_income';
-  if (PL_EXPENSE_GROUPS.has(lower)) return 'pl_expense';
-  // Fallback to bs_pl_side from DB
-  if (bsPlSide === 'BS') return 'bs_asset'; // will be refined
-  if (bsPlSide === 'PL') return 'pl_expense'; // will be refined
-  return 'unknown';
-}
-
-// Helper: recursively sum all leaf descendants of a node
-function sumLeafDescendants(
-  nodeId: string,
-  allNodes: TbHierarchyNode[]
-): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
-  const children = allNodes.filter(n => n.parentNodeId === nodeId);
+function sumDisplayedNode(nodeId: string, allNodes: TbHierarchyNode[]): { opening: number; txnDebit: number; txnCredit: number; closing: number } {
+  const children = allNodes.filter((n) => n.parentNodeId === nodeId);
   if (children.length === 0) {
-    const self = allNodes.find(n => n.nodeId === nodeId);
+    const self = allNodes.find((n) => n.nodeId === nodeId);
     return {
-      opening:   self?.opening   || 0,
-      txnDebit:  self?.txnDebit  || 0,
+      opening: self?.opening || 0,
+      txnDebit: self?.txnDebit || 0,
       txnCredit: self?.txnCredit || 0,
-      closing:   self?.closing   || 0,
+      closing: self?.closing || 0,
     };
   }
-  return children.reduce(
-    (acc, child) => {
-      const childSum = child.isLeaf
-        ? { opening: child.opening||0, txnDebit: child.txnDebit||0,
-            txnCredit: child.txnCredit||0, closing: child.closing||0 }
-        : sumLeafDescendants(child.nodeId, allNodes);
-      return {
-        opening:   acc.opening   + childSum.opening,
-        txnDebit:  acc.txnDebit  + childSum.txnDebit,
-        txnCredit: acc.txnCredit + childSum.txnCredit,
-        closing:   acc.closing   + childSum.closing,
-      };
-    },
-    { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 }
-  );
-}
 
-// Reconstruct parent-child from row order (flat DB data).
-// Level 2 groups become parents; subsequent level 4 rows are children.
-function buildVirtualHierarchy(nodes: TbHierarchyNode[]): TbHierarchyNode[] {
-  const rebuilt: TbHierarchyNode[] = [];
-  let currentGroup: TbHierarchyNode | null = null;
-  for (const n of nodes) {
-    if (!n.isLeaf && n.level <= 2) {
-      // This is a group node
-      currentGroup = { ...n, parentNodeId: null };
-      rebuilt.push(currentGroup);
-    } else if (n.isLeaf && currentGroup) {
-      rebuilt.push({ ...n, parentNodeId: currentGroup.nodeId });
-    } else {
-      // Subgroup under current group
-      if (currentGroup && !n.isLeaf) {
-        rebuilt.push({ ...n, parentNodeId: currentGroup.nodeId });
-      } else {
-        rebuilt.push({ ...n, parentNodeId: null });
-      }
-    }
-  }
-  return rebuilt;
+  return children.reduce((acc, child) => {
+    const childTotals = child.isLeaf
+      ? { opening: child.opening || 0, txnDebit: child.txnDebit || 0, txnCredit: child.txnCredit || 0, closing: child.closing || 0 }
+      : sumDisplayedNode(child.nodeId, allNodes);
+    return {
+      opening: acc.opening + childTotals.opening,
+      txnDebit: acc.txnDebit + childTotals.txnDebit,
+      txnCredit: acc.txnCredit + childTotals.txnCredit,
+      closing: acc.closing + childTotals.closing,
+    };
+  }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
 }
-
-// Format: show dash when value is zero, Indian number format otherwise
-const fmtTb = (v: number) =>
-  v === 0 ? '—'
-  : v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 function TbTreeRow({ node, allNodes, depth = 0 }:
   { node: TbHierarchyNode; allNodes: TbHierarchyNode[]; depth?: number }) {
@@ -295,9 +220,8 @@ function TbTreeRow({ node, allNodes, depth = 0 }:
   const hasChildren = children.length > 0;
 
   const vals = node.isLeaf
-    ? { opening: node.opening||0, txnDebit: node.txnDebit||0,
-        txnCredit: node.txnCredit||0, closing: node.closing||0 }
-    : sumLeafDescendants(node.nodeId, allNodes);
+    ? { opening: node.opening || 0, txnDebit: node.txnDebit || 0, txnCredit: node.txnCredit || 0, closing: node.closing || 0 }
+    : sumDisplayedNode(node.nodeId, allNodes);
 
   const indent = depth * 24 + 12;
 
@@ -464,7 +388,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async (): Promise<TbHierarchyNode[]> => {
       const { data, error } = await supabase
         .from("tb_hierarchy_nodes")
-        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
+        .select("node_id, parent_node_id, tally_group_name, level, is_leaf, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side, normal_balance, row_number")
         .eq("engagement_id", engagementId)
         .order("row_number", { ascending: true });
 
@@ -482,6 +406,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         closing: row.closing_balance || 0,
         primaryGroup: row.primary_group || row.tally_group_name,
         bsPlSide: row.bs_pl_side || 'Unknown',
+        normalBal: row.normal_balance || null,
+        rowNumber: row.row_number || null,
       }));
     },
     enabled: !!engagementId,
@@ -518,20 +444,21 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   });
 
   // Load existing TB result if available
-  useEffect(() => {
-    if (storedTbHierarchy.length > 0) {
-      const leafRows = storedTbHierarchy.filter((row) => row.isLeaf);
-      const debitTotal = leafRows.reduce((sum, row) => sum + (row.txnDebit || 0), 0);
-      const creditTotal = leafRows.reduce((sum, row) => sum + (row.txnCredit || 0), 0);
-      const difference = Math.abs(debitTotal - creditTotal);
+  const tbPresentation: TbPresentationModel | null = useMemo(() => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    return source.length > 0 ? buildTbPresentationModel(source) : null;
+  }, [tbHierarchyNodes, storedTbHierarchy]);
 
-      setTbHierarchyNodes(storedTbHierarchy);
+  useEffect(() => {
+    if (tbPresentation) {
+      const leafRows = tbPresentation.activeNodes.filter((row) => row.isLeaf);
+      setTbValidation(tbPresentation.validation as any);
       setTbResult((prev) => prev || {
         totalAccounts: leafRows.length,
-        debitTotal: Math.round(debitTotal * 100) / 100,
-        creditTotal: Math.round(creditTotal * 100) / 100,
-        difference: Math.round(difference * 100) / 100,
-        isValid: difference <= 1,
+        debitTotal: Math.round(tbPresentation.grandTotal.txnDebit * 100) / 100,
+        creditTotal: Math.round(tbPresentation.grandTotal.txnCredit * 100) / 100,
+        difference: Math.round(Math.abs(tbPresentation.grandTotal.txnDebit - tbPresentation.grandTotal.txnCredit) * 100) / 100,
+        isValid: tbPresentation.validation.allRulesPassed,
         preview: leafRows.slice(0, 20).map((row) => ({
           account_name: row.name,
           account_group: row.primaryGroup,
@@ -555,7 +482,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       });
       setTbStep(5);
     }
-  }, [existingTb, storedTbHierarchy]);
+  }, [existingTb, tbPresentation]);
 
   // ─── Replace confirmation state ───
   const [showReplaceDialog, setShowReplaceDialog] = useState(false);
@@ -843,6 +770,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           closing: row.closing || 0,
           primaryGroup: row.primaryGroup || row.name,
           bsPlSide: row.bsPlSide || 'Unknown',
+          normalBal: row.normalBal || null,
+          rowNumber: row.rowNumber || null,
         }));
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
         setTbHierarchyNodes(mappedHierarchy);
@@ -852,12 +781,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           setTbValidation(data.validation);
         }
 
+        const strictPresentation = buildTbPresentationModel(mappedHierarchy);
+        setTbValidation(strictPresentation.validation as any);
         setTbResult({
-          totalAccounts: data.leafLedgers,
-          debitTotal: Math.round(data.totalDr * 100) / 100,
-          creditTotal: Math.round(data.totalCr * 100) / 100,
-          difference: Math.round(Math.abs(data.totalDr - data.totalCr) * 100) / 100,
-          isValid: data.isBalanced,
+          totalAccounts: strictPresentation.leafCount,
+          debitTotal: Math.round(strictPresentation.grandTotal.txnDebit * 100) / 100,
+          creditTotal: Math.round(strictPresentation.grandTotal.txnCredit * 100) / 100,
+          difference: Math.round(Math.abs(strictPresentation.grandTotal.txnDebit - strictPresentation.grandTotal.txnCredit) * 100) / 100,
+          isValid: strictPresentation.validation.allRulesPassed,
           preview: leafPreview.map((n) => ({
             account_name: n.name,
             account_group: n.primaryGroup,
@@ -1249,7 +1180,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   };
 
   // Check if stage 2 can be completed
-  const canComplete = tbResult?.isValid || (existingTb as any)?.is_validated;
+  const canComplete = !!tbPresentation?.validation.allRulesPassed;
 
   const handleCompleteStage2 = async () => {
     if (!engagement) return;
@@ -1534,13 +1465,10 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Validation Failed</AlertTitle>
                   <AlertDescription className="text-sm">
-                    Difference of ₹{tbResult.difference.toLocaleString("en-IN")} detected between Debits and Credits.
+                    Trial Balance preview is blocked until all validation rules pass, including BS Assets = BS Liabilities & Equity and zero unclassified groups.
                     <div className="flex gap-2 mt-2">
                       <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
                         Re-upload
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => setTbShowOverride(true)}>
-                        Override with Justification
                       </Button>
                     </div>
                   </AlertDescription>
@@ -1594,7 +1522,17 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1
                           ? <CheckCircle2 size={14} className="text-primary" />
                           : <FileWarning size={14} className="text-amber-600" />}
-                        <span>BS Assets ≈ Liabilities: {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1 ? "Yes" : "No"}</span>
+                        <span>BS Assets = Liabilities & Equity: {Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) < 1 ? "Yes" : "No"}</span>
+                      </div>
+
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.onlyGroupsCollapsible ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation.onlyGroupsCollapsible ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Only groups collapsible: {tbValidation.onlyGroupsCollapsible ? "Yes" : "No"}</span>
+                      </div>
+
+                      <div className={cn("flex items-center gap-2 p-2 rounded", tbValidation.groupTotalsTallied ? "bg-primary/5" : "bg-amber-500/5")}>
+                        {tbValidation.groupTotalsTallied ? <CheckCircle2 size={14} className="text-primary" /> : <FileWarning size={14} className="text-amber-600" />}
+                        <span>Group totals tallied: {tbValidation.groupTotalsTallied ? "Yes" : "No"}</span>
                       </div>
                     </div>
 
@@ -1654,129 +1592,61 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
 
               {/* Hierarchy Tree View */}
-              {tbViewMode === "tree" && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (() => {
-                const rawNodes = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
-                // Reconstruct parent-child from row order if hierarchy is flat
-                const hasParents = rawNodes.some(n => n.parentNodeId !== null);
-                const activeNodes = hasParents ? rawNodes : buildVirtualHierarchy(rawNodes);
-                const rootNodes = activeNodes.filter(n => n.parentNodeId === null);
-
-                // Classify root groups into sections
-                const sections: { key: SectionType; label: string; colorClass: string; subtotalLabel: string; nodes: TbHierarchyNode[] }[] = [
-                  { key: 'bs_asset', label: 'BALANCE SHEET — ASSETS', colorClass: 'bg-emerald-600/15 text-emerald-400 border-emerald-600/30', subtotalLabel: 'TOTAL ASSETS', nodes: [] },
-                  { key: 'bs_liability', label: 'BALANCE SHEET — LIABILITIES & EQUITY', colorClass: 'bg-emerald-600/15 text-emerald-400 border-emerald-600/30', subtotalLabel: 'TOTAL LIABILITIES & EQUITY', nodes: [] },
-                  { key: 'pl_income', label: 'P&L — INCOME', colorClass: 'bg-amber-600/15 text-amber-400 border-amber-600/30', subtotalLabel: 'TOTAL INCOME', nodes: [] },
-                  { key: 'pl_expense', label: 'P&L — EXPENSES', colorClass: 'bg-purple-600/15 text-purple-400 border-purple-600/30', subtotalLabel: 'TOTAL EXPENSES', nodes: [] },
-                  { key: 'unknown', label: 'UNCLASSIFIED', colorClass: 'bg-muted/30 text-muted-foreground border-border', subtotalLabel: 'TOTAL UNCLASSIFIED', nodes: [] },
-                ];
-                for (const node of rootNodes) {
-                  const section = classifyGroup(node.name, node.bsPlSide);
-                  const s = sections.find(s => s.key === section);
-                  if (s) s.nodes.push(node);
-                }
-                // Filter out empty sections
-                const activeSections = sections.filter(s => s.nodes.length > 0);
-
-                // Grand total across ALL leaves
-                const grandTotal = rootNodes.reduce((acc, root) => {
-                  const v = sumLeafDescendants(root.nodeId, activeNodes);
-                  return {
-                    opening: acc.opening + v.opening,
-                    txnDebit: acc.txnDebit + v.txnDebit,
-                    txnCredit: acc.txnCredit + v.txnCredit,
-                    closing: acc.closing + v.closing,
-                  };
-                }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
-
-                const isBalanced = Math.abs(grandTotal.txnDebit - grandTotal.txnCredit) < 1;
-
-                const leafCount = activeNodes.filter(n => n.isLeaf).length;
-
-                return (
-                  <Card>
-                    <CardHeader className='pb-2'>
-                      <CardTitle className='text-sm flex items-center gap-2'>
-                        Trial Balance Hierarchy
-                        <span className='text-xs font-normal text-muted-foreground'>
-                          {leafCount} ledgers · {rootNodes.length} primary groups
-                        </span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className='p-0'>
-                      <div className='max-h-[600px] overflow-auto'>
-                        {/* Sticky header */}
-                        <div className='flex items-center border-b-2 border-border bg-muted/50 px-2 py-2 text-[10px] font-bold text-muted-foreground uppercase sticky top-0 z-10'>
-                          <div className='mr-2 w-4 shrink-0' />
-                          <span className='flex-1'>Account / Group</span>
-                          <span className='w-32 shrink-0 text-right pr-3'>Opening Bal</span>
-                          <span className='w-32 shrink-0 text-right pr-3'>TXN DR</span>
-                          <span className='w-32 shrink-0 text-right pr-3'>TXN CR</span>
-                          <span className='w-32 shrink-0 text-right pr-3'>Closing Bal</span>
-                        </div>
-
-                        {/* Sections with headers & subtotals */}
-                        {activeSections.map(section => {
-                          const sectionTotal = section.nodes.reduce((acc, root) => {
-                            const v = sumLeafDescendants(root.nodeId, activeNodes);
-                            return {
-                              opening: acc.opening + v.opening,
-                              txnDebit: acc.txnDebit + v.txnDebit,
-                              txnCredit: acc.txnCredit + v.txnCredit,
-                              closing: acc.closing + v.closing,
-                            };
-                          }, { opening: 0, txnDebit: 0, txnCredit: 0, closing: 0 });
-
-                          return (
-                            <div key={section.key}>
-                              {/* Section header */}
-                              <div className={cn('flex items-center px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b', section.colorClass)}>
-                                {section.label}
-                              </div>
-
-                              {/* Group rows */}
-                              {section.nodes.map(node => (
-                                <TbTreeRow
-                                  key={node.nodeId}
-                                  node={node}
-                                  allNodes={activeNodes}
-                                  depth={0}
-                                />
-                              ))}
-
-                              {/* Section subtotal */}
-                              <div className={cn('flex items-center border-b-2 px-2 py-1.5 text-[11px] font-bold', section.colorClass)}>
-                                <div className='mr-2 w-4 shrink-0' />
-                                <span className='flex-1 pl-1'>{section.subtotalLabel}</span>
-                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.opening)}</span>
-                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.txnDebit)}</span>
-                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.txnCredit)}</span>
-                                <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(sectionTotal.closing)}</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                        {/* Grand Total row */}
-                        <div className='flex items-center border-t-2 border-border bg-primary/10 px-2 py-2 text-xs font-bold text-foreground sticky bottom-0'>
-                          <div className='mr-2 w-4 shrink-0' />
-                          <span className='flex-1 flex items-center gap-2'>
-                            GRAND TOTAL
-                            {isBalanced && (
-                              <Badge variant='outline' className='text-[9px] border-emerald-500/50 text-emerald-500 font-semibold'>
-                                ✓ BALANCED
-                              </Badge>
-                            )}
-                          </span>
-                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.opening)}</span>
-                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.txnDebit)}</span>
-                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.txnCredit)}</span>
-                          <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(grandTotal.closing)}</span>
-                        </div>
+              {tbViewMode === "tree" && tbPresentation && tbPresentation.validation.allRulesPassed && (
+                <Card>
+                  <CardHeader className='pb-2'>
+                    <CardTitle className='text-sm flex items-center gap-2'>
+                      Trial Balance Hierarchy
+                      <span className='text-xs font-normal text-muted-foreground'>
+                        {tbPresentation.leafCount} ledgers · {tbPresentation.rootNodes.length} primary groups
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className='p-0'>
+                    <div className='max-h-[600px] overflow-auto'>
+                      <div className='flex items-center border-b-2 border-border bg-muted/50 px-2 py-2 text-[10px] font-bold text-muted-foreground uppercase sticky top-0 z-10'>
+                        <div className='mr-2 w-4 shrink-0' />
+                        <span className='flex-1'>Account / Group</span>
+                        <span className='w-32 shrink-0 text-right pr-3'>Opening Bal</span>
+                        <span className='w-32 shrink-0 text-right pr-3'>TXN DR</span>
+                        <span className='w-32 shrink-0 text-right pr-3'>TXN CR</span>
+                        <span className='w-32 shrink-0 text-right pr-3'>Closing Bal</span>
                       </div>
-                    </CardContent>
-                  </Card>
-                );
-              })()}
+
+                      {tbPresentation.sections.map((section) => (
+                        <div key={section.key}>
+                          <div className='flex items-center px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b bg-muted/30 text-foreground'>
+                            {section.label}
+                          </div>
+                          {section.nodes.map((node) => (
+                            <TbTreeRow key={node.nodeId} node={node as TbHierarchyNode} allNodes={tbPresentation.activeNodes as TbHierarchyNode[]} depth={0} />
+                          ))}
+                          <div className='flex items-center border-b-2 px-2 py-1.5 text-[11px] font-bold bg-muted/20 text-foreground'>
+                            <div className='mr-2 w-4 shrink-0' />
+                            <span className='flex-1 pl-1'>{section.subtotalLabel}</span>
+                            <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(section.totals.opening)}</span>
+                            <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(section.totals.txnDebit)}</span>
+                            <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(section.totals.txnCredit)}</span>
+                            <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(section.totals.closing)}</span>
+                          </div>
+                        </div>
+                      ))}
+
+                      <div className='flex items-center border-t-2 border-border bg-primary/10 px-2 py-2 text-xs font-bold text-foreground sticky bottom-0'>
+                        <div className='mr-2 w-4 shrink-0' />
+                        <span className='flex-1 flex items-center gap-2'>
+                          GRAND TOTAL
+                          <Badge variant='outline' className='text-[9px] font-semibold'>✓ BALANCED</Badge>
+                        </span>
+                        <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(tbPresentation.grandTotal.opening)}</span>
+                        <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(tbPresentation.grandTotal.txnDebit)}</span>
+                        <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(tbPresentation.grandTotal.txnCredit)}</span>
+                        <span className='w-32 shrink-0 text-right tabular-nums font-mono pr-3'>{fmtTb(tbPresentation.grandTotal.closing)}</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Flat Preview Table */}
               {tbViewMode === "flat" && tbResult.preview.length > 0 && (
