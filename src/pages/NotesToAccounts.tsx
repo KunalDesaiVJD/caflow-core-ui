@@ -187,6 +187,18 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     note_44: [note44, setNote44], note_45: [note45, setNote45],
   };
 
+  /* ── Load client data ── */
+  useEffect(() => {
+    if (!engagementId) return;
+    (async () => {
+      const { data: eng } = await supabase.from("audit_engagements").select("client_id").eq("id", engagementId).single();
+      if (eng?.client_id) {
+        const { data: cl } = await supabase.from("clients").select("name, cin, registered_office, business_activity").eq("id", eng.client_id).single();
+        if (cl) setClientData(cl as any);
+      }
+    })();
+  }, [engagementId]);
+
   /* ── Load ── */
   useEffect(() => {
     if (!engagementId) return;
@@ -194,6 +206,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       const { data } = await supabase.from("notes_to_accounts" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
       if (data) {
         setRecordId((data as any).id);
+        if ((data as any).note_selection) setNoteSelection((data as any).note_selection);
         NOTE_LIST.forEach((nl) => {
           const val = (data as any)[nl.key];
           if (val && typeof val === "object") {
@@ -215,11 +228,9 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
           const rolled = (buffer as any).rolled_notes;
           Object.assign(insertPayload, rolled);
           setRolledFromFy((buffer as any).from_financial_year);
-          // Apply buffer data to state
           NOTE_LIST.forEach((nl) => {
             if (rolled[nl.key]) stateMap[nl.key][1](rolled[nl.key]);
           });
-          // Mark buffer as applied
           await supabase.from("notes_rollover_buffer" as any).update({ applied: true }).eq("id", (buffer as any).id);
         }
         const { data: newRec } = await supabase.from("notes_to_accounts" as any).insert(insertPayload as any).select().single();
