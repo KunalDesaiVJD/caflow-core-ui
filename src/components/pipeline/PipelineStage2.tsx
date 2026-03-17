@@ -840,6 +840,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           txnCredit: row.txnCredit || 0,
           closing: row.closing || 0,
           primaryGroup: row.primaryGroup || row.name,
+          bsPlSide: row.bsPlSide || 'Unknown',
         }));
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
         setTbHierarchyNodes(mappedHierarchy);
