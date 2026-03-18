@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Save, Loader2 } from "lucide-react";
+import { Save, Loader2, Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 
 interface CaroTemplate {
   id?: string;
@@ -28,8 +28,16 @@ interface ThreeCDClause {
   is_applicable_default: boolean;
 }
 
+interface NoteTemplate {
+  id?: string;
+  note_number: number;
+  note_title: string;
+  template_content: any;
+  is_mandatory?: boolean;
+}
+
 const CARO_DEFAULTS: { number: number; title: string }[] = [
-  { number: 1, title: "Immovable Properties" },
+  { number: 1, title: "Properties" },
   { number: 2, title: "Inventory Physical Verification" },
   { number: 3, title: "Investments/Guarantees/Security" },
   { number: 4, title: "Loans, Advances, Guarantees Compliance (Sec 185/186)" },
@@ -92,9 +100,32 @@ const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
   { clause: "44", heading: "Break-up of expenditure in Statement of P&L (GST breakup)" },
 ];
 
+// Notes templates matching NotesToAccounts structure exactly
+const NOTES_DEFAULTS: { num: number; title: string }[] = [
+  { num: 1, title: "Background" },
+  { num: 2, title: "Significant Accounting Policies" },
+  { num: 29, title: "Construction Contracts" },
+  { num: 30, title: "Revenue Recognition" },
+  { num: 31, title: "Foreign Currency" },
+  { num: 32, title: "Government Grants" },
+  { num: 33, title: "Accounting for Investments" },
+  { num: 34, title: "Employee Benefits" },
+  { num: 35, title: "Borrowing Costs" },
+  { num: 36, title: "Segment Reporting" },
+  { num: 37, title: "Related Parties" },
+  { num: 38, title: "Leases" },
+  { num: 39, title: "Earnings per Share" },
+  { num: 40, title: "Accounting for Taxes on Income" },
+  { num: 41, title: "Discontinuing Operations" },
+  { num: 42, title: "Intangible Assets" },
+  { num: 43, title: "Impairment of Assets" },
+  { num: 44, title: "Events after the Reporting Period" },
+  { num: 45, title: "Previous Year Figures" },
+];
+
 export function MasterConfigPanel() {
   const [caroTemplates, setCaroTemplates] = useState<CaroTemplate[]>([]);
-  const [noteTemplates, setNoteTemplates] = useState<any[]>([]);
+  const [noteTemplates, setNoteTemplates] = useState<NoteTemplate[]>([]);
   const [threeCDClauses, setThreeCDClauses] = useState<ThreeCDClause[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -104,7 +135,6 @@ export function MasterConfigPanel() {
   async function loadAll() {
     setLoading(true);
 
-    // Load GLOBAL templates (firm_id IS NULL for CARO)
     const [caroRes, notesRes, threecdRes] = await Promise.all([
       supabase.from("caro_master_templates").select("*").is("firm_id", null).order("clause_number"),
       supabase.from("note_templates" as any).select("*").order("note_number"),
@@ -123,8 +153,37 @@ export function MasterConfigPanel() {
         is_applicable_default: existing?.is_applicable_default ?? true,
       };
     });
+    // Add any extra saved clauses not in defaults
+    caroSaved.forEach(s => {
+      if (!caroMerged.find(m => m.clause_number === s.clause_number)) {
+        caroMerged.push({
+          id: s.id, clause_number: s.clause_number,
+          clause_title: s.clause_title, default_content: s.default_content || "",
+          is_applicable_default: s.is_applicable_default ?? true,
+        });
+      }
+    });
+    caroMerged.sort((a, b) => a.clause_number - b.clause_number);
     setCaroTemplates(caroMerged);
-    setNoteTemplates(notesRes.data || []);
+
+    // Notes templates — merge with defaults
+    const notesSaved = (notesRes.data || []) as any[];
+    if (notesSaved.length > 0) {
+      setNoteTemplates(notesSaved.map((t: any) => ({
+        id: t.id,
+        note_number: t.note_number,
+        note_title: t.note_title,
+        template_content: t.template_content || "",
+        is_mandatory: t.is_mandatory,
+      })));
+    } else {
+      // Seed from defaults
+      setNoteTemplates(NOTES_DEFAULTS.map(d => ({
+        note_number: d.num,
+        note_title: d.title,
+        template_content: "",
+      })));
+    }
 
     // Merge 3CD defaults with saved
     const threecdSaved = (threecdRes.data || []) as any[];
@@ -138,39 +197,118 @@ export function MasterConfigPanel() {
         is_applicable_default: existing?.is_applicable_default ?? true,
       };
     });
+    threecdSaved.forEach(s => {
+      if (!threecdMerged.find(m => m.clause_number === s.clause_number)) {
+        threecdMerged.push({
+          id: s.id, clause_number: s.clause_number,
+          heading: s.heading, template_content: s.template_content || "",
+          is_applicable_default: s.is_applicable_default ?? true,
+        });
+      }
+    });
+    threecdMerged.sort((a, b) => parseFloat(a.clause_number) - parseFloat(b.clause_number));
     setThreeCDClauses(threecdMerged);
 
     setLoading(false);
   }
 
+  // ── CARO handlers ──
   function updateCaro(idx: number, field: keyof CaroTemplate, value: any) {
     setCaroTemplates(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
   }
+  function addCaroClause() {
+    const maxNum = Math.max(0, ...caroTemplates.map(t => t.clause_number));
+    setCaroTemplates(prev => [...prev, {
+      clause_number: maxNum + 1, clause_title: "New Clause",
+      default_content: "", is_applicable_default: true,
+    }]);
+  }
+  function deleteCaroClause(idx: number) {
+    const t = caroTemplates[idx];
+    if (t.id) {
+      if (!window.confirm(`Delete CARO Clause ${t.clause_number} — "${t.clause_title}"? This cannot be undone.`)) return;
+    }
+    setCaroTemplates(prev => prev.filter((_, i) => i !== idx));
+  }
+  function moveCaroClause(idx: number, dir: -1 | 1) {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= caroTemplates.length) return;
+    setCaroTemplates(prev => {
+      const arr = [...prev];
+      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+      // Renumber
+      return arr.map((t, i) => ({ ...t, clause_number: i + 1 }));
+    });
+  }
 
+  // ── Notes handlers ──
   function updateNote(idx: number, field: string, value: any) {
     setNoteTemplates(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
   }
+  function addNoteTemplate() {
+    const maxNum = Math.max(0, ...noteTemplates.map(t => t.note_number));
+    setNoteTemplates(prev => [...prev, {
+      note_number: maxNum + 1, note_title: "New Note",
+      template_content: "",
+    }]);
+  }
+  function deleteNoteTemplate(idx: number) {
+    const t = noteTemplates[idx];
+    if (!window.confirm(`Delete Note ${t.note_number} — "${t.note_title}"?`)) return;
+    setNoteTemplates(prev => prev.filter((_, i) => i !== idx));
+  }
+  function moveNoteTemplate(idx: number, dir: -1 | 1) {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= noteTemplates.length) return;
+    setNoteTemplates(prev => {
+      const arr = [...prev];
+      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+      return arr;
+    });
+  }
 
+  // ── 3CD handlers ──
   function updateThreeCD(idx: number, field: keyof ThreeCDClause, value: any) {
     setThreeCDClauses(prev => prev.map((t, i) => i === idx ? { ...t, [field]: value } : t));
   }
+  function addThreeCDClause() {
+    const maxNum = Math.max(0, ...threeCDClauses.map(t => parseFloat(t.clause_number) || 0));
+    setThreeCDClauses(prev => [...prev, {
+      clause_number: String(Math.floor(maxNum) + 1), heading: "New Clause",
+      template_content: "", is_applicable_default: true,
+    }]);
+  }
+  function deleteThreeCDClause(idx: number) {
+    const t = threeCDClauses[idx];
+    if (!window.confirm(`Delete 3CD Clause ${t.clause_number} — "${t.heading}"?`)) return;
+    setThreeCDClauses(prev => prev.filter((_, i) => i !== idx));
+  }
+  function moveThreeCDClause(idx: number, dir: -1 | 1) {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= threeCDClauses.length) return;
+    setThreeCDClauses(prev => {
+      const arr = [...prev];
+      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+      return arr;
+    });
+  }
 
+  // ── Save functions ──
   async function saveCaroTemplates() {
     setSaving(true);
-    for (const t of caroTemplates) {
-      const payload: any = {
-        firm_id: null, // GLOBAL
-        clause_number: t.clause_number,
-        clause_title: t.clause_title,
-        default_content: t.default_content,
-        is_applicable_default: t.is_applicable_default,
-        updated_at: new Date().toISOString(),
-      };
-      if (t.id) {
-        await supabase.from("caro_master_templates").update(payload).eq("id", t.id);
-      } else {
-        await supabase.from("caro_master_templates").insert(payload);
-      }
+    // Delete all existing global CARO templates, then reinsert
+    await supabase.from("caro_master_templates").delete().is("firm_id", null);
+    const inserts = caroTemplates.map(t => ({
+      firm_id: null,
+      clause_number: t.clause_number,
+      clause_title: t.clause_title,
+      default_content: t.default_content,
+      is_applicable_default: t.is_applicable_default,
+      updated_at: new Date().toISOString(),
+    }));
+    if (inserts.length > 0) {
+      const { error } = await supabase.from("caro_master_templates").insert(inserts);
+      if (error) { toast.error(error.message); setSaving(false); return; }
     }
     toast.success("CARO master templates saved (global)");
     setSaving(false);
@@ -180,30 +318,42 @@ export function MasterConfigPanel() {
   async function saveNoteTemplates() {
     setSaving(true);
     for (const t of noteTemplates) {
-      await supabase.from("note_templates" as any).update({
-        note_title: t.note_title,
-        template_content: t.template_content,
-      } as any).eq("id", t.id);
+      if (t.id) {
+        await supabase.from("note_templates" as any).update({
+          note_number: t.note_number,
+          note_title: t.note_title,
+          template_content: t.template_content,
+        } as any).eq("id", t.id);
+      } else {
+        await supabase.from("note_templates" as any).insert({
+          note_number: t.note_number,
+          note_title: t.note_title,
+          template_content: t.template_content || "",
+        } as any);
+      }
     }
     toast.success("Note templates saved (global)");
     setSaving(false);
+    loadAll();
   }
 
   async function saveThreeCDTemplates() {
     setSaving(true);
-    for (const t of threeCDClauses) {
-      const payload: any = {
-        clause_number: t.clause_number,
-        heading: t.heading,
-        template_content: t.template_content,
-        is_applicable_default: t.is_applicable_default,
-        updated_at: new Date().toISOString(),
-      };
-      if (t.id) {
-        await supabase.from("threecd_master_templates").update(payload).eq("id", t.id);
-      } else {
-        await supabase.from("threecd_master_templates").insert(payload);
-      }
+    // Delete and reinsert for clean ordering
+    const existingIds = threeCDClauses.filter(t => t.id).map(t => t.id!);
+    if (existingIds.length > 0) {
+      await supabase.from("threecd_master_templates").delete().in("id", existingIds);
+    }
+    const inserts = threeCDClauses.map(t => ({
+      clause_number: t.clause_number,
+      heading: t.heading,
+      template_content: t.template_content,
+      is_applicable_default: t.is_applicable_default,
+      updated_at: new Date().toISOString(),
+    }));
+    if (inserts.length > 0) {
+      const { error } = await supabase.from("threecd_master_templates").insert(inserts);
+      if (error) { toast.error(error.message); setSaving(false); return; }
     }
     toast.success("3CD master templates saved (global)");
     setSaving(false);
@@ -226,9 +376,12 @@ export function MasterConfigPanel() {
           <TabsTrigger value="threecd_master">3CD Templates</TabsTrigger>
         </TabsList>
 
-        {/* CARO Templates */}
+        {/* ═══ CARO Templates ═══ */}
         <TabsContent value="caro_master" className="mt-4 space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-between items-center">
+            <Button variant="outline" size="sm" onClick={addCaroClause} className="gap-1">
+              <Plus className="w-4 h-4" /> Add Clause
+            </Button>
             <Button onClick={saveCaroTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save CARO Templates
@@ -236,7 +389,7 @@ export function MasterConfigPanel() {
           </div>
           <Accordion type="multiple" className="space-y-2">
             {caroTemplates.map((t, idx) => (
-              <AccordionItem key={t.clause_number} value={`caro-${t.clause_number}`} className="border rounded-lg">
+              <AccordionItem key={`caro-${idx}`} value={`caro-${idx}`} className="border rounded-lg">
                 <AccordionTrigger className="px-4 py-3 hover:no-underline">
                   <div className="flex items-center gap-3 w-full">
                     <span className="text-sm font-mono font-bold text-primary min-w-[30px]">{t.clause_number}</span>
@@ -246,9 +399,23 @@ export function MasterConfigPanel() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveCaroClause(idx, -1)} disabled={idx === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveCaroClause(idx, 1)} disabled={idx === caroTemplates.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteCaroClause(idx)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <div className="flex-1" />
                     <Switch checked={t.is_applicable_default} onCheckedChange={v => updateCaro(idx, "is_applicable_default", v)} />
                     <Label className="text-xs">Applicable by Default</Label>
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr] gap-2 items-center">
+                    <Label className="text-xs">Number</Label>
+                    <Input type="number" value={t.clause_number} onChange={e => updateCaro(idx, "clause_number", parseInt(e.target.value) || 0)} className="w-24 h-8 text-sm" />
                   </div>
                   <div>
                     <Label className="text-xs">Clause Title</Label>
@@ -264,59 +431,84 @@ export function MasterConfigPanel() {
           </Accordion>
         </TabsContent>
 
-        {/* Notes Templates */}
+        {/* ═══ Notes Templates ═══ */}
         <TabsContent value="notes_master" className="mt-4 space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-between items-center">
+            <Button variant="outline" size="sm" onClick={addNoteTemplate} className="gap-1">
+              <Plus className="w-4 h-4" /> Add Note
+            </Button>
             <Button onClick={saveNoteTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Note Templates
             </Button>
           </div>
-          {noteTemplates.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-muted-foreground">No note templates found. Templates are seeded from the system.</CardContent></Card>
-          ) : (
-            <Accordion type="multiple" className="space-y-2">
-              {noteTemplates.map((t: any, idx: number) => (
-                <AccordionItem key={t.id} value={`note-${t.note_number}`} className="border rounded-lg">
-                  <AccordionTrigger className="px-4 py-3 hover:no-underline">
-                    <div className="flex items-center gap-3 w-full">
-                      <span className="text-sm font-mono font-bold text-primary min-w-[30px]">{t.note_number}</span>
-                      <span className="text-sm font-medium flex-1 text-left">{t.note_title}</span>
-                      {t.is_mandatory && <Badge variant="outline" className="text-[10px] bg-destructive/10 text-destructive">Required</Badge>}
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pb-4 space-y-3">
-                    <div>
-                      <Label className="text-xs">Note Title</Label>
-                      <Input value={t.note_title || ""} onChange={e => updateNote(idx, "note_title", e.target.value)} className="mt-1 text-sm" />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Default Template Text</Label>
-                      <Textarea
-                        value={typeof t.template_content === "object" ? (t.template_content?.default_text || "") : (t.template_content || "")}
-                        onChange={e => updateNote(idx, "template_content", { ...(typeof t.template_content === "object" ? t.template_content : {}), default_text: e.target.value })}
-                        className="mt-1 text-xs min-h-[80px]"
-                        placeholder="Default content for this note..."
-                      />
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
-          )}
+          <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
+            Note numbers and titles here directly control what appears in Notes to Accounts. Reorder or rename to match your statutory structure.
+          </p>
+          <Accordion type="multiple" className="space-y-2">
+            {noteTemplates.map((t, idx) => (
+              <AccordionItem key={`note-${idx}`} value={`note-${idx}`} className="border rounded-lg">
+                <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                  <div className="flex items-center gap-3 w-full">
+                    <span className="text-sm font-mono font-bold text-primary min-w-[30px]">{t.note_number}</span>
+                    <span className="text-sm font-medium flex-1 text-left">{t.note_title}</span>
+                    {t.is_mandatory && <Badge variant="outline" className="text-[10px] bg-destructive/10 text-destructive">Required</Badge>}
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, -1)} disabled={idx === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, 1)} disabled={idx === noteTemplates.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    {!t.is_mandatory && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteNoteTemplate(idx)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                    <Label className="text-xs">Note Number</Label>
+                    <Input type="number" value={t.note_number} onChange={e => updateNote(idx, "note_number", parseInt(e.target.value) || 0)} className="w-24 h-8 text-sm" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Note Title</Label>
+                    <Input value={t.note_title || ""} onChange={e => updateNote(idx, "note_title", e.target.value)} className="mt-1 text-sm" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Default Template Text</Label>
+                    <Textarea
+                      value={typeof t.template_content === "object" ? (t.template_content?.default_text || "") : (t.template_content || "")}
+                      onChange={e => updateNote(idx, "template_content", { ...(typeof t.template_content === "object" ? t.template_content : {}), default_text: e.target.value })}
+                      className="mt-1 text-xs min-h-[80px]"
+                      placeholder="Default content for this note..."
+                    />
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
         </TabsContent>
 
-        {/* 3CD Templates */}
+        {/* ═══ 3CD Templates ═══ */}
         <TabsContent value="threecd_master" className="mt-4 space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-between items-center">
+            <Button variant="outline" size="sm" onClick={addThreeCDClause} className="gap-1">
+              <Plus className="w-4 h-4" /> Add Clause
+            </Button>
             <Button onClick={saveThreeCDTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save 3CD Templates
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
+            Clause numbers support nested formats like <code>8(a)</code>, <code>8(b)</code>. Edit the clause number field to use any format.
+          </p>
           <Accordion type="multiple" className="space-y-2">
             {threeCDClauses.map((t, idx) => (
-              <AccordionItem key={t.clause_number} value={`3cd-${t.clause_number}`} className="border rounded-lg">
+              <AccordionItem key={`3cd-${idx}`} value={`3cd-${idx}`} className="border rounded-lg">
                 <AccordionTrigger className="px-4 py-3 hover:no-underline">
                   <div className="flex items-center gap-3 w-full">
                     <span className="text-sm font-mono font-bold text-primary min-w-[40px]">Cl {t.clause_number}</span>
@@ -325,9 +517,23 @@ export function MasterConfigPanel() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveThreeCDClause(idx, -1)} disabled={idx === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveThreeCDClause(idx, 1)} disabled={idx === threeCDClauses.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteThreeCDClause(idx)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <div className="flex-1" />
                     <Switch checked={t.is_applicable_default} onCheckedChange={v => updateThreeCD(idx, "is_applicable_default", v)} />
                     <Label className="text-xs">Applicable by Default</Label>
+                  </div>
+                  <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                    <Label className="text-xs">Clause Number</Label>
+                    <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 8(a)" />
                   </div>
                   <div>
                     <Label className="text-xs">Clause Heading</Label>
