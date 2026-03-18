@@ -1915,7 +1915,76 @@ function MultiBusinessTable({ rows, onChange, sectorCodes }: {
   );
 }
 
-function EditableTable({ columns, rows, onChange }: {
+/** Donation table (Clause 33) with 11 columns including Reg No, Mode, Date */
+function DonationTable({ rows, onChange }: {
+  rows: {
+    srNo: string; doneeName: string; address: string; pan: string;
+    regNo: string; section: string; amountDonated: string;
+    modeOfPayment: string; dateOfDonation: string;
+    qualifyingAmount: string; deductionAmount: string;
+  }[];
+  onChange: (r: any[]) => void;
+}) {
+  const empty = { srNo: "", doneeName: "", address: "", pan: "",
+    regNo: "", section: "", amountDonated: "", modeOfPayment: "",
+    dateOfDonation: "", qualifyingAmount: "", deductionAmount: "" };
+  function addRow() { onChange([...rows, { ...empty }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  return (
+    <div className="space-y-2 overflow-x-auto">
+      <Table>
+        <TableHeader><TableRow className="text-xs">
+          <TableHead className="w-8">Sr</TableHead>
+          <TableHead className="min-w-[140px]">Name of Donee</TableHead>
+          <TableHead className="min-w-[120px]">Address</TableHead>
+          <TableHead className="w-28">PAN of Donee</TableHead>
+          <TableHead className="w-28">Reg. No.</TableHead>
+          <TableHead className="w-24">Section</TableHead>
+          <TableHead className="w-28">Amount Donated (₹)</TableHead>
+          <TableHead className="w-28">Mode of Payment</TableHead>
+          <TableHead className="w-28">Date of Donation</TableHead>
+          <TableHead className="w-28">Qualifying Amount (₹)</TableHead>
+          <TableHead className="w-28">Deduction Amount (₹)</TableHead>
+          <TableHead className="w-10" />
+        </TableRow></TableHeader>
+        <TableBody>
+          {rows.length === 0 && <TableRow><TableCell colSpan={12} className="text-center py-4 text-muted-foreground text-sm">No rows. Click Add Row.</TableCell></TableRow>}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center">{i + 1}</TableCell>
+              <TableCell className="p-1"><Input value={row.doneeName} onChange={e => update(i, "doneeName", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.address} onChange={e => update(i, "address", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.pan} onChange={e => update(i, "pan", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input value={row.regNo} onChange={e => update(i, "regNo", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1">
+                <Select value={row.section} onValueChange={v => update(i, "section", v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sec" /></SelectTrigger>
+                  <SelectContent><SelectItem value="80G">80G</SelectItem><SelectItem value="80GGA">80GGA</SelectItem><SelectItem value="80GGB">80GGB</SelectItem><SelectItem value="80GGC">80GGC</SelectItem></SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amountDonated} onChange={e => update(i, "amountDonated", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1">
+                <Select value={row.modeOfPayment} onValueChange={v => update(i, "modeOfPayment", v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Mode" /></SelectTrigger>
+                  <SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Cheque">Cheque</SelectItem><SelectItem value="DD">Demand Draft</SelectItem><SelectItem value="Online">Online Transfer</SelectItem></SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell className="p-1"><Input type="date" value={row.dateOfDonation} onChange={e => update(i, "dateOfDonation", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.qualifyingAmount} onChange={e => update(i, "qualifyingAmount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.deductionAmount} onChange={e => update(i, "deductionAmount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+    </div>
+  );
+}
+
   columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
 }) {
   function addRow() { onChange([...rows, columns.map(() => "")]); }
