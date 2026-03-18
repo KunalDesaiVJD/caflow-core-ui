@@ -52,7 +52,7 @@ const CLAUSE_NAV_FALLBACK = [
   { key: "cl_24_25", label: "24-25", title: "Deemed profits / chargeable amounts" },
   { key: "cl_26", label: "26", title: "Loss/expenditure disallowable" },
   { key: "cl_27", label: "27", title: "Deemed income / prior period items" },
-  { key: "cl_29", label: "29", title: "Deemed profits u/s 32AC/33AB/41" },
+  
   { key: "cl_30", label: "30", title: "Govt receipts / MSME / Tax paid / Hundi" },
   { key: "cl_31", label: "31", title: "TDS / TCS particulars" },
   { key: "cl_32", label: "32", title: "Brought forward losses / deductions" },
