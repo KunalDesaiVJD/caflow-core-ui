@@ -2699,7 +2699,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
     cl_13: "13. Method of accounting employed in respect of speculative transactions",
     cl_14: "14. Method of valuation of closing stock employed in the previous year",
     cl_15_16: "15-16. Amounts debited to the profit and loss account",
-    cl_17: "17. Amounts debited to the profit and loss account, being any amount paid by way of dual deduction",
+    cl_17: "17. Amounts debited to the profit and loss account, being capital, personal or political expenditure (including advertisement in political party souvenir/brochure)",
     cl_18: "18. Particulars of depreciation allowable as per the Income-tax Act, 1961",
     cl_19: "19. Amounts inadmissible under section 40(a)",
     cl_20: "20. Amounts inadmissible under section 40A",
