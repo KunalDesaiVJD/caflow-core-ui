@@ -303,15 +303,18 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 <Download className="h-4 w-4 mr-2" /> Export PDF
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => {
-                let html = `<h1>CARO 2020 Report</h1>`;
-                html += `<p><strong>Client:</strong> ${client?.name || '—'} | <strong>FY:</strong> ${engagement?.financial_year || '—'}</p><hr/>`;
+                // Reuse same HTML structure as PDF print area for consistent formatting
+                let html = `<h1 style="text-align:center;font-size:16pt;margin-bottom:16px;">CARO 2020 — Auditor's Report</h1>`;
                 rows.forEach(r => {
-                  html += `<h2>Clause ${r.clause_number} — ${r.clause_title}</h2>`;
+                  html += `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #ddd;page-break-inside:avoid;">`;
+                  html += `<h3 style="font-size:12pt;font-weight:bold;margin-bottom:4px;">Clause ${r.clause_number} — ${r.clause_title}</h3>`;
                   if (!r.is_applicable) {
-                    html += `<p class="nil">Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ''}</p>`;
+                    html += `<p style="color:#888;font-style:italic;">Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ''}</p>`;
                   } else {
-                    html += `<p>${r.user_response || r.auto_draft || '<em>No response</em>'}</p>`;
+                    const text = (r.user_response || r.auto_draft || 'No response').replace(/\n/g, '<br/>');
+                    html += `<p style="white-space:pre-wrap;font-size:10pt;">${text}</p>`;
                   }
+                  html += `</div>`;
                 });
                 exportToWord(html, `CARO-2020_${client?.name || 'report'}_${engagement?.financial_year || ''}.doc`);
               }}>
