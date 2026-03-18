@@ -1079,51 +1079,15 @@ export default function Form3CD() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-4">
-                  {[
-                    { key: "lifeInsurance", label: "Amount paid as life insurance premium" },
-                    { key: "motorCar", label: "Amount paid as personal motor car expenses" },
-                    { key: "clubFees", label: "Amount paid as club entrance fee and subscription" },
-                    { key: "personalTravel", label: "Amount paid for personal travel" },
-                    { key: "personalTelephone", label: "Amount paid for personal telephone" },
-                  ].map(item => (
-                    <div key={item.key} className="grid grid-cols-[1fr_200px] gap-3 items-center">
-                      <Label className="text-sm">{item.label}</Label>
-                      <Input
-                        type="number"
-                        placeholder="₹ 0.00"
-                        value={cl22[item.key] || ""}
-                        onChange={e => updateClause(setCl22, item.key, e.target.value)}
-                        className="text-right"
-                      />
-                    </div>
-                  ))}
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>Any other personal expenditure</Label>
-                    <div className="grid grid-cols-[1fr_200px] gap-3">
-                      <Input
-                        placeholder="Particulars"
-                        value={cl22.otherParticulars || ""}
-                        onChange={e => updateClause(setCl22, "otherParticulars", e.target.value)}
-                      />
-                      <Input
-                        type="number"
-                        placeholder="₹ 0.00"
-                        value={cl22.otherAmount || ""}
-                        onChange={e => updateClause(setCl22, "otherAmount", e.target.value)}
-                        className="text-right"
-                      />
-                    </div>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-end">
-                    <div className="bg-muted px-4 py-2 rounded text-sm font-medium">
-                      Total: ₹{(
-                        ["lifeInsurance", "motorCar", "clubFees", "personalTravel", "personalTelephone", "otherAmount"]
-                          .reduce((sum, k) => sum + (parseFloat(cl22[k] || "0") || 0), 0)
-                      ).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Amounts debited to profit and loss account being in the nature of personal expenditure.
+                  </p>
+                  <EditableTableWithTotal
+                    columns={['Sr No', 'Particulars of Personal Expenditure', 'Amount (₹)']}
+                    rows={cl22.rows || []}
+                    onChange={rows => updateClause(setCl22, 'rows', rows)}
+                    totalColIndex={2}
+                  />
                 </AccordionContent>
               </AccordionItem>
             </div>
