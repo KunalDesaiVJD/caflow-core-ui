@@ -17,8 +17,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { Calculator, Lock, Plus, Trash2, ArrowRight, AlertTriangle,
-CheckCircle2, Settings, Info, Loader2, Pencil, X } from 'lucide-react';
+import { Calculator, Lock, LockOpen, Plus, Trash2, ArrowRight, AlertTriangle,
+CheckCircle2, Settings, Info, Loader2, Pencil, X, FileText, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const FY_OPTIONS = ['2025-26','2024-25','2023-24','2022-23','2021-22','2020-21'];
 
@@ -85,6 +88,13 @@ const [bulkRows, setBulkRows] = useState(Array.from({length:5}, emptyBulkRow));
 const [bulkSaving, setBulkSaving] = useState(false);
 const [editAsset, setEditAsset] = useState<any>(null);
 const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+const [scheduleView, setScheduleView] = useState<'asset'|'category'>('asset');
+
+// Carry forward & unlock state
+const [showCarryForward, setShowCarryForward] = useState(false);
+const [carryingForward, setCarryingForward] = useState(false);
+const [unlocking, setUnlocking] = useState(false);
+
 const [na, setNa] = useState({
 asset_name:'', category_id:'', location:'', date_of_purchase:'',
 gross_block_opening:'0', accumulated_dep_opening:'0',
@@ -137,7 +147,7 @@ queryFn: async () => {
 const ids = (assets || []).map((a: any) => a.id);
 if (!ids.length) return [];
 const { data } = await supabase.from('fa_depreciation_schedule')
-.select('*,fa_assets(asset_name,asset_code,dep_on_opening_block,dep_on_additions,additions_during_year,fa_categories(name,depreciation_method,wdv_rate,slm_rate))')
+.select('*,fa_assets(asset_name,asset_code,dep_on_opening_block,dep_on_additions,additions_during_year,depreciation_method_used,residual_value,fa_categories(name,depreciation_method,wdv_rate,slm_rate,useful_life_years,residual_value_pct))')
 .in('asset_id', ids).eq('fy', fy).order('created_at');
 return (data || []) as any[];
 },
@@ -194,6 +204,22 @@ return (data||[]) as any[];
 enabled: !!assets?.length,
 });
 
+// Additions Log query
+const { data: additionsLog } = useQuery({
+queryKey: ['fa-additions-log', clientId, fy],
+queryFn: async () => {
+const ids = (assets||[]).map((a:any) => a.id);
+if (!ids.length) return [];
+const { data } = await supabase
+.from('fa_asset_additions')
+.select('*, fa_assets(asset_name, asset_code, fa_categories(name))')
+.in('asset_id', ids)
+.order('addition_date', { ascending: false });
+return data || [];
+},
+enabled: !!assets?.length,
+});
+
 const isLocked = useMemo(() => assets?.some((a:any) => a.is_locked) ?? false, [assets]);
 
 const totals = useMemo(() => {
@@ -232,10 +258,25 @@ narration:               na.narration||null,
 created_by: user?.id,
 } as any);
 if (error) throw error;
+// Log addition if additions > 0
+const addAmt = parseFloat(na.additions_during_year)||0;
+if (addAmt > 0 && na.addition_date) {
+  // We need the inserted asset id — fetch latest
+  const { data: latest } = await supabase.from('fa_assets')
+    .select('id').eq('client_id', clientId).eq('fy', fy).eq('asset_code', code).single();
+  if (latest) {
+    await supabase.from('fa_asset_additions').insert({
+      asset_id: latest.id, addition_date: na.addition_date,
+      addition_amount: addAmt, description: na.asset_name,
+      entry_narration: na.narration || null, created_by: user?.id,
+    } as any);
+  }
+}
 },
 onSuccess: () => {
 toast.success('Asset added');
 qc.invalidateQueries({queryKey:['dep-assets',clientId,fy]});
+qc.invalidateQueries({queryKey:['fa-additions-log',clientId,fy]});
 setShowAdd(false);
 setNa({asset_name:'',category_id:'',location:'',date_of_purchase:'',
        gross_block_opening:'0',accumulated_dep_opening:'0',
@@ -245,7 +286,6 @@ setNa({asset_name:'',category_id:'',location:'',date_of_purchase:'',
 onError: (e:any) => { if(e.message!=='validation') toast.error(e.message); },
 });
 
-// CHANGE 7 — Edit asset mutation
 const editMut = useMutation({
 mutationFn: async () => {
 if (!editAsset) return;
@@ -269,10 +309,20 @@ const { error } = await supabase.from('fa_assets').update({
   wdv_closing:             null,
 } as any).eq('id', editAsset.id);
 if (error) throw error;
+// Log addition if additions > 0
+const addAmt = parseFloat(editAsset.additions_during_year)||0;
+if (addAmt > 0 && editAsset.addition_date) {
+  await supabase.from('fa_asset_additions').insert({
+    asset_id: editAsset.id, addition_date: editAsset.addition_date,
+    addition_amount: addAmt, description: editAsset.asset_name,
+    entry_narration: editAsset.narration || null, created_by: user?.id,
+  } as any);
+}
 },
 onSuccess: () => {
 toast.success('Asset updated. Run Calculate Depreciation to refresh.');
 qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+qc.invalidateQueries({ queryKey: ['fa-additions-log', clientId, fy] });
 setEditAsset(null);
 },
 onError: (e: any) => { if (e.message !== 'validation') toast.error(e.message); },
@@ -293,12 +343,12 @@ setCalcResult(data);
 finally { setCalculating(false); }
 };
 
-// CHANGE 2 — Finalize handler
+// Finalize handler — locks assets, then offers carry forward
 const handleFinalize = async () => {
 if (!window.confirm(
   `Finalize depreciation for ${fy}?\n\n` +
   `This will lock all ${assets?.length} assets and prevent further edits.\n` +
-  `Calculation must be run before finalizing. This action cannot be undone.`
+  `Calculation must be run before finalizing.`
 )) return;
 const uncalculated = (assets || []).filter((a: any) => a.depreciation_for_year == null);
 if (uncalculated.length > 0) {
@@ -316,10 +366,130 @@ try {
     .update({ is_locked: true, is_finalized: true } as any)
     .in('id', ids);
   if (error) throw error;
+
+  // Auto-update next-FY carried-forward rows if they exist
+  const [startY] = fy.split('-');
+  const nextFyStr = `${parseInt(startY)+1}-${String(parseInt(startY)+2).slice(-2)}`;
+  const { data: nextFyAssets } = await supabase
+    .from('fa_assets')
+    .select('id, asset_code')
+    .eq('client_id', clientId)
+    .eq('fy', nextFyStr)
+    .eq('is_carried_forward', true);
+
+  if (nextFyAssets && nextFyAssets.length > 0) {
+    for (const a of (assets || [])) {
+      const gbOpen    = parseFloat(a.gross_block_opening)    || 0;
+      const addns     = parseFloat(a.additions_during_year)  || 0;
+      const disps     = parseFloat(a.disposals_during_year)  || 0;
+      const acDepOpen = parseFloat(a.accumulated_dep_opening) || 0;
+      const depForYr  = parseFloat(a.depreciation_for_year)  || 0;
+      const gbClose   = gbOpen + addns - disps;
+      const acClose   = acDepOpen + depForYr;
+      const match = nextFyAssets.find((n: any) =>
+        n.asset_code?.startsWith(a.asset_code?.split('-').slice(0, -1).join('-') || ''));
+      if (match) {
+        await supabase.from('fa_assets').update({
+          gross_block_opening:     gbClose,
+          accumulated_dep_opening: acClose,
+        } as any).eq('id', match.id);
+      }
+    }
+    toast.info(`${nextFyAssets.length} next-FY opening balances updated.`);
+  }
+
   toast.success(`FY ${fy} depreciation finalized and locked.`);
   qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+  setShowCarryForward(true);
 } catch (e: any) { toast.error(e.message); }
 finally { setFinalizing(false); }
+};
+
+// Carry Forward handler
+const handleCarryForward = async () => {
+const [startY] = fy.split('-');
+const nextFyStart = parseInt(startY) + 1;
+const nextFy = `${nextFyStart}-${String(nextFyStart + 1).slice(-2)}`;
+
+setCarryingForward(true);
+try {
+  const activeAssets = (assets || []).filter((a: any) =>
+    (parseFloat(a.disposals_during_year) || 0) === 0
+  );
+
+  const { count: existingCount } = await supabase
+    .from('fa_assets')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .eq('fy', nextFy);
+
+  if ((existingCount ?? 0) > 0) {
+    toast.error(`Next FY (${nextFy}) already has ${existingCount} assets. Clear them first.`);
+    return;
+  }
+
+  const nextFyRows = activeAssets.map((a: any) => {
+    const gbOpen    = parseFloat(a.gross_block_opening)    || 0;
+    const addns     = parseFloat(a.additions_during_year)  || 0;
+    const disps     = parseFloat(a.disposals_during_year)  || 0;
+    const acDepOpen = parseFloat(a.accumulated_dep_opening) || 0;
+    const depForYr  = parseFloat(a.depreciation_for_year)  || 0;
+    const gbClosing = gbOpen + addns - disps;
+    const acDepClose= acDepOpen + depForYr;
+    return {
+      client_id:               clientId,
+      fy:                      nextFy,
+      asset_name:              a.asset_name,
+      asset_code:              a.asset_code?.replace(fy.replace('-',''), nextFy.replace('-','')),
+      category_id:             a.category_id,
+      location:                a.location,
+      date_of_purchase:        a.date_of_purchase,
+      gross_block_opening:     gbClosing,
+      accumulated_dep_opening: acDepClose,
+      additions_during_year:   0,
+      disposals_during_year:   0,
+      disposal_proceeds:       0,
+      residual_value:          a.residual_value,
+      is_carried_forward:      true,
+      is_locked:               false,
+      is_finalized:            false,
+      created_by:              user?.id,
+    };
+  });
+
+  const { error } = await supabase.from('fa_assets').insert(nextFyRows as any);
+  if (error) throw error;
+
+  toast.success(
+    `${nextFyRows.length} assets carried forward to ${nextFy}. ` +
+    `Switch to ${nextFy} to view and edit them.`
+  );
+  setShowCarryForward(false);
+  qc.invalidateQueries({ queryKey: ['dep-assets', clientId, nextFy] });
+} catch(e: any) { toast.error(e.message); }
+finally { setCarryingForward(false); }
+};
+
+// Unlock handler
+const handleUnlock = async () => {
+if (!window.confirm(
+  `Unlock FY ${fy}?\n\n` +
+  `This will re-open all assets for editing. ` +
+  `After making changes, you must Recalculate and Re-Finalize. ` +
+  `If next-FY data has been carried forward, its opening balances ` +
+  `will be updated automatically when you Re-Finalize.`
+)) return;
+setUnlocking(true);
+try {
+  const ids = (assets || []).map((a: any) => a.id);
+  const { error } = await supabase.from('fa_assets')
+    .update({ is_locked: false, is_finalized: false } as any)
+    .in('id', ids);
+  if (error) throw error;
+  toast.success(`FY ${fy} unlocked. Recalculate and Re-Finalize after changes.`);
+  qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+} catch(e: any) { toast.error(e.message); }
+finally { setUnlocking(false); }
 };
 
 const dispMut = useMutation({
@@ -382,7 +552,6 @@ toast.success('Asset deleted');
 qc.invalidateQueries({queryKey:['dep-assets',clientId,fy]});
 };
 
-// CHANGE 1 — Delete category handler
 const handleDeleteCategory = async (catId: string, catName: string) => {
 const { count, error: countErr } = await supabase
   .from('fa_assets')
@@ -403,7 +572,6 @@ toast.success(`Category '${catName}' deleted.`);
 refetchCats();
 };
 
-// CHANGE 3 — Bulk save handler
 const handleBulkSave = async () => {
 const validRows = bulkRows.filter(r => r.asset_name.trim() && r.category_id);
 if (validRows.length === 0) {
@@ -441,10 +609,258 @@ try {
   if (error) throw error;
   toast.success(`${inserts.length} asset(s) saved successfully.`);
   qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
+  qc.invalidateQueries({ queryKey: ['fa-additions-log', clientId, fy] });
   setShowBulkAdd(false);
   setBulkRows(Array.from({length:5}, emptyBulkRow));
 } catch(e:any) { toast.error(e.message); }
 finally { setBulkSaving(false); }
+};
+
+// ── Excel Export ──────────────────────────────────────────────
+const handleExcelExport = () => {
+if (!assets?.length) { toast.error('No assets to export'); return; }
+const clientName = clients?.find((c: any) => c.id === clientId)?.name || 'Client';
+const wb = XLSX.utils.book_new();
+
+// SHEET 1: ASSET REGISTER
+const regData: any[][] = [
+  [clientName + ' — Fixed Asset Register', '', '', '', '', '', '', '', '', '', '', '', ''],
+  ['Financial Year: ' + fy + ' | Companies Act 2013 — Schedule II', '', '', '', '', '', '', '', '', '', '', '', ''],
+  [],
+  ['#', 'Asset Code', 'Asset Name', 'Category', 'Method',
+   'Purch Date', 'Gross Block Opening', 'Additions',
+   'Acc Dep Opening', 'Residual Value', 'WDV Opening',
+   'Dep for Year', 'WDV Closing'],
+];
+const dataStart = 5;
+(assets || []).forEach((a: any, i: number) => {
+  const row = dataStart + i;
+  const gb   = parseFloat(a.gross_block_opening)    || 0;
+  const ad   = parseFloat(a.accumulated_dep_opening) || 0;
+  const addns = parseFloat(a.additions_during_year)  || 0;
+  const res   = a.residual_value ?? Math.round(gb * (parseFloat(a.fa_categories?.residual_value_pct)||5) / 100 * 100)/100;
+  const dep   = parseFloat(a.depreciation_for_year)  || 0;
+  regData.push([
+    i + 1, a.asset_code, a.asset_name,
+    a.fa_categories?.name || '', a.fa_categories?.depreciation_method || 'WDV',
+    a.date_of_purchase,
+    gb, addns, ad, res,
+    { f: `G${row}-I${row}`, v: gb - ad },
+    dep,
+    { f: `K${row}+H${row}-L${row}`, v: gb - ad + addns - dep },
+  ]);
+});
+const lastRow = dataStart + (assets?.length || 0) - 1;
+regData.push([
+  '', '', 'TOTAL', '', '', '',
+  { f: `SUM(G${dataStart}:G${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+(parseFloat(a.gross_block_opening)||0),0) },
+  { f: `SUM(H${dataStart}:H${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+(parseFloat(a.additions_during_year)||0),0) },
+  { f: `SUM(I${dataStart}:I${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+(parseFloat(a.accumulated_dep_opening)||0),0) },
+  { f: `SUM(J${dataStart}:J${lastRow})`, v: 0 },
+  { f: `SUM(K${dataStart}:K${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+((parseFloat(a.gross_block_opening)||0)-(parseFloat(a.accumulated_dep_opening)||0)),0) },
+  { f: `SUM(L${dataStart}:L${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+(parseFloat(a.depreciation_for_year)||0),0) },
+  { f: `SUM(M${dataStart}:M${lastRow})`, v: (assets||[]).reduce((s:number,a:any)=>s+(parseFloat(a.wdv_closing)||0),0) },
+]);
+const wsReg = XLSX.utils.aoa_to_sheet(regData);
+wsReg['!cols'] = [{wch:4},{wch:14},{wch:30},{wch:22},{wch:6},{wch:12},{wch:18},{wch:15},{wch:18},{wch:15},{wch:15},{wch:15},{wch:15}];
+wsReg['!merges'] = [{s:{r:0,c:0},e:{r:0,c:12}},{s:{r:1,c:0},e:{r:1,c:12}}];
+XLSX.utils.book_append_sheet(wb, wsReg, 'Asset Register');
+
+// SHEET 2: DEPRECIATION SCHEDULE
+const schedData: any[][] = [
+  [clientName + ' — Depreciation Schedule', '', '', '', '', '', '', ''],
+  ['Financial Year: ' + fy, '', '', '', '', '', '', ''],
+  [],
+  ['Asset Code', 'Asset Name', 'Category', 'Method', 'Rate / Basis', 'WDV Opening', 'Dep Amount', 'WDV Closing'],
+];
+(schedule || []).forEach((s: any) => {
+  const ast = s.fa_assets;
+  const method = ast?.depreciation_method_used || ast?.fa_categories?.depreciation_method || 'WDV';
+  const cat = ast?.fa_categories;
+  const rateBasis = method === 'SLM'
+    ? `(Cost-Res)/${cat?.useful_life_years}yr = SLM`
+    : `${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`;
+  schedData.push([
+    ast?.asset_code, ast?.asset_name, ast?.fa_categories?.name, method, rateBasis,
+    parseFloat(s.wdv_opening), parseFloat(s.depreciation_amount), parseFloat(s.wdv_closing),
+  ]);
+});
+const wsSched = XLSX.utils.aoa_to_sheet(schedData);
+wsSched['!cols'] = [{wch:14},{wch:30},{wch:22},{wch:6},{wch:24},{wch:15},{wch:15},{wch:15}];
+wsSched['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}},{s:{r:1,c:0},e:{r:1,c:7}}];
+XLSX.utils.book_append_sheet(wb, wsSched, 'Dep Schedule');
+
+// SHEET 3: CATEGORY-WISE SUMMARY
+const sumData: any[][] = [
+  [clientName + ' — Category-wise Summary', '', '', '', '', '', '', '', '', ''],
+  ['Financial Year: ' + fy, '', '', '', '', '', '', '', '', ''],
+  [],
+  ['Category', 'Life (yrs)', 'Gross Open', 'Additions', 'Disposals',
+   'Gross Close', 'Acc Dep Open', 'Dep for Year', 'Acc Dep Close', 'Net Block'],
+];
+(summary || []).forEach((s: any) => {
+  sumData.push([
+    s.category_name, s.useful_life_years,
+    parseFloat(s.gross_block_opening), parseFloat(s.additions),
+    parseFloat(s.disposals), parseFloat(s.gross_block_closing),
+    parseFloat(s.acc_dep_opening), parseFloat(s.depreciation),
+    parseFloat(s.acc_dep_closing), parseFloat(s.net_block),
+  ]);
+});
+const wsSum = XLSX.utils.aoa_to_sheet(sumData);
+wsSum['!cols'] = [{wch:24},{wch:8},{wch:16},{wch:14},{wch:12},{wch:16},{wch:16},{wch:14},{wch:16},{wch:14}];
+wsSum['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}},{s:{r:1,c:0},e:{r:1,c:9}}];
+XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
+
+// SHEET 4: DISPOSAL LOG
+if (disposals?.length) {
+  const dispData: any[][] = [
+    [clientName + ' — Disposal Log', '', '', '', '', '', '', ''],
+    ['Financial Year: ' + fy, '', '', '', '', '', '', ''],
+    [],
+    ['Asset', 'Disposal Date', 'Gross Reversed', 'Acc Dep Reversed',
+     'Net Book Value', 'Proceeds', 'Profit/(Loss)', 'Narration'],
+  ];
+  (disposals || []).forEach((d: any) => {
+    dispData.push([
+      d.fa_assets?.asset_name, d.disposal_date,
+      parseFloat(d.gross_block_reversed), parseFloat(d.accumulated_dep_reversed),
+      parseFloat(d.net_book_value_at_disposal), parseFloat(d.disposal_proceeds),
+      parseFloat(d.profit_loss_on_disposal), d.entry_narration || '',
+    ]);
+  });
+  const wsDisp = XLSX.utils.aoa_to_sheet(dispData);
+  wsDisp['!cols'] = [{wch:28},{wch:14},{wch:16},{wch:18},{wch:16},{wch:14},{wch:14},{wch:30}];
+  wsDisp['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}},{s:{r:1,c:0},e:{r:1,c:7}}];
+  XLSX.utils.book_append_sheet(wb, wsDisp, 'Disposals');
+}
+
+XLSX.writeFile(wb, `${clientName.replace(/[^a-z0-9]/gi,'_')}_Depreciation_${fy}.xlsx`);
+toast.success('Excel exported successfully');
+};
+
+// ── PDF Export ──────────────────────────────────────────────────
+const handlePdfExport = () => {
+if (!assets?.length) { toast.error('No assets to export'); return; }
+const clientName = clients?.find((c: any) => c.id === clientId)?.name || 'Client';
+
+const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+const pageW = doc.internal.pageSize.getWidth();
+const pageH = doc.internal.pageSize.getHeight();
+const margin = 12;
+const DARK   = [13, 17, 23] as [number,number,number];
+const GOLD   = [201, 168, 76] as [number,number,number];
+const WHITE  = [255, 255, 255] as [number,number,number];
+const LTBLUE = [239, 246, 255] as [number,number,number];
+const GREY   = [100, 110, 120] as [number,number,number];
+
+// COVER PAGE
+doc.setFillColor(...DARK);
+doc.rect(0, 0, pageW, pageH, 'F');
+doc.setFillColor(...GOLD);
+doc.rect(0, pageH * 0.42, pageW, 1.5, 'F');
+doc.setFont('helvetica', 'bold');
+doc.setFontSize(28);
+doc.setTextColor(...GOLD);
+doc.text('Fixed Asset Register', pageW / 2, pageH * 0.35, { align: 'center' });
+doc.text('& Depreciation Report', pageW / 2, pageH * 0.35 + 14, { align: 'center' });
+doc.setFontSize(14);
+doc.setTextColor(...WHITE);
+doc.text(clientName, pageW / 2, pageH * 0.35 + 28, { align: 'center' });
+doc.text(`Financial Year: ${fy}`, pageW / 2, pageH * 0.35 + 38, { align: 'center' });
+doc.setFontSize(10);
+doc.setTextColor(160, 170, 180);
+doc.text('Companies Act 2013 — Schedule II Depreciation', pageW / 2, pageH * 0.35 + 52, { align: 'center' });
+doc.text(`Generated on: ${new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'long', year:'numeric' })}`,
+  pageW / 2, pageH * 0.35 + 60, { align: 'center' });
+
+const addSection = (title: string, head: string[][], body: any[][]) => {
+  doc.addPage();
+  // Section title bar
+  doc.setFillColor(...DARK);
+  doc.rect(margin, margin, pageW - margin*2, 8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...GOLD);
+  doc.text(title, margin + 3, margin + 5.5);
+
+  autoTable(doc, {
+    head, body,
+    startY: margin + 10,
+    margin: { left: margin, right: margin },
+    theme: 'grid',
+    headStyles: { fillColor: DARK, textColor: GOLD, fontStyle: 'bold', fontSize: 7.5, cellPadding: 2 },
+    bodyStyles: { fontSize: 7, cellPadding: 1.5, textColor: [30, 30, 30] },
+    alternateRowStyles: { fillColor: LTBLUE },
+    footStyles: { fillColor: [240, 247, 255], textColor: DARK, fontStyle: 'bold', fontSize: 7.5 },
+    didDrawPage: () => {
+      doc.setFontSize(8);
+      doc.setTextColor(...GREY);
+      doc.text(
+        `Page ${(doc as any).internal.getCurrentPageInfo().pageNumber} | ${clientName} | FY ${fy} | Confidential`,
+        pageW / 2, pageH - 5, { align: 'center' }
+      );
+    },
+  });
+};
+
+// ASSET REGISTER
+const regHead = [['#','Code','Asset Name','Category','Method','Purch Date',
+                   'Gross Block','Additions','Acc Dep','Residual','WDV Open','Dep/Year','WDV Close']];
+const regBody = (assets||[]).map((a: any, i: number) => {
+  const gb  = parseFloat(a.gross_block_opening)||0;
+  const ad  = parseFloat(a.accumulated_dep_opening)||0;
+  const addV = parseFloat(a.additions_during_year)||0;
+  const res = a.residual_value ?? Math.round(gb*(parseFloat(a.fa_categories?.residual_value_pct)||5)/100*100)/100;
+  const dep = parseFloat(a.depreciation_for_year)||0;
+  const wdvO = gb - ad;
+  const wdvC = a.wdv_closing ?? wdvO + addV - dep;
+  return [i+1, a.asset_code, a.asset_name,
+    a.fa_categories?.name||'', a.fa_categories?.depreciation_method||'WDV',
+    a.date_of_purchase, fmt(gb), fmt(addV), fmt(ad), fmt(res), fmt(wdvO), fmt(dep), fmt(wdvC)];
+});
+addSection('Asset Register — ' + fy, regHead, regBody);
+
+// DEPRECIATION SCHEDULE
+if (schedule?.length) {
+  const schedHead = [['Code','Asset Name','Category','Method','Rate/Basis','WDV Open','Dep Amt','WDV Close']];
+  const schedBody = schedule.map((s: any) => {
+    const ast = s.fa_assets;
+    const m = ast?.depreciation_method_used || 'WDV';
+    const cat = ast?.fa_categories;
+    return [ast?.asset_code, ast?.asset_name, cat?.name, m,
+      m==='SLM'?`(Cost-Res)/${cat?.useful_life_years}yr`:`${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`,
+      fmt(parseFloat(s.wdv_opening)), fmt(parseFloat(s.depreciation_amount)), fmt(parseFloat(s.wdv_closing))];
+  });
+  addSection('Depreciation Schedule — ' + fy, schedHead, schedBody);
+}
+
+// CATEGORY SUMMARY
+if (summary?.length) {
+  const sumHead = [['Category','Life','Gross Open','Additions','Disposals',
+                    'Gross Close','Acc Dep Open','Dep/Year','Acc Dep Close','Net Block']];
+  const sumBody = summary.map((s: any) => [
+    s.category_name, `${s.useful_life_years} yr`,
+    fmt(parseFloat(s.gross_block_opening)), fmt(parseFloat(s.additions)),
+    fmt(parseFloat(s.disposals)), fmt(parseFloat(s.gross_block_closing)),
+    fmt(parseFloat(s.acc_dep_opening)), fmt(parseFloat(s.depreciation)),
+    fmt(parseFloat(s.acc_dep_closing)), fmt(parseFloat(s.net_block))]);
+  addSection('Category-wise Summary — ' + fy, sumHead, sumBody);
+}
+
+// DISPOSAL LOG
+if (disposals?.length) {
+  const dispHead = [['Asset','Date','Gross Rev.','Acc Dep Rev.','NBV','Proceeds','P/(L)','Narration']];
+  const dispBody = disposals.map((d: any) => [
+    d.fa_assets?.asset_name, d.disposal_date,
+    fmt(parseFloat(d.gross_block_reversed)), fmt(parseFloat(d.accumulated_dep_reversed)),
+    fmt(parseFloat(d.net_book_value_at_disposal)), fmt(parseFloat(d.disposal_proceeds)),
+    fmt(parseFloat(d.profit_loss_on_disposal)), d.entry_narration||'']);
+  addSection('Disposal Log — ' + fy, dispHead, dispBody);
+}
+
+doc.save(`${clientName.replace(/[^a-z0-9]/gi,'_')}_Depreciation_${fy}.pdf`);
+toast.success('PDF exported successfully');
 };
 
 return (
@@ -454,9 +870,21 @@ return (
     <h1 className='text-2xl font-bold text-foreground'>Depreciation Register</h1>
     <p className='text-sm text-muted-foreground'>Companies Act 2013 — Schedule II — WDV &amp; SLM Methods</p>
   </div>
-  <Button variant='outline' size='sm' onClick={() => setShowCats(true)} className='gap-2'>
-    <Settings size={14} /> Asset Category Master
-  </Button>
+  <div className='flex items-center gap-2'>
+    {clientId && assets?.length ? (
+      <>
+        <Button variant='outline' size='sm' onClick={handleExcelExport} className='gap-1'>
+          <Download size={14}/> Excel
+        </Button>
+        <Button variant='outline' size='sm' onClick={handlePdfExport} className='gap-1'>
+          <FileText size={14}/> PDF
+        </Button>
+      </>
+    ) : null}
+    <Button variant='outline' size='sm' onClick={() => setShowCats(true)} className='gap-2'>
+      <Settings size={14} /> Asset Category Master
+    </Button>
+  </div>
 </div>
 
 <Card>
@@ -490,7 +918,19 @@ return (
         {finalizing ? 'Finalizing...' : 'Save & Finalize FY'}
       </Button>
     )}
-    {isLocked && <Badge variant='outline' className='gap-1 border-amber-400 text-amber-600'><Lock size={14} /> FY Finalized &amp; Locked</Badge>}
+    {isLocked && (
+      <>
+        <Badge variant='outline' className='gap-1 border-amber-400 text-amber-600'><Lock size={14} /> FY Finalized &amp; Locked</Badge>
+        <Button
+          variant='outline' size='sm'
+          className='gap-1 border-amber-400 text-amber-700 hover:bg-amber-50'
+          onClick={handleUnlock} disabled={unlocking}
+        >
+          {unlocking ? <Loader2 size={14} className='animate-spin'/> : <LockOpen size={14}/>}
+          {unlocking ? 'Unlocking...' : 'Unlock FY for Editing'}
+        </Button>
+      </>
+    )}
   </CardContent>
 </Card>
 
@@ -506,6 +946,7 @@ return (
     <TabsTrigger value='register'>Asset Register{assets?.length ? <Badge variant='secondary' className='ml-1 text-[10px]'>{assets.length}</Badge> : null}</TabsTrigger>
     <TabsTrigger value='schedule'>Depreciation Schedule</TabsTrigger>
     <TabsTrigger value='summary'>Block-wise Summary</TabsTrigger>
+    <TabsTrigger value='additions'>Additions Log{additionsLog?.length ? <Badge variant='secondary' className='ml-1 text-[10px]'>{additionsLog.length}</Badge> : null}</TabsTrigger>
     <TabsTrigger value='disposals'>Disposal Log</TabsTrigger>
   </TabsList>
 
@@ -542,6 +983,7 @@ return (
             <TableHead className='text-right'>Additions</TableHead>
             <TableHead className='text-right'>Disposals</TableHead>
             <TableHead className='text-right'>Acc Dep Open</TableHead>
+            <TableHead className='text-right'>Residual Val</TableHead>
             <TableHead className='text-right font-semibold'>WDV Opening</TableHead>
             <TableHead className='text-right w-16'>Rate %</TableHead>
             <TableHead className='text-right font-semibold'>Dep for Year</TableHead>
@@ -550,9 +992,9 @@ return (
           </TableRow></TableHeader>
           <TableBody>
             {loadingAssets ? (
-              <TableRow><TableCell colSpan={15} className='text-center py-8'><Loader2 className='mx-auto animate-spin' /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={16} className='text-center py-8'><Loader2 className='mx-auto animate-spin' /></TableCell></TableRow>
             ) : !assets?.length ? (
-              <TableRow><TableCell colSpan={15} className='text-center py-8 text-muted-foreground'>No assets for {fy}. Click Add Asset.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={16} className='text-center py-8 text-muted-foreground'>No assets for {fy}. Click Add Asset.</TableCell></TableRow>
             ) : assets.map((a:any, i:number) => {
               const gb   = parseFloat(a.gross_block_opening)||0;
               const ad   = parseFloat(a.accumulated_dep_opening)||0;
@@ -563,11 +1005,16 @@ return (
               const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
               const method = a.fa_categories?.depreciation_method || 'WDV';
               const rate   = method==='SLM' ? a.fa_categories?.slm_rate : a.fa_categories?.wdv_rate;
+              const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
+              const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
               const warn   = wdvO < 0 || ad > gb;
               return (
                 <TableRow key={a.id} className={cn(a.is_fully_depreciated&&'bg-muted/20', warn&&'bg-red-50 dark:bg-red-950/20')}>
                   <TableCell className='text-xs text-muted-foreground'>{i+1}</TableCell>
-                  <TableCell className='font-mono text-xs'>{a.asset_code}</TableCell>
+                  <TableCell className='font-mono text-xs'>
+                    {a.asset_code}
+                    {a.is_carried_forward && <Badge variant='outline' className='ml-1 text-[8px] px-1'>CF</Badge>}
+                  </TableCell>
                   <TableCell className='font-medium text-sm'>
                     {a.asset_name}
                     {a.is_fully_depreciated&&<Badge variant='outline' className='ml-1 text-[9px]'>Fully Dep.</Badge>}
@@ -580,6 +1027,7 @@ return (
                   <TableCell className='text-right tabular-nums text-sm'>{add>0?fmt(add):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{dis>0?fmt(dis):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{fmt(ad)}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resVal)}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(wdvO)}</TableCell>
                   <TableCell className='text-right tabular-nums text-xs'>{fmtPct(rate)}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>
@@ -612,6 +1060,7 @@ return (
                 <TableCell className='text-right tabular-nums'>{fmt(totals.add)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.disp)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.acDep)}</TableCell>
+                <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.wdvOpen)}</TableCell>
                 <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.dep)}</TableCell>
@@ -651,6 +1100,7 @@ return (
               <TableHead className='text-right'>Gross Block</TableHead>
               <TableHead className='text-right'>Additions</TableHead>
               <TableHead className='text-right'>Acc Dep Open</TableHead>
+              <TableHead className='text-right'>Residual Val</TableHead>
               <TableHead className='text-right'>WDV Opening</TableHead>
               <TableHead className='text-right'>Depreciation</TableHead>
               <TableHead className='text-right'>WDV Closing</TableHead>
@@ -669,7 +1119,7 @@ return (
                 return (
                   <Fragment key={catName}>
                     <TableRow className='bg-primary/5 border-t-2 border-border'>
-                      <TableCell colSpan={11} className='font-semibold text-sm py-2'>
+                      <TableCell colSpan={12} className='font-semibold text-sm py-2'>
                         {catName} — {catAssets.length} asset(s)
                       </TableCell>
                     </TableRow>
@@ -679,6 +1129,8 @@ return (
                       const wdvO = gb - ad;
                       const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
                       const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
+                      const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
+                      const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
                       return (
                         <TableRow key={a.id}>
                           <TableCell className='text-xs text-muted-foreground'>{i+1}</TableCell>
@@ -688,6 +1140,7 @@ return (
                           <TableCell className='text-right tabular-nums text-sm'>{fmt(gb)}</TableCell>
                           <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(a.additions_during_year)||0)}</TableCell>
                           <TableCell className='text-right tabular-nums text-sm'>{fmt(ad)}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resVal)}</TableCell>
                           <TableCell className='text-right tabular-nums text-sm'>{fmt(wdvO)}</TableCell>
                           <TableCell className='text-right tabular-nums text-sm'>
                             {dep!=null?fmt(dep):<span className='text-muted-foreground text-xs italic'>pending</span>}
@@ -714,6 +1167,7 @@ return (
                       <TableCell className='text-right tabular-nums'>{fmt(sub.gb)}</TableCell>
                       <TableCell className='text-right tabular-nums'>{fmt(sub.add)}</TableCell>
                       <TableCell className='text-right tabular-nums'>{fmt(sub.acDep)}</TableCell>
+                      <TableCell/>
                       <TableCell className='text-right tabular-nums'>{fmt(sub.wdvO)}</TableCell>
                       <TableCell className='text-right tabular-nums'>{fmt(sub.dep)}</TableCell>
                       <TableCell className='text-right tabular-nums'>{fmt(sub.wdvC)}</TableCell>
@@ -727,6 +1181,7 @@ return (
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.gb)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.add)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.acDep)}</TableCell>
+                <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.wdvO)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.dep)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(grandTotals.wdvC)}</TableCell>
@@ -744,17 +1199,27 @@ return (
   {/* ═══ DEPRECIATION SCHEDULE TAB ═══ */}
   <TabsContent value='schedule'>
     <Card>
-      <CardHeader>
-        <CardTitle className='text-base'>Depreciation Schedule — {fy}</CardTitle>
-        <CardDescription className='text-xs'>Dep on Opening Block + Dep on Additions shown separately</CardDescription>
+      <CardHeader className='flex flex-row items-center justify-between pb-2'>
+        <div>
+          <CardTitle className='text-base'>Depreciation Schedule — {fy}</CardTitle>
+          <CardDescription className='text-xs'>Dep on Opening Block + Dep on Additions shown separately</CardDescription>
+        </div>
+        <div className='flex border rounded-md overflow-hidden'>
+          <Button variant={scheduleView==='asset'?'default':'ghost'} size='sm' className='rounded-none h-8 text-xs' onClick={()=>setScheduleView('asset')}>Asset-wise</Button>
+          <Button variant={scheduleView==='category'?'default':'ghost'} size='sm' className='rounded-none h-8 text-xs' onClick={()=>setScheduleView('category')}>Category-wise</Button>
+        </div>
       </CardHeader>
       <CardContent className='p-0'>
+
+        {/* Asset-wise schedule view */}
+        {scheduleView === 'asset' && (
         <Table>
           <TableHeader><TableRow className='bg-muted/50 text-xs'>
             <TableHead>Code</TableHead><TableHead>Asset Name</TableHead><TableHead>Category</TableHead>
             <TableHead className='text-center'>Method</TableHead>
-            <TableHead className='text-right'>Rate %</TableHead>
-            <TableHead className='text-right'>Dep Base</TableHead>
+            <TableHead className='text-right'>Rate / Basis</TableHead>
+            <TableHead className='text-right'>WDV Opening</TableHead>
+            <TableHead className='text-right'>Residual</TableHead>
             <TableHead className='text-right'>Dep on Opening</TableHead>
             <TableHead className='text-right'>Additions</TableHead>
             <TableHead className='text-right'>Dep on Additions</TableHead>
@@ -763,34 +1228,127 @@ return (
           </TableRow></TableHeader>
           <TableBody>
             {!schedule?.length ? (
-              <TableRow><TableCell colSpan={11} className='text-center py-8 text-muted-foreground'>Run Calculate Depreciation first</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className='text-center py-8 text-muted-foreground'>Run Calculate Depreciation first</TableCell></TableRow>
             ) : schedule.map((s:any) => {
               const ast = s.fa_assets;
-              const method = ast?.fa_categories?.depreciation_method||'WDV';
+              const method = ast?.depreciation_method_used || ast?.fa_categories?.depreciation_method||'WDV';
+              const cat = ast?.fa_categories;
               const addAst = assets?.find((a:any) => a.id===s.asset_id);
+              const residual = addAst?.residual_value ?? Math.round((parseFloat(s.wdv_opening)+(parseFloat(ast?.accumulated_dep_opening)||0)) * (parseFloat(cat?.residual_value_pct)||5) / 100 * 100)/100;
+              const rateBasis = method === 'SLM'
+                ? `(Cost-Res)/${cat?.useful_life_years}yr`
+                : `${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`;
+              const wdvC = parseFloat(s.wdv_closing);
+              const isFullyDep = wdvC <= (typeof residual === 'number' ? residual : 0);
               return (
                 <TableRow key={s.id}>
                   <TableCell className='font-mono text-xs'>{ast?.asset_code}</TableCell>
-                  <TableCell className='text-sm font-medium'>{ast?.asset_name}</TableCell>
-                  <TableCell className='text-xs'>{ast?.fa_categories?.name}</TableCell>
+                  <TableCell className='text-sm font-medium'>
+                    {ast?.asset_name}
+                    {isFullyDep && <Badge variant='outline' className='ml-1 text-[9px]'>Fully Dep.</Badge>}
+                  </TableCell>
+                  <TableCell className='text-xs'>{cat?.name}</TableCell>
                   <TableCell className='text-center'><MethodBadge method={method}/></TableCell>
-                  <TableCell className='text-right text-xs'>{fmtPct(parseFloat(s.depreciation_rate))}</TableCell>
-                  <TableCell className='text-right text-xs text-muted-foreground'>{method==='SLM'?'Gross Block':'WDV Opening'}</TableCell>
+                  <TableCell className='text-right text-xs text-muted-foreground'>{rateBasis}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.wdv_opening))}</TableCell>
+                  <TableCell className='text-right tabular-nums text-xs text-muted-foreground'>{fmt(residual)}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(ast?.dep_on_opening_block??s.depreciation_amount))}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{addAst&&parseFloat(addAst.additions_during_year)>0?fmt(parseFloat(addAst.additions_during_year)):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(ast?.dep_on_additions??0))}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(parseFloat(s.depreciation_amount))}</TableCell>
-                  <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(parseFloat(s.wdv_closing))}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(wdvC)}</TableCell>
                 </TableRow>
               );
             })}
           </TableBody>
         </Table>
+        )}
+
+        {/* Category-wise schedule view */}
+        {scheduleView === 'category' && (() => {
+          const grouped: Record<string, any[]> = {};
+          (schedule||[]).forEach((s:any) => {
+            const catName = s.fa_assets?.fa_categories?.name || 'Uncategorized';
+            if (!grouped[catName]) grouped[catName] = [];
+            grouped[catName].push(s);
+          });
+          return (
+          <Table>
+            <TableHeader><TableRow className='bg-muted/50 text-xs'>
+              <TableHead>Code</TableHead><TableHead>Asset Name</TableHead>
+              <TableHead className='text-center'>Method</TableHead>
+              <TableHead className='text-right'>Rate / Basis</TableHead>
+              <TableHead className='text-right'>WDV Opening</TableHead>
+              <TableHead className='text-right'>Total Dep</TableHead>
+              <TableHead className='text-right font-bold'>WDV Closing</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {!schedule?.length ? (
+                <TableRow><TableCell colSpan={7} className='text-center py-8 text-muted-foreground'>Run Calculate Depreciation first</TableCell></TableRow>
+              ) : Object.entries(grouped).map(([catName, catScheds]) => {
+                const sub = catScheds.reduce((acc:any, s:any) => ({
+                  wdvO: acc.wdvO + (parseFloat(s.wdv_opening)||0),
+                  dep:  acc.dep  + (parseFloat(s.depreciation_amount)||0),
+                  wdvC: acc.wdvC + (parseFloat(s.wdv_closing)||0),
+                }), {wdvO:0,dep:0,wdvC:0});
+                return (
+                  <Fragment key={catName}>
+                    <TableRow className='bg-primary/5 border-t-2 border-border'>
+                      <TableCell colSpan={7} className='font-semibold text-sm py-2'>{catName} — {catScheds.length} asset(s)</TableCell>
+                    </TableRow>
+                    {catScheds.map((s:any) => {
+                      const ast = s.fa_assets;
+                      const method = ast?.depreciation_method_used || ast?.fa_categories?.depreciation_method||'WDV';
+                      const cat = ast?.fa_categories;
+                      const rateBasis = method === 'SLM'
+                        ? `(Cost-Res)/${cat?.useful_life_years}yr`
+                        : `${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`;
+                      return (
+                        <TableRow key={s.id}>
+                          <TableCell className='font-mono text-xs'>{ast?.asset_code}</TableCell>
+                          <TableCell className='text-sm'>{ast?.asset_name}</TableCell>
+                          <TableCell className='text-center'><MethodBadge method={method}/></TableCell>
+                          <TableCell className='text-right text-xs text-muted-foreground'>{rateBasis}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm'>{fmt(parseFloat(s.wdv_opening))}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(parseFloat(s.depreciation_amount))}</TableCell>
+                          <TableCell className='text-right tabular-nums text-sm font-bold'>{fmt(parseFloat(s.wdv_closing))}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow className='bg-muted/40 font-semibold text-xs border-b-2'>
+                      <TableCell colSpan={4}>Subtotal — {catName}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.wdvO)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.dep)}</TableCell>
+                      <TableCell className='text-right tabular-nums'>{fmt(sub.wdvC)}</TableCell>
+                    </TableRow>
+                  </Fragment>
+                );
+              })}
+              {schedule?.length > 0 && (() => {
+                const gt = schedule.reduce((acc:any, s:any) => ({
+                  wdvO: acc.wdvO + (parseFloat(s.wdv_opening)||0),
+                  dep:  acc.dep  + (parseFloat(s.depreciation_amount)||0),
+                  wdvC: acc.wdvC + (parseFloat(s.wdv_closing)||0),
+                }), {wdvO:0,dep:0,wdvC:0});
+                return (
+                  <TableRow className='bg-muted font-bold border-t-2 border-border text-sm'>
+                    <TableCell colSpan={4}>GRAND TOTAL</TableCell>
+                    <TableCell className='text-right tabular-nums'>{fmt(gt.wdvO)}</TableCell>
+                    <TableCell className='text-right tabular-nums'>{fmt(gt.dep)}</TableCell>
+                    <TableCell className='text-right tabular-nums'>{fmt(gt.wdvC)}</TableCell>
+                  </TableRow>
+                );
+              })()}
+            </TableBody>
+          </Table>
+          );
+        })()}
+
       </CardContent>
     </Card>
   </TabsContent>
 
-  {/* ═══ BLOCK-WISE SUMMARY TAB (CHANGE 5 — expandable) ═══ */}
+  {/* ═══ BLOCK-WISE SUMMARY TAB ═══ */}
   <TabsContent value='summary'>
     <Card>
       <CardHeader>
@@ -894,6 +1452,41 @@ return (
     </Card>
   </TabsContent>
 
+  {/* ═══ ADDITIONS LOG TAB ═══ */}
+  <TabsContent value='additions'>
+    <Card>
+      <CardHeader><CardTitle className='text-base'>Additions Log — {fy}</CardTitle></CardHeader>
+      <CardContent className='p-0'>
+        <Table>
+          <TableHeader><TableRow className='text-xs bg-muted/50'>
+            <TableHead>Asset</TableHead>
+            <TableHead>Category</TableHead>
+            <TableHead>Addition Date</TableHead>
+            <TableHead className='text-right'>Amount (₹)</TableHead>
+            <TableHead>Invoice No</TableHead>
+            <TableHead>Supplier</TableHead>
+            <TableHead>Narration</TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {!additionsLog?.length ? (
+              <TableRow><TableCell colSpan={7} className='text-center py-8 text-muted-foreground'>No additions recorded for {fy}</TableCell></TableRow>
+            ) : additionsLog.map((a: any) => (
+              <TableRow key={a.id}>
+                <TableCell className='font-medium text-sm'>{a.fa_assets?.asset_name}</TableCell>
+                <TableCell className='text-xs'>{a.fa_assets?.fa_categories?.name}</TableCell>
+                <TableCell className='text-sm'>{a.addition_date}</TableCell>
+                <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(parseFloat(a.addition_amount))}</TableCell>
+                <TableCell className='text-xs'>{a.invoice_no || '—'}</TableCell>
+                <TableCell className='text-xs'>{a.supplier || '—'}</TableCell>
+                <TableCell className='text-xs text-muted-foreground'>{a.entry_narration || '—'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  </TabsContent>
+
   {/* ═══ DISPOSAL LOG TAB ═══ */}
   <TabsContent value='disposals'>
     <Card>
@@ -937,7 +1530,32 @@ return (
 </Tabs>
 )}
 
-{/* ═══ CATEGORY MASTER DIALOG (CHANGE 1) ═══ */}
+{/* ═══ CARRY FORWARD DIALOG ═══ */}
+<Dialog open={showCarryForward} onOpenChange={setShowCarryForward}>
+  <DialogContent>
+    <DialogHeader>
+      <DialogTitle>FY {fy} Finalized — Carry Forward to Next FY?</DialogTitle>
+      <DialogDescription>
+        This will create opening balance rows for FY{' '}
+        {(() => { const [y] = fy.split('-'); const n=parseInt(y)+1;
+                  return `${n}-${String(n+1).slice(-2)}`; })()}
+        {' '}using the closing WDV of each active asset as the new opening balance.
+        Disposed assets are excluded.
+      </DialogDescription>
+    </DialogHeader>
+    <DialogFooter>
+      <Button variant='outline' onClick={() => setShowCarryForward(false)}>
+        Skip — I will do this later
+      </Button>
+      <Button onClick={handleCarryForward} disabled={carryingForward} className='gap-2'>
+        {carryingForward && <Loader2 size={14} className='animate-spin'/>}
+        Yes, Carry Forward
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+{/* ═══ CATEGORY MASTER DIALOG ═══ */}
 <Dialog open={showCats} onOpenChange={setShowCats}>
   <DialogContent className='max-w-5xl max-h-[80vh] overflow-y-auto'>
     <DialogHeader>
@@ -1093,7 +1711,7 @@ return (
   </DialogContent>
 </Dialog>
 
-{/* ═══ EDIT ASSET DIALOG (CHANGE 7) ═══ */}
+{/* ═══ EDIT ASSET DIALOG ═══ */}
 <Dialog open={!!editAsset} onOpenChange={() => setEditAsset(null)}>
   <DialogContent className='max-w-xl'>
     <DialogHeader>
@@ -1152,7 +1770,7 @@ return (
   </DialogContent>
 </Dialog>
 
-{/* ═══ BULK ADD DIALOG (CHANGE 3) ═══ */}
+{/* ═══ BULK ADD DIALOG ═══ */}
 <Dialog open={showBulkAdd} onOpenChange={setShowBulkAdd}>
   <DialogContent className='max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col'>
     <DialogHeader>
@@ -1293,7 +1911,7 @@ return (
 {/* CALCULATION RESULTS DIALOG */}
 {calcResult&&(
   <Dialog open={!!calcResult} onOpenChange={()=>setCalcResult(null)}>
-    <DialogContent className='max-w-3xl max-h-[70vh] overflow-y-auto'>
+    <DialogContent className='max-w-4xl max-h-[70vh] overflow-y-auto'>
       <DialogHeader>
         <DialogTitle className='flex items-center gap-2'>
           <CheckCircle2 size={18} className='text-emerald-500'/>
@@ -1308,6 +1926,7 @@ return (
         <TableHeader><TableRow className='text-xs'>
           <TableHead>Asset</TableHead>
           <TableHead className='text-center'>Method</TableHead>
+          <TableHead className='text-right'>Rate / Basis</TableHead>
           <TableHead className='text-right'>Dep on Open</TableHead>
           <TableHead className='text-right'>Dep on Add</TableHead>
           <TableHead className='text-right'>Total Dep</TableHead>
@@ -1319,6 +1938,7 @@ return (
             <TableRow key={r.asset_id} className={r.status==='warning'?'bg-amber-50 dark:bg-amber-950/20':''}>
               <TableCell className='text-xs font-medium'>{r.asset_name}</TableCell>
               <TableCell className='text-center'><MethodBadge method={r.method}/></TableCell>
+              <TableCell className='text-right text-xs text-muted-foreground max-w-[160px] truncate'>{r.rate_display || '—'}</TableCell>
               <TableCell className='text-right text-xs tabular-nums'>{fmt(r.dep_on_opening)}</TableCell>
               <TableCell className='text-right text-xs tabular-nums'>{fmt(r.dep_on_additions)}</TableCell>
               <TableCell className='text-right text-xs tabular-nums font-semibold'>{fmt(r.total_depreciation)}</TableCell>

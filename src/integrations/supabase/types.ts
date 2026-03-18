@@ -1813,6 +1813,60 @@ export type Database = {
           },
         ]
       }
+      fa_asset_additions: {
+        Row: {
+          addition_amount: number
+          addition_date: string
+          asset_id: string
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          entry_narration: string | null
+          id: string
+          invoice_no: string | null
+          supplier: string | null
+        }
+        Insert: {
+          addition_amount?: number
+          addition_date: string
+          asset_id: string
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          entry_narration?: string | null
+          id?: string
+          invoice_no?: string | null
+          supplier?: string | null
+        }
+        Update: {
+          addition_amount?: number
+          addition_date?: string
+          asset_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          entry_narration?: string | null
+          id?: string
+          invoice_no?: string | null
+          supplier?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fa_asset_additions_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "fa_assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fa_asset_additions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fa_asset_disposals: {
         Row: {
           accumulated_dep_reversed: number
