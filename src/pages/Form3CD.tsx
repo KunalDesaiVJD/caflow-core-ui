@@ -169,7 +169,7 @@ const CLAUSE_KEYS = [
   "cl_35","cl_36","cl_37_39","cl_40","cl_41","cl_42_43","cl_44",
 ] as const;
 
-const STOCK_UNIT_OPTIONS = ["KG", "MT", "Nos", "Ltrs", "Sq Ft", "Sq Mt", "Other"];
+const STOCK_UNIT_OPTIONS = ["KG", "MT", "Nos", "Ltrs", "Sq Ft", "Sq Mt", "Meters", "Pairs", "Sets", "Bundles", "Pieces", "Other"];
 
 const FRINGE_BENEFIT_CATEGORIES = [
   "Motor Car", "Telephone", "Club", "Travel", "Medical", "Entertainment", "Guest House", "Festival", "Other",
