@@ -17,12 +17,23 @@ export async function exportToPdf(element: HTMLElement, filename: string) {
 }
 
 /**
- * Export data as Excel (.xlsx)
+ * Export data as Excel (.xlsx) with proper formatting
  */
 export function exportToExcel(data: { sheetName: string; rows: Record<string, any>[] }[], filename: string) {
   const wb = XLSX.utils.book_new();
   data.forEach(({ sheetName, rows }) => {
     const ws = XLSX.utils.json_to_sheet(rows);
+    // Auto-width columns
+    if (rows.length > 0) {
+      const cols = Object.keys(rows[0]);
+      ws['!cols'] = cols.map(key => {
+        const maxLen = Math.max(
+          key.length,
+          ...rows.map(r => String(r[key] || '').length)
+        );
+        return { wch: Math.min(Math.max(maxLen, 12), 80) };
+      });
+    }
     XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
   });
   XLSX.writeFile(wb, filename);
