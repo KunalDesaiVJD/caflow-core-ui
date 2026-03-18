@@ -217,9 +217,7 @@ export default function Form3CD() {
   const [cl35, setCl35] = useState<ClauseData>({});
   const [cl36, setCl36] = useState<ClauseData>({});
   const [cl37_39, setCl37_39] = useState<ClauseData>({});
-  const [cl40, setCl40] = useState<ClauseData>(() => ({
-    rows: FRINGE_BENEFIT_CATEGORIES.map(c => ({ nature: c, totalExp: "", pctFB: "", fbValue: "" })),
-  }));
+  const [cl40, setCl40] = useState<ClauseData>({});
   const [cl41, setCl41] = useState<ClauseData>({});
   const [cl42_43, setCl42_43] = useState<ClauseData>({});
   const [cl44, setCl44] = useState<ClauseData>({});
