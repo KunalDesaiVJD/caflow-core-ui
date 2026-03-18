@@ -556,7 +556,6 @@ export function MasterConfigPanel() {
                     <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 9, 9(a), Clause 9" />
                   </div>
                   <p className="text-[10px] text-muted-foreground">Enter any format: 9, 9(a), Clause 9, C1.9 — fully editable</p>
-                  </div>
                   <div>
                     <Label className="text-xs">Clause Heading</Label>
                     <Input value={t.heading} onChange={e => updateThreeCD(idx, "heading", e.target.value)} className="mt-1 text-sm" />
@@ -571,7 +570,6 @@ export function MasterConfigPanel() {
                       <Plus className="w-3 h-3" /> Add Sub-Row under {t.clause_number}
                     </Button>
                   )}
-                  </div>
                 </AccordionContent>
               </AccordionItem>
             ))}
