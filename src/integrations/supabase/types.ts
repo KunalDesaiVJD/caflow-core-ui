@@ -1936,7 +1936,7 @@ export type Database = {
           client_id: string
           created_at: string | null
           created_by: string | null
-          date_of_purchase: string
+          date_of_purchase: string | null
           dep_days_addition: number | null
           dep_days_opening: number | null
           dep_on_additions: number | null
@@ -1971,7 +1971,7 @@ export type Database = {
           client_id: string
           created_at?: string | null
           created_by?: string | null
-          date_of_purchase: string
+          date_of_purchase?: string | null
           dep_days_addition?: number | null
           dep_days_opening?: number | null
           dep_on_additions?: number | null
@@ -2006,7 +2006,7 @@ export type Database = {
           client_id?: string
           created_at?: string | null
           created_by?: string | null
-          date_of_purchase?: string
+          date_of_purchase?: string | null
           dep_days_addition?: number | null
           dep_days_opening?: number | null
           dep_on_additions?: number | null
