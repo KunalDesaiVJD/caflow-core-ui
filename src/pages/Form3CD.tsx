@@ -617,10 +617,10 @@ export default function Form3CD() {
                     </div>
                     {cl10.multiBusiness === true && (
                       <div className="mt-2">
-                        <EditableTable
-                          columns={["Sector", "Sub-sector Code", "Description"]}
+                        <MultiBusinessTable
                           rows={cl10.multiBusinessRows || []}
                           onChange={rows => updateClause(setCl10, "multiBusinessRows", rows)}
+                          sectorCodes={SECTOR_CODES}
                         />
                       </div>
                     )}
