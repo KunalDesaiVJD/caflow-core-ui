@@ -86,7 +86,17 @@ const STOCK_VALUATION_OPTIONS = [
 ];
 
 const STOCK_VALUATION_14_OPTIONS = [
-  "FIFO", "Weighted Average", "Specific Identification", "Standard Cost", "Market Value", "Other",
+  "Cost",
+  "Market Value",
+  "Cost or Market Value whichever is lower",
+  "Other (specify)",
+];
+
+const ACCOUNTING_METHOD_OPTIONS = [
+  "Mercantile System (Accrual Basis)",
+  "Cash System (Cash Basis)",
+  "Hybrid / Mixed Method",
+  "Other (specify)",
 ];
 
 const ICDS_LIST = [
