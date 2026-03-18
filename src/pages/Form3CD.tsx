@@ -14,7 +14,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { Save, Printer, Plus, Trash2, Loader2, CheckCircle2, Circle } from "lucide-react";
+import { Save, Printer, Plus, Trash2, Loader2, CheckCircle2, Circle, Download, FileSpreadsheet } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import { SECTOR_CODES } from "@/data/sectorCodes";
 
 /* ──────── types ──────── */
@@ -378,9 +380,44 @@ export default function Form3CD() {
             {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowPrintView(true)}>
-              <Printer className="h-4 w-4 mr-1" /> Print / Export
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setShowPrintView(true)}>
+                  <Printer className="h-4 w-4 mr-2" /> Preview & Print
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  setShowPrintView(true);
+                  setTimeout(() => {
+                    const el = document.querySelector('.print-view') as HTMLElement;
+                    if (el) exportToPdf(el, `Form-3CD_${client?.name || 'report'}_${fy}.pdf`);
+                  }, 800);
+                }}>
+                  <Download className="h-4 w-4 mr-2" /> Export PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  const rows = CLAUSE_NAV.map(c => {
+                    const data = clauseStateMap[c.key] || {};
+                    const filled = isClauseFilled(data);
+                    return {
+                      "Clause": c.label,
+                      "Title": c.title,
+                      "Status": filled ? "Filled" : "NIL",
+                      "Content": filled ? Object.entries(data).map(([k, v]) =>
+                        `${k}: ${typeof v === 'string' ? v : Array.isArray(v) ? `${v.length} items` : JSON.stringify(v)}`
+                      ).join(' | ') : 'Not Applicable',
+                    };
+                  });
+                  exportToExcel([{ sheetName: "Form 3CD", rows }], `Form-3CD_${client?.name || 'report'}_${fy}.xlsx`);
+                }}>
+                  <FileSpreadsheet className="h-4 w-4 mr-2" /> Export Excel
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" onClick={() => saveAll(false)} disabled={saving}>
               <Save className="h-4 w-4 mr-1" /> Save All
             </Button>
@@ -2538,11 +2575,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
 }) {
   const printRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    // Auto-trigger print after render
-    const timer = setTimeout(() => window.print(), 500);
-    return () => clearTimeout(timer);
-  }, []);
+  // No longer auto-trigger print
 
   const clauseQuestions: Record<string, string> = {
     cl_8: "8. Indicate the relevant clause of section 44AB under which the audit has been conducted",
@@ -2647,7 +2680,12 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
         <h2 className="text-lg font-bold">Form 3CD — Print Preview</h2>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => window.print()}>
-            <Printer className="h-4 w-4 mr-1" /> Download as PDF
+            <Printer className="h-4 w-4 mr-1" /> Print
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => {
+            if (printRef.current) exportToPdf(printRef.current, `Form-3CD_${client?.name || 'report'}_${fy}.pdf`);
+          }}>
+            <Download className="h-4 w-4 mr-1" /> Export PDF
           </Button>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>

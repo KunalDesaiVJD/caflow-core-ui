@@ -10,7 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
+import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles, Download, FileType } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { exportToPdf, exportToWord } from "@/lib/exportUtils";
 import { Checkbox } from "@/components/ui/checkbox";
 
 /* ───────────── constants (fallback) ───────────── */
@@ -402,7 +404,31 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
           <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
-            <Button variant="outline" size="sm" onClick={() => setShowPrint(true)}><Printer className="h-4 w-4 mr-1" /> Print</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm"><Download className="h-4 w-4 mr-1" /> Export</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setShowPrint(true)}>
+                  <Printer className="h-4 w-4 mr-2" /> Preview & Print
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  setShowPrint(true);
+                  setTimeout(() => {
+                    const el = document.querySelector('.print-view .p-8') as HTMLElement;
+                    if (el) exportToPdf(el, `Notes-to-Accounts_${clientData?.name || 'report'}.pdf`);
+                  }, 800);
+                }}>
+                  <Download className="h-4 w-4 mr-2" /> Export PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  const html = buildNotesWordHtml(stateMap, clientData, NOTE_LIST, noteSelection, POLICY_TEXTS, STANDARD_TEXTS, displayNumberMap);
+                  exportToWord(html, `Notes-to-Accounts_${clientData?.name || 'report'}.doc`);
+                }}>
+                  <FileType className="h-4 w-4 mr-2" /> Export Word
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="default" size="sm" disabled={finalising}><Lock className="h-4 w-4 mr-1" /> Finalise Notes</Button>
@@ -915,11 +941,63 @@ function Note45({ data, onChange }: { data: any; onChange: (f: string, v: string
 /* ══════════════════════════════════════════════
    PRINT VIEW
    ══════════════════════════════════════════════ */
+/* ── Build Notes HTML for Word export ── */
+function buildNotesWordHtml(
+  notes: Record<string, [any, any]>,
+  clientData: any,
+  noteList: typeof NOTE_LIST_FALLBACK,
+  noteSelection: Record<string, boolean>,
+  policyTexts: typeof POLICY_TEXTS,
+  standardTexts: typeof STANDARD_TEXTS,
+  displayNumberMap: Map<string, number>,
+): string {
+  const n1 = notes.note_1?.[0] || {};
+  const n2 = notes.note_2?.[0] || {};
+  const companyName = clientData?.name || n1.company_name || "[Company Name]";
+  const cin = clientData?.cin || n1.reg_number || "[CIN]";
+
+  let html = `<h1>Notes to Financial Statements</h1>`;
+
+  // Note 1 — all sub-sections
+  html += `<h2>Note 1 — Background</h2>`;
+  html += `<h3>a. Overview of the Reporting Entity</h3>`;
+  html += `<p><strong>${companyName}</strong> incorporated under the Companies Act, 2013 vide CIN <strong>${cin}</strong> having its registered office at ${n1.registered_office || clientData?.registered_office || "—"} and engaged in business of ${n1.business_activity || clientData?.business_activity || "—"}.</p>`;
+  if (n1.incorporation_date) html += `<p>Date of Incorporation: ${n1.incorporation_date}</p>`;
+  html += `<h3>b. Basis of Preparation</h3><p>${n1.basis_of_preparation || standardTexts.basis_of_preparation}</p>`;
+  html += `<h3>c. Basis of Measurement</h3><p>${n1.basis_of_measurement || standardTexts.basis_of_measurement}</p>`;
+  html += `<h3>d. Use of Estimates</h3><p>${n1.use_of_estimates || standardTexts.use_of_estimates}</p>`;
+
+  // Note 2
+  html += `<h2>Note 2 — Significant Accounting Policies</h2>`;
+  Object.entries(policyTexts).forEach(([k, v]) => {
+    html += `<h3>${v.title}</h3><p>${v.text}</p>`;
+    if (n2[`${k}_additional`]) html += `<p><em>Additional: ${n2[`${k}_additional`]}</em></p>`;
+  });
+
+  // Notes 29-45
+  noteList.filter(n => parseInt(String(n.num)) >= 29 && noteSelection[n.key] !== false).forEach(nl => {
+    const d = notes[nl.key]?.[0] || {};
+    const displayNum = displayNumberMap.get(nl.key) || nl.num;
+    const hasData = Object.values(d).some(v => v !== "" && v !== undefined && v !== null);
+    html += `<h2>Note ${displayNum} — ${nl.title}</h2>`;
+    if (!hasData) {
+      html += `<p class="nil">NIL</p>`;
+    } else {
+      Object.entries(d).forEach(([k, v]) => {
+        if (v && typeof v === "string" && k !== "rolled_from_fy") html += `<p><strong>${k}:</strong> ${v}</p>`;
+      });
+    }
+  });
+
+  html += `<p style="margin-top:24pt; text-align:center; font-size:8pt;">Generated by CAFlow | ${new Date().toLocaleDateString("en-IN")}</p>`;
+  return html;
+}
+
 function PrintView({ notes, onClose }: { notes: Record<string, [any, any]>; onClose: () => void }) {
-  useEffect(() => { setTimeout(() => window.print(), 500); }, []);
-  const printRow = (label: string, cy: any, py: any) => (
-    <tr className="border-b border-border"><td className="py-1 px-2 text-[9pt]">{label}</td><td className="py-1 px-2 text-right text-[9pt]">{cy||"—"}</td><td className="py-1 px-2 text-right text-[9pt]">{py||"—"}</td></tr>
-  );
+  const printRef = useRef<HTMLDivElement>(null);
+  const n1 = notes.note_1?.[0] || {};
+  const n2 = notes.note_2?.[0] || {};
+
   return (
     <div className="print-view bg-background">
       <style>{`
@@ -929,27 +1007,43 @@ function PrintView({ notes, onClose }: { notes: Record<string, [any, any]>; onCl
       `}</style>
       <div className="no-print p-4 flex gap-2 border-b border-border">
         <Button variant="outline" size="sm" onClick={onClose}>← Back to Editor</Button>
-        <Button size="sm" onClick={() => window.print()}><Printer className="h-4 w-4 mr-1" /> Print / Save as PDF</Button>
+        <Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="h-4 w-4 mr-1" /> Print</Button>
+        <Button size="sm" onClick={() => {
+          if (printRef.current) exportToPdf(printRef.current, `Notes-to-Accounts.pdf`);
+        }}><Download className="h-4 w-4 mr-1" /> Export PDF</Button>
       </div>
-      <div className="p-8 max-w-[210mm] mx-auto">
+      <div ref={printRef} className="p-8 max-w-[210mm] mx-auto">
         <h1 className="text-center font-bold text-lg mb-1">Notes to Financial Statements</h1>
         <p className="text-center text-sm text-muted-foreground mb-6">Generated by CAFlow</p>
 
-        {/* Note 1 */}
+        {/* Note 1 — Full sub-sections */}
         <h2 className="font-bold text-sm mb-2">Note No : 1 Background</h2>
-        <div className="text-[9pt] mb-4 space-y-1">
-          <p><strong>Company:</strong> {notes.note_1[0].company_name || "—"}</p>
-          <p><strong>Address:</strong> {notes.note_1[0].address || "—"}</p>
-          <p><strong>Registration No:</strong> {notes.note_1[0].reg_number || "—"} | <strong>Incorporated:</strong> {notes.note_1[0].incorporation_date || "—"}</p>
-          <p><strong>Principal Activity:</strong> {notes.note_1[0].principal_activity || "—"}</p>
+        <div className="text-[9pt] mb-4 space-y-3">
+          <div>
+            <h3 className="font-semibold text-[10pt] mb-1">a. Overview of the Reporting Entity</h3>
+            <p><strong>{n1.company_name || "—"}</strong> incorporated under the Companies Act, 2013 vide CIN <strong>{n1.reg_number || "—"}</strong> having its registered office at {n1.registered_office || "—"} and engaged in business of {n1.business_activity || "—"}.</p>
+            {n1.incorporation_date && <p>Date of Incorporation: {n1.incorporation_date}</p>}
+          </div>
+          <div>
+            <h3 className="font-semibold text-[10pt] mb-1">b. Basis of Preparation</h3>
+            <p>{n1.basis_of_preparation || STANDARD_TEXTS.basis_of_preparation}</p>
+          </div>
+          <div>
+            <h3 className="font-semibold text-[10pt] mb-1">c. Basis of Measurement</h3>
+            <p>{n1.basis_of_measurement || STANDARD_TEXTS.basis_of_measurement}</p>
+          </div>
+          <div>
+            <h3 className="font-semibold text-[10pt] mb-1">d. Use of Estimates</h3>
+            <p>{n1.use_of_estimates || STANDARD_TEXTS.use_of_estimates}</p>
+          </div>
         </div>
 
-        {/* Note 2 */}
+        {/* Note 2 — All policies */}
         <h2 className="font-bold text-sm mb-2">Note No : 2 Significant Accounting Policies</h2>
         <div className="text-[9pt] mb-4 space-y-2">
           {Object.entries(POLICY_TEXTS).map(([k,v]) => (
             <div key={k}><p className="font-semibold">{v.title}</p><p className="text-muted-foreground">{v.text}</p>
-              {notes.note_2[0][`${k}_additional`] && <p className="italic mt-1">Additional: {notes.note_2[0][`${k}_additional`]}</p>}
+              {n2[`${k}_additional`] && <p className="italic mt-1">Additional: {n2[`${k}_additional`]}</p>}
             </div>
           ))}
         </div>
@@ -961,7 +1055,14 @@ function PrintView({ notes, onClose }: { notes: Record<string, [any, any]>; onCl
           return (
             <div key={nl.key} className={`mb-4 ${nl.num === 34 || nl.num === 37 ? "page-break" : ""}`}>
               <h2 className="font-bold text-sm mb-1">Note No : {nl.num} {nl.title}</h2>
-              {!hasData ? <p className="text-[9pt] text-muted-foreground italic">NIL</p> : <p className="text-[9pt] text-muted-foreground">[Data filled — see detailed view]</p>}
+              {!hasData ? <p className="text-[9pt] text-muted-foreground italic">NIL</p> : (
+                <div className="text-[9pt]">
+                  {Object.entries(d).filter(([k]) => k !== "rolled_from_fy").map(([k, v]) => {
+                    if (!v || v === "") return null;
+                    return <p key={k}><strong>{k.replace(/_/g, " ")}:</strong> {typeof v === "string" ? v : JSON.stringify(v)}</p>;
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
