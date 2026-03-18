@@ -278,6 +278,26 @@ export function MasterConfigPanel() {
       template_content: "", is_applicable_default: true,
     }]);
   }
+  function addThreeCDSubClause(parentIdx: number) {
+    const parent = threeCDClauses[parentIdx];
+    const parentNum = parent.clause_number;
+    // Find existing sub-clauses for this parent
+    const existingSubs = threeCDClauses.filter(t =>
+      t.clause_number.startsWith(parentNum + '(') || t.clause_number.startsWith(parentNum + '.')
+    );
+    const nextLetter = String.fromCharCode(97 + existingSubs.length); // a, b, c...
+    const newClause: ThreeCDClause = {
+      clause_number: `${parentNum}(${nextLetter})`,
+      heading: `Sub-clause of ${parentNum}`,
+      template_content: "",
+      is_applicable_default: true,
+    };
+    setThreeCDClauses(prev => {
+      const arr = [...prev];
+      arr.splice(parentIdx + 1 + existingSubs.length, 0, newClause);
+      return arr;
+    });
+  }
   function deleteThreeCDClause(idx: number) {
     const t = threeCDClauses[idx];
     if (!window.confirm(`Delete 3CD Clause ${t.clause_number} — "${t.heading}"?`)) return;
