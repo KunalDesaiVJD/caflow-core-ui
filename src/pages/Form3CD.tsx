@@ -2648,61 +2648,67 @@ function MSMETable({ rows, onChange }: {
   );
 }
 
-/** GST Breakup table (Clause 44) with totals */
+/** GST Breakup table (Clause 44) — statutory 7-column format */
 function GSTBreakupTable({ rows, onChange }: {
-  rows: { description: string; totalExp: string; gstExp: string; gstRate: string; itcAvailed: string; nonGstExp: string }[];
+  rows: {
+    particulars: string; totalAmount: string;
+    regTaxable: string; regComposition: string;
+    regExempt: string; unregistered: string;
+  }[];
   onChange: (r: any[]) => void;
 }) {
-  function addRow() { onChange([...rows, { description: "", totalExp: "", gstExp: "", gstRate: "", itcAvailed: "", nonGstExp: "" }]); }
+  const emptyRow = { particulars: "", totalAmount: "", regTaxable: "", regComposition: "", regExempt: "", unregistered: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
   }
-  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
-  const totals = rows.reduce((acc, r) => ({
-    totalExp: acc.totalExp + (parseFloat(r.totalExp) || 0),
-    gstExp: acc.gstExp + (parseFloat(r.gstExp) || 0),
-    itcAvailed: acc.itcAvailed + (parseFloat(r.itcAvailed) || 0),
-    nonGstExp: acc.nonGstExp + (parseFloat(r.nonGstExp) || 0),
-  }), { totalExp: 0, gstExp: 0, itcAvailed: 0, nonGstExp: 0 });
-
+  const fmt = (n: number) =>
+    n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const tot = (k: string) =>
+    rows.reduce((s, r) => s + (parseFloat((r as any)[k] || "0") || 0), 0);
   return (
-    <div className="space-y-2">
+    <div className="space-y-3 overflow-x-auto">
+      <p className="text-xs text-muted-foreground">
+        Break-up of total expenditure of entities registered or not registered under GST
+      </p>
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead className="text-xs">Sr</TableHead>
-            <TableHead className="text-xs">Description</TableHead>
-            <TableHead className="text-xs w-28">Total Exp (₹)</TableHead>
-            <TableHead className="text-xs w-28">GST Exp (₹)</TableHead>
-            <TableHead className="text-xs w-20">GST Rate</TableHead>
-            <TableHead className="text-xs w-28">ITC Availed (₹)</TableHead>
-            <TableHead className="text-xs w-28">Non-GST Exp (₹)</TableHead>
+          <TableRow className="bg-muted/50 text-xs">
+            <TableHead className="w-8">Sl</TableHead>
+            <TableHead className="min-w-[200px]">Particulars of Expenditure</TableHead>
+            <TableHead className="w-32">Total Amount (₹)</TableHead>
+            <TableHead className="w-32">Registered GST — Taxable (₹)</TableHead>
+            <TableHead className="w-32">Registered GST — Composition (₹)</TableHead>
+            <TableHead className="w-32">Registered GST — Exempt/Nil Rated (₹)</TableHead>
+            <TableHead className="w-32">Not Registered under GST (₹)</TableHead>
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
+          {rows.length === 0 && (
+            <TableRow><TableCell colSpan={8} className="text-center py-4 text-muted-foreground text-sm">No rows.</TableCell></TableRow>
+          )}
           {rows.map((row, i) => (
             <TableRow key={i}>
-              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
-              <TableCell className="p-1"><Input value={row.description} onChange={e => update(i, "description", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.totalExp} onChange={e => update(i, "totalExp", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.gstExp} onChange={e => update(i, "gstExp", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input value={row.gstRate} onChange={e => update(i, "gstRate", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.itcAvailed} onChange={e => update(i, "itcAvailed", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.nonGstExp} onChange={e => update(i, "nonGstExp", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1 text-xs text-center">{i + 1}</TableCell>
+              <TableCell className="p-1"><Input value={row.particulars} onChange={e => update(i, "particulars", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.totalAmount} onChange={e => update(i, "totalAmount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.regTaxable} onChange={e => update(i, "regTaxable", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.regComposition} onChange={e => update(i, "regComposition", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.regExempt} onChange={e => update(i, "regExempt", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.unregistered} onChange={e => update(i, "unregistered", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
             </TableRow>
           ))}
           {rows.length > 0 && (
             <TableRow className="bg-muted/20 font-semibold text-xs">
-              <TableCell colSpan={2} className="p-1 text-right">Totals</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.totalExp)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.gstExp)}</TableCell>
-              <TableCell className="p-1" />
-              <TableCell className="p-1 text-right">{fmt(totals.itcAvailed)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.nonGstExp)}</TableCell>
+              <TableCell colSpan={2} className="p-1 text-right">TOTAL</TableCell>
+              <TableCell className="p-1 text-right tabular-nums">{fmt(tot("totalAmount"))}</TableCell>
+              <TableCell className="p-1 text-right tabular-nums">{fmt(tot("regTaxable"))}</TableCell>
+              <TableCell className="p-1 text-right tabular-nums">{fmt(tot("regComposition"))}</TableCell>
+              <TableCell className="p-1 text-right tabular-nums">{fmt(tot("regExempt"))}</TableCell>
+              <TableCell className="p-1 text-right tabular-nums">{fmt(tot("unregistered"))}</TableCell>
               <TableCell />
             </TableRow>
           )}
