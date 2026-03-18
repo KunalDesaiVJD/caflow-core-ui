@@ -731,12 +731,12 @@ export default function Form3CD() {
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
                   <div className="space-y-2">
-                    <Label>13(a) Whether speculative business transactions are accounted separately?</Label>
+                    <Label>13(a) Method of accounting employed in respect of speculative transactions:</Label>
                     <Select value={cl13.specSeparate || ""} onValueChange={v => updateClause(setCl13, "specSeparate", v)}>
                       <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="yes">Yes — Maintained separately</SelectItem>
-                        <SelectItem value="no">No — Not maintained separately</SelectItem>
+                        <SelectItem value="yes">Maintained Separately</SelectItem>
+                        <SelectItem value="no">Not Maintained Separately</SelectItem>
                         <SelectItem value="na">Not Applicable</SelectItem>
                       </SelectContent>
                     </Select>
