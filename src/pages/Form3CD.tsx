@@ -1505,31 +1505,41 @@ export default function Form3CD() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 34(a) */}
+                  {/* 34(a) — TDS deducted as per provisions */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">34(a) — Tax deducted as per provisions?</Label>
+                    <Label className="font-medium">34(a) — Whether tax has been deducted at source as per provisions of sections 192 to 196D?</Label>
                     <RadioYesNo name="cl34a" value={cl34.a_yes} onChange={v => updateClause(setCl34, "a_yes", v)} />
                     {cl34.a_yes === true && (
-                      <TDSComplianceTable rows={cl34.a_rows || []} onChange={rows => updateClause(setCl34, "a_rows", rows)} />
+                      <TDSScheduleTable rows={cl34.a_rows || []} onChange={rows => updateClause(setCl34, "a_rows", rows)} showDateOfDeposit={true} />
                     )}
+                    {cl34.a_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                   <Separator />
-                  {/* 34(b) */}
+                  {/* 34(b) — TDS deposited timely */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">34(b) — TDS deposited timely?</Label>
+                    <Label className="font-medium">34(b) — Whether TDS has been deposited within the time prescribed?</Label>
                     <RadioYesNo name="cl34b" value={cl34.b_yes} onChange={v => updateClause(setCl34, "b_yes", v)} />
-                    {cl34.b_yes === true && (
-                      <TDSTimeliness rows={cl34.b_rows || []} onChange={rows => updateClause(setCl34, "b_rows", rows)} />
+                    {cl34.b_yes === false && (
+                      <>
+                        <p className="text-xs text-amber-600">If No — furnish details of late deposit:</p>
+                        <TDSTimeliness rows={cl34.b_rows || []} onChange={rows => updateClause(setCl34, "b_rows", rows)} />
+                      </>
                     )}
+                    {cl34.b_yes === true && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">All TDS deposited timely</div>}
                   </div>
                   <Separator />
-                  {/* 34(c) */}
+                  {/* 34(c) — TCS collected */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">34(c) — TCS as per provisions?</Label>
+                    <Label className="font-medium">34(c) — Whether tax has been collected at source as per provisions of sections 206C?</Label>
                     <RadioYesNo name="cl34c" value={cl34.c_yes} onChange={v => updateClause(setCl34, "c_yes", v)} />
                     {cl34.c_yes === true && (
-                      <TDSComplianceTable rows={cl34.c_rows || []} onChange={rows => updateClause(setCl34, "c_rows", rows)} />
+                      <EditableTable
+                        columns={["Section", "Nature of Transaction", "Name of Buyer", "PAN", "Amount (₹)", "TCS Collected (₹)", "Date of Collection", "Date of Deposit"]}
+                        rows={cl34.c_rows || []}
+                        onChange={rows => updateClause(setCl34, "c_rows", rows)}
+                      />
                     )}
+                    {cl34.c_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
