@@ -208,7 +208,7 @@ export default function Form3CD() {
   const [cl24_25, setCl24_25] = useState<ClauseData>({});
   const [cl26, setCl26] = useState<ClauseData>({});
   const [cl27, setCl27] = useState<ClauseData>({});
-  const [cl29, setCl29] = useState<ClauseData>({});
+  
   const [cl30, setCl30] = useState<ClauseData>({});
   const [cl31, setCl31] = useState<ClauseData>({});
   const [cl32, setCl32] = useState<ClauseData>({});
