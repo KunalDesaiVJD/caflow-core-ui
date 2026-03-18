@@ -1487,14 +1487,7 @@ export default function Form3CD() {
                 <AccordionContent className="px-4 pb-4 space-y-4">
                   <RadioYesNo name="cl33" value={cl33.yes} onChange={v => updateClause(setCl33, "yes", v)} />
                   {cl33.yes === true && (
-                    <DropdownTable
-                      dropdownCol={3}
-                      dropdownLabel="Section"
-                      dropdownOptions={DONATION_SECTION_OPTIONS}
-                      columns={["Donee Name", "Address", "PAN", "Section", "Amount Donated (₹)", "Qualifying Amount (₹)", "Deduction Amount (₹)"]}
-                      rows={cl33.rows || []}
-                      onChange={rows => updateClause(setCl33, "rows", rows)}
-                    />
+                    <DonationTable rows={cl33.rows || []} onChange={rows => updateClause(setCl33, "rows", rows)} />
                   )}
                   {cl33.yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                 </AccordionContent>
