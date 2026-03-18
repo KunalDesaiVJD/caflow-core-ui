@@ -2148,12 +2148,12 @@ function DepreciationTable({ rows, onChange }: {
   );
 }
 
-/** Section 40(a) table with dropdown */
+/** Section 40(a) table with dropdown — 5 columns */
 function Section40aTable({ rows, onChange }: {
-  rows: { section: string; nature: string; amount: string; remarks: string }[];
+  rows: { section: string; nature: string; expenditure: string; disallowed: string; remarks: string }[];
   onChange: (r: any[]) => void;
 }) {
-  function addRow() { onChange([...rows, { section: "", nature: "", amount: "", remarks: "" }]); }
+  function addRow() { onChange([...rows, { section: "", nature: "", expenditure: "", disallowed: "", remarks: "" }]); }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
@@ -2165,14 +2165,15 @@ function Section40aTable({ rows, onChange }: {
           <TableRow>
             <TableHead className="text-xs w-40">Section</TableHead>
             <TableHead className="text-xs">Nature of Payment</TableHead>
-            <TableHead className="text-xs w-32">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-32">Amount of Expenditure (₹)</TableHead>
+            <TableHead className="text-xs w-32">Amount Disallowed (₹)</TableHead>
             <TableHead className="text-xs w-40">Remarks</TableHead>
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length === 0 && (
-            <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
           )}
           {rows.map((row, i) => (
             <TableRow key={i}>
@@ -2185,7 +2186,8 @@ function Section40aTable({ rows, onChange }: {
                 </Select>
               </TableCell>
               <TableCell className="p-1"><Input value={row.nature} onChange={e => update(i, "nature", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.expenditure} onChange={e => update(i, "expenditure", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.disallowed} onChange={e => update(i, "disallowed", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1">
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
