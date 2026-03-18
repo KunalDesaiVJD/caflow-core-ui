@@ -1024,46 +1024,43 @@ export default function Form3CD() {
                     {isClauseFilled(cl21) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="px-4 pb-4 space-y-6">
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <Label>Amounts allowable on payment basis under the following sections:</Label>
                   <RadioApplicable name="cl21" value={cl21.applicable} onChange={v => updateClause(setCl21, "applicable", v)} />
                   {cl21.applicable === true && (
                     <>
-                      {/* 21(a)(A) Bonus/Commission */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(A) — Bonus / Commission to Employees</Label>
-                        <EditableTable
-                          columns={["Payee Name", "Amount (₹)", "Due Date", "Actual Payment Date", "Late Payment Amount (₹)"]}
-                          rows={cl21.bonus_rows || []}
-                          onChange={rows => updateClause(setCl21, "bonus_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(B) Interest on Loans */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(B) — Interest on Loans</Label>
-                        <EditableTable
-                          columns={["Payee Name", "PAN", "Amount (₹)", "Remarks"]}
-                          rows={cl21.interest_rows || []}
-                          onChange={rows => updateClause(setCl21, "interest_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(C) Employer's contribution to PF/ESI */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(C) — Employer's Contribution to PF / ESI</Label>
-                        <EditableTable
-                          columns={["Fund Name", "Amount Due (₹)", "Amount Paid (₹)", "Date of Payment"]}
-                          rows={cl21.pf_rows || []}
-                          onChange={rows => updateClause(setCl21, "pf_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(D) Interest to partners */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(D) — Interest to Partners</Label>
-                        <EditableTable
-                          columns={["Partner Name", "Amount (₹)", "Rate %"]}
-                          rows={cl21.partner_interest_rows || []}
-                          onChange={rows => updateClause(setCl21, "partner_interest_rows", rows)}
-                        />
-                      </div>
+                    {/* 21(a) — Section 43B items */}
+                    <div className="space-y-2 border-l-2 border-primary/30 pl-4">
+                      <Label className="font-semibold text-sm">21(a) — Amounts allowable on actual payment u/s 43B</Label>
+                      {[
+                        { key: 'tax_duty', label: '(i) Tax, duty, cess or fee' },
+                        { key: 'employer_pf', label: '(ii) Employer contribution to PF/ESI/Gratuity/superannuation fund' },
+                        { key: 'bonus_comm', label: '(iii) Bonus or commission to employees' },
+                        { key: 'bank_interest', label: '(iv) Interest on loan from public financial institution / scheduled bank / NBFC' },
+                        { key: 'leave_salary', label: '(v) Leave encashment / leave salary' },
+                        { key: 'railway', label: '(vi) Sum payable to Railways for use of railway assets' },
+                        { key: 'msme_43bh', label: '(vii) Sum payable to MSME u/s 43B(h)' },
+                      ].map(item => (
+                        <div key={item.key} className="space-y-2 border-l border-muted/60 pl-3 pt-2">
+                          <Label className="text-sm">{item.label}</Label>
+                          <EditableTable
+                            columns={['Payee Name / Details', 'Amount Due (₹)', 'Amount Paid (₹)', 'Date of Payment', 'Delayed? (Y/N)']}
+                            rows={cl21[`${item.key}_rows`] || []}
+                            onChange={rows => updateClause(setCl21, `${item.key}_rows`, rows)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <Separator />
+                    {/* 21(b) — Section 36(1)(va) */}
+                    <div className="space-y-2 border-l-2 border-primary/30 pl-4">
+                      <Label className="font-semibold text-sm">21(b) — Employee contribution to PF/ESI u/s 36(1)(va)</Label>
+                      <EditableTable
+                        columns={['Fund Name', 'Amount Deducted from Salary (₹)', 'Due Date for Deposit', 'Date Actually Deposited', 'Delayed? (Y/N)']}
+                        rows={cl21.empPF_rows || []}
+                        onChange={rows => updateClause(setCl21, 'empPF_rows', rows)}
+                      />
+                    </div>
                     </>
                   )}
                   {cl21.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
