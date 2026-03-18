@@ -51,12 +51,25 @@ if (dis < 0)      errs.push('Disposals cannot be negative.');
 if (dis > gb+add) errs.push('Disposals cannot exceed total gross block.');
 if (add > 0 && !a.addition_date)  errs.push('Addition date required when additions > 0.');
 if (dis > 0 && !a.disposal_date)  errs.push('Disposal date required when disposals > 0.');
-if (fy && a.addition_date) {
+  if (fy && a.addition_date) {
 const fyY = parseInt(fy.split('-')[0]);
 const d = new Date(a.addition_date);
 if (d < new Date(fyY,3,1) || d > new Date(fyY+1,2,31))
-errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
+  errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
 }
+  // FIX GEN-4: Block adding an asset whose purchase date falls in a
+  // future financial year relative to the currently selected FY.
+  if (fy && a.date_of_purchase) {
+    const fyY = parseInt(fy.split('-')[0]);
+    const fyLastDay = new Date(fyY + 1, 2, 31); // Mar 31 of FY end year
+    const purchDate = new Date(a.date_of_purchase);
+    if (purchDate > fyLastDay) {
+      errs.push(
+        `Date of Purchase (${a.date_of_purchase}) is beyond FY ${fy}. ` +
+        `You cannot add a future-year asset to this financial year.`
+      );
+    }
+  }
 return errs;
 }
 
