@@ -400,19 +400,35 @@ export default function Form3CD() {
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => {
-                  const rows = CLAUSE_NAV.map(c => {
+                  const excelRows = CLAUSE_NAV.map(c => {
                     const data = clauseStateMap[c.key] || {};
                     const filled = isClauseFilled(data);
+                    // Build a readable description from the data
+                    let description = '';
+                    let answer = '';
+                    if (filled) {
+                      const entries = Object.entries(data).filter(([k]) => k !== 'rows' && k !== 'tds_rows' && k !== 'tcs_rows');
+                      const textEntries = entries.filter(([, v]) => typeof v === 'string' && v.trim());
+                      const arrayEntries = entries.filter(([, v]) => Array.isArray(v) && v.length > 0);
+                      answer = textEntries.map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join('\n');
+                      if (arrayEntries.length > 0) {
+                        answer += arrayEntries.map(([k, v]) => `\n${k.replace(/_/g, ' ')}: ${(v as any[]).length} entries`).join('');
+                      }
+                      // Handle special row-based data
+                      if (data.rows && Array.isArray(data.rows)) {
+                        answer += '\n' + data.rows.map((r: any, i: number) =>
+                          Object.entries(r).filter(([, rv]) => rv).map(([rk, rv]) => `${rk}: ${rv}`).join(', ')
+                        ).filter((s: string) => s).join('\n');
+                      }
+                    }
                     return {
-                      "Clause": c.label,
-                      "Title": c.title,
-                      "Status": filled ? "Filled" : "NIL",
-                      "Content": filled ? Object.entries(data).map(([k, v]) =>
-                        `${k}: ${typeof v === 'string' ? v : Array.isArray(v) ? `${v.length} items` : JSON.stringify(v)}`
-                      ).join(' | ') : 'Not Applicable',
+                      "Clause Number": c.label,
+                      "Clause Heading": c.title,
+                      "Description": filled ? 'Filled' : 'Not Applicable / NIL',
+                      "Answer": answer || (filled ? 'See detailed entries' : 'N/A'),
                     };
                   });
-                  exportToExcel([{ sheetName: "Form 3CD", rows }], `Form-3CD_${client?.name || 'report'}_${fy}.xlsx`);
+                  exportToExcel([{ sheetName: "Form 3CD", rows: excelRows }], `Form-3CD_${client?.name || 'report'}_${fy}.xlsx`);
                 }}>
                   <FileSpreadsheet className="h-4 w-4 mr-2" /> Export Excel
                 </DropdownMenuItem>

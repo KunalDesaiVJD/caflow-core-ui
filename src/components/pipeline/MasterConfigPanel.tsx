@@ -278,6 +278,26 @@ export function MasterConfigPanel() {
       template_content: "", is_applicable_default: true,
     }]);
   }
+  function addThreeCDSubClause(parentIdx: number) {
+    const parent = threeCDClauses[parentIdx];
+    const parentNum = parent.clause_number;
+    // Find existing sub-clauses for this parent
+    const existingSubs = threeCDClauses.filter(t =>
+      t.clause_number.startsWith(parentNum + '(') || t.clause_number.startsWith(parentNum + '.')
+    );
+    const nextLetter = String.fromCharCode(97 + existingSubs.length); // a, b, c...
+    const newClause: ThreeCDClause = {
+      clause_number: `${parentNum}(${nextLetter})`,
+      heading: `Sub-clause of ${parentNum}`,
+      template_content: "",
+      is_applicable_default: true,
+    };
+    setThreeCDClauses(prev => {
+      const arr = [...prev];
+      arr.splice(parentIdx + 1 + existingSubs.length, 0, newClause);
+      return arr;
+    });
+  }
   function deleteThreeCDClause(idx: number) {
     const t = threeCDClauses[idx];
     if (!window.confirm(`Delete 3CD Clause ${t.clause_number} — "${t.heading}"?`)) return;
@@ -511,7 +531,7 @@ export function MasterConfigPanel() {
               <AccordionItem key={`3cd-${idx}`} value={`3cd-${idx}`} className="border rounded-lg">
                 <AccordionTrigger className="px-4 py-3 hover:no-underline">
                   <div className="flex items-center gap-3 w-full">
-                    <span className="text-sm font-mono font-bold text-primary min-w-[40px]">Cl {t.clause_number}</span>
+                    <span className="text-sm font-mono font-bold text-primary min-w-[40px]">{t.clause_number}</span>
                     <span className="text-sm font-medium flex-1 text-left">{t.heading}</span>
                     {!t.is_applicable_default && <Badge variant="secondary" className="text-[10px]">Default N/A</Badge>}
                   </div>
@@ -533,8 +553,9 @@ export function MasterConfigPanel() {
                   </div>
                   <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
                     <Label className="text-xs">Clause Number</Label>
-                    <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 8(a)" />
+                    <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 9, 9(a), Clause 9" />
                   </div>
+                  <p className="text-[10px] text-muted-foreground">Enter any format: 9, 9(a), Clause 9, C1.9 — fully editable</p>
                   <div>
                     <Label className="text-xs">Clause Heading</Label>
                     <Input value={t.heading} onChange={e => updateThreeCD(idx, "heading", e.target.value)} className="mt-1 text-sm" />
@@ -543,6 +564,12 @@ export function MasterConfigPanel() {
                     <Label className="text-xs">Default Template Content</Label>
                     <Textarea value={t.template_content} onChange={e => updateThreeCD(idx, "template_content", e.target.value)} className="mt-1 text-xs min-h-[100px]" placeholder="Enter default 3CD clause content..." />
                   </div>
+                  {/* Add sub-clause button — only for parent-level clauses (no parentheses/dots in number) */}
+                  {!/[(.)]/.test(t.clause_number) && (
+                    <Button variant="outline" size="sm" onClick={() => addThreeCDSubClause(idx)} className="gap-1 text-xs">
+                      <Plus className="w-3 h-3" /> Add Sub-Row under {t.clause_number}
+                    </Button>
+                  )}
                 </AccordionContent>
               </AccordionItem>
             ))}
