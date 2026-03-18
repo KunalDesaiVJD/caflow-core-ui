@@ -118,7 +118,12 @@ const [df, setDf] = useState({ disposal_date:'', disposal_proceeds:'0', narratio
 const { data: clients } = useQuery({
 queryKey: ['dep-clients', user?.firm_id, user?.role],
 queryFn: async () => {
-let q = supabase.from('clients').select('id,name').order('name');
+  const COMPANY_TYPES = ['Private Ltd', 'Public Ltd', 'OPC'];
+  let q = supabase
+    .from('clients')
+    .select('id, name, entity_type')
+    .in('entity_type', COMPANY_TYPES)
+    .order('name');
 if (user?.role !== 'superadmin' && user?.firm_id) q = q.eq('firm_id', user.firm_id);
 const { data } = await q;
 return data || [];
