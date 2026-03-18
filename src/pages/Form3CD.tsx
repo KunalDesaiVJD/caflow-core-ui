@@ -68,11 +68,15 @@ const CLAUSE_NAV_FALLBACK = [
 ];
 
 const SECTION_44AB_OPTIONS = [
-  "44AB(a) — Business turnover > ₹1 Cr",
-  "44AB(b) — Professional receipts > ₹50 Lakhs",
-  "44AB(c) — Profit lower than presumptive",
-  "44AB(d) — Loss from presumptive business",
-  "Third Proviso to sec 44AB: Audited under any other law",
+  "44AB(a) — Carrying on business — total sales/turnover/gross receipts exceed ₹1 crore",
+  "44AB(a) Proviso — Business turnover >₹1Cr and ≤₹10Cr; cash receipts and payments each ≤5%",
+  "44AB(b) — Carrying on profession — gross receipts exceed ₹50 lakhs",
+  "44AB(b) Proviso — Professional receipts >₹25L and ≤₹50L; cash receipts and payments each ≤5%",
+  "44AB(c) — Business income declared lower than presumptive profit u/s 44AD",
+  "44AB(d) — Loss in business to which presumptive provisions of 44AD apply",
+  "44AB(e) — Person required to get accounts audited under any other law",
+  "44AB — Gross receipts/turnover from business/profession exceeds ₹1 crore (specified persons)",
+  "Third Proviso to 44AB — Accounts audited under Companies Act 2013 or other statute",
 ];
 
 const TAXATION_SCHEME_OPTIONS = ["115BA", "115BAA", "115BAB", "115BAC", "115BAD", "115BAE"];
