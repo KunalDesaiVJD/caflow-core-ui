@@ -511,7 +511,7 @@ export function MasterConfigPanel() {
               <AccordionItem key={`3cd-${idx}`} value={`3cd-${idx}`} className="border rounded-lg">
                 <AccordionTrigger className="px-4 py-3 hover:no-underline">
                   <div className="flex items-center gap-3 w-full">
-                    <span className="text-sm font-mono font-bold text-primary min-w-[40px]">Cl {t.clause_number}</span>
+                    <span className="text-sm font-mono font-bold text-primary min-w-[40px]">{t.clause_number}</span>
                     <span className="text-sm font-medium flex-1 text-left">{t.heading}</span>
                     {!t.is_applicable_default && <Badge variant="secondary" className="text-[10px]">Default N/A</Badge>}
                   </div>
