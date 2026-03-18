@@ -971,7 +971,7 @@ export default function Form3CD() {
                   <Separator />
                   {/* 20(b) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">20(b) — Payments to related parties u/s 40A(2)(b)</Label>
+                    <Label className="font-medium">20(b) — Payments to related parties u/s 40A(2)(a)</Label>
                     <RadioApplicable name="cl20b" value={cl20.b_applicable} onChange={v => updateClause(setCl20, "b_applicable", v)} />
                     {cl20.b_applicable === true && (
                       <EditableTable
@@ -981,6 +981,34 @@ export default function Form3CD() {
                       />
                     )}
                     {cl20.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 20(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">20(c) — Cash payments exceeding ₹10,000 u/s 40A(3)</Label>
+                    <RadioApplicable name="cl20c" value={cl20.c_applicable} onChange={v => updateClause(setCl20, "c_applicable", v)} />
+                    {cl20.c_applicable === true && (
+                      <EditableTable
+                        columns={["Name & Address of Payee", "Date of Payment", "Nature of Payment", "Amount Paid in Cash (₹)"]}
+                        rows={cl20.c_rows || []}
+                        onChange={rows => updateClause(setCl20, "c_rows", rows)}
+                      />
+                    )}
+                    {cl20.c_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 20(d) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">20(d) — Mark-to-market loss or other anticipated loss u/s 40A(13)</Label>
+                    <RadioApplicable name="cl20d" value={cl20.d_applicable} onChange={v => updateClause(setCl20, "d_applicable", v)} />
+                    {cl20.d_applicable === true && (
+                      <EditableTable
+                        columns={["Particulars of Loss", "Amount (₹)"]}
+                        rows={cl20.d_rows || []}
+                        onChange={rows => updateClause(setCl20, "d_rows", rows)}
+                      />
+                    )}
+                    {cl20.d_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
