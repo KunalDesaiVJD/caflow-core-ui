@@ -284,6 +284,41 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           <Button onClick={approveAll} variant="outline" className="gap-1">
             <CheckCircle2 className="w-4 h-4" /> Approve All
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-1">
+                <Download className="w-4 h-4" /> Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => {
+                const el = document.getElementById('caro-print-area');
+                if (el) {
+                  el.style.display = 'block';
+                  exportToPdf(el, `CARO-2020_${client?.name || 'report'}_${engagement?.financial_year || ''}.pdf`).then(() => {
+                    el.style.display = 'none';
+                  });
+                }
+              }}>
+                <Download className="h-4 w-4 mr-2" /> Export PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => {
+                let html = `<h1>CARO 2020 Report</h1>`;
+                html += `<p><strong>Client:</strong> ${client?.name || '—'} | <strong>FY:</strong> ${engagement?.financial_year || '—'}</p><hr/>`;
+                rows.forEach(r => {
+                  html += `<h2>Clause ${r.clause_number} — ${r.clause_title}</h2>`;
+                  if (!r.is_applicable) {
+                    html += `<p class="nil">Not Applicable${r.inapplicability_reason ? ` — ${r.inapplicability_reason}` : ''}</p>`;
+                  } else {
+                    html += `<p>${r.user_response || r.auto_draft || '<em>No response</em>'}</p>`;
+                  }
+                });
+                exportToWord(html, `CARO-2020_${client?.name || 'report'}_${engagement?.financial_year || ''}.doc`);
+              }}>
+                <FileType className="h-4 w-4 mr-2" /> Export Word
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button onClick={saveAll} disabled={saving} className="gap-1">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Save CARO
