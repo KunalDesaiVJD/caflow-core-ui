@@ -923,6 +923,7 @@ return (
           {!clients?.length && <div className='px-3 py-2 text-sm text-muted-foreground'>No clients found</div>}
         </SelectContent>
       </Select>
+      <p className='text-xs text-muted-foreground mt-1'>Companies only (Private Ltd, Public Ltd, OPC)</p>
     </div>
     <div className='w-36'>
       <Label>Financial Year</Label>
