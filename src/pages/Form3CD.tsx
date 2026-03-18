@@ -380,9 +380,44 @@ export default function Form3CD() {
             {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowPrintView(true)}>
-              <Printer className="h-4 w-4 mr-1" /> Print / Export
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="h-4 w-4 mr-1" /> Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setShowPrintView(true)}>
+                  <Printer className="h-4 w-4 mr-2" /> Preview & Print
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  setShowPrintView(true);
+                  setTimeout(() => {
+                    const el = document.querySelector('.print-view') as HTMLElement;
+                    if (el) exportToPdf(el, `Form-3CD_${client?.name || 'report'}_${fy}.pdf`);
+                  }, 800);
+                }}>
+                  <Download className="h-4 w-4 mr-2" /> Export PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  const rows = CLAUSE_NAV.map(c => {
+                    const data = clauseStateMap[c.key] || {};
+                    const filled = isClauseFilled(data);
+                    return {
+                      "Clause": c.label,
+                      "Title": c.title,
+                      "Status": filled ? "Filled" : "NIL",
+                      "Content": filled ? Object.entries(data).map(([k, v]) =>
+                        `${k}: ${typeof v === 'string' ? v : Array.isArray(v) ? `${v.length} items` : JSON.stringify(v)}`
+                      ).join(' | ') : 'Not Applicable',
+                    };
+                  });
+                  exportToExcel([{ sheetName: "Form 3CD", rows }], `Form-3CD_${client?.name || 'report'}_${fy}.xlsx`);
+                }}>
+                  <FileSpreadsheet className="h-4 w-4 mr-2" /> Export Excel
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" onClick={() => saveAll(false)} disabled={saving}>
               <Save className="h-4 w-4 mr-1" /> Save All
             </Button>
