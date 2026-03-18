@@ -2680,7 +2680,12 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
         <h2 className="text-lg font-bold">Form 3CD — Print Preview</h2>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => window.print()}>
-            <Printer className="h-4 w-4 mr-1" /> Download as PDF
+            <Printer className="h-4 w-4 mr-1" /> Print
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => {
+            if (printRef.current) exportToPdf(printRef.current, `Form-3CD_${client?.name || 'report'}_${fy}.pdf`);
+          }}>
+            <Download className="h-4 w-4 mr-1" /> Export PDF
           </Button>
           <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
         </div>
