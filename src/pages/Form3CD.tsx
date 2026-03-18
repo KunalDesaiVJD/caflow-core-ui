@@ -2601,42 +2601,42 @@ function FringeBenefitTable({ rows, onChange }: {
   );
 }
 
-/** MSME outstanding table (Clause 41) with auto-calc days */
+/** MSME outstanding table (Clause 41) — statutory 7-column format */
 function MSMETable({ rows, onChange }: {
-  rows: { name: string; amount: string; dueDate: string; remarks: string }[];
+  rows: { srNo: string; name: string; amountDue: string; dueDate: string; amountOver45: string; interest: string; remarks: string }[];
   onChange: (r: any[]) => void;
 }) {
-  function addRow() { onChange([...rows, { name: "", amount: "", dueDate: "", remarks: "" }]); }
+  const emptyRow = { srNo: "", name: "", amountDue: "", dueDate: "", amountOver45: "", interest: "", remarks: "" };
+  function addRow() { onChange([...rows, { ...emptyRow }]); }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
   }
-  function calcDays(dueDate: string): string {
-    if (!dueDate) return "—";
-    const diff = Math.ceil((Date.now() - new Date(dueDate).getTime()) / (1000 * 60 * 60 * 24));
-    return diff > 0 ? `${diff} days` : "Not overdue";
-  }
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="text-xs">Name of Supplier</TableHead>
-            <TableHead className="text-xs w-32">Amount Outstanding (₹)</TableHead>
-            <TableHead className="text-xs w-32">Due Date</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Days Outstanding</TableHead>
-            <TableHead className="text-xs w-36">Remarks</TableHead>
+            <TableHead className="text-xs w-10">Sr No</TableHead>
+            <TableHead className="text-xs">Name of MSME Supplier</TableHead>
+            <TableHead className="text-xs w-28">Amount of Payment Due (₹)</TableHead>
+            <TableHead className="text-xs w-28">Due Date for Payment</TableHead>
+            <TableHead className="text-xs w-32">Amount Outstanding &gt;45 days (₹)</TableHead>
+            <TableHead className="text-xs w-32">Interest payable u/s 16 of MSME Act (₹)</TableHead>
+            <TableHead className="text-xs w-32">Remarks</TableHead>
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
+          {rows.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground text-sm py-4">No rows.</TableCell></TableRow>}
           {rows.map((row, i) => (
             <TableRow key={i}>
+              <TableCell className="p-1 text-xs text-center text-muted-foreground">{i + 1}</TableCell>
               <TableCell className="p-1"><Input value={row.name} onChange={e => update(i, "name", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amountDue} onChange={e => update(i, "amountDue", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Input type="date" value={row.dueDate} onChange={e => update(i, "dueDate", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1 bg-muted/30 text-xs text-center font-medium">{calcDays(row.dueDate)}</TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.amountOver45} onChange={e => update(i, "amountOver45", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.interest} onChange={e => update(i, "interest", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}><Trash2 className="h-3 w-3 text-destructive" /></Button></TableCell>
             </TableRow>
