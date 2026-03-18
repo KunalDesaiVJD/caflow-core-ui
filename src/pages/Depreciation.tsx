@@ -23,7 +23,14 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const FY_OPTIONS = ['2025-26','2024-25','2023-24','2022-23','2021-22','2020-21'];
+const FY_OPTIONS = (() => {
+  const opts: string[] = [];
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear + 1; y >= 2001; y--) {
+    opts.push(`${y}-${String(y + 1).slice(-2)}`);
+  }
+  return opts;
+})();
 
 const fmt = (v: number | null | undefined) =>
 v == null || isNaN(v as number) ? '—'
@@ -44,12 +51,25 @@ if (dis < 0)      errs.push('Disposals cannot be negative.');
 if (dis > gb+add) errs.push('Disposals cannot exceed total gross block.');
 if (add > 0 && !a.addition_date)  errs.push('Addition date required when additions > 0.');
 if (dis > 0 && !a.disposal_date)  errs.push('Disposal date required when disposals > 0.');
-if (fy && a.addition_date) {
+  if (fy && a.addition_date) {
 const fyY = parseInt(fy.split('-')[0]);
 const d = new Date(a.addition_date);
 if (d < new Date(fyY,3,1) || d > new Date(fyY+1,2,31))
-errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
+  errs.push(`Addition date ${a.addition_date} is outside FY ${fy}.`);
 }
+  // FIX GEN-4: Block adding an asset whose purchase date falls in a
+  // future financial year relative to the currently selected FY.
+  if (fy && a.date_of_purchase) {
+    const fyY = parseInt(fy.split('-')[0]);
+    const fyLastDay = new Date(fyY + 1, 2, 31); // Mar 31 of FY end year
+    const purchDate = new Date(a.date_of_purchase);
+    if (purchDate > fyLastDay) {
+      errs.push(
+        `Date of Purchase (${a.date_of_purchase}) is beyond FY ${fy}. ` +
+        `You cannot add a future-year asset to this financial year.`
+      );
+    }
+  }
 return errs;
 }
 
@@ -111,7 +131,12 @@ const [df, setDf] = useState({ disposal_date:'', disposal_proceeds:'0', narratio
 const { data: clients } = useQuery({
 queryKey: ['dep-clients', user?.firm_id, user?.role],
 queryFn: async () => {
-let q = supabase.from('clients').select('id,name').order('name');
+  const COMPANY_TYPES = ['Private Ltd', 'Public Ltd', 'OPC'];
+  let q = supabase
+    .from('clients')
+    .select('id, name, entity_type')
+    .in('entity_type', COMPANY_TYPES)
+    .order('name');
 if (user?.role !== 'superadmin' && user?.firm_id) q = q.eq('firm_id', user.firm_id);
 const { data } = await q;
 return data || [];
@@ -898,6 +923,7 @@ return (
           {!clients?.length && <div className='px-3 py-2 text-sm text-muted-foreground'>No clients found</div>}
         </SelectContent>
       </Select>
+      <p className='text-xs text-muted-foreground mt-1'>Companies only (Private Ltd, Public Ltd, OPC)</p>
     </div>
     <div className='w-36'>
       <Label>Financial Year</Label>
