@@ -1411,16 +1411,16 @@ export default function Form3CD() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 32(a) */}
+                  {/* 32(a) — Brought forward losses */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">32(a) — Brought forward losses</Label>
+                    <Label className="font-medium">32(a) — Schedule of brought forward losses / depreciation:</Label>
                     <RadioApplicable name="cl32a" value={cl32.a_applicable} onChange={v => updateClause(setCl32, "a_applicable", v)} />
                     {cl32.a_applicable === true && (
                       <DropdownTable
                         dropdownCol={0}
                         dropdownLabel="Nature of Loss"
-                        dropdownOptions={LOSS_NATURE_OPTIONS}
-                        columns={["Nature of Loss", "Assessment Year", "Amount (₹)", "Amount set off this year (₹)", "Balance carried forward (₹)"]}
+                        dropdownOptions={["Business Loss", "Speculation Loss", "Capital Loss", "House Property Loss", "Unabsorbed Depreciation", "Other"]}
+                        columns={["Nature of Loss", "Assessment Year", "Amount (₹)", "Amount set off this year (₹)", "Balance to carry forward (₹)"]}
                         rows={cl32.a_rows || []}
                         onChange={rows => updateClause(setCl32, "a_rows", rows)}
                       />
@@ -1430,7 +1430,7 @@ export default function Form3CD() {
                   <Separator />
                   {/* 32(b) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">32(b) — Allowance under section 32(2) deemed deduction?</Label>
+                    <Label className="font-medium">32(b) — Whether allowance u/s 32(2) treated as deemed deduction?</Label>
                     <div className="flex gap-4">
                       {["Yes", "No", "N/A"].map(opt => (
                         <label key={opt} className="flex items-center gap-2 cursor-pointer">
@@ -1442,31 +1442,32 @@ export default function Form3CD() {
                   <Separator />
                   {/* 32(c) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">32(c) — Deduction claimed u/s 10AA/80HH/80HHC?</Label>
+                    <Label className="font-medium">32(c) — Whether deduction claimed u/s 10AA / 80HH / 80HHC / 80HHD / 80-I / 80-IA / 80-IB?</Label>
                     <RadioYesNo name="cl32c" value={cl32.c_yes} onChange={v => updateClause(setCl32, "c_yes", v)} />
                     {cl32.c_yes === true && (
-                      <div className="space-y-2">
-                        <Textarea placeholder="Details of deduction claimed..." value={cl32.c_text || ""} onChange={e => updateClause(setCl32, "c_text", e.target.value)} />
-                        <Input type="number" placeholder="Amount (₹)" value={cl32.c_amount || ""} onChange={e => updateClause(setCl32, "c_amount", e.target.value)} className="max-w-xs" />
-                      </div>
+                      <EditableTable
+                        columns={["Section", "Particulars of Deduction", "Amount (₹)"]}
+                        rows={cl32.c_rows || []}
+                        onChange={rows => updateClause(setCl32, "c_rows", rows)}
+                      />
                     )}
                   </div>
                   <Separator />
                   {/* 32(d) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">32(d) — Loss from speculation business?</Label>
+                    <Label className="font-medium">32(d) — Whether assessee has incurred any speculation loss?</Label>
                     <RadioYesNo name="cl32d" value={cl32.d_yes} onChange={v => updateClause(setCl32, "d_yes", v)} />
                     {cl32.d_yes === true && (
-                      <Input type="number" placeholder="Amount (₹)" value={cl32.d_amount || ""} onChange={e => updateClause(setCl32, "d_amount", e.target.value)} className="max-w-xs" />
+                      <Input type="number" placeholder="Amount of speculation loss (₹)" value={cl32.d_amount || ""} onChange={e => updateClause(setCl32, "d_amount", e.target.value)} className="max-w-xs" />
                     )}
                   </div>
                   <Separator />
                   {/* 32(e) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">32(e) — Loss from specified business?</Label>
+                    <Label className="font-medium">32(e) — Whether assessee has incurred any loss from specified business u/s 35AD?</Label>
                     <RadioYesNo name="cl32e" value={cl32.e_yes} onChange={v => updateClause(setCl32, "e_yes", v)} />
                     {cl32.e_yes === true && (
-                      <Input type="number" placeholder="Amount (₹)" value={cl32.e_amount || ""} onChange={e => updateClause(setCl32, "e_amount", e.target.value)} className="max-w-xs" />
+                      <Input type="number" placeholder="Amount of loss (₹)" value={cl32.e_amount || ""} onChange={e => updateClause(setCl32, "e_amount", e.target.value)} className="max-w-xs" />
                     )}
                   </div>
                 </AccordionContent>
