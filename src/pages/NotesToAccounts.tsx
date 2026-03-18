@@ -404,7 +404,31 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
           <h1 className="text-lg font-semibold">Note {displayNumberMap.get(activeNote) || NOTE_LIST.find((n) => n.key === activeNote)?.num} — {NOTE_LIST.find((n) => n.key === activeNote)?.title}</h1>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={saveAll} disabled={saving}><Save className="h-4 w-4 mr-1" /> {saving ? "Saving..." : "Save All"}</Button>
-            <Button variant="outline" size="sm" onClick={() => setShowPrint(true)}><Printer className="h-4 w-4 mr-1" /> Print</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm"><Download className="h-4 w-4 mr-1" /> Export</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setShowPrint(true)}>
+                  <Printer className="h-4 w-4 mr-2" /> Preview & Print
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  setShowPrint(true);
+                  setTimeout(() => {
+                    const el = document.querySelector('.print-view .p-8') as HTMLElement;
+                    if (el) exportToPdf(el, `Notes-to-Accounts_${clientData?.name || 'report'}.pdf`);
+                  }, 800);
+                }}>
+                  <Download className="h-4 w-4 mr-2" /> Export PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  const html = buildNotesWordHtml(stateMap, clientData, NOTE_LIST, noteSelection, POLICY_TEXTS, STANDARD_TEXTS, displayNumberMap);
+                  exportToWord(html, `Notes-to-Accounts_${clientData?.name || 'report'}.doc`);
+                }}>
+                  <FileType className="h-4 w-4 mr-2" /> Export Word
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="default" size="sm" disabled={finalising}><Lock className="h-4 w-4 mr-1" /> Finalise Notes</Button>
