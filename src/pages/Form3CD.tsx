@@ -971,7 +971,7 @@ export default function Form3CD() {
                   <Separator />
                   {/* 20(b) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">20(b) — Payments to related parties u/s 40A(2)(b)</Label>
+                    <Label className="font-medium">20(b) — Payments to related parties u/s 40A(2)(a)</Label>
                     <RadioApplicable name="cl20b" value={cl20.b_applicable} onChange={v => updateClause(setCl20, "b_applicable", v)} />
                     {cl20.b_applicable === true && (
                       <EditableTable
@@ -981,6 +981,34 @@ export default function Form3CD() {
                       />
                     )}
                     {cl20.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 20(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">20(c) — Cash payments exceeding ₹10,000 u/s 40A(3)</Label>
+                    <RadioApplicable name="cl20c" value={cl20.c_applicable} onChange={v => updateClause(setCl20, "c_applicable", v)} />
+                    {cl20.c_applicable === true && (
+                      <EditableTable
+                        columns={["Name & Address of Payee", "Date of Payment", "Nature of Payment", "Amount Paid in Cash (₹)"]}
+                        rows={cl20.c_rows || []}
+                        onChange={rows => updateClause(setCl20, "c_rows", rows)}
+                      />
+                    )}
+                    {cl20.c_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 20(d) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">20(d) — Mark-to-market loss or other anticipated loss u/s 40A(13)</Label>
+                    <RadioApplicable name="cl20d" value={cl20.d_applicable} onChange={v => updateClause(setCl20, "d_applicable", v)} />
+                    {cl20.d_applicable === true && (
+                      <EditableTable
+                        columns={["Particulars of Loss", "Amount (₹)"]}
+                        rows={cl20.d_rows || []}
+                        onChange={rows => updateClause(setCl20, "d_rows", rows)}
+                      />
+                    )}
+                    {cl20.d_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -996,46 +1024,43 @@ export default function Form3CD() {
                     {isClauseFilled(cl21) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="px-4 pb-4 space-y-6">
+                <AccordionContent className="px-4 pb-4 space-y-4">
+                  <Label>Amounts allowable on payment basis under the following sections:</Label>
                   <RadioApplicable name="cl21" value={cl21.applicable} onChange={v => updateClause(setCl21, "applicable", v)} />
                   {cl21.applicable === true && (
                     <>
-                      {/* 21(a)(A) Bonus/Commission */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(A) — Bonus / Commission to Employees</Label>
-                        <EditableTable
-                          columns={["Payee Name", "Amount (₹)", "Due Date", "Actual Payment Date", "Late Payment Amount (₹)"]}
-                          rows={cl21.bonus_rows || []}
-                          onChange={rows => updateClause(setCl21, "bonus_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(B) Interest on Loans */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(B) — Interest on Loans</Label>
-                        <EditableTable
-                          columns={["Payee Name", "PAN", "Amount (₹)", "Remarks"]}
-                          rows={cl21.interest_rows || []}
-                          onChange={rows => updateClause(setCl21, "interest_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(C) Employer's contribution to PF/ESI */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(C) — Employer's Contribution to PF / ESI</Label>
-                        <EditableTable
-                          columns={["Fund Name", "Amount Due (₹)", "Amount Paid (₹)", "Date of Payment"]}
-                          rows={cl21.pf_rows || []}
-                          onChange={rows => updateClause(setCl21, "pf_rows", rows)}
-                        />
-                      </div>
-                      {/* 21(a)(D) Interest to partners */}
-                      <div className="space-y-3 border-l-2 border-muted pl-4">
-                        <Label className="font-medium">21(a)(D) — Interest to Partners</Label>
-                        <EditableTable
-                          columns={["Partner Name", "Amount (₹)", "Rate %"]}
-                          rows={cl21.partner_interest_rows || []}
-                          onChange={rows => updateClause(setCl21, "partner_interest_rows", rows)}
-                        />
-                      </div>
+                    {/* 21(a) — Section 43B items */}
+                    <div className="space-y-2 border-l-2 border-primary/30 pl-4">
+                      <Label className="font-semibold text-sm">21(a) — Amounts allowable on actual payment u/s 43B</Label>
+                      {[
+                        { key: 'tax_duty', label: '(i) Tax, duty, cess or fee' },
+                        { key: 'employer_pf', label: '(ii) Employer contribution to PF/ESI/Gratuity/superannuation fund' },
+                        { key: 'bonus_comm', label: '(iii) Bonus or commission to employees' },
+                        { key: 'bank_interest', label: '(iv) Interest on loan from public financial institution / scheduled bank / NBFC' },
+                        { key: 'leave_salary', label: '(v) Leave encashment / leave salary' },
+                        { key: 'railway', label: '(vi) Sum payable to Railways for use of railway assets' },
+                        { key: 'msme_43bh', label: '(vii) Sum payable to MSME u/s 43B(h)' },
+                      ].map(item => (
+                        <div key={item.key} className="space-y-2 border-l border-muted/60 pl-3 pt-2">
+                          <Label className="text-sm">{item.label}</Label>
+                          <EditableTable
+                            columns={['Payee Name / Details', 'Amount Due (₹)', 'Amount Paid (₹)', 'Date of Payment', 'Delayed? (Y/N)']}
+                            rows={cl21[`${item.key}_rows`] || []}
+                            onChange={rows => updateClause(setCl21, `${item.key}_rows`, rows)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <Separator />
+                    {/* 21(b) — Section 36(1)(va) */}
+                    <div className="space-y-2 border-l-2 border-primary/30 pl-4">
+                      <Label className="font-semibold text-sm">21(b) — Employee contribution to PF/ESI u/s 36(1)(va)</Label>
+                      <EditableTable
+                        columns={['Fund Name', 'Amount Deducted from Salary (₹)', 'Due Date for Deposit', 'Date Actually Deposited', 'Delayed? (Y/N)']}
+                        rows={cl21.empPF_rows || []}
+                        onChange={rows => updateClause(setCl21, 'empPF_rows', rows)}
+                      />
+                    </div>
                     </>
                   )}
                   {cl21.applicable === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
@@ -1054,51 +1079,15 @@ export default function Form3CD() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-4">
-                  {[
-                    { key: "lifeInsurance", label: "Amount paid as life insurance premium" },
-                    { key: "motorCar", label: "Amount paid as personal motor car expenses" },
-                    { key: "clubFees", label: "Amount paid as club entrance fee and subscription" },
-                    { key: "personalTravel", label: "Amount paid for personal travel" },
-                    { key: "personalTelephone", label: "Amount paid for personal telephone" },
-                  ].map(item => (
-                    <div key={item.key} className="grid grid-cols-[1fr_200px] gap-3 items-center">
-                      <Label className="text-sm">{item.label}</Label>
-                      <Input
-                        type="number"
-                        placeholder="₹ 0.00"
-                        value={cl22[item.key] || ""}
-                        onChange={e => updateClause(setCl22, item.key, e.target.value)}
-                        className="text-right"
-                      />
-                    </div>
-                  ))}
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>Any other personal expenditure</Label>
-                    <div className="grid grid-cols-[1fr_200px] gap-3">
-                      <Input
-                        placeholder="Particulars"
-                        value={cl22.otherParticulars || ""}
-                        onChange={e => updateClause(setCl22, "otherParticulars", e.target.value)}
-                      />
-                      <Input
-                        type="number"
-                        placeholder="₹ 0.00"
-                        value={cl22.otherAmount || ""}
-                        onChange={e => updateClause(setCl22, "otherAmount", e.target.value)}
-                        className="text-right"
-                      />
-                    </div>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-end">
-                    <div className="bg-muted px-4 py-2 rounded text-sm font-medium">
-                      Total: ₹{(
-                        ["lifeInsurance", "motorCar", "clubFees", "personalTravel", "personalTelephone", "otherAmount"]
-                          .reduce((sum, k) => sum + (parseFloat(cl22[k] || "0") || 0), 0)
-                      ).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Amounts debited to profit and loss account being in the nature of personal expenditure.
+                  </p>
+                  <EditableTableWithTotal
+                    columns={['Sr No', 'Particulars of Personal Expenditure', 'Amount (₹)']}
+                    rows={cl22.rows || []}
+                    onChange={rows => updateClause(setCl22, 'rows', rows)}
+                    totalColIndex={2}
+                  />
                 </AccordionContent>
               </AccordionItem>
             </div>
@@ -1153,13 +1142,14 @@ export default function Form3CD() {
                     <Label className="font-medium">Clause 25 — Any amount of profit chargeable to tax under the Act</Label>
                     <RadioApplicable name="cl25" value={cl24_25.cl25_applicable} onChange={v => updateClause(setCl24_25, "cl25_applicable", v)} />
                     {cl24_25.cl25_applicable === true && (
-                      <div className="space-y-2">
-                        <Textarea placeholder="Particulars..." value={cl24_25.cl25_particulars || ""} onChange={e => updateClause(setCl24_25, "cl25_particulars", e.target.value)} />
-                        <div className="grid grid-cols-[1fr_200px] gap-3 items-center">
-                          <Label>Amount (₹)</Label>
-                          <Input type="number" placeholder="₹ 0.00" value={cl24_25.cl25_amount || ""} onChange={e => updateClause(setCl24_25, "cl25_amount", e.target.value)} className="text-right" />
-                        </div>
-                      </div>
+                      <DropdownTable
+                        dropdownCol={0}
+                        dropdownLabel="Section"
+                        dropdownOptions={['41','32AC','32AD','33AB','33ABA','35ABB','40A(3A)','43CA','43D','Other']}
+                        columns={['Section', 'Particulars', 'Amount Chargeable to Tax (₹)']}
+                        rows={cl24_25.cl25_rows || []}
+                        onChange={rows => updateClause(setCl24_25, 'cl25_rows', rows)}
+                      />
                     )}
                     {cl24_25.cl25_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
@@ -1240,6 +1230,20 @@ export default function Form3CD() {
                       />
                     )}
                     {cl27.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                  </div>
+                  <Separator />
+                  {/* 27(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">27(c) — Whether any amount is required to be included in total income u/s 68, 69, 69A, 69B, 69C or 69D (unexplained cash credits etc.)?</Label>
+                    <RadioYesNo name="cl27c" value={cl27.c_yes} onChange={v => updateClause(setCl27, "c_yes", v)} />
+                    {cl27.c_yes === true && (
+                      <EditableTable
+                        columns={["Section", "Particulars", "Amount (₹)"]}
+                        rows={cl27.c_rows || []}
+                        onChange={rows => updateClause(setCl27, "c_rows", rows)}
+                      />
+                    )}
+                    {cl27.c_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -2018,117 +2022,142 @@ function ICDSTable({ rows, onChange }: { rows: { icds: string; particulars: stri
   );
 }
 
-/** Depreciation schedule table with auto-calc columns */
+/** Depreciation schedule table with 180-day bifurcation and auto-calc */
 function DepreciationTable({ rows, onChange }: {
-  rows: { block: string; openingWDV: string; additions: string; deductions: string; rate: string; depAsPerBooks: string }[];
+  rows: {
+    block: string;
+    openingWDV: string;
+    addOver180: string;
+    addUnder180: string;
+    deductions: string;
+    rate: string;
+    depAsPerBooks: string;
+  }[];
   onChange: (r: any[]) => void;
 }) {
   function addRow() {
-    onChange([...rows, { block: "", openingWDV: "", additions: "", deductions: "", rate: "", depAsPerBooks: "" }]);
+    onChange([...rows, {
+      block: '', openingWDV: '', addOver180: '0',
+      addUnder180: '0', deductions: '0', rate: '', depAsPerBooks: '0',
+    }]);
   }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
   }
-
   function calc(row: any) {
-    const o = parseFloat(row.openingWDV || "0") || 0;
-    const a = parseFloat(row.additions || "0") || 0;
-    const d = parseFloat(row.deductions || "0") || 0;
-    const closingWDV = o + a - d;
-    const rate = parseFloat(row.rate || "0") || 0;
-    const dep = closingWDV * rate / 100;
-    const perBooks = parseFloat(row.depAsPerBooks || "0") || 0;
-    return { closingWDV, dep, diff: dep - perBooks };
+    const o   = parseFloat(row.openingWDV  || '0') || 0;
+    const a1  = parseFloat(row.addOver180  || '0') || 0;
+    const a2  = parseFloat(row.addUnder180 || '0') || 0;
+    const d   = parseFloat(row.deductions  || '0') || 0;
+    const r   = parseFloat(row.rate        || '0') || 0;
+    const bk  = parseFloat(row.depAsPerBooks || '0') || 0;
+    const depFull  = Math.round((o + a1) * r / 100 * 100) / 100;
+    const depHalf  = Math.round(a2 * r / 100 * 0.5 * 100) / 100;
+    const dep      = depFull + depHalf;
+    const closingWDV = Math.round((o + a1 + a2 - d - dep) * 100) / 100;
+    return { dep, closingWDV, diff: Math.round((dep - bk) * 100) / 100 };
   }
-
+  const fmt = (n: number) =>
+    n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const totals = rows.reduce(
     (acc, row) => {
       const c = calc(row);
       return {
-        openingWDV: acc.openingWDV + (parseFloat(row.openingWDV || "0") || 0),
-        additions: acc.additions + (parseFloat(row.additions || "0") || 0),
-        deductions: acc.deductions + (parseFloat(row.deductions || "0") || 0),
-        closingWDV: acc.closingWDV + c.closingWDV,
+        openingWDV:  acc.openingWDV  + (parseFloat(row.openingWDV  || '0') || 0),
+        addOver180:  acc.addOver180  + (parseFloat(row.addOver180  || '0') || 0),
+        addUnder180: acc.addUnder180 + (parseFloat(row.addUnder180 || '0') || 0),
+        deductions:  acc.deductions  + (parseFloat(row.deductions  || '0') || 0),
         dep: acc.dep + c.dep,
-        perBooks: acc.perBooks + (parseFloat(row.depAsPerBooks || "0") || 0),
+        perBooks: acc.perBooks + (parseFloat(row.depAsPerBooks || '0') || 0),
         diff: acc.diff + c.diff,
+        closingWDV: acc.closingWDV + c.closingWDV,
       };
     },
-    { openingWDV: 0, additions: 0, deductions: 0, closingWDV: 0, dep: 0, perBooks: 0, diff: 0 }
+    { openingWDV: 0, addOver180: 0, addUnder180: 0, deductions: 0,
+      dep: 0, perBooks: 0, diff: 0, closingWDV: 0 }
   );
-
-  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
-
   return (
-    <div className="space-y-2">
+    <div className='space-y-3 overflow-x-auto'>
+      <div className='text-xs text-muted-foreground p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200'>
+        <strong>Depreciation Rule (Income Tax Act):</strong> Full rate on opening WDV + additions
+        put to use &gt;180 days. Half rate on additions put to use ≤180 days.
+        Closing WDV and Depreciation are auto-calculated.
+      </div>
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead className="text-xs">Block of Assets</TableHead>
-            <TableHead className="text-xs w-28">Opening WDV (₹)</TableHead>
-            <TableHead className="text-xs w-28">Additions (₹)</TableHead>
-            <TableHead className="text-xs w-28">Deductions (₹)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Closing WDV (₹)</TableHead>
-            <TableHead className="text-xs w-20">Rate (%)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Depreciation (₹)</TableHead>
-            <TableHead className="text-xs w-28">Dep as per Books (₹)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Difference (₹)</TableHead>
-            <TableHead className="w-10" />
+          <TableRow className='text-xs bg-muted/50'>
+            <TableHead className='min-w-[160px]'>Block of Assets</TableHead>
+            <TableHead className='w-28'>Opening WDV (₹)</TableHead>
+            <TableHead className='w-32 bg-blue-50/70 dark:bg-blue-950/20'>
+              <div>Additions</div>
+              <div className='text-[10px] font-normal text-blue-700'>&gt;180 days (full rate)</div>
+            </TableHead>
+            <TableHead className='w-32 bg-amber-50/70 dark:bg-amber-950/20'>
+              <div>Additions</div>
+              <div className='text-[10px] font-normal text-amber-700'>≤180 days (half rate)</div>
+            </TableHead>
+            <TableHead className='w-28'>Deductions (₹)</TableHead>
+            <TableHead className='w-20'>Rate (%)</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Depreciation (₹) [auto]</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Closing WDV (₹) [auto]</TableHead>
+            <TableHead className='w-28'>Dep as per Books (₹)</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Difference (₹) [auto]</TableHead>
+            <TableHead className='w-10' />
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length === 0 && (
-            <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+            <TableRow><TableCell colSpan={11} className='text-center py-6 text-muted-foreground text-sm'>
+              No rows — click Add Row to begin
+            </TableCell></TableRow>
           )}
           {rows.map((row, i) => {
             const c = calc(row);
             return (
               <TableRow key={i}>
-                <TableCell className="p-1"><Input value={row.block} onChange={e => update(i, "block", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.openingWDV} onChange={e => update(i, "openingWDV", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.additions} onChange={e => update(i, "additions", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.deductions} onChange={e => update(i, "deductions", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.closingWDV)}</TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.rate} onChange={e => update(i, "rate", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.dep)}</TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.depAsPerBooks} onChange={e => update(i, "depAsPerBooks", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.diff)}</TableCell>
-                <TableCell className="p-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
-                    <Trash2 className="h-3 w-3 text-destructive" />
-                  </Button>
-                </TableCell>
+                <TableCell className='p-1'><Input value={row.block} onChange={e => update(i, 'block', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.openingWDV} onChange={e => update(i, 'openingWDV', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-blue-50/40'><Input type='number' value={row.addOver180} onChange={e => update(i, 'addOver180', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-amber-50/40'><Input type='number' value={row.addUnder180} onChange={e => update(i, 'addUnder180', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.deductions} onChange={e => update(i, 'deductions', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.rate} onChange={e => update(i, 'rate', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.dep)}</TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.closingWDV)}</TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.depAsPerBooks} onChange={e => update(i, 'depAsPerBooks', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.diff)}</TableCell>
+                <TableCell className='p-1'><Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => removeRow(i)}><Trash2 className='h-3 w-3 text-destructive' /></Button></TableCell>
               </TableRow>
             );
           })}
           {rows.length > 0 && (
-            <TableRow className="bg-muted/20 font-semibold text-xs">
-              <TableCell className="p-1">Totals</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.openingWDV)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.additions)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.deductions)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.closingWDV)}</TableCell>
-              <TableCell className="p-1" />
-              <TableCell className="p-1 text-right">{fmt(totals.dep)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.perBooks)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.diff)}</TableCell>
+            <TableRow className='bg-muted/30 font-semibold text-xs'>
+              <TableCell className='p-1'>Totals</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.openingWDV)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.addOver180)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.addUnder180)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.deductions)}</TableCell>
+              <TableCell />
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.dep)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.closingWDV)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.perBooks)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.diff)}</TableCell>
               <TableCell />
             </TableRow>
           )}
         </TableBody>
       </Table>
-      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+      <Button variant='outline' size='sm' onClick={addRow}><Plus className='h-3 w-3 mr-1' /> Add Row</Button>
     </div>
   );
 }
 
-/** Section 40(a) table with dropdown */
+/** Section 40(a) table with dropdown — 5 columns */
 function Section40aTable({ rows, onChange }: {
-  rows: { section: string; nature: string; amount: string; remarks: string }[];
+  rows: { section: string; nature: string; expenditure: string; disallowed: string; remarks: string }[];
   onChange: (r: any[]) => void;
 }) {
-  function addRow() { onChange([...rows, { section: "", nature: "", amount: "", remarks: "" }]); }
+  function addRow() { onChange([...rows, { section: "", nature: "", expenditure: "", disallowed: "", remarks: "" }]); }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
@@ -2140,14 +2169,15 @@ function Section40aTable({ rows, onChange }: {
           <TableRow>
             <TableHead className="text-xs w-40">Section</TableHead>
             <TableHead className="text-xs">Nature of Payment</TableHead>
-            <TableHead className="text-xs w-32">Amount (₹)</TableHead>
+            <TableHead className="text-xs w-32">Amount of Expenditure (₹)</TableHead>
+            <TableHead className="text-xs w-32">Amount Disallowed (₹)</TableHead>
             <TableHead className="text-xs w-40">Remarks</TableHead>
             <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length === 0 && (
-            <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
           )}
           {rows.map((row, i) => (
             <TableRow key={i}>
@@ -2160,7 +2190,8 @@ function Section40aTable({ rows, onChange }: {
                 </Select>
               </TableCell>
               <TableCell className="p-1"><Input value={row.nature} onChange={e => update(i, "nature", e.target.value)} className="h-8 text-xs" /></TableCell>
-              <TableCell className="p-1"><Input type="number" value={row.amount} onChange={e => update(i, "amount", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.expenditure} onChange={e => update(i, "expenditure", e.target.value)} className="h-8 text-xs" /></TableCell>
+              <TableCell className="p-1"><Input type="number" value={row.disallowed} onChange={e => update(i, "disallowed", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1"><Input value={row.remarks} onChange={e => update(i, "remarks", e.target.value)} className="h-8 text-xs" /></TableCell>
               <TableCell className="p-1">
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
