@@ -23,7 +23,14 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const FY_OPTIONS = ['2025-26','2024-25','2023-24','2022-23','2021-22','2020-21'];
+const FY_OPTIONS = (() => {
+  const opts: string[] = [];
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear + 1; y >= 2001; y--) {
+    opts.push(`${y}-${String(y + 1).slice(-2)}`);
+  }
+  return opts;
+})();
 
 const fmt = (v: number | null | undefined) =>
 v == null || isNaN(v as number) ? '—'
