@@ -841,28 +841,33 @@ export default function Form3CD() {
                   {[
                     { key: "cl15", label: "Clause 15 — Capital expenditure debited to P&L" },
                     { key: "cl16a", label: "16(a) — Personal expenses charged to P&L" },
-                    { key: "cl16b", label: "16(b) — Amounts inadmissible u/s 40(a)" },
-                    { key: "cl16c", label: "16(c) — Amounts inadmissible u/s 40A" },
+                    { key: "cl16b", label: "16(b) — Amounts inadmissible u/s 40(a) — TDS non-deduction" },
+                    { key: "cl16c", label: "16(c) — Amounts inadmissible u/s 40A — excessive payments" },
                     { key: "cl16d", label: "16(d) — Payments to relatives u/s 40A(2)" },
-                    { key: "cl16e", label: "16(e) — Expenditure on advertisement in political party journals" },
-                  ].map(sub => (
-                    <div key={sub.key} className="space-y-3 border-l-2 border-muted pl-4">
-                      <Label className="font-medium">{sub.label}</Label>
-                      <RadioApplicable
-                        name={`cl15_16_${sub.key}`}
-                        value={cl15_16[`${sub.key}_applicable`]}
-                        onChange={v => updateClause(setCl15_16, `${sub.key}_applicable`, v)}
-                      />
-                      {cl15_16[`${sub.key}_applicable`] === true && (
-                        <EditableTable
-                          columns={["Sr No", "Particulars", "Amount (₹)", "Remarks"]}
-                          rows={cl15_16[`${sub.key}_rows`] || []}
-                          onChange={rows => updateClause(setCl15_16, `${sub.key}_rows`, rows)}
+                    { key: "cl16e", label: "16(e) — Expenditure on advertisement in political party journals/souvenirs" },
+                    { key: "cl16f", label: "16(f) — Amounts paid as salary/wages to domestic servants" },
+                    { key: "cl16g", label: "16(g) — Expenditure where payment has been made to a relative u/s 40A(2)(b)" },
+                  ].map((sub, idx, arr) => (
+                    <div key={sub.key}>
+                      <div className="space-y-3 border-l-2 border-muted pl-4">
+                        <Label className="font-medium">{sub.label}</Label>
+                        <RadioApplicable
+                          name={`cl15_16_${sub.key}`}
+                          value={cl15_16[`${sub.key}_applicable`]}
+                          onChange={v => updateClause(setCl15_16, `${sub.key}_applicable`, v)}
                         />
-                      )}
-                      {cl15_16[`${sub.key}_applicable`] === false && (
-                        <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
-                      )}
+                        {cl15_16[`${sub.key}_applicable`] === true && (
+                          <EditableTable
+                            columns={["Sr No", "Particulars", "Amount (₹)", "Remarks"]}
+                            rows={cl15_16[`${sub.key}_rows`] || []}
+                            onChange={rows => updateClause(setCl15_16, `${sub.key}_rows`, rows)}
+                          />
+                        )}
+                        {cl15_16[`${sub.key}_applicable`] === false && (
+                          <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
+                        )}
+                      </div>
+                      {idx < arr.length - 1 && <Separator className="my-2" />}
                     </div>
                   ))}
                 </AccordionContent>
