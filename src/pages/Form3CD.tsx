@@ -1247,39 +1247,6 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* ═══════ CLAUSE 29 — Deemed profits u/s 32AC/33AB/41 ═══════ */}
-            <div ref={el => { sectionRefs.current["cl_29"] = el; }}>
-              <AccordionItem value="cl_29" className="border rounded-lg">
-                <AccordionTrigger className="px-4">
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="font-mono text-xs">29</Badge>
-                    <span className="font-medium">Deemed Profits u/s 32AC / 33AB / 41</span>
-                    {isClauseFilled(cl29) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 29(A) */}
-                  <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">29(A) — Amount deemed as profits u/s 32AC/32AD/33AB/33ABA/35ABB</Label>
-                    <RadioYesNo name="cl29a" value={cl29.a_yes} onChange={v => updateClause(setCl29, "a_yes", v)} />
-                    {cl29.a_yes === true && (
-                      <EditableTable columns={["Section", "Amount of Deduction Earlier Claimed (₹)", "Amount Chargeable Now (₹)", "Remarks"]} rows={cl29.a_rows || []} onChange={rows => updateClause(setCl29, "a_rows", rows)} />
-                    )}
-                    {cl29.a_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">No deemed profits</div>}
-                  </div>
-                  <Separator />
-                  {/* 29(B) */}
-                  <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">29(B) — Deemed profits u/s 41</Label>
-                    <RadioYesNo name="cl29b" value={cl29.b_yes} onChange={v => updateClause(setCl29, "b_yes", v)} />
-                    {cl29.b_yes === true && (
-                      <EditableTable columns={["Section", "Name of Person", "Amount (₹)"]} rows={cl29.b_rows || []} onChange={rows => updateClause(setCl29, "b_rows", rows)} />
-                    )}
-                    {cl29.b_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">No deemed profits u/s 41</div>}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </div>
 
             {/* ═══════ CLAUSE 30 — Govt receipts / MSME / Tax paid / Hundi ═══════ */}
             <div ref={el => { sectionRefs.current["cl_30"] = el; }}>
