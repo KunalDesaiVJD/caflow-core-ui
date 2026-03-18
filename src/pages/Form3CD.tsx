@@ -1719,20 +1719,21 @@ export default function Form3CD() {
                     <RadioYesNo name="cl42" value={cl42_43.cl42_yes} onChange={v => updateClause(setCl42_43, "cl42_yes", v)} />
                     {cl42_43.cl42_yes === true && (
                       <EditableTable
-                        columns={["Transaction Type", "Amount (₹)", "PAN of Other Party", "Form 61 Filed (Yes/No)", "Date of Filing"]}
+                        columns={["Sr No", "Nature of Transaction", "Amount (₹)", "PAN of Other Party", "Whether Form 61 filed (Y/N)", "Date of Filing Form 61", "Acknowledgement No."]}
                         rows={cl42_43.cl42_rows || []}
                         onChange={rows => updateClause(setCl42_43, "cl42_rows", rows)}
                       />
                     )}
                     {cl42_43.cl42_yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
+                  <Separator />
                   {/* 43 */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">43 — Furnishing of Form 61A?</Label>
+                    <Label className="font-medium">43 — Furnishing of Form 61A (SFT)?</Label>
                     <RadioYesNo name="cl43" value={cl42_43.cl43_yes} onChange={v => updateClause(setCl42_43, "cl43_yes", v)} />
                     {cl42_43.cl43_yes === true && (
                       <EditableTable
-                        columns={["Nature of Transaction", "Amount (₹)", "Date of Filing Form 61A"]}
+                        columns={["Sr No", "Nature of SFT", "Threshold Amount (₹)", "Aggregate Value Reported (₹)", "Whether Form 61A filed (Y/N)", "Date of Filing", "Acknowledgement No."]}
                         rows={cl42_43.cl43_rows || []}
                         onChange={rows => updateClause(setCl42_43, "cl43_rows", rows)}
                       />
