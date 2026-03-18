@@ -647,19 +647,37 @@ export default function Form3CD() {
                     <Label>11(a) Whether method of accounting employed is the same as in the preceding year?</Label>
                     <RadioYesNo name="cl11a" value={cl11.sameMethod} onChange={v => updateClause(setCl11, "sameMethod", v)} />
                   </div>
+                  {cl11.sameMethod === false && (
+                    <div className="space-y-2">
+                      <Label>State the new method employed:</Label>
+                      <Select value={cl11.newMethod || ""} onValueChange={v => updateClause(setCl11, "newMethod", v)}>
+                        <SelectTrigger><SelectValue placeholder="Select new method" /></SelectTrigger>
+                        <SelectContent>
+                          {ACCOUNTING_METHOD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {cl11.newMethod === "Other (specify)" && (
+                        <Input value={cl11.newMethodOther || ""} onChange={e => updateClause(setCl11, "newMethodOther", e.target.value)} placeholder="Specify method..." className="mt-2" />
+                      )}
+                    </div>
+                  )}
+                  {cl11.sameMethod === false && (
+                    <>
+                      <Separator />
+                      <div className="space-y-2">
+                        <Label>11(b) If method of accounting changed, furnish effect on profit/loss:</Label>
+                        <EditableTableWithTotal
+                          columns={["Particulars of Change", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
+                          rows={cl11.changeRows || []}
+                          onChange={rows => updateClause(setCl11, "changeRows", rows)}
+                          totalColIndex={1}
+                        />
+                      </div>
+                    </>
+                  )}
                   <Separator />
                   <div className="space-y-2">
-                    <Label>11(b) Effect on profit/loss due to change in method</Label>
-                    <EditableTableWithTotal
-                      columns={["Particulars", "Effect (Increase/Decrease)", "Amount (₹)"]}
-                      rows={cl11.changeRows || []}
-                      onChange={rows => updateClause(setCl11, "changeRows", rows)}
-                      totalColIndex={2}
-                    />
-                  </div>
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>11(c) Method of valuation of closing stock</Label>
+                    <Label>11(c) Method of valuation of closing stock employed in the previous year:</Label>
                     <Select value={cl11.stockValuation || ""} onValueChange={v => updateClause(setCl11, "stockValuation", v)}>
                       <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
                       <SelectContent>
