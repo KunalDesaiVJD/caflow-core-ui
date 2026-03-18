@@ -392,10 +392,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       </Accordion>
       {/* Hidden print area for PDF export */}
       <div id="caro-print-area" style={{ display: 'none', padding: '32px', fontFamily: 'Arial, sans-serif', fontSize: '11pt' }}>
-        <h1 style={{ textAlign: 'center', fontSize: '16pt', marginBottom: '8px' }}>CARO 2020 — Auditor's Report</h1>
-        <p style={{ textAlign: 'center', fontSize: '10pt', color: '#666', marginBottom: '24px' }}>
-          Client: {client?.name || '—'} | FY: {engagement?.financial_year || '—'}
-        </p>
+        <h1 style={{ textAlign: 'center', fontSize: '16pt', marginBottom: '24px' }}>CARO 2020 — Auditor's Report</h1>
         {rows.map(r => (
           <div key={r.clause_number} style={{ marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #ddd', pageBreakInside: 'avoid' }}>
             <h3 style={{ fontSize: '12pt', fontWeight: 'bold', marginBottom: '4px' }}>
