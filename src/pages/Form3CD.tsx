@@ -1850,7 +1850,64 @@ function SectorPicker({ selectedSector, selectedCode, onSectorChange, onCodeChan
   );
 }
 
-/** Generic editable table with add/remove rows */
+/** Multi-business table with sector/code dropdowns (Clause 10b) */
+function MultiBusinessTable({ rows, onChange, sectorCodes }: {
+  rows: { sector: string; code: string; description: string }[];
+  onChange: (r: any[]) => void;
+  sectorCodes: typeof SECTOR_CODES;
+}) {
+  function addRow() { onChange([...rows, { sector: '', code: '', description: '' }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  return (
+    <div className='space-y-2'>
+      <Table>
+        <TableHeader><TableRow>
+          <TableHead className='text-xs w-40'>Sector</TableHead>
+          <TableHead className='text-xs w-40'>Sub-sector Code</TableHead>
+          <TableHead className='text-xs'>Description (auto-filled)</TableHead>
+          <TableHead className='w-10' />
+        </TableRow></TableHeader>
+        <TableBody>
+          {rows.map((row, i) => {
+            const sec = sectorCodes.find(s => s.name === row.sector);
+            const sub = sec?.subSectors.find(ss => ss.code === row.code);
+            return (
+              <TableRow key={i}>
+                <TableCell className='p-1'>
+                  <Select value={row.sector} onValueChange={v => { update(i, 'sector', v); update(i, 'code', ''); }}>
+                    <SelectTrigger className='h-8 text-xs'><SelectValue placeholder='Sector' /></SelectTrigger>
+                    <SelectContent className='max-h-60'>
+                      {sectorCodes.map(s => <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className='p-1'>
+                  <Select value={row.code} onValueChange={v => update(i, 'code', v)} disabled={!sec}>
+                    <SelectTrigger className='h-8 text-xs'><SelectValue placeholder='Code' /></SelectTrigger>
+                    <SelectContent className='max-h-60'>
+                      {sec?.subSectors.map(ss => <SelectItem key={ss.code} value={ss.code}>{ss.code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className='p-1 text-xs text-muted-foreground'>{sub?.name || row.description || '—'}</TableCell>
+                <TableCell className='p-1'>
+                  <Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => removeRow(i)}>
+                    <Trash2 className='h-3 w-3 text-destructive' />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      <Button variant='outline' size='sm' onClick={addRow}><Plus className='h-3 w-3 mr-1' /> Add Row</Button>
+    </div>
+  );
+}
+
 function EditableTable({ columns, rows, onChange }: {
   columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
 }) {
