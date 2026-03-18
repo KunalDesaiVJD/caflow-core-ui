@@ -565,6 +565,13 @@ export function MasterConfigPanel() {
                     <Label className="text-xs">Default Template Content</Label>
                     <Textarea value={t.template_content} onChange={e => updateThreeCD(idx, "template_content", e.target.value)} className="mt-1 text-xs min-h-[100px]" placeholder="Enter default 3CD clause content..." />
                   </div>
+                  {/* Add sub-clause button — only for parent-level clauses (no parentheses/dots in number) */}
+                  {!/[(.)]/.test(t.clause_number) && (
+                    <Button variant="outline" size="sm" onClick={() => addThreeCDSubClause(idx)} className="gap-1 text-xs">
+                      <Plus className="w-3 h-3" /> Add Sub-Row under {t.clause_number}
+                    </Button>
+                  )}
+                  </div>
                 </AccordionContent>
               </AccordionItem>
             ))}
