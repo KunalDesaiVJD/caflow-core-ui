@@ -1231,6 +1231,20 @@ export default function Form3CD() {
                     )}
                     {cl27.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
+                  <Separator />
+                  {/* 27(c) */}
+                  <div className="space-y-3 border-l-2 border-muted pl-4">
+                    <Label className="font-medium">27(c) — Whether any amount is required to be included in total income u/s 68, 69, 69A, 69B, 69C or 69D (unexplained cash credits etc.)?</Label>
+                    <RadioYesNo name="cl27c" value={cl27.c_yes} onChange={v => updateClause(setCl27, "c_yes", v)} />
+                    {cl27.c_yes === true && (
+                      <EditableTable
+                        columns={["Section", "Particulars", "Amount (₹)"]}
+                        rows={cl27.c_rows || []}
+                        onChange={rows => updateClause(setCl27, "c_rows", rows)}
+                      />
+                    )}
+                    {cl27.c_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                  </div>
                 </AccordionContent>
               </AccordionItem>
             </div>
