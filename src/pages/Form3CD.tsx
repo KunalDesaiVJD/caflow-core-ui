@@ -282,7 +282,7 @@ export default function Form3CD() {
       setCl18(e.cl_18 || {}); setCl19(e.cl_19 || {}); setCl20(e.cl_20 || {});
       setCl21(e.cl_21 || {}); setCl22(e.cl_22 || {});
       setCl23(e.cl_23 || {}); setCl24_25(e.cl_24_25 || {}); setCl26(e.cl_26 || {});
-      setCl27(e.cl_27 || {}); setCl29(e.cl_29 || {}); setCl30(e.cl_30 || {});
+      setCl27(e.cl_27 || {}); setCl30(e.cl_30 || {});
       setCl31(e.cl_31 || {}); setCl32(e.cl_32 || {}); setCl33(e.cl_33 || {});
       setCl34(e.cl_34 || {});
       setCl35(e.cl_35 || {}); setCl36(e.cl_36 || {});
