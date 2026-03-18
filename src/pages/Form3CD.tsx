@@ -14,7 +14,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { Save, Printer, Plus, Trash2, Loader2, CheckCircle2, Circle } from "lucide-react";
+import { Save, Printer, Plus, Trash2, Loader2, CheckCircle2, Circle, Download, FileSpreadsheet } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import { SECTOR_CODES } from "@/data/sectorCodes";
 
 /* ──────── types ──────── */
