@@ -796,25 +796,28 @@ export default function Form3CD() {
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-4">
                   <div className="space-y-2">
-                    <Label>14(a) Method of valuation of stock</Label>
+                    <Label>14(a) Method of valuation of closing stock:</Label>
                     <Select value={cl14.method || ""} onValueChange={v => updateClause(setCl14, "method", v)}>
                       <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
                       <SelectContent>
                         {STOCK_VALUATION_14_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {cl14.method === "Other (specify)" && (
+                      <Input value={cl14.methodOther || ""} onChange={e => updateClause(setCl14, "methodOther", e.target.value)} placeholder="Specify method..." className="mt-2" />
+                    )}
                   </div>
                   <Separator />
                   <div className="space-y-2">
-                    <Label>14(b) Whether method of valuation changed during the year?</Label>
+                    <Label>14(b) Whether method of valuation of closing stock changed during the year?</Label>
                     <RadioYesNo name="cl14b" value={cl14.changed} onChange={v => updateClause(setCl14, "changed", v)} />
                   </div>
-                  {cl14.changed === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL — No change in method.</div>}
+                  {cl14.changed === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL — No change in method of valuation</div>}
                   {cl14.changed === true && (
                     <div className="space-y-2">
                       <Label>Effect on profit/loss</Label>
                       <EditableTable
-                        columns={["Particulars", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
+                        columns={["Particulars of Change", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
                         rows={cl14.changeRows || []}
                         onChange={rows => updateClause(setCl14, "changeRows", rows)}
                       />
