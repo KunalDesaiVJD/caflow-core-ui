@@ -54,7 +54,7 @@ const CLAUSE_NAV_FALLBACK = [
   { key: "cl_27", label: "27", title: "Deemed income / prior period items" },
   
   { key: "cl_30", label: "30", title: "Govt receipts / MSME / Tax paid / Hundi" },
-  { key: "cl_31", label: "31", title: "TDS / TCS particulars" },
+  { key: "cl_31", label: "31", title: "Loans/deposits u/s 269SS/269T · Cash transactions u/s 269ST · SFT u/s 285BA" },
   { key: "cl_32", label: "32", title: "Brought forward losses / deductions" },
   { key: "cl_33", label: "33", title: "Deductions u/s 80G/80GGA/80GGB/80GGC" },
   { key: "cl_34", label: "34", title: "TDS/TCS compliance" },
