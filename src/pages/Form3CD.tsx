@@ -2575,11 +2575,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
 }) {
   const printRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    // Auto-trigger print after render
-    const timer = setTimeout(() => window.print(), 500);
-    return () => clearTimeout(timer);
-  }, []);
+  // No longer auto-trigger print
 
   const clauseQuestions: Record<string, string> = {
     cl_8: "8. Indicate the relevant clause of section 44AB under which the audit has been conducted",
