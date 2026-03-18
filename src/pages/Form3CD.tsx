@@ -1259,63 +1259,58 @@ export default function Form3CD() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 30 — Govt scheme */}
+                  {/* Clause 30 main */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">Clause 30 — Amount received/receivable from Government</Label>
+                    <Label className="font-medium">30 — Amount received from Government under any scheme?</Label>
                     <RadioYesNo name="cl30" value={cl30.govt_yes} onChange={v => updateClause(setCl30, "govt_yes", v)} />
                     {cl30.govt_yes === true && (
-                      <div className="space-y-2">
-                        <Input placeholder="Name of Government scheme" value={cl30.govt_scheme || ""} onChange={e => updateClause(setCl30, "govt_scheme", e.target.value)} />
-                        <div className="grid grid-cols-2 gap-3">
-                          <Input type="number" placeholder="Amount Received (₹)" value={cl30.govt_amount || ""} onChange={e => updateClause(setCl30, "govt_amount", e.target.value)} />
-                          <Input placeholder="Purpose" value={cl30.govt_purpose || ""} onChange={e => updateClause(setCl30, "govt_purpose", e.target.value)} />
-                        </div>
-                      </div>
+                      <EditableTable
+                        columns={["Name of Government Scheme", "Amount Received (₹)", "Date of Receipt", "Purpose"]}
+                        rows={cl30.govt_rows || []}
+                        onChange={rows => updateClause(setCl30, "govt_rows", rows)}
+                      />
                     )}
                     {cl30.govt_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                   <Separator />
-                  {/* 30(A) — MSME */}
+                  {/* 30(A) — MSME payments u/s 43B(h) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">30(A) — MSME payments u/s 43B(h)</Label>
+                    <Label className="font-medium">30(A) — Payments to MSME outstanding &gt;45 days u/s 43B(h)</Label>
                     <RadioYesNo name="cl30a" value={cl30.msme_yes} onChange={v => updateClause(setCl30, "msme_yes", v)} />
                     {cl30.msme_yes === true && (
-                      <div className="space-y-2">
-                        <Select value={cl30.msme_section || ""} onValueChange={v => updateClause(setCl30, "msme_section", v)}>
-                          <SelectTrigger><SelectValue placeholder="Select section" /></SelectTrigger>
-                          <SelectContent>
-                            {SECTION_43B_OPTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                        <div className="grid grid-cols-2 gap-3">
-                          <Input type="number" placeholder="Amount Due (₹)" value={cl30.msme_due || ""} onChange={e => updateClause(setCl30, "msme_due", e.target.value)} />
-                          <Input type="number" placeholder="Amount Paid (₹)" value={cl30.msme_paid || ""} onChange={e => updateClause(setCl30, "msme_paid", e.target.value)} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <Input type="date" value={cl30.msme_date || ""} onChange={e => updateClause(setCl30, "msme_date", e.target.value)} />
-                          <Input placeholder="Remarks" value={cl30.msme_remarks || ""} onChange={e => updateClause(setCl30, "msme_remarks", e.target.value)} />
-                        </div>
-                      </div>
+                      <EditableTable
+                        columns={["Name of MSME Supplier", "Amount Due (₹)", "Due Date", "Amount Paid (₹)", "Date of Payment", "Balance Outstanding (₹)"]}
+                        rows={cl30.msme_rows || []}
+                        onChange={rows => updateClause(setCl30, "msme_rows", rows)}
+                      />
                     )}
                     {cl30.msme_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                   <Separator />
                   {/* 30(B) — Tax paid */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">30(B) — Tax paid</Label>
+                    <Label className="font-medium">30(B) — Amounts paid as tax, duty, cess or fee debited to P&amp;L</Label>
                     <RadioYesNo name="cl30b" value={cl30.tax_yes} onChange={v => updateClause(setCl30, "tax_yes", v)} />
                     {cl30.tax_yes === true && (
-                      <EditableTable columns={["Sr No", "Nature of Tax", "Amount (₹)", "Date of Payment"]} rows={cl30.tax_rows || []} onChange={rows => updateClause(setCl30, "tax_rows", rows)} />
+                      <EditableTable
+                        columns={["Sr No", "Nature of Tax/Duty/Fee", "Amount (₹)", "Date of Payment", "Whether debited to P&L"]}
+                        rows={cl30.tax_rows || []}
+                        onChange={rows => updateClause(setCl30, "tax_rows", rows)}
+                      />
                     )}
                     {cl30.tax_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                   <Separator />
                   {/* 30(C) — Hundi */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">30(C) — Amount borrowed / repaid on hundi</Label>
+                    <Label className="font-medium">30(C) — Amount borrowed/repaid on hundi u/s 69D</Label>
                     <RadioYesNo name="cl30c" value={cl30.hundi_yes} onChange={v => updateClause(setCl30, "hundi_yes", v)} />
                     {cl30.hundi_yes === true && (
-                      <EditableTable columns={["Name of Payer/Payee", "Amount Borrowed (₹)", "Amount Repaid (₹)", "Date"]} rows={cl30.hundi_rows || []} onChange={rows => updateClause(setCl30, "hundi_rows", rows)} />
+                      <EditableTable
+                        columns={["Name of Person", "Amount Borrowed on Hundi (₹)", "Date", "Amount Repaid (₹)", "Date of Repayment"]}
+                        rows={cl30.hundi_rows || []}
+                        onChange={rows => updateClause(setCl30, "hundi_rows", rows)}
+                      />
                     )}
                     {cl30.hundi_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
