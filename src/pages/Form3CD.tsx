@@ -1661,12 +1661,23 @@ export default function Form3CD() {
                 <AccordionTrigger className="px-4">
                   <div className="flex items-center gap-3">
                     <Badge variant="outline" className="font-mono text-xs">40</Badge>
-                    <span className="font-medium">Fringe benefit details</span>
+                    <span className="font-medium">Shares issued above FMV u/s 56(2)(viib)</span>
                     {isClauseFilled(cl40) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-4">
-                  <FringeBenefitTable rows={cl40.rows || []} onChange={rows => updateClause(setCl40, "rows", rows)} />
+                  <p className="text-sm text-muted-foreground">
+                    Whether the assessee has received any consideration for issue of shares exceeding the Fair Market Value u/s 56(2)(viib)?
+                  </p>
+                  <RadioYesNo name="cl40" value={cl40.yes} onChange={v => updateClause(setCl40, "yes", v)} />
+                  {cl40.yes === true && (
+                    <EditableTable
+                      columns={["Name of Investor", "PAN", "No. of Shares Issued", "Issue Price per Share (₹)", "Fair Market Value per Share (₹)", "Excess Amount (₹) [taxable u/s 56]", "Date of Issue"]}
+                      rows={cl40.rows || []}
+                      onChange={rows => updateClause(setCl40, "rows", rows)}
+                    />
+                  )}
+                  {cl40.yes === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                 </AccordionContent>
               </AccordionItem>
             </div>
