@@ -553,7 +553,9 @@ export function MasterConfigPanel() {
                   </div>
                   <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
                     <Label className="text-xs">Clause Number</Label>
-                    <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 8(a)" />
+                    <Input value={t.clause_number} onChange={e => updateThreeCD(idx, "clause_number", e.target.value)} className="w-32 h-8 text-sm" placeholder="e.g. 9, 9(a), Clause 9" />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Enter any format: 9, 9(a), Clause 9, C1.9 — fully editable</p>
                   </div>
                   <div>
                     <Label className="text-xs">Clause Heading</Label>
