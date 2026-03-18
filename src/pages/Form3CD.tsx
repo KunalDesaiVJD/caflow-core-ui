@@ -1318,65 +1318,83 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* ═══════ CLAUSE 31 — TDS / TCS Particulars ═══════ */}
+            {/* ═══════ CLAUSE 31 — Loans/deposits/Cash/SFT ═══════ */}
             <div ref={el => { sectionRefs.current["cl_31"] = el; }}>
               <AccordionItem value="cl_31" className="border rounded-lg">
                 <AccordionTrigger className="px-4">
                   <div className="flex items-center gap-3">
                     <Badge variant="outline" className="font-mono text-xs">31</Badge>
-                    <span className="font-medium">TDS / TCS Particulars</span>
+                    <span className="font-medium">Loans/deposits u/s 269SS/269T · Cash u/s 269ST · SFT</span>
                     {isClauseFilled(cl31) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 31(a) — TDS Deductions */}
+                  {/* 31(a) — Loans/deposits accepted */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">31(a) — TDS Deductions (Section 192 to 196D)</Label>
+                    <Label className="font-medium">31(a) — Particulars of each loan or deposit in excess of specified limit accepted during the year u/s 269SS</Label>
                     <RadioApplicable name="cl31a" value={cl31.a_applicable} onChange={v => updateClause(setCl31, "a_applicable", v)} />
                     {cl31.a_applicable === true && (
-                      <TDSScheduleTable rows={cl31.a_rows || []} onChange={rows => updateClause(setCl31, "a_rows", rows)} />
+                      <EditableTable
+                        columns={["Name of Lender/Depositor", "PAN", "Address", "Amount Received (₹)", "Date of Receipt", "Maximum balance at any time (₹)", "Mode (Cheque/DD/NEFT/Other)"]}
+                        rows={cl31.a_rows || []}
+                        onChange={rows => updateClause(setCl31, "a_rows", rows)}
+                      />
                     )}
                     {cl31.a_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                   <Separator />
-                  {/* 31(b) — TCS Collections */}
+                  {/* 31(b) — Repayments of loans/deposits */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">31(b) — TCS Collections</Label>
+                    <Label className="font-medium">31(b) — Particulars of each repayment of loan/deposit in excess of specified limit u/s 269T</Label>
                     <RadioApplicable name="cl31b" value={cl31.b_applicable} onChange={v => updateClause(setCl31, "b_applicable", v)} />
                     {cl31.b_applicable === true && (
-                      <EditableTable columns={["Section", "Nature of Transaction", "Name of Buyer", "PAN", "Amount (₹)", "TCS Collected (₹)", "Date of Collection", "Date of Deposit"]} rows={cl31.b_rows || []} onChange={rows => updateClause(setCl31, "b_rows", rows)} />
+                      <EditableTable
+                        columns={["Name of Payee", "PAN", "Address", "Amount Repaid (₹)", "Date of Repayment", "Mode (Cheque/DD/NEFT/Other)"]}
+                        rows={cl31.b_rows || []}
+                        onChange={rows => updateClause(setCl31, "b_rows", rows)}
+                      />
                     )}
                     {cl31.b_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
                   <Separator />
-                  {/* 31(c) — TDS where assessee is payer */}
+                  {/* 31(c) — Section 269ST cash transactions */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">31(c) — TDS where assessee is payer but deductee is payee</Label>
-                    <RadioApplicable name="cl31c" value={cl31.c_applicable} onChange={v => updateClause(setCl31, "c_applicable", v)} />
-                    {cl31.c_applicable === true && (
-                      <TDSScheduleTable rows={cl31.c_rows || []} onChange={rows => updateClause(setCl31, "c_rows", rows)} showDateOfDeposit={false} />
+                    <Label className="font-medium">31(c) — Whether any transaction exceeding ₹2 lakhs in cash received in violation of section 269ST?</Label>
+                    <RadioYesNo name="cl31c" value={cl31.c_yes} onChange={v => updateClause(setCl31, "c_yes", v)} />
+                    {cl31.c_yes === true && (
+                      <EditableTable
+                        columns={["Name of Payer", "PAN", "Amount (₹)", "Date", "Nature of Transaction"]}
+                        rows={cl31.c_rows || []}
+                        onChange={rows => updateClause(setCl31, "c_rows", rows)}
+                      />
                     )}
-                    {cl31.c_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
+                    {cl31.c_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                   <Separator />
-                  {/* 31(d) — Default in TDS */}
+                  {/* 31(d) — SFT u/s 285BA */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">31(d) — Default in TDS deduction</Label>
-                    <RadioApplicable name="cl31d" value={cl31.d_applicable} onChange={v => updateClause(setCl31, "d_applicable", v)} />
-                    {cl31.d_applicable === true && (
-                      <EditableTable columns={["Section", "Name of Party", "PAN", "Amount on which TDS not deducted (₹)", "Reasons"]} rows={cl31.d_rows || []} onChange={rows => updateClause(setCl31, "d_rows", rows)} />
+                    <Label className="font-medium">31(d) — Whether assessee required to furnish Statement of Financial Transactions (SFT) u/s 285BA?</Label>
+                    <RadioYesNo name="cl31d" value={cl31.d_yes} onChange={v => updateClause(setCl31, "d_yes", v)} />
+                    {cl31.d_yes === true && (
+                      <div className="space-y-2">
+                        <Input placeholder="Acknowledgement No. of SFT filed" value={cl31.d_ack || ""} onChange={e => updateClause(setCl31, "d_ack", e.target.value)} />
+                        <Input type="date" placeholder="Date of Filing" value={cl31.d_date || ""} onChange={e => updateClause(setCl31, "d_date", e.target.value)} />
+                      </div>
                     )}
-                    {cl31.d_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                   <Separator />
-                  {/* 31(e) — Default in TCS */}
+                  {/* 31(e) — Deemed dividend u/s 2(22)(e) */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">31(e) — Default in TCS collection</Label>
-                    <RadioApplicable name="cl31e" value={cl31.e_applicable} onChange={v => updateClause(setCl31, "e_applicable", v)} />
-                    {cl31.e_applicable === true && (
-                      <EditableTable columns={["Section", "Name of Party", "PAN", "Amount on which TCS not collected (₹)", "Reasons"]} rows={cl31.e_rows || []} onChange={rows => updateClause(setCl31, "e_rows", rows)} />
+                    <Label className="font-medium">31(e) — Whether any amount received from a company in which assessee is a substantial shareholder is deemed dividend u/s 2(22)(e)?</Label>
+                    <RadioYesNo name="cl31e" value={cl31.e_yes} onChange={v => updateClause(setCl31, "e_yes", v)} />
+                    {cl31.e_yes === true && (
+                      <EditableTable
+                        columns={["Name of Company", "PAN of Company", "Amount Deemed Dividend (₹)", "Date"]}
+                        rows={cl31.e_rows || []}
+                        onChange={rows => updateClause(setCl31, "e_rows", rows)}
+                      />
                     )}
-                    {cl31.e_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
+                    {cl31.e_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
