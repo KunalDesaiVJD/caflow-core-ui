@@ -42,7 +42,7 @@ const CLAUSE_NAV_FALLBACK = [
   { key: "cl_13", label: "13", title: "Speculative Transactions & ICDS" },
   { key: "cl_14", label: "14", title: "Method of Valuation" },
   { key: "cl_15_16", label: "15-16", title: "Amounts debited to P&L" },
-  { key: "cl_17", label: "17", title: "Dual deduction / amounts debited twice" },
+  { key: "cl_17", label: "17", title: "Capital / personal / political expenditure debited to P&L" },
   { key: "cl_18", label: "18", title: "Depreciation allowable" },
   { key: "cl_19", label: "19", title: "Amounts not deductible u/s 40(a)" },
   { key: "cl_20", label: "20", title: "Amounts inadmissible u/s 40A" },
@@ -68,11 +68,15 @@ const CLAUSE_NAV_FALLBACK = [
 ];
 
 const SECTION_44AB_OPTIONS = [
-  "44AB(a) — Business turnover > ₹1 Cr",
-  "44AB(b) — Professional receipts > ₹50 Lakhs",
-  "44AB(c) — Profit lower than presumptive",
-  "44AB(d) — Loss from presumptive business",
-  "Third Proviso to sec 44AB: Audited under any other law",
+  "44AB(a) — Carrying on business — total sales/turnover/gross receipts exceed ₹1 crore",
+  "44AB(a) Proviso — Business turnover >₹1Cr and ≤₹10Cr; cash receipts and payments each ≤5%",
+  "44AB(b) — Carrying on profession — gross receipts exceed ₹50 lakhs",
+  "44AB(b) Proviso — Professional receipts >₹25L and ≤₹50L; cash receipts and payments each ≤5%",
+  "44AB(c) — Business income declared lower than presumptive profit u/s 44AD",
+  "44AB(d) — Loss in business to which presumptive provisions of 44AD apply",
+  "44AB(e) — Person required to get accounts audited under any other law",
+  "44AB — Gross receipts/turnover from business/profession exceeds ₹1 crore (specified persons)",
+  "Third Proviso to 44AB — Accounts audited under Companies Act 2013 or other statute",
 ];
 
 const TAXATION_SCHEME_OPTIONS = ["115BA", "115BAA", "115BAB", "115BAC", "115BAD", "115BAE"];
@@ -82,7 +86,17 @@ const STOCK_VALUATION_OPTIONS = [
 ];
 
 const STOCK_VALUATION_14_OPTIONS = [
-  "FIFO", "Weighted Average", "Specific Identification", "Standard Cost", "Market Value", "Other",
+  "Cost",
+  "Market Value",
+  "Cost or Market Value whichever is lower",
+  "Other (specify)",
+];
+
+const ACCOUNTING_METHOD_OPTIONS = [
+  "Mercantile System (Accrual Basis)",
+  "Cash System (Cash Basis)",
+  "Hybrid / Mixed Method",
+  "Other (specify)",
 ];
 
 const ICDS_LIST = [
@@ -603,10 +617,10 @@ export default function Form3CD() {
                     </div>
                     {cl10.multiBusiness === true && (
                       <div className="mt-2">
-                        <EditableTable
-                          columns={["Sector", "Sub-sector Code", "Description"]}
+                        <MultiBusinessTable
                           rows={cl10.multiBusinessRows || []}
                           onChange={rows => updateClause(setCl10, "multiBusinessRows", rows)}
+                          sectorCodes={SECTOR_CODES}
                         />
                       </div>
                     )}
@@ -633,19 +647,37 @@ export default function Form3CD() {
                     <Label>11(a) Whether method of accounting employed is the same as in the preceding year?</Label>
                     <RadioYesNo name="cl11a" value={cl11.sameMethod} onChange={v => updateClause(setCl11, "sameMethod", v)} />
                   </div>
+                  {cl11.sameMethod === false && (
+                    <div className="space-y-2">
+                      <Label>State the new method employed:</Label>
+                      <Select value={cl11.newMethod || ""} onValueChange={v => updateClause(setCl11, "newMethod", v)}>
+                        <SelectTrigger><SelectValue placeholder="Select new method" /></SelectTrigger>
+                        <SelectContent>
+                          {ACCOUNTING_METHOD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {cl11.newMethod === "Other (specify)" && (
+                        <Input value={cl11.newMethodOther || ""} onChange={e => updateClause(setCl11, "newMethodOther", e.target.value)} placeholder="Specify method..." className="mt-2" />
+                      )}
+                    </div>
+                  )}
+                  {cl11.sameMethod === false && (
+                    <>
+                      <Separator />
+                      <div className="space-y-2">
+                        <Label>11(b) If method of accounting changed, furnish effect on profit/loss:</Label>
+                        <EditableTableWithTotal
+                          columns={["Particulars of Change", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
+                          rows={cl11.changeRows || []}
+                          onChange={rows => updateClause(setCl11, "changeRows", rows)}
+                          totalColIndex={1}
+                        />
+                      </div>
+                    </>
+                  )}
                   <Separator />
                   <div className="space-y-2">
-                    <Label>11(b) Effect on profit/loss due to change in method</Label>
-                    <EditableTableWithTotal
-                      columns={["Particulars", "Effect (Increase/Decrease)", "Amount (₹)"]}
-                      rows={cl11.changeRows || []}
-                      onChange={rows => updateClause(setCl11, "changeRows", rows)}
-                      totalColIndex={2}
-                    />
-                  </div>
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>11(c) Method of valuation of closing stock</Label>
+                    <Label>11(c) Method of valuation of closing stock employed in the previous year:</Label>
                     <Select value={cl11.stockValuation || ""} onValueChange={v => updateClause(setCl11, "stockValuation", v)}>
                       <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
                       <SelectContent>
@@ -699,12 +731,12 @@ export default function Form3CD() {
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
                   <div className="space-y-2">
-                    <Label>13(a) Whether speculative business transactions are accounted separately?</Label>
+                    <Label>13(a) Method of accounting employed in respect of speculative transactions:</Label>
                     <Select value={cl13.specSeparate || ""} onValueChange={v => updateClause(setCl13, "specSeparate", v)}>
                       <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="yes">Yes — Maintained separately</SelectItem>
-                        <SelectItem value="no">No — Not maintained separately</SelectItem>
+                        <SelectItem value="yes">Maintained Separately</SelectItem>
+                        <SelectItem value="no">Not Maintained Separately</SelectItem>
                         <SelectItem value="na">Not Applicable</SelectItem>
                       </SelectContent>
                     </Select>
@@ -764,25 +796,28 @@ export default function Form3CD() {
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-4">
                   <div className="space-y-2">
-                    <Label>14(a) Method of valuation of stock</Label>
+                    <Label>14(a) Method of valuation of closing stock:</Label>
                     <Select value={cl14.method || ""} onValueChange={v => updateClause(setCl14, "method", v)}>
                       <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
                       <SelectContent>
                         {STOCK_VALUATION_14_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {cl14.method === "Other (specify)" && (
+                      <Input value={cl14.methodOther || ""} onChange={e => updateClause(setCl14, "methodOther", e.target.value)} placeholder="Specify method..." className="mt-2" />
+                    )}
                   </div>
                   <Separator />
                   <div className="space-y-2">
-                    <Label>14(b) Whether method of valuation changed during the year?</Label>
+                    <Label>14(b) Whether method of valuation of closing stock changed during the year?</Label>
                     <RadioYesNo name="cl14b" value={cl14.changed} onChange={v => updateClause(setCl14, "changed", v)} />
                   </div>
-                  {cl14.changed === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL — No change in method.</div>}
+                  {cl14.changed === false && <div className="p-3 bg-muted rounded text-sm text-muted-foreground">NIL — No change in method of valuation</div>}
                   {cl14.changed === true && (
                     <div className="space-y-2">
                       <Label>Effect on profit/loss</Label>
                       <EditableTable
-                        columns={["Particulars", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
+                        columns={["Particulars of Change", "Increase in Profit (₹)", "Decrease in Profit (₹)"]}
                         rows={cl14.changeRows || []}
                         onChange={rows => updateClause(setCl14, "changeRows", rows)}
                       />
@@ -806,41 +841,46 @@ export default function Form3CD() {
                   {[
                     { key: "cl15", label: "Clause 15 — Capital expenditure debited to P&L" },
                     { key: "cl16a", label: "16(a) — Personal expenses charged to P&L" },
-                    { key: "cl16b", label: "16(b) — Amounts inadmissible u/s 40(a)" },
-                    { key: "cl16c", label: "16(c) — Amounts inadmissible u/s 40A" },
+                    { key: "cl16b", label: "16(b) — Amounts inadmissible u/s 40(a) — TDS non-deduction" },
+                    { key: "cl16c", label: "16(c) — Amounts inadmissible u/s 40A — excessive payments" },
                     { key: "cl16d", label: "16(d) — Payments to relatives u/s 40A(2)" },
-                    { key: "cl16e", label: "16(e) — Expenditure on advertisement in political party journals" },
-                  ].map(sub => (
-                    <div key={sub.key} className="space-y-3 border-l-2 border-muted pl-4">
-                      <Label className="font-medium">{sub.label}</Label>
-                      <RadioApplicable
-                        name={`cl15_16_${sub.key}`}
-                        value={cl15_16[`${sub.key}_applicable`]}
-                        onChange={v => updateClause(setCl15_16, `${sub.key}_applicable`, v)}
-                      />
-                      {cl15_16[`${sub.key}_applicable`] === true && (
-                        <EditableTable
-                          columns={["Sr No", "Particulars", "Amount (₹)", "Remarks"]}
-                          rows={cl15_16[`${sub.key}_rows`] || []}
-                          onChange={rows => updateClause(setCl15_16, `${sub.key}_rows`, rows)}
+                    { key: "cl16e", label: "16(e) — Expenditure on advertisement in political party journals/souvenirs" },
+                    { key: "cl16f", label: "16(f) — Amounts paid as salary/wages to domestic servants" },
+                    { key: "cl16g", label: "16(g) — Expenditure where payment has been made to a relative u/s 40A(2)(b)" },
+                  ].map((sub, idx, arr) => (
+                    <div key={sub.key}>
+                      <div className="space-y-3 border-l-2 border-muted pl-4">
+                        <Label className="font-medium">{sub.label}</Label>
+                        <RadioApplicable
+                          name={`cl15_16_${sub.key}`}
+                          value={cl15_16[`${sub.key}_applicable`]}
+                          onChange={v => updateClause(setCl15_16, `${sub.key}_applicable`, v)}
                         />
-                      )}
-                      {cl15_16[`${sub.key}_applicable`] === false && (
-                        <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
-                      )}
+                        {cl15_16[`${sub.key}_applicable`] === true && (
+                          <EditableTable
+                            columns={["Sr No", "Particulars", "Amount (₹)", "Remarks"]}
+                            rows={cl15_16[`${sub.key}_rows`] || []}
+                            onChange={rows => updateClause(setCl15_16, `${sub.key}_rows`, rows)}
+                          />
+                        )}
+                        {cl15_16[`${sub.key}_applicable`] === false && (
+                          <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
+                        )}
+                      </div>
+                      {idx < arr.length - 1 && <Separator className="my-2" />}
                     </div>
                   ))}
                 </AccordionContent>
               </AccordionItem>
             </div>
 
-            {/* ═══════ CLAUSE 17 — Dual Deduction ═══════ */}
+            {/* ═══════ CLAUSE 17 — Capital / personal / political expenditure debited to P&L ═══════ */}
             <div ref={el => { sectionRefs.current["cl_17"] = el; }}>
               <AccordionItem value="cl_17" className="border rounded-lg">
                 <AccordionTrigger className="px-4">
                   <div className="flex items-center gap-3">
                     <Badge variant="outline" className="font-mono text-xs">17</Badge>
-                    <span className="font-medium">Dual Deduction / Amounts Debited Twice</span>
+                    <span className="font-medium">Amounts debited to P&L — capital, personal or political expenditure</span>
                     {isClauseFilled(cl17) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
@@ -848,7 +888,7 @@ export default function Form3CD() {
                   <RadioApplicable name="cl17" value={cl17.applicable} onChange={v => updateClause(setCl17, "applicable", v)} />
                   {cl17.applicable === true && (
                     <EditableTable
-                      columns={["Sr No", "Section", "Particulars", "Amount (₹)"]}
+                      columns={["Sr No", "Section", "Nature of Amount Debited", "Amount (₹)", "Remarks"]}
                       rows={cl17.rows || []}
                       onChange={rows => updateClause(setCl17, "rows", rows)}
                     />
@@ -1810,7 +1850,64 @@ function SectorPicker({ selectedSector, selectedCode, onSectorChange, onCodeChan
   );
 }
 
-/** Generic editable table with add/remove rows */
+/** Multi-business table with sector/code dropdowns (Clause 10b) */
+function MultiBusinessTable({ rows, onChange, sectorCodes }: {
+  rows: { sector: string; code: string; description: string }[];
+  onChange: (r: any[]) => void;
+  sectorCodes: typeof SECTOR_CODES;
+}) {
+  function addRow() { onChange([...rows, { sector: '', code: '', description: '' }]); }
+  function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
+  function update(i: number, key: string, val: string) {
+    onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+  }
+  return (
+    <div className='space-y-2'>
+      <Table>
+        <TableHeader><TableRow>
+          <TableHead className='text-xs w-40'>Sector</TableHead>
+          <TableHead className='text-xs w-40'>Sub-sector Code</TableHead>
+          <TableHead className='text-xs'>Description (auto-filled)</TableHead>
+          <TableHead className='w-10' />
+        </TableRow></TableHeader>
+        <TableBody>
+          {rows.map((row, i) => {
+            const sec = sectorCodes.find(s => s.name === row.sector);
+            const sub = sec?.subSectors.find(ss => ss.code === row.code);
+            return (
+              <TableRow key={i}>
+                <TableCell className='p-1'>
+                  <Select value={row.sector} onValueChange={v => { update(i, 'sector', v); update(i, 'code', ''); }}>
+                    <SelectTrigger className='h-8 text-xs'><SelectValue placeholder='Sector' /></SelectTrigger>
+                    <SelectContent className='max-h-60'>
+                      {sectorCodes.map(s => <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className='p-1'>
+                  <Select value={row.code} onValueChange={v => update(i, 'code', v)} disabled={!sec}>
+                    <SelectTrigger className='h-8 text-xs'><SelectValue placeholder='Code' /></SelectTrigger>
+                    <SelectContent className='max-h-60'>
+                      {sec?.subSectors.map(ss => <SelectItem key={ss.code} value={ss.code}>{ss.code}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell className='p-1 text-xs text-muted-foreground'>{sub?.name || row.description || '—'}</TableCell>
+                <TableCell className='p-1'>
+                  <Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => removeRow(i)}>
+                    <Trash2 className='h-3 w-3 text-destructive' />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      <Button variant='outline' size='sm' onClick={addRow}><Plus className='h-3 w-3 mr-1' /> Add Row</Button>
+    </div>
+  );
+}
+
 function EditableTable({ columns, rows, onChange }: {
   columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
 }) {
@@ -2602,7 +2699,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
     cl_13: "13. Method of accounting employed in respect of speculative transactions",
     cl_14: "14. Method of valuation of closing stock employed in the previous year",
     cl_15_16: "15-16. Amounts debited to the profit and loss account",
-    cl_17: "17. Amounts debited to the profit and loss account, being any amount paid by way of dual deduction",
+    cl_17: "17. Amounts debited to the profit and loss account, being capital, personal or political expenditure (including advertisement in political party souvenir/brochure)",
     cl_18: "18. Particulars of depreciation allowable as per the Income-tax Act, 1961",
     cl_19: "19. Amounts inadmissible under section 40(a)",
     cl_20: "20. Amounts inadmissible under section 40A",
@@ -2801,7 +2898,7 @@ function Form3CDPrintView({ client, engagement, fy, ay, clauseData, onClose }: {
 
         {/* FOOTER (visible on print) */}
         <div className="print-footer hidden print:block">
-          {client?.name} | PAN: {client?.pan} | FY: {fy} | Generated by CAFlow
+          {client?.name} | PAN: {client?.pan} | FY: {fy}
         </div>
       </div>
     </div>
