@@ -9,7 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Lock, CheckCircle2 } from "lucide-react";
+import { Sparkles, Loader2, Save, Lock, CheckCircle2, Download, FileType, Printer } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { exportToPdf, exportToWord } from "@/lib/exportUtils";
 
 // Hardcoded fallback titles — used ONLY if master templates don't exist
 const CARO_CLAUSES_FALLBACK: Record<number, string> = {
