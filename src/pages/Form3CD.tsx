@@ -1985,6 +1985,7 @@ function DonationTable({ rows, onChange }: {
   );
 }
 
+function EditableTable({ columns, rows, onChange }: {
   columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void;
 }) {
   function addRow() { onChange([...rows, columns.map(() => "")]); }
