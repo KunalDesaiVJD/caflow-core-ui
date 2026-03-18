@@ -42,7 +42,7 @@ const CLAUSE_NAV_FALLBACK = [
   { key: "cl_13", label: "13", title: "Speculative Transactions & ICDS" },
   { key: "cl_14", label: "14", title: "Method of Valuation" },
   { key: "cl_15_16", label: "15-16", title: "Amounts debited to P&L" },
-  { key: "cl_17", label: "17", title: "Dual deduction / amounts debited twice" },
+  { key: "cl_17", label: "17", title: "Capital / personal / political expenditure debited to P&L" },
   { key: "cl_18", label: "18", title: "Depreciation allowable" },
   { key: "cl_19", label: "19", title: "Amounts not deductible u/s 40(a)" },
   { key: "cl_20", label: "20", title: "Amounts inadmissible u/s 40A" },
