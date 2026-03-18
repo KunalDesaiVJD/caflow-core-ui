@@ -874,13 +874,13 @@ export default function Form3CD() {
               </AccordionItem>
             </div>
 
-            {/* ═══════ CLAUSE 17 — Dual Deduction ═══════ */}
+            {/* ═══════ CLAUSE 17 — Capital / personal / political expenditure debited to P&L ═══════ */}
             <div ref={el => { sectionRefs.current["cl_17"] = el; }}>
               <AccordionItem value="cl_17" className="border rounded-lg">
                 <AccordionTrigger className="px-4">
                   <div className="flex items-center gap-3">
                     <Badge variant="outline" className="font-mono text-xs">17</Badge>
-                    <span className="font-medium">Dual Deduction / Amounts Debited Twice</span>
+                    <span className="font-medium">Amounts debited to P&L — capital, personal or political expenditure</span>
                     {isClauseFilled(cl17) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
@@ -888,7 +888,7 @@ export default function Form3CD() {
                   <RadioApplicable name="cl17" value={cl17.applicable} onChange={v => updateClause(setCl17, "applicable", v)} />
                   {cl17.applicable === true && (
                     <EditableTable
-                      columns={["Sr No", "Section", "Particulars", "Amount (₹)"]}
+                      columns={["Sr No", "Section", "Nature of Amount Debited", "Amount (₹)", "Remarks"]}
                       rows={cl17.rows || []}
                       onChange={rows => updateClause(setCl17, "rows", rows)}
                     />
