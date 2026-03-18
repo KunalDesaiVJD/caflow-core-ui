@@ -1605,42 +1605,51 @@ export default function Form3CD() {
                 <AccordionTrigger className="px-4">
                   <div className="flex items-center gap-3">
                     <Badge variant="outline" className="font-mono text-xs">37-39</Badge>
-                    <span className="font-medium">Change in shareholding / Cost audit / Central Excise</span>
+                    <span className="font-medium">Partner in firm / Statutory audit / Non-resident payments</span>
                     {isClauseFilled(cl37_39) && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-6">
-                  {/* 37 */}
+                  {/* CLAUSE 37 */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">37 — Any change in shareholding?</Label>
+                    <Label className="font-medium">37 — Whether the assessee is a partner in any firm or member of any AOP/BOI whose accounts have been audited u/s 44AB?</Label>
                     <RadioYesNo name="cl37" value={cl37_39.cl37_yes} onChange={v => updateClause(setCl37_39, "cl37_yes", v)} />
                     {cl37_39.cl37_yes === true && (
-                      <Textarea value={cl37_39.cl37_particulars || ""} onChange={e => updateClause(setCl37_39, "cl37_particulars", e.target.value)} placeholder="Particulars of change in shareholding..." />
+                      <EditableTable
+                        columns={["Name of Firm/AOP/BOI", "PAN", "Profit Share %", "Whether accounts audited", "Date of Audit Report"]}
+                        rows={cl37_39.cl37_rows || []}
+                        onChange={rows => updateClause(setCl37_39, "cl37_rows", rows)}
+                      />
                     )}
+                    {cl37_39.cl37_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
-                  {/* 38 */}
+                  <Separator />
+                  {/* CLAUSE 38 */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">38 — Cost audit ordered?</Label>
+                    <Label className="font-medium">38 — Whether the accounts of the assessee have been audited under any law other than the Income Tax Act, 1961?</Label>
                     <RadioYesNo name="cl38" value={cl37_39.cl38_yes} onChange={v => updateClause(setCl37_39, "cl38_yes", v)} />
                     {cl37_39.cl38_yes === true && (
-                      <div className="grid grid-cols-3 gap-3">
-                        <div><Label className="text-xs">Name of Cost Auditor</Label><Input value={cl37_39.cl38_auditor || ""} onChange={e => updateClause(setCl37_39, "cl38_auditor", e.target.value)} /></div>
-                        <div><Label className="text-xs">Membership No</Label><Input value={cl37_39.cl38_membership || ""} onChange={e => updateClause(setCl37_39, "cl38_membership", e.target.value)} /></div>
-                        <div><Label className="text-xs">Date of Report</Label><Input type="date" value={cl37_39.cl38_date || ""} onChange={e => updateClause(setCl37_39, "cl38_date", e.target.value)} /></div>
-                      </div>
+                      <EditableTable
+                        columns={["Name of Statute", "Name of Auditor", "Membership No.", "Date of Audit Report", "Period Covered", "Observations"]}
+                        rows={cl37_39.cl38_rows || []}
+                        onChange={rows => updateClause(setCl37_39, "cl38_rows", rows)}
+                      />
                     )}
+                    {cl37_39.cl38_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
-                  {/* 39 */}
+                  <Separator />
+                  {/* CLAUSE 39 */}
                   <div className="space-y-3 border-l-2 border-muted pl-4">
-                    <Label className="font-medium">39 — Audit under Central Excise?</Label>
+                    <Label className="font-medium">39 — Whether any tax has been deducted or withheld on any income paid/credited to non-residents during the year?</Label>
                     <RadioYesNo name="cl39" value={cl37_39.cl39_yes} onChange={v => updateClause(setCl37_39, "cl39_yes", v)} />
                     {cl37_39.cl39_yes === true && (
-                      <div className="grid grid-cols-3 gap-3">
-                        <div><Label className="text-xs">Name of Auditor</Label><Input value={cl37_39.cl39_auditor || ""} onChange={e => updateClause(setCl37_39, "cl39_auditor", e.target.value)} /></div>
-                        <div><Label className="text-xs">Audit Period</Label><Input value={cl37_39.cl39_period || ""} onChange={e => updateClause(setCl37_39, "cl39_period", e.target.value)} /></div>
-                        <div><Label className="text-xs">Observations</Label><Input value={cl37_39.cl39_observations || ""} onChange={e => updateClause(setCl37_39, "cl39_observations", e.target.value)} /></div>
-                      </div>
+                      <EditableTable
+                        columns={["Name of Non-Resident", "Country", "PAN/TAN", "Nature of Payment", "Amount Paid (₹)", "Tax Withheld (₹)", "Section"]}
+                        rows={cl37_39.cl39_rows || []}
+                        onChange={rows => updateClause(setCl37_39, "cl39_rows", rows)}
+                      />
                     )}
+                    {cl37_39.cl39_yes === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">NIL</div>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
