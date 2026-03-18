@@ -10,7 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles } from "lucide-react";
+import { Save, Printer, FileText, CheckCircle2, Circle, Plus, Lock, Sparkles, Download, FileType } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { exportToPdf, exportToWord } from "@/lib/exportUtils";
 import { Checkbox } from "@/components/ui/checkbox";
 
 /* ───────────── constants (fallback) ───────────── */
