@@ -1142,13 +1142,14 @@ export default function Form3CD() {
                     <Label className="font-medium">Clause 25 — Any amount of profit chargeable to tax under the Act</Label>
                     <RadioApplicable name="cl25" value={cl24_25.cl25_applicable} onChange={v => updateClause(setCl24_25, "cl25_applicable", v)} />
                     {cl24_25.cl25_applicable === true && (
-                      <div className="space-y-2">
-                        <Textarea placeholder="Particulars..." value={cl24_25.cl25_particulars || ""} onChange={e => updateClause(setCl24_25, "cl25_particulars", e.target.value)} />
-                        <div className="grid grid-cols-[1fr_200px] gap-3 items-center">
-                          <Label>Amount (₹)</Label>
-                          <Input type="number" placeholder="₹ 0.00" value={cl24_25.cl25_amount || ""} onChange={e => updateClause(setCl24_25, "cl25_amount", e.target.value)} className="text-right" />
-                        </div>
-                      </div>
+                      <DropdownTable
+                        dropdownCol={0}
+                        dropdownLabel="Section"
+                        dropdownOptions={['41','32AC','32AD','33AB','33ABA','35ABB','40A(3A)','43CA','43D','Other']}
+                        columns={['Section', 'Particulars', 'Amount Chargeable to Tax (₹)']}
+                        rows={cl24_25.cl25_rows || []}
+                        onChange={rows => updateClause(setCl24_25, 'cl25_rows', rows)}
+                      />
                     )}
                     {cl24_25.cl25_applicable === false && <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>}
                   </div>
