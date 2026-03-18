@@ -2018,107 +2018,132 @@ function ICDSTable({ rows, onChange }: { rows: { icds: string; particulars: stri
   );
 }
 
-/** Depreciation schedule table with auto-calc columns */
+/** Depreciation schedule table with 180-day bifurcation and auto-calc */
 function DepreciationTable({ rows, onChange }: {
-  rows: { block: string; openingWDV: string; additions: string; deductions: string; rate: string; depAsPerBooks: string }[];
+  rows: {
+    block: string;
+    openingWDV: string;
+    addOver180: string;
+    addUnder180: string;
+    deductions: string;
+    rate: string;
+    depAsPerBooks: string;
+  }[];
   onChange: (r: any[]) => void;
 }) {
   function addRow() {
-    onChange([...rows, { block: "", openingWDV: "", additions: "", deductions: "", rate: "", depAsPerBooks: "" }]);
+    onChange([...rows, {
+      block: '', openingWDV: '', addOver180: '0',
+      addUnder180: '0', deductions: '0', rate: '', depAsPerBooks: '0',
+    }]);
   }
   function removeRow(i: number) { onChange(rows.filter((_, idx) => idx !== i)); }
   function update(i: number, key: string, val: string) {
     onChange(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
   }
-
   function calc(row: any) {
-    const o = parseFloat(row.openingWDV || "0") || 0;
-    const a = parseFloat(row.additions || "0") || 0;
-    const d = parseFloat(row.deductions || "0") || 0;
-    const closingWDV = o + a - d;
-    const rate = parseFloat(row.rate || "0") || 0;
-    const dep = closingWDV * rate / 100;
-    const perBooks = parseFloat(row.depAsPerBooks || "0") || 0;
-    return { closingWDV, dep, diff: dep - perBooks };
+    const o   = parseFloat(row.openingWDV  || '0') || 0;
+    const a1  = parseFloat(row.addOver180  || '0') || 0;
+    const a2  = parseFloat(row.addUnder180 || '0') || 0;
+    const d   = parseFloat(row.deductions  || '0') || 0;
+    const r   = parseFloat(row.rate        || '0') || 0;
+    const bk  = parseFloat(row.depAsPerBooks || '0') || 0;
+    const depFull  = Math.round((o + a1) * r / 100 * 100) / 100;
+    const depHalf  = Math.round(a2 * r / 100 * 0.5 * 100) / 100;
+    const dep      = depFull + depHalf;
+    const closingWDV = Math.round((o + a1 + a2 - d - dep) * 100) / 100;
+    return { dep, closingWDV, diff: Math.round((dep - bk) * 100) / 100 };
   }
-
+  const fmt = (n: number) =>
+    n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const totals = rows.reduce(
     (acc, row) => {
       const c = calc(row);
       return {
-        openingWDV: acc.openingWDV + (parseFloat(row.openingWDV || "0") || 0),
-        additions: acc.additions + (parseFloat(row.additions || "0") || 0),
-        deductions: acc.deductions + (parseFloat(row.deductions || "0") || 0),
-        closingWDV: acc.closingWDV + c.closingWDV,
+        openingWDV:  acc.openingWDV  + (parseFloat(row.openingWDV  || '0') || 0),
+        addOver180:  acc.addOver180  + (parseFloat(row.addOver180  || '0') || 0),
+        addUnder180: acc.addUnder180 + (parseFloat(row.addUnder180 || '0') || 0),
+        deductions:  acc.deductions  + (parseFloat(row.deductions  || '0') || 0),
         dep: acc.dep + c.dep,
-        perBooks: acc.perBooks + (parseFloat(row.depAsPerBooks || "0") || 0),
+        perBooks: acc.perBooks + (parseFloat(row.depAsPerBooks || '0') || 0),
         diff: acc.diff + c.diff,
+        closingWDV: acc.closingWDV + c.closingWDV,
       };
     },
-    { openingWDV: 0, additions: 0, deductions: 0, closingWDV: 0, dep: 0, perBooks: 0, diff: 0 }
+    { openingWDV: 0, addOver180: 0, addUnder180: 0, deductions: 0,
+      dep: 0, perBooks: 0, diff: 0, closingWDV: 0 }
   );
-
-  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
-
   return (
-    <div className="space-y-2">
+    <div className='space-y-3 overflow-x-auto'>
+      <div className='text-xs text-muted-foreground p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200'>
+        <strong>Depreciation Rule (Income Tax Act):</strong> Full rate on opening WDV + additions
+        put to use &gt;180 days. Half rate on additions put to use ≤180 days.
+        Closing WDV and Depreciation are auto-calculated.
+      </div>
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead className="text-xs">Block of Assets</TableHead>
-            <TableHead className="text-xs w-28">Opening WDV (₹)</TableHead>
-            <TableHead className="text-xs w-28">Additions (₹)</TableHead>
-            <TableHead className="text-xs w-28">Deductions (₹)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Closing WDV (₹)</TableHead>
-            <TableHead className="text-xs w-20">Rate (%)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Depreciation (₹)</TableHead>
-            <TableHead className="text-xs w-28">Dep as per Books (₹)</TableHead>
-            <TableHead className="text-xs w-28 bg-muted/50">Difference (₹)</TableHead>
-            <TableHead className="w-10" />
+          <TableRow className='text-xs bg-muted/50'>
+            <TableHead className='min-w-[160px]'>Block of Assets</TableHead>
+            <TableHead className='w-28'>Opening WDV (₹)</TableHead>
+            <TableHead className='w-32 bg-blue-50/70 dark:bg-blue-950/20'>
+              <div>Additions</div>
+              <div className='text-[10px] font-normal text-blue-700'>&gt;180 days (full rate)</div>
+            </TableHead>
+            <TableHead className='w-32 bg-amber-50/70 dark:bg-amber-950/20'>
+              <div>Additions</div>
+              <div className='text-[10px] font-normal text-amber-700'>≤180 days (half rate)</div>
+            </TableHead>
+            <TableHead className='w-28'>Deductions (₹)</TableHead>
+            <TableHead className='w-20'>Rate (%)</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Depreciation (₹) [auto]</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Closing WDV (₹) [auto]</TableHead>
+            <TableHead className='w-28'>Dep as per Books (₹)</TableHead>
+            <TableHead className='w-28 bg-muted/40'>Difference (₹) [auto]</TableHead>
+            <TableHead className='w-10' />
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length === 0 && (
-            <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground text-sm py-4">No rows. Click "+ Add Row".</TableCell></TableRow>
+            <TableRow><TableCell colSpan={11} className='text-center py-6 text-muted-foreground text-sm'>
+              No rows — click Add Row to begin
+            </TableCell></TableRow>
           )}
           {rows.map((row, i) => {
             const c = calc(row);
             return (
               <TableRow key={i}>
-                <TableCell className="p-1"><Input value={row.block} onChange={e => update(i, "block", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.openingWDV} onChange={e => update(i, "openingWDV", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.additions} onChange={e => update(i, "additions", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.deductions} onChange={e => update(i, "deductions", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.closingWDV)}</TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.rate} onChange={e => update(i, "rate", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.dep)}</TableCell>
-                <TableCell className="p-1"><Input type="number" value={row.depAsPerBooks} onChange={e => update(i, "depAsPerBooks", e.target.value)} className="h-8 text-xs" /></TableCell>
-                <TableCell className="p-1 bg-muted/30 text-xs text-right font-medium">{fmt(c.diff)}</TableCell>
-                <TableCell className="p-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
-                    <Trash2 className="h-3 w-3 text-destructive" />
-                  </Button>
-                </TableCell>
+                <TableCell className='p-1'><Input value={row.block} onChange={e => update(i, 'block', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.openingWDV} onChange={e => update(i, 'openingWDV', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-blue-50/40'><Input type='number' value={row.addOver180} onChange={e => update(i, 'addOver180', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-amber-50/40'><Input type='number' value={row.addUnder180} onChange={e => update(i, 'addUnder180', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.deductions} onChange={e => update(i, 'deductions', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.rate} onChange={e => update(i, 'rate', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.dep)}</TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.closingWDV)}</TableCell>
+                <TableCell className='p-1'><Input type='number' value={row.depAsPerBooks} onChange={e => update(i, 'depAsPerBooks', e.target.value)} className='h-8 text-xs' /></TableCell>
+                <TableCell className='p-1 bg-muted/30 text-right text-xs font-semibold'>{fmt(c.diff)}</TableCell>
+                <TableCell className='p-1'><Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => removeRow(i)}><Trash2 className='h-3 w-3 text-destructive' /></Button></TableCell>
               </TableRow>
             );
           })}
           {rows.length > 0 && (
-            <TableRow className="bg-muted/20 font-semibold text-xs">
-              <TableCell className="p-1">Totals</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.openingWDV)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.additions)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.deductions)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.closingWDV)}</TableCell>
-              <TableCell className="p-1" />
-              <TableCell className="p-1 text-right">{fmt(totals.dep)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.perBooks)}</TableCell>
-              <TableCell className="p-1 text-right">{fmt(totals.diff)}</TableCell>
+            <TableRow className='bg-muted/30 font-semibold text-xs'>
+              <TableCell className='p-1'>Totals</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.openingWDV)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.addOver180)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.addUnder180)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.deductions)}</TableCell>
+              <TableCell />
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.dep)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.closingWDV)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.perBooks)}</TableCell>
+              <TableCell className='p-1 text-right tabular-nums'>{fmt(totals.diff)}</TableCell>
               <TableCell />
             </TableRow>
           )}
         </TableBody>
       </Table>
-      <Button variant="outline" size="sm" onClick={addRow}><Plus className="h-3 w-3 mr-1" /> Add Row</Button>
+      <Button variant='outline' size='sm' onClick={addRow}><Plus className='h-3 w-3 mr-1' /> Add Row</Button>
     </div>
   );
 }
