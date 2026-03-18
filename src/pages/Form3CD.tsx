@@ -1587,7 +1587,7 @@ export default function Form3CD() {
                       <RadioYesNo name={`cl36${sub}`} value={cl36[`${sub}_yes`]} onChange={v => updateClause(setCl36, `${sub}_yes`, v)} />
                       {cl36[`${sub}_yes`] === true && (
                         <EditableTable
-                          columns={["Nature of Receipt", "Amount (₹)", "Remarks"]}
+                          columns={["Sr No", "Nature of Receipt / Amount", "Date of Receipt", "Amount (₹)", "Remarks"]}
                           rows={cl36[`${sub}_rows`] || []}
                           onChange={rows => updateClause(setCl36, `${sub}_rows`, rows)}
                         />
