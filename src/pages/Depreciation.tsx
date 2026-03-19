@@ -1130,6 +1130,7 @@ return (
                 <TableCell className='text-right tabular-nums'>{fmt(totals.acDep)}</TableCell>
                 <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.wdvOpen)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(assets.reduce((s: number, a: any) => s + (parseFloat(a.residual_value) || 0), 0))}</TableCell>
                 <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.dep)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.wdvClose)}</TableCell>
