@@ -1939,6 +1939,7 @@ export type Database = {
           date_of_purchase: string | null
           dep_days_addition: number | null
           dep_days_opening: number | null
+          dep_formula_json: Json | null
           dep_on_additions: number | null
           dep_on_opening_block: number | null
           depreciation_for_year: number | null
@@ -1974,6 +1975,7 @@ export type Database = {
           date_of_purchase?: string | null
           dep_days_addition?: number | null
           dep_days_opening?: number | null
+          dep_formula_json?: Json | null
           dep_on_additions?: number | null
           dep_on_opening_block?: number | null
           depreciation_for_year?: number | null
@@ -2009,6 +2011,7 @@ export type Database = {
           date_of_purchase?: string | null
           dep_days_addition?: number | null
           dep_days_opening?: number | null
+          dep_formula_json?: Json | null
           dep_on_additions?: number | null
           dep_on_opening_block?: number | null
           depreciation_for_year?: number | null

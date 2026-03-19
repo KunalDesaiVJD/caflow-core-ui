@@ -1,0 +1,1 @@
+ALTER TABLE public.fa_assets ADD COLUMN IF NOT EXISTS dep_formula_json jsonb;

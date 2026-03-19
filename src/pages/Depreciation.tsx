@@ -1011,8 +1011,9 @@ return (
             <TableHead className='text-right'>Acc Dep Open</TableHead>
             <TableHead className='text-right'>Residual Val</TableHead>
             <TableHead className='text-right font-semibold'>WDV Opening</TableHead>
-            <TableHead className='text-right w-16'>Rate %</TableHead>
-            <TableHead className='text-right font-semibold'>Dep for Year</TableHead>
+            <TableHead className='text-right text-amber-600 dark:text-amber-400'>Residual Val.</TableHead>
+            <TableHead className='text-right w-16'>Rate / Life</TableHead>
+            <TableHead className='text-right font-semibold'><div>Dep for Year</div><div className='text-[9px] font-normal text-muted-foreground italic'>hover for formula</div></TableHead>
             <TableHead className='text-right font-bold'>WDV Closing</TableHead>
             <TableHead className='w-24'></TableHead>
           </TableRow></TableHeader>
@@ -1030,9 +1031,18 @@ return (
               const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
               const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
               const method = a.fa_categories?.depreciation_method || 'WDV';
-              const rate   = method==='SLM' ? a.fa_categories?.slm_rate : a.fa_categories?.wdv_rate;
+              const resVal = a.residual_value != null ? parseFloat(a.residual_value) : null;
+              const rateDisplay = method === 'SLM'
+                ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
+                : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
+              const formulaText: string =
+                (a as any).dep_formula_json?.formula_text ||
+                (method === 'SLM' && a.fa_categories?.useful_life_years
+                  ? `(Cost ₹${fmt(parseFloat(a.gross_block_opening)||0)} − Residual ₹${fmt(resVal||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
+                  : 'Run Calculate Depreciation to see formula');
+              const isAtResidual = resVal != null && wdvC != null && Math.abs(wdvC - resVal) < 1;
               const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-              const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
+              const resValDisplay = resVal ?? Math.round(gb * residualPct / 100 * 100)/100;
               const warn   = wdvO < 0 || ad > gb;
               return (
                 <TableRow key={a.id} className={cn(a.is_fully_depreciated&&'bg-muted/20', warn&&'bg-red-50 dark:bg-red-950/20')}>
@@ -1053,14 +1063,46 @@ return (
                   <TableCell className='text-right tabular-nums text-sm'>{add>0?fmt(add):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{dis>0?fmt(dis):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{fmt(ad)}</TableCell>
-                  <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resVal)}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resValDisplay)}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(wdvO)}</TableCell>
-                  <TableCell className='text-right tabular-nums text-xs'>{fmtPct(rate)}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm text-amber-600 dark:text-amber-400'>{resVal != null ? fmt(resVal) : '—'}</TableCell>
+                  <TableCell className='text-right tabular-nums text-xs'>{rateDisplay}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>
-                    {dep!=null?fmt(dep):<span className='text-muted-foreground text-xs italic'>pending</span>}
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className='cursor-help inline-flex items-center gap-1'>
+                            {dep != null ? fmt(dep) : <span className='text-muted-foreground text-xs italic'>pending</span>}
+                            {(a as any).dep_formula_json?.is_balancing_year && (
+                              <Badge variant='outline' className='text-[8px] px-1 py-0 border-orange-400 text-orange-600 bg-orange-50 dark:bg-orange-950/30'>BAL</Badge>
+                            )}
+                            {(a as any).dep_formula_json?.is_pro_rata && !(a as any).dep_formula_json?.is_balancing_year && (
+                              <Badge variant='outline' className='text-[8px] px-1 py-0 border-blue-400 text-blue-600 bg-blue-50 dark:bg-blue-950/30'>PRO</Badge>
+                            )}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side='top' className='max-w-xs'>
+                          <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
+                          <p className='text-xs mt-1'>{formulaText}</p>
+                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
+                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
+                          )}
+                          {(a as any).dep_formula_json?.is_balancing_year && (
+                            <p className='text-xs mt-1 text-orange-600'>Final year — dep restricted to (Opening WDV − Residual Value)</p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </TableCell>
-                  <TableCell className={cn('text-right tabular-nums text-sm font-bold',wdvC!=null&&wdvC<0?'text-red-600':'')}>
-                    {wdvC!=null?fmt(wdvC):'—'}
+                  <TableCell className={cn('text-right tabular-nums text-sm font-bold',wdvC!=null&&wdvC<0?'text-destructive':'')}>
+                    {wdvC != null ? (
+                      <span className='inline-flex items-center gap-1'>
+                        {fmt(wdvC)}
+                        {isAtResidual && (
+                          <Badge variant='outline' className='text-[8px] px-1 py-0 border-green-400 text-green-600 bg-green-50 dark:bg-green-950/30'>RES</Badge>
+                        )}
+                      </span>
+                    ) : '—'}
                   </TableCell>
                   <TableCell>
                     {!a.is_locked&&(<div className='flex gap-1'>
@@ -1088,6 +1130,7 @@ return (
                 <TableCell className='text-right tabular-nums'>{fmt(totals.acDep)}</TableCell>
                 <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.wdvOpen)}</TableCell>
+                <TableCell className='text-right tabular-nums'>{fmt(assets.reduce((s: number, a: any) => s + (parseFloat(a.residual_value) || 0), 0))}</TableCell>
                 <TableCell/>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.dep)}</TableCell>
                 <TableCell className='text-right tabular-nums'>{fmt(totals.wdvClose)}</TableCell>
