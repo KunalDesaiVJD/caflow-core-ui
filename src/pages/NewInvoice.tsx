@@ -555,6 +555,7 @@ const NewInvoice = () => {
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; }
+        td, th { vertical-align: middle !important; }
         @media print {
           @page { size: A4; margin: 20mm 15mm 20mm 15mm; }
           body { margin: 0; padding: 0; }
@@ -568,7 +569,7 @@ const NewInvoice = () => {
       <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
       <!-- TAX INVOICE Header -->
-      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:10px 0">
+      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0">
         <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
       </div>
 
