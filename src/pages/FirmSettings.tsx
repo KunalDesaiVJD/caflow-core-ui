@@ -64,6 +64,8 @@ const FirmSettings = () => {
   const [invoicePrefix, setInvoicePrefix] = useState("");
   const [gstRate, setGstRate] = useState("18");
   const [paymentTerms, setPaymentTerms] = useState("Net 30 days");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [billingContactNo, setBillingContactNo] = useState("");
 
   // Branding
   const [logoUrl, setLogoUrl] = useState("");
@@ -156,6 +158,8 @@ const FirmSettings = () => {
       setInvoicePrefix(billing.invoice_prefix || "INV/2425/");
       setGstRate(String(billing.gst_rate || 18));
       setPaymentTerms(billing.payment_terms || "Net 30 days");
+      setBillingEmail(settings.billing_email || "");
+      setBillingContactNo(settings.billing_contact_no || "");
     }
     setLoading(false);
   }
@@ -217,6 +221,8 @@ const FirmSettings = () => {
           signature_url: signatureUrl,
           address: addressLine,
           msme_no: msmeNo,
+          billing_email: billingEmail,
+          billing_contact_no: billingContactNo,
         },
       } as any).eq("id", firmId);
 
@@ -362,6 +368,13 @@ const FirmSettings = () => {
                 <div className="space-y-2"><Label>Account Number</Label><Input value={accountNo} onChange={e => setAccountNo(e.target.value)} disabled={!isAdmin} /></div>
                 <div className="space-y-2"><Label>IFSC Code</Label><Input value={ifsc} onChange={e => setIfsc(e.target.value.toUpperCase())} disabled={!isAdmin} /></div>
                 <div className="space-y-2"><Label>Branch</Label><Input value={branch} onChange={e => setBranch(e.target.value)} disabled={!isAdmin} /></div>
+              </div>
+              <div className="border-t border-border pt-4" />
+              <p className="text-sm font-semibold text-foreground">Invoice Contact Details</p>
+              <p className="text-xs text-muted-foreground">These will appear on the invoice header below MSME/Udyam No.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2"><Label>Billing Email</Label><Input type="email" value={billingEmail} onChange={e => setBillingEmail(e.target.value)} disabled={!isAdmin} placeholder="billing@firm.com" /></div>
+                <div className="space-y-2"><Label>Billing Contact No</Label><Input value={billingContactNo} onChange={e => setBillingContactNo(e.target.value)} disabled={!isAdmin} placeholder="+91 98765 43210" /></div>
               </div>
               <div className="border-t border-border pt-4" />
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

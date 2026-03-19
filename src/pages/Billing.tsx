@@ -23,16 +23,20 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, parseISO, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, IndianRupee, Clock, AlertTriangle, FileText, Send,
-  CheckCircle2, Eye, Copy, XCircle, ChevronLeft, ChevronRight,
-  Trash2, BarChart3, Percent,
+  CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
+  BarChart3, Percent, Upload, Download, Pencil, Settings2,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import * as XLSX from "xlsx";
 
 // ─── Types ───
 interface Invoice {
@@ -57,6 +61,10 @@ interface ClientMap {
   [id: string]: { name: string; entity_type: string | null };
 }
 
+interface FirmMap {
+  [id: string]: string;
+}
+
 interface TimesheetEntry {
   id: string;
   user_id: string | null;
@@ -76,16 +84,24 @@ interface TimesheetEntry {
 interface ClientOption { id: string; name: string | null; }
 interface UserOption { id: string; name: string | null; }
 
+interface ItemMaster {
+  id: string;
+  description: string;
+  hsn_sac_code: string | null;
+  default_rate: number | null;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
   finalized: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   sent: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   paid: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-  voided: "bg-destructive/15 text-destructive",
   overdue: "bg-destructive/15 text-destructive",
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const Billing = () => {
   const [activeTab, setActiveTab] = useState("invoices");
@@ -101,11 +117,13 @@ const Billing = () => {
         <TabsList>
           <TabsTrigger value="invoices" className="gap-2"><FileText size={14} /> Invoices</TabsTrigger>
           <TabsTrigger value="timesheet" className="gap-2"><Clock size={14} /> Timesheet</TabsTrigger>
+          <TabsTrigger value="item-master" className="gap-2"><Settings2 size={14} /> Item Master</TabsTrigger>
           <TabsTrigger value="reports" className="gap-2"><BarChart3 size={14} /> Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="invoices"><InvoicesTab /></TabsContent>
         <TabsContent value="timesheet"><TimesheetTab /></TabsContent>
+        <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
         <TabsContent value="reports"><ReportsTab /></TabsContent>
       </Tabs>
     </div>
@@ -124,10 +142,11 @@ function InvoicesTab() {
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clientMap, setClientMap] = useState<ClientMap>({});
+  const [firmMap, setFirmMap] = useState<FirmMap>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [voidId, setVoidId] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -139,11 +158,17 @@ function InvoicesTab() {
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
+    const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
+
     const cMap: ClientMap = {};
     (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
 
+    const fMap: FirmMap = {};
+    (firmData || []).forEach((f: any) => { fMap[f.id] = f.display_name || f.name || "Unknown"; });
+
     setInvoices((invData as Invoice[]) || []);
     setClientMap(cMap);
+    setFirmMap(fMap);
     setLoading(false);
   }, [firmId, isSuperadmin]);
 
@@ -173,31 +198,48 @@ function InvoicesTab() {
   const filtered = useMemo(() => enriched.filter(inv => {
     if (statusFilter !== "all" && inv.effectiveStatus !== statusFilter) return false;
     if (search) {
+      const s = search.toLowerCase();
       const cn = clientMap[inv.client_id || ""]?.name || "";
-      if (!(inv.invoice_no || "").toLowerCase().includes(search.toLowerCase()) &&
-        !cn.toLowerCase().includes(search.toLowerCase())) return false;
+      const fn = firmMap[inv.firm_id || ""] || "";
+      if (!(inv.invoice_no || "").toLowerCase().includes(s) &&
+        !cn.toLowerCase().includes(s) &&
+        !fn.toLowerCase().includes(s)) return false;
     }
     return true;
-  }), [enriched, statusFilter, search, clientMap]);
+  }), [enriched, statusFilter, search, clientMap, firmMap]);
 
-  const handleVoid = async () => {
-    if (!voidId) return;
-    await supabase.from("invoices").update({ status: "voided" }).eq("id", voidId);
-    toast({ title: "Invoice voided" });
-    setVoidId(null);
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    const { error } = await supabase.from("invoices").delete().eq("id", deleteId);
+    if (error) {
+      toast({ title: "Error deleting invoice", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Invoice deleted" });
+    }
+    setDeleteId(null);
     fetchData();
   };
 
   const handleDuplicate = async (inv: Invoice) => {
-    // Get next invoice number
-    const { data: lastInv } = await supabase.from("invoices").select("invoice_no")
-      .eq("firm_id", firmId).order("invoice_no", { ascending: false }).limit(1);
-    let nextNum = 1;
-    if (lastInv?.[0]?.invoice_no) {
-      const match = lastInv[0].invoice_no.match(/(\d+)$/);
-      if (match) nextNum = parseInt(match[1]) + 1;
-    }
-    const newNo = `INV-${String(nextNum).padStart(4, "0")}`;
+    const fy = (() => {
+      const now = new Date();
+      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+    })();
+    const targetFirmId = inv.firm_id || firmId;
+    const { data: existing } = await supabase
+      .from("invoices")
+      .select("invoice_no")
+      .eq("firm_id", targetFirmId)
+      .ilike("invoice_no", `%/${fy}`)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    let maxNum = 0;
+    (existing || []).forEach((e: any) => {
+      const match = e.invoice_no?.match(/^(\d+)\//);
+      if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
+    });
+    const newNo = `${maxNum + 1}/${fy}`;
 
     const { error } = await supabase.from("invoices").insert({
       ...inv,
@@ -249,12 +291,12 @@ function InvoicesTab() {
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
-            {["draft", "finalized", "sent", "paid", "voided", "overdue"].map(s =>
+            {["draft", "finalized", "sent", "paid", "overdue"].map(s =>
               <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
             )}
           </SelectContent>
         </Select>
-        <Input placeholder="Search invoice or client..." value={search} onChange={e => setSearch(e.target.value)} className="w-[240px]" />
+        <Input placeholder="Search invoice, client, or firm..." value={search} onChange={e => setSearch(e.target.value)} className="w-[280px]" />
         <div className="flex-1" />
         <Button onClick={() => navigate("/billing/new")} className="gap-1"><Plus size={14} /> New Invoice</Button>
       </div>
@@ -269,6 +311,7 @@ function InvoicesTab() {
               <TableRow>
                 <TableHead>Invoice No</TableHead>
                 <TableHead>Client</TableHead>
+                <TableHead>Firm</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead>Status</TableHead>
@@ -278,14 +321,16 @@ function InvoicesTab() {
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No invoices found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No invoices found.</TableCell></TableRow>
               ) : filtered.map(inv => {
                 const clientName = clientMap[inv.client_id || ""]?.name || "—";
+                const firmName = firmMap[inv.firm_id || ""] || "—";
                 const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
                 return (
                   <TableRow key={inv.id}>
                     <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
                     <TableCell className="font-medium">{clientName}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
                     <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
                     <TableCell>
@@ -305,9 +350,9 @@ function InvoicesTab() {
                             <Send size={14} />
                           </Button>
                         ) : null}
-                        {inv.effectiveStatus !== "voided" && inv.effectiveStatus !== "paid" && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Void" onClick={() => setVoidId(inv.id)}>
-                            <XCircle size={14} className="text-destructive" />
+                        {inv.effectiveStatus !== "paid" && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
+                            <Trash2 size={14} className="text-destructive" />
                           </Button>
                         )}
                       </div>
@@ -320,19 +365,230 @@ function InvoicesTab() {
         )}
       </CardContent></Card>
 
-      {/* Void confirmation */}
-      <AlertDialog open={!!voidId} onOpenChange={() => setVoidId(null)}>
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Void Invoice?</AlertDialogTitle>
-            <AlertDialogDescription>This will permanently void the invoice. This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Delete Invoice?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently delete the invoice. This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleVoid}>Void Invoice</AlertDialogAction>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete Invoice</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// ITEM MASTER TAB
+// ═══════════════════════════════════════
+function ItemMasterTab() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const firmId = user?.firm_id;
+  const isSuperadmin = user?.role === "superadmin";
+
+  const [items, setItems] = useState<ItemMaster[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [desc, setDesc] = useState("");
+  const [hsn, setHsn] = useState("");
+  const [rate, setRate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editDesc, setEditDesc] = useState("");
+  const [editHsn, setEditHsn] = useState("");
+  const [editRate, setEditRate] = useState("");
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState(firmId || "");
+  const fileRef = useState<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("firms").select("id, name").order("name");
+      setFirmsList(data || []);
+      if (!selectedFirmId && data?.length) setSelectedFirmId(firmId || data[0].id);
+    })();
+  }, [firmId]);
+
+  const fetchItems = useCallback(async () => {
+    if (!selectedFirmId) return;
+    setLoading(true);
+    const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
+    setItems((data as ItemMaster[]) || []);
+    setLoading(false);
+  }, [selectedFirmId]);
+
+  useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  const addItem = async () => {
+    if (!desc.trim() || !selectedFirmId) return;
+    setSaving(true);
+    const { error } = await supabase.from("invoice_item_masters").insert({
+      firm_id: selectedFirmId, description: desc.trim(), hsn_sac_code: hsn.trim() || null,
+      default_rate: rate ? Number(rate) : null, created_by: user?.id,
+    });
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else { setDesc(""); setHsn(""); setRate(""); fetchItems(); toast({ title: "Item added" }); }
+    setSaving(false);
+  };
+
+  const startEdit = (item: ItemMaster) => {
+    setEditId(item.id);
+    setEditDesc(item.description);
+    setEditHsn(item.hsn_sac_code || "");
+    setEditRate(item.default_rate != null ? String(item.default_rate) : "");
+  };
+
+  const saveEdit = async () => {
+    if (!editId || !editDesc.trim()) return;
+    const { error } = await supabase.from("invoice_item_masters").update({
+      description: editDesc.trim(), hsn_sac_code: editHsn.trim() || null,
+      default_rate: editRate ? Number(editRate) : null,
+    }).eq("id", editId);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else { setEditId(null); fetchItems(); toast({ title: "Item updated" }); }
+  };
+
+  const deleteItem = async (id: string) => {
+    await supabase.from("invoice_item_masters").update({ is_active: false }).eq("id", id);
+    fetchItems();
+    toast({ title: "Item removed" });
+  };
+
+  const handleDownloadTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Description", "HSN/SAC Code", "Default Rate"],
+      ["Professional Services", "9978", "2000"],
+      ["Tax Filing Fees", "9971", "5000"],
+    ]);
+    ws["!cols"] = [{ wch: 30 }, { wch: 15 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Item Masters");
+    XLSX.writeFile(wb, "Item_Master_Template.xlsx");
+  };
+
+  const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedFirmId) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows: any[] = XLSX.utils.sheet_to_json(ws);
+        if (rows.length === 0) { toast({ title: "No rows found", variant: "destructive" }); return; }
+        const inserts = rows.map(r => ({
+          firm_id: selectedFirmId,
+          description: String(r["Description"] || r["description"] || "").trim(),
+          hsn_sac_code: String(r["HSN/SAC Code"] || r["hsn_sac_code"] || r["HSN"] || "").trim() || null,
+          default_rate: r["Default Rate"] || r["default_rate"] || r["Rate"] ? Number(r["Default Rate"] || r["default_rate"] || r["Rate"]) : null,
+          created_by: user?.id,
+        })).filter(i => i.description);
+        if (inserts.length === 0) { toast({ title: "No valid items found", variant: "destructive" }); return; }
+        const { error } = await supabase.from("invoice_item_masters").insert(inserts);
+        if (error) toast({ title: "Import error", description: error.message, variant: "destructive" });
+        else { toast({ title: `${inserts.length} items imported` }); fetchItems(); }
+      } catch (err: any) {
+        toast({ title: "Import failed", description: err.message, variant: "destructive" });
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        {isSuperadmin && firmsList.length > 1 && (
+          <div>
+            <Label className="text-xs">Firm</Label>
+            <Select value={selectedFirmId} onValueChange={setSelectedFirmId}>
+              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        )}
+        <div className="flex-1" />
+        <Button variant="outline" size="sm" className="gap-1" onClick={handleDownloadTemplate}>
+          <Download size={14} /> Download Template
+        </Button>
+        <div className="relative">
+          <input type="file" accept=".xlsx,.xls" onChange={handleBulkImport} className="absolute inset-0 opacity-0 cursor-pointer" />
+          <Button variant="outline" size="sm" className="gap-1 pointer-events-none">
+            <Upload size={14} /> Bulk Import
+          </Button>
+        </div>
+      </div>
+
+      {/* Add new item */}
+      <Card><CardContent className="p-4">
+        <p className="text-sm font-semibold mb-3">Add New Item</p>
+        <div className="grid grid-cols-4 gap-2">
+          <Input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description *" />
+          <Input value={hsn} onChange={e => setHsn(e.target.value)} placeholder="HSN/SAC" />
+          <Input value={rate} onChange={e => setRate(e.target.value)} placeholder="Default Rate" type="number" />
+          <Button onClick={addItem} disabled={saving || !desc.trim()} className="gap-1"><Plus size={14} /> Add</Button>
+        </div>
+      </CardContent></Card>
+
+      {/* Items list */}
+      <Card><CardContent className="p-0">
+        {loading ? (
+          <div className="p-6 space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Description</TableHead>
+                <TableHead>HSN/SAC</TableHead>
+                <TableHead className="text-right">Default Rate</TableHead>
+                <TableHead className="w-[100px]">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-8">No items yet. Add your first item above or bulk import.</TableCell></TableRow>
+              ) : items.map(item => (
+                <TableRow key={item.id}>
+                  {editId === item.id ? (
+                    <>
+                      <TableCell><Input value={editDesc} onChange={e => setEditDesc(e.target.value)} className="text-sm h-8" /></TableCell>
+                      <TableCell><Input value={editHsn} onChange={e => setEditHsn(e.target.value)} className="text-sm h-8" /></TableCell>
+                      <TableCell><Input type="number" value={editRate} onChange={e => setEditRate(e.target.value)} className="text-sm h-8 text-right" /></TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={saveEdit}>Save</Button>
+                          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditId(null)}>Cancel</Button>
+                        </div>
+                      </TableCell>
+                    </>
+                  ) : (
+                    <>
+                      <TableCell className="font-medium">{item.description}</TableCell>
+                      <TableCell className="text-muted-foreground">{item.hsn_sac_code || "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.default_rate != null ? fmtINR(item.default_rate) : "—"}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-0.5">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => startEdit(item)}>
+                            <Pencil size={12} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => deleteItem(item.id)}>
+                            <Trash2 size={12} className="text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent></Card>
     </div>
   );
 }
