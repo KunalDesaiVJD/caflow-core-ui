@@ -258,12 +258,15 @@ const NewInvoice = () => {
 
   // Fetch item masters
   useEffect(() => {
-    if (!selectedFirmId) return;
     (async () => {
-      const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
+      const { data } = await supabase
+        .from("invoice_item_masters")
+        .select("id, description, hsn_sac_code, default_rate")
+        .eq("is_active", true)
+        .order("description");
       setItemMasters((data as ItemMaster[]) || []);
     })();
-  }, [selectedFirmId]);
+  }, []);
 
   // Fetch clients & generate invoice number — firm-aware
   useEffect(() => {
@@ -276,20 +279,17 @@ const NewInvoice = () => {
 
       // Auto invoice numbering per firm: N/YYYY-YY
       if (!isEdit && selectedFirmId) {
-        const fy = getFY();
-        const { data: existing } = await supabase
+        const fy = getFY(new Date(invoiceDate || new Date()));
+        const { data: existing, error: existingError } = await supabase
           .from("invoices")
           .select("invoice_no")
           .eq("firm_id", selectedFirmId)
           .ilike("invoice_no", `%/${fy}`)
-          .order("created_at", { ascending: false })
-          .limit(100);
-        let maxNum = 0;
-        (existing || []).forEach((inv: any) => {
-          const match = inv.invoice_no?.match(/^(\d+)\//);
-          if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
-        });
-        setInvoiceNo(`${maxNum + 1}/${fy}`);
+          .limit(1000);
+
+        if (!existingError) {
+          setInvoiceNo(getNextInvoiceNumber((existing || []).map((inv: any) => inv.invoice_no), fy));
+        }
       }
 
       // Load existing invoice
@@ -326,7 +326,7 @@ const NewInvoice = () => {
       }
       setLoading(false);
     })();
-  }, [isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
+  }, [invoiceDate, isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
 
   // Auto-fill client details
   useEffect(() => {
