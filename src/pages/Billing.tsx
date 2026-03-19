@@ -404,8 +404,6 @@ function InvoicesTab() {
 function ItemMasterTab() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const firmId = user?.firm_id;
-  const isSuperadmin = user?.role === "superadmin";
 
   const [items, setItems] = useState<ItemMaster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -417,34 +415,29 @@ function ItemMasterTab() {
   const [editDesc, setEditDesc] = useState("");
   const [editHsn, setEditHsn] = useState("");
   const [editRate, setEditRate] = useState("");
-  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState(firmId || "");
-  const fileRef = useState<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("firms").select("id, name").order("name");
-      setFirmsList(data || []);
-      if (!selectedFirmId && data?.length) setSelectedFirmId(firmId || data[0].id);
-    })();
-  }, [firmId]);
 
   const fetchItems = useCallback(async () => {
-    if (!selectedFirmId) return;
     setLoading(true);
-    const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
+    const { data } = await supabase
+      .from("invoice_item_masters")
+      .select("id, description, hsn_sac_code, default_rate")
+      .eq("is_active", true)
+      .order("description");
     setItems((data as ItemMaster[]) || []);
     setLoading(false);
-  }, [selectedFirmId]);
+  }, []);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
   const addItem = async () => {
-    if (!desc.trim() || !selectedFirmId) return;
+    if (!desc.trim()) return;
     setSaving(true);
     const { error } = await supabase.from("invoice_item_masters").insert({
-      firm_id: selectedFirmId, description: desc.trim(), hsn_sac_code: hsn.trim() || null,
-      default_rate: rate ? Number(rate) : null, created_by: user?.id,
+      firm_id: null,
+      description: desc.trim(),
+      hsn_sac_code: hsn.trim() || null,
+      default_rate: rate ? Number(rate) : null,
+      created_by: user?.id,
     });
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { setDesc(""); setHsn(""); setRate(""); fetchItems(); toast({ title: "Item added" }); }
@@ -463,6 +456,7 @@ function ItemMasterTab() {
     const { error } = await supabase.from("invoice_item_masters").update({
       description: editDesc.trim(), hsn_sac_code: editHsn.trim() || null,
       default_rate: editRate ? Number(editRate) : null,
+      firm_id: null,
     }).eq("id", editId);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { setEditId(null); fetchItems(); toast({ title: "Item updated" }); }
@@ -488,7 +482,7 @@ function ItemMasterTab() {
 
   const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedFirmId) return;
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
@@ -498,7 +492,7 @@ function ItemMasterTab() {
         const rows: any[] = XLSX.utils.sheet_to_json(ws);
         if (rows.length === 0) { toast({ title: "No rows found", variant: "destructive" }); return; }
         const inserts = rows.map(r => ({
-          firm_id: selectedFirmId,
+          firm_id: null,
           description: String(r["Description"] || r["description"] || "").trim(),
           hsn_sac_code: String(r["HSN/SAC Code"] || r["hsn_sac_code"] || r["HSN"] || "").trim() || null,
           default_rate: r["Default Rate"] || r["default_rate"] || r["Rate"] ? Number(r["Default Rate"] || r["default_rate"] || r["Rate"]) : null,
@@ -519,15 +513,7 @@ function ItemMasterTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        {isSuperadmin && firmsList.length > 1 && (
-          <div>
-            <Label className="text-xs">Firm</Label>
-            <Select value={selectedFirmId} onValueChange={setSelectedFirmId}>
-              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-              <SelectContent>{firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-        )}
+        <p className="text-sm text-muted-foreground">Item Master is shared across all firms.</p>
         <div className="flex-1" />
         <Button variant="outline" size="sm" className="gap-1" onClick={handleDownloadTemplate}>
           <Download size={14} /> Download Template
