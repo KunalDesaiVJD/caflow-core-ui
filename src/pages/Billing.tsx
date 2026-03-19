@@ -250,23 +250,19 @@ function InvoicesTab() {
     });
     const newNo = `${maxNum + 1}/${fy}`;
 
+    const { id: _id, effectiveStatus: _effectiveStatus, ...rest } = inv as any;
     const duplicatePayload = {
-      client_id: inv.client_id,
+      ...rest,
       firm_id: targetFirmId,
-      amount: inv.amount,
-      gst_amount: inv.gst_amount,
-      total_amount: inv.total_amount,
-      due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
-      invoice_date: format(new Date(), "yyyy-MM-dd"),
-      invoice_format: inv.invoice_format,
-      subject: inv.subject,
       invoice_no: newNo,
       status: "draft",
+      invoice_date: format(new Date(), "yyyy-MM-dd"),
+      due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
       sent_at: null,
       paid_at: null,
     };
 
-    const { error } = await supabase.from("invoices").insert(duplicatePayload as any);
+    const { error } = await supabase.from("invoices").insert(duplicatePayload);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: `Duplicated as ${newNo}` }); fetchData(); }
   };
