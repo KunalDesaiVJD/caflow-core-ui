@@ -220,37 +220,49 @@ function InvoicesTab() {
     fetchData();
   };
 
-  const handleDuplicate = async (inv: Invoice) => {
-    const fy = (() => {
-      const now = new Date();
-      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-      return `${fyStart}-${String(fyStart + 1).slice(2)}`;
-    })();
+  const handleDuplicate = async (inv: Invoice & { effectiveStatus?: string }) => {
     const targetFirmId = inv.firm_id || firmId;
-    const { data: existing } = await supabase
+    if (!targetFirmId) {
+      toast({ title: "Error", description: "Firm not found for this invoice.", variant: "destructive" });
+      return;
+    }
+
+    const sourceDate = inv.invoice_date ? new Date(inv.invoice_date) : new Date();
+    const fyStart = sourceDate.getMonth() >= 3 ? sourceDate.getFullYear() : sourceDate.getFullYear() - 1;
+    const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
+
+    const { data: existing, error: existingError } = await supabase
       .from("invoices")
       .select("invoice_no")
       .eq("firm_id", targetFirmId)
       .ilike("invoice_no", `%/${fy}`)
-      .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(1000);
+
+    if (existingError) {
+      toast({ title: "Error", description: existingError.message, variant: "destructive" });
+      return;
+    }
+
     let maxNum = 0;
     (existing || []).forEach((e: any) => {
-      const match = e.invoice_no?.match(/^(\d+)\//);
-      if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
+      const match = e.invoice_no?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+      if (match) maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
     });
     const newNo = `${maxNum + 1}/${fy}`;
 
-    const { error } = await supabase.from("invoices").insert({
-      ...inv,
-      id: undefined,
+    const { id: _id, effectiveStatus: _effectiveStatus, ...rest } = inv as any;
+    const duplicatePayload = {
+      ...rest,
+      firm_id: targetFirmId,
       invoice_no: newNo,
       status: "draft",
       invoice_date: format(new Date(), "yyyy-MM-dd"),
       due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
       sent_at: null,
       paid_at: null,
-    } as any);
+    };
+
+    const { error } = await supabase.from("invoices").insert(duplicatePayload);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: `Duplicated as ${newNo}` }); fetchData(); }
   };
@@ -388,8 +400,6 @@ function InvoicesTab() {
 function ItemMasterTab() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const firmId = user?.firm_id;
-  const isSuperadmin = user?.role === "superadmin";
 
   const [items, setItems] = useState<ItemMaster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -401,34 +411,29 @@ function ItemMasterTab() {
   const [editDesc, setEditDesc] = useState("");
   const [editHsn, setEditHsn] = useState("");
   const [editRate, setEditRate] = useState("");
-  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState(firmId || "");
-  const fileRef = useState<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("firms").select("id, name").order("name");
-      setFirmsList(data || []);
-      if (!selectedFirmId && data?.length) setSelectedFirmId(firmId || data[0].id);
-    })();
-  }, [firmId]);
 
   const fetchItems = useCallback(async () => {
-    if (!selectedFirmId) return;
     setLoading(true);
-    const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
+    const { data } = await supabase
+      .from("invoice_item_masters")
+      .select("id, description, hsn_sac_code, default_rate")
+      .eq("is_active", true)
+      .order("description");
     setItems((data as ItemMaster[]) || []);
     setLoading(false);
-  }, [selectedFirmId]);
+  }, []);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
   const addItem = async () => {
-    if (!desc.trim() || !selectedFirmId) return;
+    if (!desc.trim()) return;
     setSaving(true);
     const { error } = await supabase.from("invoice_item_masters").insert({
-      firm_id: selectedFirmId, description: desc.trim(), hsn_sac_code: hsn.trim() || null,
-      default_rate: rate ? Number(rate) : null, created_by: user?.id,
+      firm_id: null,
+      description: desc.trim(),
+      hsn_sac_code: hsn.trim() || null,
+      default_rate: rate ? Number(rate) : null,
+      created_by: user?.id,
     });
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { setDesc(""); setHsn(""); setRate(""); fetchItems(); toast({ title: "Item added" }); }
@@ -447,6 +452,7 @@ function ItemMasterTab() {
     const { error } = await supabase.from("invoice_item_masters").update({
       description: editDesc.trim(), hsn_sac_code: editHsn.trim() || null,
       default_rate: editRate ? Number(editRate) : null,
+      firm_id: null,
     }).eq("id", editId);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { setEditId(null); fetchItems(); toast({ title: "Item updated" }); }
@@ -472,7 +478,7 @@ function ItemMasterTab() {
 
   const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedFirmId) return;
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
@@ -482,7 +488,7 @@ function ItemMasterTab() {
         const rows: any[] = XLSX.utils.sheet_to_json(ws);
         if (rows.length === 0) { toast({ title: "No rows found", variant: "destructive" }); return; }
         const inserts = rows.map(r => ({
-          firm_id: selectedFirmId,
+          firm_id: null,
           description: String(r["Description"] || r["description"] || "").trim(),
           hsn_sac_code: String(r["HSN/SAC Code"] || r["hsn_sac_code"] || r["HSN"] || "").trim() || null,
           default_rate: r["Default Rate"] || r["default_rate"] || r["Rate"] ? Number(r["Default Rate"] || r["default_rate"] || r["Rate"]) : null,
@@ -503,15 +509,7 @@ function ItemMasterTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        {isSuperadmin && firmsList.length > 1 && (
-          <div>
-            <Label className="text-xs">Firm</Label>
-            <Select value={selectedFirmId} onValueChange={setSelectedFirmId}>
-              <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
-              <SelectContent>{firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-        )}
+        <p className="text-sm text-muted-foreground">Item Master is shared across all firms.</p>
         <div className="flex-1" />
         <Button variant="outline" size="sm" className="gap-1" onClick={handleDownloadTemplate}>
           <Download size={14} /> Download Template

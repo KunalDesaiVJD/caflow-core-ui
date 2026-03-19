@@ -152,10 +152,20 @@ function numberToWords(num: number): string {
   return result.trim() + " Rupees Only";
 }
 
-function getFY(): string {
-  const now = new Date();
-  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+function getFY(date = new Date()): string {
+  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+}
+
+function getNextInvoiceNumber(existingInvoiceNos: Array<string | null | undefined>, fy: string): string {
+  let maxNum = 0;
+  existingInvoiceNos.forEach((invoiceNo) => {
+    const match = invoiceNo?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    if (match) {
+      maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
+    }
+  });
+  return `${maxNum + 1}/${fy}`;
 }
 
 const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -248,12 +258,15 @@ const NewInvoice = () => {
 
   // Fetch item masters
   useEffect(() => {
-    if (!selectedFirmId) return;
     (async () => {
-      const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
+      const { data } = await supabase
+        .from("invoice_item_masters")
+        .select("id, description, hsn_sac_code, default_rate")
+        .eq("is_active", true)
+        .order("description");
       setItemMasters((data as ItemMaster[]) || []);
     })();
-  }, [selectedFirmId]);
+  }, []);
 
   // Fetch clients & generate invoice number — firm-aware
   useEffect(() => {
@@ -266,20 +279,17 @@ const NewInvoice = () => {
 
       // Auto invoice numbering per firm: N/YYYY-YY
       if (!isEdit && selectedFirmId) {
-        const fy = getFY();
-        const { data: existing } = await supabase
+        const fy = getFY(new Date(invoiceDate || new Date()));
+        const { data: existing, error: existingError } = await supabase
           .from("invoices")
           .select("invoice_no")
           .eq("firm_id", selectedFirmId)
           .ilike("invoice_no", `%/${fy}`)
-          .order("created_at", { ascending: false })
-          .limit(100);
-        let maxNum = 0;
-        (existing || []).forEach((inv: any) => {
-          const match = inv.invoice_no?.match(/^(\d+)\//);
-          if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
-        });
-        setInvoiceNo(`${maxNum + 1}/${fy}`);
+          .limit(1000);
+
+        if (!existingError) {
+          setInvoiceNo(getNextInvoiceNumber((existing || []).map((inv: any) => inv.invoice_no), fy));
+        }
       }
 
       // Load existing invoice
@@ -316,7 +326,7 @@ const NewInvoice = () => {
       }
       setLoading(false);
     })();
-  }, [isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
+  }, [invoiceDate, isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
 
   // Auto-fill client details
   useEffect(() => {
@@ -407,8 +417,8 @@ const NewInvoice = () => {
         from_address: firmFullAddress,
         from_gstin: firmGstin,
         from_pan: firm?.pan || "",
-        from_phone: firm?.phone || "",
-        from_email: firm?.email || "",
+        from_phone: billingContact,
+        from_email: billingEmail,
         to_name: toName,
         to_address: toAddress,
         to_gstin: toGstin,
