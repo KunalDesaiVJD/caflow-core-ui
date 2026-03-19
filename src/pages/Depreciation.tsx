@@ -1063,14 +1063,46 @@ return (
                   <TableCell className='text-right tabular-nums text-sm'>{add>0?fmt(add):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{dis>0?fmt(dis):'—'}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm'>{fmt(ad)}</TableCell>
-                  <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resVal)}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm text-muted-foreground'>{fmt(resValDisplay)}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(wdvO)}</TableCell>
-                  <TableCell className='text-right tabular-nums text-xs'>{fmtPct(rate)}</TableCell>
+                  <TableCell className='text-right tabular-nums text-sm text-amber-600 dark:text-amber-400'>{resVal != null ? fmt(resVal) : '—'}</TableCell>
+                  <TableCell className='text-right tabular-nums text-xs'>{rateDisplay}</TableCell>
                   <TableCell className='text-right tabular-nums text-sm font-semibold'>
-                    {dep!=null?fmt(dep):<span className='text-muted-foreground text-xs italic'>pending</span>}
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className='cursor-help inline-flex items-center gap-1'>
+                            {dep != null ? fmt(dep) : <span className='text-muted-foreground text-xs italic'>pending</span>}
+                            {(a as any).dep_formula_json?.is_balancing_year && (
+                              <Badge variant='outline' className='text-[8px] px-1 py-0 border-orange-400 text-orange-600 bg-orange-50 dark:bg-orange-950/30'>BAL</Badge>
+                            )}
+                            {(a as any).dep_formula_json?.is_pro_rata && !(a as any).dep_formula_json?.is_balancing_year && (
+                              <Badge variant='outline' className='text-[8px] px-1 py-0 border-blue-400 text-blue-600 bg-blue-50 dark:bg-blue-950/30'>PRO</Badge>
+                            )}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side='top' className='max-w-xs'>
+                          <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
+                          <p className='text-xs mt-1'>{formulaText}</p>
+                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
+                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
+                          )}
+                          {(a as any).dep_formula_json?.is_balancing_year && (
+                            <p className='text-xs mt-1 text-orange-600'>Final year — dep restricted to (Opening WDV − Residual Value)</p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </TableCell>
-                  <TableCell className={cn('text-right tabular-nums text-sm font-bold',wdvC!=null&&wdvC<0?'text-red-600':'')}>
-                    {wdvC!=null?fmt(wdvC):'—'}
+                  <TableCell className={cn('text-right tabular-nums text-sm font-bold',wdvC!=null&&wdvC<0?'text-destructive':'')}>
+                    {wdvC != null ? (
+                      <span className='inline-flex items-center gap-1'>
+                        {fmt(wdvC)}
+                        {isAtResidual && (
+                          <Badge variant='outline' className='text-[8px] px-1 py-0 border-green-400 text-green-600 bg-green-50 dark:bg-green-950/30'>RES</Badge>
+                        )}
+                      </span>
+                    ) : '—'}
                   </TableCell>
                   <TableCell>
                     {!a.is_locked&&(<div className='flex gap-1'>
