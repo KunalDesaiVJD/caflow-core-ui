@@ -1011,8 +1011,9 @@ return (
             <TableHead className='text-right'>Acc Dep Open</TableHead>
             <TableHead className='text-right'>Residual Val</TableHead>
             <TableHead className='text-right font-semibold'>WDV Opening</TableHead>
-            <TableHead className='text-right w-16'>Rate %</TableHead>
-            <TableHead className='text-right font-semibold'>Dep for Year</TableHead>
+            <TableHead className='text-right text-amber-600 dark:text-amber-400'>Residual Val.</TableHead>
+            <TableHead className='text-right w-16'>Rate / Life</TableHead>
+            <TableHead className='text-right font-semibold'><div>Dep for Year</div><div className='text-[9px] font-normal text-muted-foreground italic'>hover for formula</div></TableHead>
             <TableHead className='text-right font-bold'>WDV Closing</TableHead>
             <TableHead className='w-24'></TableHead>
           </TableRow></TableHeader>
