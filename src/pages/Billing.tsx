@@ -220,37 +220,53 @@ function InvoicesTab() {
     fetchData();
   };
 
-  const handleDuplicate = async (inv: Invoice) => {
-    const fy = (() => {
-      const now = new Date();
-      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-      return `${fyStart}-${String(fyStart + 1).slice(2)}`;
-    })();
+  const handleDuplicate = async (inv: Invoice & { effectiveStatus?: string }) => {
     const targetFirmId = inv.firm_id || firmId;
-    const { data: existing } = await supabase
+    if (!targetFirmId) {
+      toast({ title: "Error", description: "Firm not found for this invoice.", variant: "destructive" });
+      return;
+    }
+
+    const sourceDate = inv.invoice_date ? new Date(inv.invoice_date) : new Date();
+    const fyStart = sourceDate.getMonth() >= 3 ? sourceDate.getFullYear() : sourceDate.getFullYear() - 1;
+    const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
+
+    const { data: existing, error: existingError } = await supabase
       .from("invoices")
       .select("invoice_no")
       .eq("firm_id", targetFirmId)
       .ilike("invoice_no", `%/${fy}`)
-      .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(1000);
+
+    if (existingError) {
+      toast({ title: "Error", description: existingError.message, variant: "destructive" });
+      return;
+    }
+
     let maxNum = 0;
     (existing || []).forEach((e: any) => {
-      const match = e.invoice_no?.match(/^(\d+)\//);
-      if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
+      const match = e.invoice_no?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+      if (match) maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
     });
     const newNo = `${maxNum + 1}/${fy}`;
 
-    const { error } = await supabase.from("invoices").insert({
-      ...inv,
-      id: undefined,
+    const duplicatePayload = {
+      client_id: inv.client_id,
+      firm_id: targetFirmId,
+      amount: inv.amount,
+      gst_amount: inv.gst_amount,
+      total_amount: inv.total_amount,
+      due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
+      invoice_date: format(new Date(), "yyyy-MM-dd"),
+      invoice_format: inv.invoice_format,
+      subject: inv.subject,
       invoice_no: newNo,
       status: "draft",
-      invoice_date: format(new Date(), "yyyy-MM-dd"),
-      due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
       sent_at: null,
       paid_at: null,
-    } as any);
+    };
+
+    const { error } = await supabase.from("invoices").insert(duplicatePayload as any);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else { toast({ title: `Duplicated as ${newNo}` }); fetchData(); }
   };

@@ -152,10 +152,20 @@ function numberToWords(num: number): string {
   return result.trim() + " Rupees Only";
 }
 
-function getFY(): string {
-  const now = new Date();
-  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+function getFY(date = new Date()): string {
+  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   return `${fyStart}-${String(fyStart + 1).slice(2)}`;
+}
+
+function getNextInvoiceNumber(existingInvoiceNos: Array<string | null | undefined>, fy: string): string {
+  let maxNum = 0;
+  existingInvoiceNos.forEach((invoiceNo) => {
+    const match = invoiceNo?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    if (match) {
+      maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
+    }
+  });
+  return `${maxNum + 1}/${fy}`;
 }
 
 const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
