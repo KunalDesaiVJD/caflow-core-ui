@@ -1031,9 +1031,18 @@ return (
               const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
               const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
               const method = a.fa_categories?.depreciation_method || 'WDV';
-              const rate   = method==='SLM' ? a.fa_categories?.slm_rate : a.fa_categories?.wdv_rate;
+              const resVal = a.residual_value != null ? parseFloat(a.residual_value) : null;
+              const rateDisplay = method === 'SLM'
+                ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
+                : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
+              const formulaText: string =
+                (a as any).dep_formula_json?.formula_text ||
+                (method === 'SLM' && a.fa_categories?.useful_life_years
+                  ? `(Cost ₹${fmt(parseFloat(a.gross_block_opening)||0)} − Residual ₹${fmt(resVal||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
+                  : 'Run Calculate Depreciation to see formula');
+              const isAtResidual = resVal != null && wdvC != null && Math.abs(wdvC - resVal) < 1;
               const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-              const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
+              const resValDisplay = resVal ?? Math.round(gb * residualPct / 100 * 100)/100;
               const warn   = wdvO < 0 || ad > gb;
               return (
                 <TableRow key={a.id} className={cn(a.is_fully_depreciated&&'bg-muted/20', warn&&'bg-red-50 dark:bg-red-950/20')}>
