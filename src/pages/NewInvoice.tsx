@@ -32,7 +32,7 @@ import { format, addDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
-  FileText, Info, Check, ChevronsUpDown, Settings2,
+  FileText, Info, Check, ChevronsUpDown,
 } from "lucide-react";
 
 // ─── GSTIN State Code Map ───
@@ -160,72 +160,20 @@ function getFY(): string {
 
 const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// ─── Item Master Dialog ───
-function ItemMasterDialog({ open, onClose, firmId }: { open: boolean; onClose: () => void; firmId: string }) {
-  const { toast } = useToast();
-  const { user } = useAuth();
-  const [items, setItems] = useState<ItemMaster[]>([]);
-  const [desc, setDesc] = useState("");
-  const [hsn, setHsn] = useState("");
-  const [rate, setRate] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const fetchItems = useCallback(async () => {
-    const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", firmId).eq("is_active", true).order("description");
-    setItems((data as ItemMaster[]) || []);
-  }, [firmId]);
-
-  useEffect(() => { if (open) fetchItems(); }, [open, fetchItems]);
-
-  const addItem = async () => {
-    if (!desc.trim()) return;
-    setLoading(true);
-    const { error } = await supabase.from("invoice_item_masters").insert({
-      firm_id: firmId, description: desc.trim(), hsn_sac_code: hsn.trim() || null,
-      default_rate: rate ? Number(rate) : null, created_by: user?.id,
-    });
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { setDesc(""); setHsn(""); setRate(""); fetchItems(); }
-    setLoading(false);
-  };
-
-  const deleteItem = async (id: string) => {
-    await supabase.from("invoice_item_masters").update({ is_active: false }).eq("id", id);
-    fetchItems();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Item Description Master</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <Input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description" />
-            <Input value={hsn} onChange={e => setHsn(e.target.value)} placeholder="HSN/SAC" />
-            <div className="flex gap-1">
-              <Input value={rate} onChange={e => setRate(e.target.value)} placeholder="Rate" type="number" />
-              <Button size="sm" onClick={addItem} disabled={loading}><Plus size={14} /></Button>
-            </div>
-          </div>
-          <div className="max-h-60 overflow-y-auto space-y-1">
-            {items.map(item => (
-              <div key={item.id} className="flex items-center justify-between text-sm p-2 rounded bg-muted/50">
-                <div>
-                  <span className="font-medium">{item.description}</span>
-                  {item.hsn_sac_code && <span className="text-muted-foreground ml-2">({item.hsn_sac_code})</span>}
-                  {item.default_rate != null && <span className="text-muted-foreground ml-2">{fmtINR(item.default_rate)}</span>}
-                </div>
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteItem(item.id)}>
-                  <Trash2 size={12} className="text-destructive" />
-                </Button>
-              </div>
-            ))}
-            {items.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">No items yet. Add your first item above.</p>}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+// Helper: balance address lines so they are visually even
+function balanceAddressLines(lines: string[]): string[] {
+  if (lines.length < 2) return lines;
+  // If first line is much longer than second, try to redistribute
+  const firstTwo = lines.slice(0, -1); // all but city-pincode line
+  const lastLine = lines[lines.length - 1]; // city-pincode
+  if (firstTwo.length === 1) {
+    const words = firstTwo[0].split(/\s+/);
+    if (words.length > 6) {
+      const mid = Math.ceil(words.length / 2);
+      return [words.slice(0, mid).join(" "), words.slice(mid).join(" "), lastLine];
+    }
+  }
+  return lines;
 }
 
 // ─── Main Component ───
@@ -244,7 +192,6 @@ const NewInvoice = () => {
   const [selectedFirmId, setSelectedFirmId] = useState<string>("");
   const [firm, setFirm] = useState<Firm | null>(null);
   const [itemMasters, setItemMasters] = useState<ItemMaster[]>([]);
-  const [masterDialogOpen, setMasterDialogOpen] = useState(false);
 
   // Invoice state
   const [clientId, setClientId] = useState("");
@@ -268,6 +215,11 @@ const NewInvoice = () => {
   const firmGstin = firm?.gstin || "";
   const placeOfSupply = getPlaceOfSupply(firmGstin);
   const msmeNo = (firm?.settings as any)?.msme_no || "";
+  const billingEmail = (firm?.settings as any)?.billing_email || firm?.email || "";
+  const billingContact = (firm?.settings as any)?.billing_contact_no || firm?.phone || "";
+
+  // Determine if firm has GST
+  const firmHasGst = !!firmGstin;
 
   // Auto-detect intra/inter state when client GSTIN changes
   useEffect(() => {
@@ -301,9 +253,9 @@ const NewInvoice = () => {
       const { data } = await supabase.from("invoice_item_masters").select("id, description, hsn_sac_code, default_rate").eq("firm_id", selectedFirmId).eq("is_active", true).order("description");
       setItemMasters((data as ItemMaster[]) || []);
     })();
-  }, [selectedFirmId, masterDialogOpen]);
+  }, [selectedFirmId]);
 
-  // Fetch clients & generate invoice number
+  // Fetch clients & generate invoice number — firm-aware
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -312,12 +264,16 @@ const NewInvoice = () => {
       const { data: clientData } = await cq;
       setClients(clientData || []);
 
-      // Auto invoice numbering: N/YYYY-YY
-      if (!isEdit) {
+      // Auto invoice numbering per firm: N/YYYY-YY
+      if (!isEdit && selectedFirmId) {
         const fy = getFY();
-        let invQ = supabase.from("invoices").select("invoice_no").ilike("invoice_no", `%/${fy}`).order("created_at", { ascending: false }).limit(50);
-        if (!isSuperadmin && user?.firm_id) invQ = invQ.eq("firm_id", user.firm_id);
-        const { data: existing } = await invQ;
+        const { data: existing } = await supabase
+          .from("invoices")
+          .select("invoice_no")
+          .eq("firm_id", selectedFirmId)
+          .ilike("invoice_no", `%/${fy}`)
+          .order("created_at", { ascending: false })
+          .limit(100);
         let maxNum = 0;
         (existing || []).forEach((inv: any) => {
           const match = inv.invoice_no?.match(/^(\d+)\//);
@@ -360,7 +316,7 @@ const NewInvoice = () => {
       }
       setLoading(false);
     })();
-  }, [isSuperadmin, isEdit, invoiceId, user?.firm_id]);
+  }, [isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
 
   // Auto-fill client details
   useEffect(() => {
@@ -372,15 +328,15 @@ const NewInvoice = () => {
     }
   }, [clientId, clients]);
 
-  // Recalculate line item
+  // Recalculate line item — GST-aware
   const recalcItem = useCallback((item: LineItem): LineItem => {
     const qty = Number(item.quantity) || 0;
     const rate = Number(item.rate) || 0;
     const taxable = Math.round(qty * rate * 100) / 100;
-    const gstPct = Number(item.gst_percent) || 0;
+    const gstPct = firmHasGst ? (Number(item.gst_percent) || 0) : 0;
     const gstAmt = Math.round(taxable * gstPct / 100 * 100) / 100;
     return { ...item, taxable_value: taxable, gst_amount: gstAmt, total: taxable + gstAmt };
-  }, []);
+  }, [firmHasGst]);
 
   const updateLine = (idx: number, field: keyof LineItem, value: any) => {
     setLineItems(prev => {
@@ -408,14 +364,16 @@ const NewInvoice = () => {
   // Totals
   const items = useMemo(() => lineItems.filter(li => li.description.trim()), [lineItems]);
   const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
-  const totalGst = useMemo(() => items.reduce((s, li) => s + li.gst_amount, 0), [items]);
+  const totalGst = useMemo(() => firmHasGst ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst]);
   const grandTotal = totalTaxable + totalGst;
 
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
-  const firmAddressLines = firmAddr
-    ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean)
-    : [];
+  const firmAddressLines = useMemo(() => {
+    if (!firmAddr) return [];
+    const rawLines = [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean);
+    return balanceAddressLines(rawLines);
+  }, [firmAddr]);
   const firmFullAddress = firmAddressLines.join(", ");
   const bankDetails = firm?.bank_details as any;
 
@@ -438,9 +396,9 @@ const NewInvoice = () => {
         amount: totalTaxable,
         subtotal: totalTaxable,
         gst_amount: totalGst,
-        total_cgst: isIntraState ? halfGst : 0,
-        total_sgst: isIntraState ? halfGst : 0,
-        total_igst: isIntraState ? 0 : totalGst,
+        total_cgst: firmHasGst && isIntraState ? halfGst : 0,
+        total_sgst: firmHasGst && isIntraState ? halfGst : 0,
+        total_igst: firmHasGst && !isIntraState ? totalGst : 0,
         total_amount: grandTotal,
         is_intra_state: isIntraState,
         show_logo: showLogo,
@@ -463,12 +421,12 @@ const NewInvoice = () => {
           quantity: li.quantity,
           rate: li.rate,
           taxable_value: li.taxable_value,
-          gst_percent: li.gst_percent,
-          gst_amount: li.gst_amount,
-          cgst_percent: isIntraState ? li.gst_percent / 2 : 0,
-          cgst_amount: isIntraState ? li.gst_amount / 2 : 0,
-          sgst_percent: isIntraState ? li.gst_percent / 2 : 0,
-          sgst_amount: isIntraState ? li.gst_amount / 2 : 0,
+          gst_percent: firmHasGst ? li.gst_percent : 0,
+          gst_amount: firmHasGst ? li.gst_amount : 0,
+          cgst_percent: firmHasGst && isIntraState ? li.gst_percent / 2 : 0,
+          cgst_amount: firmHasGst && isIntraState ? li.gst_amount / 2 : 0,
+          sgst_percent: firmHasGst && isIntraState ? li.gst_percent / 2 : 0,
+          sgst_amount: firmHasGst && isIntraState ? li.gst_amount / 2 : 0,
           total: li.total,
         })),
         signatory_name: firmName,
@@ -520,10 +478,14 @@ const NewInvoice = () => {
   const generateInvoiceHtml = useCallback(() => {
     const validItems = lineItems.filter(li => li.description.trim());
 
-    const gstLabel = isIntraState ? "CGST + SGST" : "IGST";
+    // Build table columns based on whether GST is applicable
+    const thGst = firmHasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
     const itemRows = validItems.map((item, i) => {
-      const gstPct = item.gst_percent;
+      const gstCol = firmHasGst
+        ? `<td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent}%</td>`
+        : "";
+      const itemTotal = firmHasGst ? item.total : item.taxable_value;
       return `
       <tr>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
@@ -535,20 +497,42 @@ const NewInvoice = () => {
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${gstPct}%</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        ${gstCol}
+        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${itemTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
     }).join("");
 
+    const colSpan = firmHasGst ? 5 : 4;
+    const totalColSpan = firmHasGst ? 7 : 6;
+
     const totalRow = `
       <tr style="background:#f0f0f0;font-weight:700">
-        <td style="border:1px solid #bbb;padding:8px" colspan="5">Total</td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:11px">${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:8px"></td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;font-size:12px">${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        ${firmHasGst ? `<td style="border:1px solid #bbb;padding:8px;vertical-align:middle"></td>` : ""}
+        <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>`;
 
     const halfGst = totalGst / 2;
+
+    // Build the totals summary section
+    let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
+    if (firmHasGst) {
+      if (isIntraState) {
+        totalsSummary += `
+          <tr><td style="padding:3px 8px;vertical-align:middle">CGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr><td style="padding:3px 8px;vertical-align:middle">SGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
+      } else {
+        totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">IGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${totalGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
+      }
+      totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">Round Off</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>`;
+    }
+    totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>`;
+
+    // Balanced address lines for the PDF
+    const pdfAddressLines = balanceAddressLines(
+      firmAddr ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean) : []
+    );
 
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Tax Invoice ${invoiceNo}</title>
       <style>
@@ -578,16 +562,18 @@ const NewInvoice = () => {
         <!-- Left: Firm Name + Address + Place of Supply -->
         <div style="flex:1;max-width:55%">
           <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
-          ${firmAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
+          ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
           ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
         </div>
-        <!-- Right: GSTIN, PAN, Invoice Date, Invoice No, MSME -->
+        <!-- Right: GSTIN, PAN, Invoice Date, Invoice No, MSME, Email, Contact -->
         <div style="text-align:right;font-size:11px;min-width:280px">
           <div style="display:flex;justify-content:space-between;gap:20px">
             <div style="text-align:left">
               ${firmGstin ? `<p style="margin:2px 0"><strong>GSTIN:</strong> ${firmGstin}</p>` : ""}
               ${firm?.pan ? `<p style="margin:2px 0"><strong>PAN:</strong> ${firm.pan}</p>` : ""}
               ${msmeNo ? `<p style="margin:2px 0"><strong>MSME/Udyam No:</strong> ${msmeNo}</p>` : ""}
+              ${billingEmail ? `<p style="margin:2px 0"><strong>Email:</strong> ${billingEmail}</p>` : ""}
+              ${billingContact ? `<p style="margin:2px 0"><strong>Contact No:</strong> ${billingContact}</p>` : ""}
             </div>
             <div style="text-align:right">
               <p style="margin:2px 0"><strong>Invoice Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
@@ -610,14 +596,14 @@ const NewInvoice = () => {
       <table>
         <thead>
           <tr style="background:#e2e8f0">
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;width:30px">#</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left">Item</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">HSN/SAC</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Quantity</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Rate / Item (\u20B9)</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Taxable Value (\u20B9)</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">GST %</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px">Total (\u20B9)</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;width:30px;vertical-align:middle">#</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">HSN/SAC</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Quantity</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (\u20B9)</th>
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (\u20B9)</th>
+            ${thGst}
+            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (\u20B9)</th>
           </tr>
         </thead>
         <tbody>
@@ -629,15 +615,7 @@ const NewInvoice = () => {
       <!-- Totals summary -->
       <div style="display:flex;justify-content:flex-end;margin-top:10px">
         <table style="width:320px;font-size:12px">
-          <tr><td style="padding:3px 8px">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          ${isIntraState ? `
-            <tr><td style="padding:3px 8px">CGST</td><td style="padding:3px 8px;text-align:right">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-            <tr><td style="padding:3px 8px">SGST</td><td style="padding:3px 8px;text-align:right">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          ` : `
-            <tr><td style="padding:3px 8px">IGST</td><td style="padding:3px 8px;text-align:right">\u20B9${totalGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          `}
-          <tr><td style="padding:3px 8px">Round Off</td><td style="padding:3px 8px;text-align:right">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>
-          <tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px">Grand Total</td><td style="padding:6px 8px;text-align:right">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>
+          ${totalsSummary}
         </table>
       </div>
 
@@ -673,7 +651,8 @@ const NewInvoice = () => {
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
     firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo,
-    toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal]);
+    toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal, firmHasGst, firmAddr,
+    billingEmail, billingContact]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -743,12 +722,6 @@ const NewInvoice = () => {
                 <Input value={toAddress} onChange={e => setToAddress(e.target.value)} placeholder="Address" disabled={isLocked} className="col-span-2" />
               </div>
             )}
-            {clientId && toGstin && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                Tax Type: <strong>{isIntraState ? "Intra-State (CGST + SGST)" : "Inter-State (IGST)"}</strong>
-                <span className="ml-1">(auto-detected from GSTINs)</span>
-              </div>
-            )}
           </div>
 
           <Separator />
@@ -784,9 +757,6 @@ const NewInvoice = () => {
             <div className="flex items-center justify-between mb-2">
               <Label className="text-xs font-semibold text-muted-foreground uppercase">Line Items</Label>
               <div className="flex gap-1">
-                <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={() => setMasterDialogOpen(true)}>
-                  <Settings2 size={12} /> Item Master
-                </Button>
                 {!isLocked && <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={addLine}><Plus size={12} /> Add Row</Button>}
               </div>
             </div>
@@ -852,7 +822,7 @@ const NewInvoice = () => {
                       disabled={isLocked}
                     />
                   )}
-                  <div className="grid grid-cols-5 gap-1">
+                  <div className={cn("grid gap-1", firmHasGst ? "grid-cols-5" : "grid-cols-4")}>
                     <div>
                       <Label className="text-[10px]">HSN/SAC</Label>
                       <Input value={item.hsn_sac_code} onChange={e => updateLine(idx, "hsn_sac_code", e.target.value)} className="text-xs h-8" disabled={isLocked} />
@@ -865,13 +835,15 @@ const NewInvoice = () => {
                       <Label className="text-[10px]">Rate</Label>
                       <Input type="number" value={item.rate || ""} onChange={e => updateLine(idx, "rate", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
                     </div>
-                    <div>
-                      <Label className="text-[10px]">GST %</Label>
-                      <Input type="number" value={item.gst_percent || ""} onChange={e => updateLine(idx, "gst_percent", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
-                    </div>
+                    {firmHasGst && (
+                      <div>
+                        <Label className="text-[10px]">GST %</Label>
+                        <Input type="number" value={item.gst_percent || ""} onChange={e => updateLine(idx, "gst_percent", Number(e.target.value))} className="text-xs h-8" disabled={isLocked} />
+                      </div>
+                    )}
                     <div>
                       <Label className="text-[10px]">Total</Label>
-                      <div className="text-xs font-semibold pt-2 text-right">{fmtINR(item.total)}</div>
+                      <div className="text-xs font-semibold pt-2 text-right">{fmtINR(firmHasGst ? item.total : item.taxable_value)}</div>
                     </div>
                   </div>
                 </div>
@@ -884,13 +856,15 @@ const NewInvoice = () => {
           {/* Totals */}
           <div className="text-sm space-y-1 text-right">
             <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
-            {isIntraState ? (
-              <>
-                <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-                <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-              </>
-            ) : (
-              <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
+            {firmHasGst && (
+              isIntraState ? (
+                <>
+                  <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                  <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                </>
+              ) : (
+                <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
+              )
             )}
             <p className="text-lg font-bold text-foreground">Grand Total: {fmtINR(grandTotal)}</p>
             <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(grandTotal))}</p>
@@ -922,9 +896,6 @@ const NewInvoice = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Item Master Dialog */}
-      <ItemMasterDialog open={masterDialogOpen} onClose={() => setMasterDialogOpen(false)} firmId={selectedFirmId} />
     </div>
   );
 };
