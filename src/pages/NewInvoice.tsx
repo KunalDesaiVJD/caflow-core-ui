@@ -414,7 +414,7 @@ const NewInvoice = () => {
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
   const firmAddressLines = firmAddr
-    ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.state || firm?.state, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean)
+    ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean)
     : [];
   const firmFullAddress = firmAddressLines.join(", ");
   const bankDetails = firm?.bank_details as any;
