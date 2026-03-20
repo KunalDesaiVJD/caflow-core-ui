@@ -246,6 +246,10 @@ const ClientDetail = () => {
     { name: "LOW", value: lowCount, color: SEVERITY_COLORS.LOW },
   ].filter(d => d.value > 0);
 
+  // Check if client has audit classification
+  const clientClassification = (client as any).client_classification;
+  const isAuditClient = Array.isArray(clientClassification) && clientClassification.includes("audit");
+
   const banking = bankingData?.banking_data as any;
   const bankAccounts = Array.isArray(banking?.bank_accounts) ? banking.bank_accounts : [];
 
