@@ -197,6 +197,7 @@ const ServiceMasters = () => {
         applicable_entity_types: form.applicable_entity_types,
         linked_module: form.linked_module,
         is_active: form.is_active,
+        package: form.package_name || null,
         updated_at: new Date().toISOString(),
       };
       if (editing) {
