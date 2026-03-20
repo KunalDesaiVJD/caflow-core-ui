@@ -48,6 +48,7 @@ const FREQUENCIES = [
   { value: "half_yearly", label: "Half Yearly" },
   { value: "annual", label: "Annual" },
   { value: "event_based", label: "Event Based" },
+  { value: "package", label: "Package" },
 ];
 
 const MODULES = [
@@ -71,6 +72,7 @@ const FREQ_COLORS: Record<string, string> = {
   half_yearly: "bg-indigo-100 text-indigo-800 border-indigo-200",
   annual: "bg-green-100 text-green-800 border-green-200",
   event_based: "bg-amber-100 text-amber-800 border-amber-200",
+  package: "bg-green-100 text-green-800 border-green-200",
 };
 
 const DEFAULT_CATEGORIES = [

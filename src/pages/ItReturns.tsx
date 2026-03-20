@@ -133,6 +133,12 @@ const ItReturns = () => {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterForm, setFilterForm] = useState("");
   const [filterStaff, setFilterStaff] = useState("");
+  const [filterConstitution, setFilterConstitution] = useState("");
+  const [filterWorkGroup, setFilterWorkGroup] = useState("");
+  const [filterStatus2, setFilterStatus2] = useState("");
+  const [filterUploadBy, setFilterUploadBy] = useState("");
+  const [filterPreparedBy, setFilterPreparedBy] = useState("");
+  const [filterCheckedBy, setFilterCheckedBy] = useState("");
 
   // ─── Fetch ITR-activated clients ───
   const { data: itrClientIds = [] } = useQuery({
@@ -237,9 +243,14 @@ const ItReturns = () => {
       if (filterStatus && (p.filing_status || "Data Pending") !== filterStatus) return false;
       if (filterForm && p.itr_form !== filterForm) return false;
       if (filterStaff && p.assigned_to !== filterStaff) return false;
+      if (filterConstitution && (p.entity_type || "") !== filterConstitution) return false;
+      if (filterWorkGroup && (p.work_group_name || "") !== filterWorkGroup) return false;
+      if (filterUploadBy && (p as any).upload_by !== filterUploadBy) return false;
+      if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
+      if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
       return true;
     });
-  }, [profiles, search, filterStatus, filterForm, filterStaff]);
+  }, [profiles, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterUploadBy, filterPreparedBy, filterCheckedBy]);
 
   // ─── Status counts ───
   const statusCounts = useMemo(() => {
@@ -342,6 +353,16 @@ const ItReturns = () => {
             setFilterForm={setFilterForm}
             filterStaff={filterStaff}
             setFilterStaff={setFilterStaff}
+            filterConstitution={filterConstitution}
+            setFilterConstitution={setFilterConstitution}
+            filterWorkGroup={filterWorkGroup}
+            setFilterWorkGroup={setFilterWorkGroup}
+            filterUploadBy={filterUploadBy}
+            setFilterUploadBy={setFilterUploadBy}
+            filterPreparedBy={filterPreparedBy}
+            setFilterPreparedBy={setFilterPreparedBy}
+            filterCheckedBy={filterCheckedBy}
+            setFilterCheckedBy={setFilterCheckedBy}
             isLoading={isLoading}
             onInlineUpdate={handleInlineUpdate}
             onExport={handleExport}
@@ -367,6 +388,11 @@ function FilingTab({
   profiles, allProfiles, statusCounts, staffUsers, workGroups,
   search, setSearch, filterStatus, setFilterStatus,
   filterForm, setFilterForm, filterStaff, setFilterStaff,
+  filterConstitution, setFilterConstitution,
+  filterWorkGroup, setFilterWorkGroup,
+  filterUploadBy, setFilterUploadBy,
+  filterPreparedBy, setFilterPreparedBy,
+  filterCheckedBy, setFilterCheckedBy,
   isLoading, onInlineUpdate, onExport, navigate, selectedAY,
   firmId, user,
 }: any) {
@@ -485,15 +511,47 @@ function FilingTab({
             {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={filterStaff} onValueChange={v => setFilterStaff(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[140px] h-9 text-xs"><SelectValue placeholder="Staff" /></SelectTrigger>
+        <Select value={filterConstitution} onValueChange={v => setFilterConstitution(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[130px] h-9 text-xs"><SelectValue placeholder="Constitution" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Staff</SelectItem>
+            <SelectItem value="all">All</SelectItem>
+            {[...new Set(allProfiles.map((p: ItrProfile) => p.entity_type).filter(Boolean))].map((et: string) => (
+              <SelectItem key={et} value={et}>{et}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterWorkGroup} onValueChange={v => setFilterWorkGroup(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[130px] h-9 text-xs"><SelectValue placeholder="Work Group" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {[...new Set(allProfiles.map((p: ItrProfile) => p.work_group_name).filter(Boolean))].map((wg: string) => (
+              <SelectItem key={wg} value={wg}>{wg}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterUploadBy} onValueChange={v => setFilterUploadBy(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Upload By" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
             {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
           </SelectContent>
         </Select>
-        {(search || filterStatus || filterForm || filterStaff) && (
-          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterStaff(""); }}>
+        <Select value={filterPreparedBy} onValueChange={v => setFilterPreparedBy(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Prepared By" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filterCheckedBy} onValueChange={v => setFilterCheckedBy(v === "all" ? "" : v)}>
+          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Checked By" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterUploadBy || filterPreparedBy || filterCheckedBy) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); }}>
             <X size={14} className="mr-1" /> Clear
           </Button>
         )}
@@ -566,10 +624,8 @@ function FilingTab({
                       <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
                       <TableHead className="min-w-[100px]">Constitution</TableHead>
                       <TableHead className="min-w-[120px]">Work Group</TableHead>
-                      <TableHead className="min-w-[100px]">ITR Form</TableHead>
                       <TableHead className="min-w-[170px]">Status</TableHead>
                       <TableHead className="min-w-[130px]">Filed Date</TableHead>
-                      <TableHead className="min-w-[140px]">Ack No</TableHead>
                       <TableHead className="min-w-[130px]">Upload By</TableHead>
                       <TableHead className="min-w-[130px]">Prepared By</TableHead>
                       <TableHead className="min-w-[130px]">Checked By</TableHead>
@@ -579,7 +635,7 @@ function FilingTab({
                   <TableBody>
                     {subTabProfiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                           No clients in this category.
                         </TableCell>
                       </TableRow>
