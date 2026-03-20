@@ -130,7 +130,7 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
             name: name.trim(),
             description: description.trim() || null,
             color: finalColor,
-            firm_id: firmId,
+            firm_id: user?.firm_id || null,
             created_by: userId || null,
           } as any);
         if (error) throw error;
