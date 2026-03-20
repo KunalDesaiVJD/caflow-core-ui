@@ -3809,6 +3809,82 @@ export type Database = {
           },
         ]
       }
+      service_tasks: {
+        Row: {
+          assigned_to: string | null
+          client_id: string
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string | null
+          due_date: string | null
+          firm_id: string
+          frequency: string
+          id: string
+          period_label: string | null
+          service_category_id: string
+          status: string
+          task_description: string | null
+          task_title: string
+          updated_at: string | null
+        }
+        Insert: {
+          assigned_to?: string | null
+          client_id: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          firm_id: string
+          frequency: string
+          id?: string
+          period_label?: string | null
+          service_category_id: string
+          status?: string
+          task_description?: string | null
+          task_title: string
+          updated_at?: string | null
+        }
+        Update: {
+          assigned_to?: string | null
+          client_id?: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          firm_id?: string
+          frequency?: string
+          id?: string
+          period_label?: string | null
+          service_category_id?: string
+          status?: string
+          task_description?: string | null
+          task_title?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_tasks_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_tasks_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_tasks_service_category_id_fkey"
+            columns: ["service_category_id"]
+            isOneToOne: false
+            referencedRelation: "service_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       service_templates: {
         Row: {
           created_at: string | null

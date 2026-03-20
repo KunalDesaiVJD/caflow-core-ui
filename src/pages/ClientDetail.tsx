@@ -179,6 +179,60 @@ const ClientDetail = () => {
     }
   }
 
+  // Generate tasks based on frequency
+  function generateTasksForFrequency(
+    clientId: string, clientName: string, catName: string, catId: string, 
+    frequency: string, firmId: string
+  ) {
+    const now = new Date();
+    const fy = now.getMonth() >= 3
+      ? `${now.getFullYear()}-${String(now.getFullYear()+1).slice(-2)}`
+      : `${now.getFullYear()-1}-${String(now.getFullYear()).slice(-2)}`;
+    const tasks: any[] = [];
+
+    if (frequency === 'event_based') return tasks; // No auto-tasks
+
+    const periods: { label: string; due: string }[] = [];
+    const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+
+    if (frequency === 'monthly') {
+      for (let m = 0; m < 12; m++) {
+        const month = new Date(fyStart, 3 + m, 1);
+        const monthName = month.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+        const dueDate = new Date(fyStart, 3 + m + 1, 10); // 10th of next month
+        periods.push({ label: monthName, due: dueDate.toISOString().split('T')[0] });
+      }
+    } else if (frequency === 'quarterly') {
+      [{ label: 'Q1 (Apr-Jun)', m: 6 }, { label: 'Q2 (Jul-Sep)', m: 9 },
+       { label: 'Q3 (Oct-Dec)', m: 12 }, { label: 'Q4 (Jan-Mar)', m: 15 }].forEach(q => {
+        const due = new Date(fyStart, q.m, 15);
+        periods.push({ label: `${q.label} ${fy}`, due: due.toISOString().split('T')[0] });
+      });
+    } else if (frequency === 'half_yearly') {
+      periods.push(
+        { label: `H1 (Apr-Sep) ${fy}`, due: new Date(fyStart, 9, 15).toISOString().split('T')[0] },
+        { label: `H2 (Oct-Mar) ${fy}`, due: new Date(fyStart + 1, 2, 31).toISOString().split('T')[0] }
+      );
+    } else if (frequency === 'annual') {
+      periods.push({ label: `FY ${fy}`, due: new Date(fyStart + 1, 2, 31).toISOString().split('T')[0] });
+    }
+
+    for (const p of periods) {
+      tasks.push({
+        client_id: clientId,
+        service_category_id: catId,
+        firm_id: firmId,
+        task_title: `${catName} — ${p.label}`,
+        task_description: `Auto-generated task for ${clientName}`,
+        frequency,
+        due_date: p.due,
+        period_label: p.label,
+        status: 'pending',
+      });
+    }
+    return tasks;
+  }
+
   // Service toggle
   async function toggleService(catId: string, currentlyActive: boolean) {
     setSvcSaving(catId);
@@ -189,6 +243,14 @@ const ClientDetail = () => {
           is_active: !currentlyActive,
           ...(currentlyActive ? { deactivated_at: new Date().toISOString() } : { activated_at: new Date().toISOString(), deactivated_at: null }),
         } as any).eq("id", existing.id);
+
+        // If deactivating, remove pending tasks
+        if (currentlyActive) {
+          await supabase.from("service_tasks").delete()
+            .eq("client_id", clientId!)
+            .eq("service_category_id", catId)
+            .eq("status", "pending");
+        }
       } else {
         await supabase.from("client_services").insert({
           client_id: clientId!,
@@ -197,6 +259,29 @@ const ClientDetail = () => {
           activated_at: new Date().toISOString(),
         } as any);
       }
+
+      // If activating, auto-generate tasks based on frequency
+      if (!currentlyActive && client?.firm_id) {
+        const cat = serviceCategories.find(c => c.id === catId);
+        const cs = clientServices.find(s => s.service_category_id === catId);
+        const freq = cs?.frequency_override || cat?.frequency || 'annual';
+        if (freq !== 'event_based') {
+          const tasks = generateTasksForFrequency(
+            clientId!, client.name || 'Client', cat?.name || 'Service',
+            catId, freq, client.firm_id
+          );
+          if (tasks.length > 0) {
+            // Remove existing pending tasks first to avoid duplicates
+            await supabase.from("service_tasks").delete()
+              .eq("client_id", clientId!)
+              .eq("service_category_id", catId)
+              .eq("status", "pending");
+            await supabase.from("service_tasks").insert(tasks as any);
+            toast({ title: `${tasks.length} task(s) auto-created for ${cat?.name}` });
+          }
+        }
+      }
+
       const { data } = await supabase.from("client_services").select("*").eq("client_id", clientId!);
       setClientServices((data || []) as any as ClientService[]);
     } catch (e: any) {
