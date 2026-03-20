@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Pencil, Trash2, Loader2, Package } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 
 interface ServiceCategory {
   id: string;
@@ -105,7 +105,7 @@ const ServiceMasters = () => {
   const [form, setForm] = useState({
     name: "", description: "", frequency: "annual", default_due_day: "",
     applicable_entity_types: [] as string[], linked_module: "custom",
-    is_active: true, category_code: "", package_name: "",
+    is_active: true, category_code: "",
   });
 
   // Template form
@@ -163,7 +163,7 @@ const ServiceMasters = () => {
   function openNew() {
     setEditing(null);
     const nextCode = `SVC${String(categories.length + 1).padStart(3, "0")}`;
-    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode, package_name: "" });
+    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode });
     setDrawerOpen(true);
   }
 
@@ -178,7 +178,6 @@ const ServiceMasters = () => {
       linked_module: cat.linked_module || "custom",
       is_active: cat.is_active,
       category_code: cat.category_code,
-      package_name: (cat as any).package || "",
     });
     setDrawerOpen(true);
   }
@@ -197,7 +196,6 @@ const ServiceMasters = () => {
         applicable_entity_types: form.applicable_entity_types,
         linked_module: form.linked_module,
         is_active: form.is_active,
-        package: form.package_name || null,
         updated_at: new Date().toISOString(),
       };
       if (editing) {
@@ -352,20 +350,6 @@ const ServiceMasters = () => {
               <Select value={form.linked_module} onValueChange={v => setForm(p => ({ ...p, linked_module: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{MODULES.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Package</Label>
-              <Select value={form.package_name || "__none__"} onValueChange={v => setForm(p => ({ ...p, package_name: v === "__none__" ? "" : v }))}>
-                <SelectTrigger><SelectValue placeholder="Select package" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None</SelectItem>
-                  <SelectItem value="Basic">Basic</SelectItem>
-                  <SelectItem value="Standard">Standard</SelectItem>
-                  <SelectItem value="Premium">Premium</SelectItem>
-                  <SelectItem value="Enterprise">Enterprise</SelectItem>
-                  <SelectItem value="Custom">Custom</SelectItem>
-                </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
