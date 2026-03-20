@@ -293,26 +293,34 @@ const ClientGroups = () => {
           <TabsTrigger value="work_groups" className="gap-1.5"><Briefcase className="h-3.5 w-3.5" /> Work Groups</TabsTrigger>
         </TabsList>
         <TabsContent value="client_groups" className="mt-4">
-          <GroupManager
-            tableName="client_groups"
-            membershipTable="client_group_memberships"
-            title="Client Groups"
-            subtitle="Organize clients into groups for easy filtering."
-            icon={Users}
-            firmId={user?.firm_id || ""}
-            userId={user?.id}
-          />
+          {user?.firm_id ? (
+            <GroupManager
+              tableName="client_groups"
+              membershipTable="client_group_memberships"
+              title="Client Groups"
+              subtitle="Organize clients into groups for easy filtering."
+              icon={Users}
+              firmId={user.firm_id}
+              userId={user?.id}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground py-8 text-center">No firm context available.</p>
+          )}
         </TabsContent>
         <TabsContent value="work_groups" className="mt-4">
-          <GroupManager
-            tableName="work_groups"
-            membershipTable="work_group_memberships"
-            title="Work Groups"
-            subtitle="Reusable work groups across modules."
-            icon={Briefcase}
-            firmId={user?.firm_id || ""}
-            userId={user?.id}
-          />
+          {user?.firm_id ? (
+            <GroupManager
+              tableName="work_groups"
+              membershipTable="work_group_memberships"
+              title="Work Groups"
+              subtitle="Reusable work groups across modules."
+              icon={Briefcase}
+              firmId={user.firm_id}
+              userId={user?.id}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground py-8 text-center">No firm context available.</p>
+          )}
         </TabsContent>
       </Tabs>
     </div>

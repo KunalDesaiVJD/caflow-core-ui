@@ -246,6 +246,10 @@ const ClientDetail = () => {
     { name: "LOW", value: lowCount, color: SEVERITY_COLORS.LOW },
   ].filter(d => d.value > 0);
 
+  // Check if client has audit classification
+  const clientClassification = (client as any).client_classification;
+  const isAuditClient = Array.isArray(clientClassification) && clientClassification.includes("audit");
+
   const banking = bankingData?.banking_data as any;
   const bankAccounts = Array.isArray(banking?.bank_accounts) ? banking.bank_accounts : [];
 
@@ -272,7 +276,7 @@ const ClientDetail = () => {
         <TabsList>
           <TabsTrigger value="basic">Basic Info</TabsTrigger>
           <TabsTrigger value="services">Service Activation</TabsTrigger>
-          <TabsTrigger value="audit">Audit Setup</TabsTrigger>
+          {isAuditClient && <TabsTrigger value="audit">Audit Setup</TabsTrigger>}
           <TabsTrigger value="groups">Work Groups</TabsTrigger>
         </TabsList>
 
@@ -416,8 +420,8 @@ const ClientDetail = () => {
           </Card>
         </TabsContent>
 
-        {/* Tab 3: Audit Setup */}
-        <TabsContent value="audit">
+        {/* Tab 3: Audit Setup — only for audit clients */}
+        {isAuditClient && <TabsContent value="audit">
           <Card>
             <CardHeader><CardTitle className="text-sm">Audit Configuration</CardTitle></CardHeader>
             <CardContent className="space-y-4">
@@ -479,7 +483,7 @@ const ClientDetail = () => {
               </Button>
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
 
         {/* Tab 4: Work Groups */}
         <TabsContent value="groups">

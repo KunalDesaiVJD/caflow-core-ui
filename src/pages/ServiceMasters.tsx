@@ -356,7 +356,17 @@ const ServiceMasters = () => {
             </div>
             <div className="space-y-2">
               <Label>Package</Label>
-              <Input value={form.package_name} onChange={e => setForm(p => ({ ...p, package_name: e.target.value }))} placeholder="e.g. Basic, Premium, Enterprise" />
+              <Select value={form.package_name || "__none__"} onValueChange={v => setForm(p => ({ ...p, package_name: v === "__none__" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Select package" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  <SelectItem value="Basic">Basic</SelectItem>
+                  <SelectItem value="Standard">Standard</SelectItem>
+                  <SelectItem value="Premium">Premium</SelectItem>
+                  <SelectItem value="Enterprise">Enterprise</SelectItem>
+                  <SelectItem value="Custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>Applicable Entity Types</Label>
