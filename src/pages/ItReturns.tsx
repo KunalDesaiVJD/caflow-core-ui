@@ -418,12 +418,34 @@ function FilingTab({
     return counts;
   }, [allProfiles]);
 
-  // Add Row handler
+  // Add Row handler — pick a client first
   const [addingRow, setAddingRow] = useState(false);
+  const [showAddRowDialog, setShowAddRowDialog] = useState(false);
+  const [addRowClientId, setAddRowClientId] = useState("");
+  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any}[]>([]);
+  const [addRowSearch, setAddRowSearch] = useState("");
+
+  const openAddRowDialog = async () => {
+    // Fetch all clients with ITR service active
+    const { data: cats } = await supabase.from("service_categories").select("id").eq("linked_module", "itr");
+    if (!cats?.length) { toast({ title: "No ITR service category found", variant: "destructive" }); return; }
+    const catIds = cats.map(c => c.id);
+    const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
+    const clientIds = [...new Set((cs || []).map(c => c.client_id))];
+    if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, client_classification").in("id", clientIds).order("name");
+    setAddRowClients((clients || []) as any);
+    setAddRowClientId("");
+    setAddRowSearch("");
+    setShowAddRowDialog(true);
+  };
+
   const handleAddRow = async () => {
+    if (!addRowClientId) { toast({ title: "Please select a client", variant: "destructive" }); return; }
     setAddingRow(true);
     try {
       const { error } = await supabase.from("itr_profiles").insert({
+        client_id: addRowClientId,
         firm_id: firmId,
         assessment_year: selectedAY,
         filing_status: "Data Pending",
@@ -431,12 +453,18 @@ function FilingTab({
       if (error) throw error;
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
       toast({ title: "New row added" });
+      setShowAddRowDialog(false);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setAddingRow(false);
     }
   };
+
+  const filteredAddRowClients = addRowClients.filter(c =>
+    !addRowSearch || (c.name || "").toLowerCase().includes(addRowSearch.toLowerCase()) ||
+    (c.pan || "").toLowerCase().includes(addRowSearch.toLowerCase())
+  );
 
   return (
     <div className="space-y-4">
@@ -487,10 +515,53 @@ function FilingTab({
           </Button>
         )}
         <div className="flex-1" />
+        <Button variant="outline" size="sm" onClick={openAddRowDialog} className="gap-1">
+          <Plus size={14} /> Add Row
+        </Button>
         <Button variant="outline" size="sm" onClick={onExport}>
           <Download size={14} className="mr-1.5" /> Export
         </Button>
       </div>
+
+      {/* Add Row Dialog */}
+      <Dialog open={showAddRowDialog} onOpenChange={setShowAddRowDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add ITR Row — Select Client</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Search client name or PAN..."
+              value={addRowSearch}
+              onChange={e => setAddRowSearch(e.target.value)}
+              className="h-9"
+            />
+            <div className="max-h-60 overflow-auto border rounded-lg">
+              {filteredAddRowClients.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No matching clients</p>
+              ) : filteredAddRowClients.map(c => (
+                <button
+                  key={c.id}
+                  className={cn(
+                    "w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/50 text-left border-b last:border-0",
+                    addRowClientId === c.id && "bg-primary/10"
+                  )}
+                  onClick={() => setAddRowClientId(c.id)}
+                >
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-xs text-muted-foreground font-mono">{c.pan || "—"}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddRowDialog(false)}>Cancel</Button>
+            <Button onClick={handleAddRow} disabled={addingRow || !addRowClientId}>
+              {addingRow ? "Adding..." : "Add Row"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Filing sub-tabs */}
       <Tabs value={filingSubTab} onValueChange={v => setFilingSubTab(v as FilingSubTab)}>
