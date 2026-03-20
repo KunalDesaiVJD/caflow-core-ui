@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -17,14 +17,14 @@ import { StepAuditQuestions, type AuditQuestionsData, emptyAuditQuestions } from
 import { StepImportData, type ImportDataResult } from "@/components/client-wizard/StepImportData";
 import { StepDone } from "@/components/client-wizard/StepDone";
 
-const STEPS = [
-  "Basic Info",
-  "Financial Profile",
-  "Compliance Flags",
-  "Banking & Loans",
-  "Audit Questions",
-  "Import Data",
-  "Done",
+const ALL_STEPS = [
+  { id: "basic", label: "Basic Info", auditOnly: false },
+  { id: "financial", label: "Financial Profile", auditOnly: true },
+  { id: "compliance", label: "Compliance Flags", auditOnly: true },
+  { id: "banking", label: "Banking & Loans", auditOnly: true },
+  { id: "audit_q", label: "Audit Questions", auditOnly: true },
+  { id: "import", label: "Import Data", auditOnly: true },
+  { id: "done", label: "Done", auditOnly: false },
 ];
 
 const defaultBasicInfo: BasicInfoData = {
@@ -37,6 +37,10 @@ const defaultBasicInfo: BasicInfoData = {
   gstins: [""],
   cin: "",
   selectedGroupIds: [],
+  email: "",
+  mobile: "",
+  address: "",
+  client_classification: [],
 };
 
 const defaultFinancialProfile: FinancialProfileData = {
@@ -92,6 +96,16 @@ const NewClientWizard = () => {
 
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
 
+  // Compute visible steps based on classification
+  const isAuditClient = (basicInfo.client_classification || []).includes("audit");
+  const visibleSteps = useMemo(() => {
+    if (isAuditClient) return ALL_STEPS;
+    return ALL_STEPS.filter((s) => !s.auditOnly);
+  }, [isAuditClient]);
+
+  const STEPS = visibleSteps.map((s) => s.label);
+  const currentStepDef = visibleSteps[step];
+
   useEffect(() => {
     if (!isEditMode || !clientId) {
       setLoadingClient(false);
@@ -107,7 +121,7 @@ const NewClientWizard = () => {
       const [clientRes, profileRes] = await Promise.all([
         supabase
           .from("clients")
-          .select("id, name, pan, entity_type, cin, gstin, compliance_flags")
+          .select("id, name, pan, entity_type, cin, gstin, compliance_flags, email, mobile, address, client_classification")
           .eq("id", clientId)
           .maybeSingle(),
         supabase
@@ -151,6 +165,10 @@ const NewClientWizard = () => {
         date_of_incorporation: basicExtra.date_of_incorporation ? new Date(basicExtra.date_of_incorporation) : undefined,
         registered_state: basicExtra.registered_state || "",
         business_nature: basicExtra.business_nature || "",
+        email: client.email || "",
+        mobile: client.mobile || "",
+        address: client.address || "",
+        client_classification: Array.isArray(client.client_classification) ? client.client_classification : [],
       });
 
       setFinancialProfile({
@@ -205,6 +223,12 @@ const NewClientWizard = () => {
     if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
       errors.pan = "Invalid PAN format. Example: ABCDE1234F";
     }
+    if (basicInfo.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(basicInfo.email)) {
+      errors.email = "Invalid email format";
+    }
+    if (basicInfo.mobile && basicInfo.mobile.length > 0 && basicInfo.mobile.length < 10) {
+      errors.mobile = "Mobile number must be 10 digits";
+    }
     // Check duplicate PAN
     if (basicInfo.pan && !errors.pan) {
       const { data: existing } = await supabase
@@ -241,6 +265,10 @@ const NewClientWizard = () => {
       entity_type: basicInfo.entity_type || null,
       cin: basicInfo.cin || null,
       gstin: gstins.length > 0 ? gstins : null,
+      email: basicInfo.email || null,
+      mobile: basicInfo.mobile || null,
+      address: basicInfo.address || null,
+      client_classification: basicInfo.client_classification || [],
       compliance_flags: {
         ...complianceFlags,
         financial_profile: financialProfile,
@@ -271,7 +299,6 @@ const NewClientWizard = () => {
 
   const saveTrialBalance = async (targetClientId: string) => {
     if (!importData || importData.rows.length === 0) return;
-    // Rows are already pre-parsed by StepImportData with account_name, debit, credit, balance
     const { error } = await supabase.from("trial_balance_snapshots").upsert({
       client_id: targetClientId,
       financial_year: new Date().getFullYear().toString(),
@@ -332,7 +359,6 @@ const NewClientWizard = () => {
 
         toast({ title: "Client updated", description: "Full client profile saved successfully." });
 
-        // Save imported trial balance data in edit mode too
         if (importData && importData.rows.length > 0) {
           await saveTrialBalance(clientId);
         }
@@ -359,7 +385,6 @@ const NewClientWizard = () => {
 
         if (profileError) throw profileError;
 
-        // Save imported trial balance data
         if (importData && importData.rows.length > 0) {
           await saveTrialBalance(clientData.id);
         }
@@ -388,15 +413,17 @@ const NewClientWizard = () => {
   };
 
   const handleNext = async () => {
-    if (step === 0 && !(await validateBasicInfo())) return;
-    if (step === STEPS.length - 1) {
+    if (currentStepDef?.id === "basic" && !(await validateBasicInfo())) return;
+    if (step === visibleSteps.length - 1) {
       await handleFinalSubmit();
       return;
     }
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    setStep((s) => Math.min(s + 1, visibleSteps.length - 1));
   };
 
-  const progress = ((step + 1) / STEPS.length) * 100;
+  const progress = ((step + 1) / visibleSteps.length) * 100;
+  const isDoneStep = currentStepDef?.id === "done";
+  const isImportStep = currentStepDef?.id === "import";
 
   if (loadingClient) {
     return (
@@ -442,13 +469,13 @@ const NewClientWizard = () => {
       {/* Step Content */}
       <Card>
         <CardContent className="p-6">
-          {step === 0 && <StepBasicInfo data={basicInfo} onChange={setBasicInfo} errors={basicErrors} />}
-          {step === 1 && <StepFinancialProfile data={financialProfile} onChange={setFinancialProfile} />}
-          {step === 2 && <StepComplianceFlags data={complianceFlags} onChange={setComplianceFlags} />}
-          {step === 3 && <StepBankingLoans data={bankingLoans} onChange={setBankingLoans} />}
-          {step === 4 && <StepAuditQuestions data={auditQuestions} onChange={setAuditQuestions} />}
-          {step === 5 && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(6)} clientId={isEditMode ? clientId : undefined} firmId={user?.firm_id} />}
-          {step === 6 && (
+          {currentStepDef?.id === "basic" && <StepBasicInfo data={basicInfo} onChange={setBasicInfo} errors={basicErrors} />}
+          {currentStepDef?.id === "financial" && <StepFinancialProfile data={financialProfile} onChange={setFinancialProfile} />}
+          {currentStepDef?.id === "compliance" && <StepComplianceFlags data={complianceFlags} onChange={setComplianceFlags} />}
+          {currentStepDef?.id === "banking" && <StepBankingLoans data={bankingLoans} onChange={setBankingLoans} />}
+          {currentStepDef?.id === "audit_q" && <StepAuditQuestions data={auditQuestions} onChange={setAuditQuestions} />}
+          {currentStepDef?.id === "import" && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(s => s + 1)} clientId={isEditMode ? clientId : undefined} firmId={user?.firm_id} />}
+          {currentStepDef?.id === "done" && (
             <StepDone
               mode={isEditMode ? "edit" : "create"}
               basicInfo={basicInfo}
@@ -462,13 +489,13 @@ const NewClientWizard = () => {
       </Card>
 
       {/* Navigation */}
-      {step < 6 && (
+      {!isDoneStep && (
         <div className="flex justify-between">
           <Button variant="outline" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
             Previous
           </Button>
           <Button onClick={handleNext} disabled={saving}>
-            {step === 5 ? "Review Summary" : "Next"}
+            {isImportStep ? "Review Summary" : "Next"}
           </Button>
         </div>
       )}

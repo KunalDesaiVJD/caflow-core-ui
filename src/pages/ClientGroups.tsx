@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -27,14 +28,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Plus, Pencil, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Users, Briefcase } from "lucide-react";
 
 const PRESET_COLORS = [
   "#6B7280", "#EF4444", "#F59E0B", "#10B981",
   "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6",
 ];
 
-interface ClientGroup {
+interface GroupItem {
   id: string;
   name: string;
   description: string | null;
@@ -44,18 +45,23 @@ interface ClientGroup {
   member_count?: number;
 }
 
-const ClientGroups = () => {
-  const navigate = useNavigate();
+// Reusable group grid + CRUD component
+function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon, firmId, userId }: {
+  tableName: "client_groups" | "work_groups";
+  membershipTable: "client_group_memberships" | "work_group_memberships";
+  title: string;
+  subtitle: string;
+  icon: typeof Users;
+  firmId: string;
+  userId: string | undefined;
+}) {
   const { toast } = useToast();
-  const { user } = useAuth();
-  const [groups, setGroups] = useState<ClientGroup[]>([]);
+  const [groups, setGroups] = useState<GroupItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editGroup, setEditGroup] = useState<ClientGroup | null>(null);
-  const [deleteGroup, setDeleteGroup] = useState<ClientGroup | null>(null);
+  const [editGroup, setEditGroup] = useState<GroupItem | null>(null);
+  const [deleteGroup, setDeleteGroup] = useState<GroupItem | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // Form state
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [color, setColor] = useState(PRESET_COLORS[0]);
@@ -63,12 +69,12 @@ const ClientGroups = () => {
 
   const fetchGroups = async () => {
     const { data: groupsData } = await supabase
-      .from("client_groups")
+      .from(tableName)
       .select("*")
       .order("name");
 
     const { data: memberships } = await supabase
-      .from("client_group_memberships")
+      .from(membershipTable)
       .select("group_id");
 
     const countMap: Record<string, number> = {};
@@ -96,46 +102,38 @@ const ClientGroups = () => {
     setModalOpen(true);
   };
 
-  const openEdit = (g: ClientGroup) => {
+  const openEdit = (g: GroupItem) => {
     setEditGroup(g);
     setName(g.name);
     setDescription(g.description || "");
     const c = g.color || PRESET_COLORS[0];
-    if (PRESET_COLORS.includes(c)) {
-      setColor(c);
-      setCustomColor("");
-    } else {
-      setColor("");
-      setCustomColor(c);
-    }
+    if (PRESET_COLORS.includes(c)) { setColor(c); setCustomColor(""); }
+    else { setColor(""); setCustomColor(c); }
     setModalOpen(true);
   };
 
   const handleSave = async () => {
-    if (!name.trim()) {
-      toast({ title: "Name is required", variant: "destructive" });
-      return;
-    }
+    if (!name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
     setSaving(true);
     const finalColor = customColor || color || PRESET_COLORS[0];
     try {
       if (editGroup) {
         const { error } = await supabase
-          .from("client_groups")
-          .update({ name: name.trim(), description: description.trim() || null, color: finalColor })
+          .from(tableName)
+          .update({ name: name.trim(), description: description.trim() || null, color: finalColor } as any)
           .eq("id", editGroup.id);
         if (error) throw error;
         toast({ title: "Group updated" });
       } else {
         const { error } = await supabase
-          .from("client_groups")
+          .from(tableName)
           .insert({
             name: name.trim(),
             description: description.trim() || null,
             color: finalColor,
-            firm_id: user?.firm_id!,
-            created_by: user?.id || null,
-          });
+            firm_id: firmId,
+            created_by: userId || null,
+          } as any);
         if (error) throw error;
         toast({ title: "Group created" });
       }
@@ -143,38 +141,30 @@ const ClientGroups = () => {
       fetchGroups();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   const handleDelete = async () => {
     if (!deleteGroup) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("client_groups").delete().eq("id", deleteGroup.id);
+      const { error } = await supabase.from(tableName).delete().eq("id", deleteGroup.id);
       if (error) throw error;
       toast({ title: "Group deleted" });
       setDeleteGroup(null);
       fetchGroups();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <>
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}>
-            <ArrowLeft className="h-3 w-3" /> Back to Clients
-          </Button>
-          <h1 className="text-2xl font-display font-bold text-foreground">Client Groups</h1>
-          <p className="text-sm text-muted-foreground">Organize clients into groups for easy filtering.</p>
+          <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        <Button onClick={openCreate} className="gap-2">
+        <Button onClick={openCreate} size="sm" className="gap-2">
           <Plus className="h-4 w-4" /> New Group
         </Button>
       </div>
@@ -186,8 +176,8 @@ const ClientGroups = () => {
       ) : groups.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Users className="h-10 w-10 mb-3 opacity-40" />
-            <p>No groups yet. Create one to organize your clients.</p>
+            <Icon className="h-10 w-10 mb-3 opacity-40" />
+            <p>No groups yet. Create one to get started.</p>
           </CardContent>
         </Card>
       ) : (
@@ -279,6 +269,52 @@ const ClientGroups = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+const ClientGroups = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}>
+          <ArrowLeft className="h-3 w-3" /> Back to Clients
+        </Button>
+        <h1 className="text-2xl font-display font-bold text-foreground">Groups</h1>
+        <p className="text-sm text-muted-foreground">Organize clients and work into groups.</p>
+      </div>
+
+      <Tabs defaultValue="client_groups">
+        <TabsList>
+          <TabsTrigger value="client_groups" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Client Groups</TabsTrigger>
+          <TabsTrigger value="work_groups" className="gap-1.5"><Briefcase className="h-3.5 w-3.5" /> Work Groups</TabsTrigger>
+        </TabsList>
+        <TabsContent value="client_groups" className="mt-4">
+          <GroupManager
+            tableName="client_groups"
+            membershipTable="client_group_memberships"
+            title="Client Groups"
+            subtitle="Organize clients into groups for easy filtering."
+            icon={Users}
+            firmId={user?.firm_id || ""}
+            userId={user?.id}
+          />
+        </TabsContent>
+        <TabsContent value="work_groups" className="mt-4">
+          <GroupManager
+            tableName="work_groups"
+            membershipTable="work_group_memberships"
+            title="Work Groups"
+            subtitle="Reusable work groups across modules."
+            icon={Briefcase}
+            firmId={user?.firm_id || ""}
+            userId={user?.id}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
