@@ -483,7 +483,7 @@ const ClientDetail = () => {
               </Button>
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
 
         {/* Tab 4: Work Groups */}
         <TabsContent value="groups">
