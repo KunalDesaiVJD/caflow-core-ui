@@ -30,7 +30,10 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import {
-  FileText, Plus, Download, Search, Filter, X, Eye,
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  FileText, Plus, Download, Search, Filter, X, Eye, Info,
   AlertTriangle, Clock, CheckCircle2, Scale, ChevronRight,
   CalendarDays, Sparkles, Copy, Send, Mail,
 } from "lucide-react";
@@ -39,18 +42,18 @@ import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 
 // ─── Constants ───
 const ITR_FORMS = ["ITR-1", "ITR-2", "ITR-3", "ITR-4", "ITR-5", "ITR-6", "ITR-7"];
-const FILING_STATUSES = ["Not Started", "Data Collection", "In Progress", "Ready for Review", "Pending Approval", "Filed", "Verified"];
+const FILING_STATUSES = ["Data Pending", "In Progress", "Ready for Review", "Pending Approval from Client", "Filed", "Verified", "Sent to CPC"];
 const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
 const DEFAULT_AY = "2025-26";
 
 const STATUS_COLORS: Record<string, string> = {
-  "Not Started": "bg-muted text-muted-foreground",
-  "Data Collection": "bg-blue-500/15 text-blue-600",
+  "Data Pending": "bg-blue-500/15 text-blue-600",
   "In Progress": "bg-amber-500/15 text-amber-600",
   "Ready for Review": "bg-purple-500/15 text-purple-600",
-  "Pending Approval": "bg-orange-500/15 text-orange-600",
+  "Pending Approval from Client": "bg-orange-500/15 text-orange-600",
   "Filed": "bg-teal-500/15 text-teal-600",
   "Verified": "bg-emerald-500/15 text-emerald-600",
+  "Sent to CPC": "bg-green-500/15 text-green-700",
 };
 
 // ─── Notice Tracker Constants ───
@@ -83,13 +86,17 @@ interface ItrProfile {
   date_filed: string | null;
   acknowledgment_no: string | null;
   assessment_year: string | null;
-  // enriched
   client_name?: string;
   client_pan?: string;
   entity_type?: string;
   group_name?: string;
   assigned_name?: string;
   remarks?: string;
+  client_classification?: string[];
+  upload_by?: string | null;
+  prepared_by?: string | null;
+  checked_by?: string | null;
+  work_group_name?: string;
 }
 
 interface StaffUser { id: string; name: string | null; role: string | null; }
@@ -99,6 +106,16 @@ function formatDateDDMMYYYY(dateStr: string | null): string {
   try {
     return format(new Date(dateStr), "dd/MM/yyyy");
   } catch { return dateStr; }
+}
+
+// Classification to tab mapping
+type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm";
+
+function getClientSubTab(classification: string[] | undefined): FilingSubTab {
+  const cls = (classification || [])[0] || "non_audit";
+  if (cls === "audit") return "audited";
+  if (cls === "partner_in_audited_firm") return "partner_in_audited_firm";
+  return "non_audited";
 }
 
 // ─── Main Component ───
@@ -121,14 +138,12 @@ const ItReturns = () => {
   const { data: itrClientIds = [] } = useQuery({
     queryKey: ["itr_client_ids", firmId],
     queryFn: async () => {
-      // Get service_category where linked_module = 'itr'
       const { data: cats } = await supabase
         .from("service_categories")
         .select("id")
         .eq("linked_module", "itr");
       if (!cats?.length) return [];
       const catIds = cats.map(c => c.id);
-      // Get active client_services for those categories
       const { data: cs } = await supabase
         .from("client_services")
         .select("client_id")
@@ -170,25 +185,31 @@ const ItReturns = () => {
       q = q.in("client_id", itrClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details
+      // Fetch client details including classification
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type")
+        .select("id, name, pan, entity_type, client_classification")
         .in("id", itrClientIds);
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
-      // Fetch users for assigned_to
+      // Fetch users
       const { data: uData } = await supabase.from("users").select("id, name");
       const userMap = new Map((uData || []).map(u => [u.id, u.name]));
 
-      // Work group map
-      const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
+      // Fetch client work group memberships
+      const { data: wgMembers } = await supabase
+        .from("work_group_memberships")
+        .select("client_id, group_id, work_groups(name)")
+        .in("client_id", itrClientIds);
+      const clientWgMap = new Map<string, string>();
+      for (const m of (wgMembers || [])) {
+        clientWgMap.set(m.client_id, (m as any).work_groups?.name || "");
+      }
 
-      // For clients that have ITR service active but no profile for this AY, create placeholder
+      const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
       const existingClientIds = new Set((pData || []).map(p => p.client_id));
       const enriched: ItrProfile[] = [];
 
-      // Existing profiles
       for (const p of (pData || [])) {
         const cl = clientMap.get(p.client_id || "");
         const wg = wgMap.get(p.itr_work_group_id || "");
@@ -199,10 +220,12 @@ const ItReturns = () => {
           entity_type: cl?.entity_type || "",
           group_name: (wg as any)?.name || "",
           assigned_name: userMap.get(p.assigned_to || "") || "",
+          client_classification: (cl as any)?.client_classification || [],
+          work_group_name: clientWgMap.get(p.client_id || "") || "",
         });
       }
 
-      // Missing clients → auto-create profiles
+      // Missing clients → auto-create placeholder profiles
       for (const cid of itrClientIds) {
         if (!existingClientIds.has(cid)) {
           const cl = clientMap.get(cid);
@@ -213,7 +236,7 @@ const ItReturns = () => {
             firm_id: firmId || null,
             financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
             itr_form: null,
-            filing_status: "Not Started",
+            filing_status: "Data Pending",
             itr_work_group_id: null,
             assigned_to: null,
             date_data_received: null,
@@ -225,6 +248,8 @@ const ItReturns = () => {
             entity_type: cl.entity_type || "",
             group_name: "",
             assigned_name: "",
+            client_classification: (cl as any)?.client_classification || [],
+            work_group_name: clientWgMap.get(cid) || "",
           });
         }
       }
@@ -238,7 +263,7 @@ const ItReturns = () => {
   const filtered = useMemo(() => {
     return profiles.filter(p => {
       if (search && !(p.client_name || "").toLowerCase().includes(search.toLowerCase()) && !(p.client_pan || "").toLowerCase().includes(search.toLowerCase())) return false;
-      if (filterStatus && (p.filing_status || "Not Started") !== filterStatus) return false;
+      if (filterStatus && (p.filing_status || "Data Pending") !== filterStatus) return false;
       if (filterForm && p.itr_form !== filterForm) return false;
       if (filterStaff && p.assigned_to !== filterStaff) return false;
       return true;
@@ -249,7 +274,7 @@ const ItReturns = () => {
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     FILING_STATUSES.forEach(s => { counts[s] = 0; });
-    profiles.forEach(p => { const s = p.filing_status || "Not Started"; counts[s] = (counts[s] || 0) + 1; });
+    profiles.forEach(p => { const s = p.filing_status || "Data Pending"; counts[s] = (counts[s] || 0) + 1; });
     return counts;
   }, [profiles]);
 
@@ -258,13 +283,12 @@ const ItReturns = () => {
     const isNew = profile.id.startsWith("new_");
     try {
       if (isNew) {
-        // Create the profile first
         const payload: any = {
           client_id: profile.client_id,
           firm_id: firmId,
           assessment_year: selectedAY,
           financial_year: profile.financial_year,
-          filing_status: "Not Started",
+          filing_status: "Data Pending",
           [field]: value || null,
         };
         const { error } = await supabase.from("itr_profiles").insert(payload);
@@ -286,9 +310,9 @@ const ItReturns = () => {
         "Client Name": p.client_name,
         "PAN": p.client_pan,
         "Constitution": p.entity_type,
-        "Work Group": p.group_name,
+        "Work Group": p.work_group_name || p.group_name,
         "ITR Form": p.itr_form || "",
-        "Status": p.filing_status || "Not Started",
+        "Status": p.filing_status || "Data Pending",
         "Due Date": "",
         "Filed Date": formatDateDDMMYYYY(p.date_filed),
         "Ack No": p.acknowledgment_no || "",
@@ -352,6 +376,8 @@ const ItReturns = () => {
             onExport={handleExport}
             navigate={navigate}
             selectedAY={selectedAY}
+            firmId={firmId}
+            user={user}
           />
         </TabsContent>
 
@@ -365,13 +391,53 @@ const ItReturns = () => {
 
 export default ItReturns;
 
-// ─── Filing Tab ───
+// ─── Filing Tab with sub-tabs ───
 function FilingTab({
   profiles, allProfiles, statusCounts, staffUsers, workGroups,
   search, setSearch, filterStatus, setFilterStatus,
   filterForm, setFilterForm, filterStaff, setFilterStaff,
   isLoading, onInlineUpdate, onExport, navigate, selectedAY,
+  firmId, user,
 }: any) {
+  const [filingSubTab, setFilingSubTab] = useState<FilingSubTab>("audited");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // Sub-tab filtered profiles
+  const subTabProfiles = useMemo(() => {
+    return profiles.filter((p: ItrProfile) => getClientSubTab(p.client_classification) === filingSubTab);
+  }, [profiles, filingSubTab]);
+
+  // Sub-tab counts
+  const subTabCounts = useMemo(() => {
+    const counts = { audited: 0, non_audited: 0, partner_in_audited_firm: 0 };
+    for (const p of allProfiles) {
+      const tab = getClientSubTab((p as ItrProfile).client_classification);
+      counts[tab]++;
+    }
+    return counts;
+  }, [allProfiles]);
+
+  // Add Row handler
+  const [addingRow, setAddingRow] = useState(false);
+  const handleAddRow = async () => {
+    setAddingRow(true);
+    try {
+      const { error } = await supabase.from("itr_profiles").insert({
+        firm_id: firmId,
+        assessment_year: selectedAY,
+        filing_status: "Data Pending",
+      });
+      if (error) throw error;
+      queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
+      toast({ title: "New row added" });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setAddingRow(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Status count strip */}
@@ -426,49 +492,62 @@ function FilingTab({
         </Button>
       </div>
 
-      {/* Inline Editable Table */}
-      {isLoading ? (
-        <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
-      ) : (
-        <div className="border rounded-lg overflow-auto">
-          <Table>
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
-                <TableHead className="min-w-[100px]">PAN</TableHead>
-                <TableHead className="min-w-[100px]">Constitution</TableHead>
-                <TableHead className="min-w-[120px]">Work Group</TableHead>
-                <TableHead className="min-w-[100px]">ITR Form</TableHead>
-                <TableHead className="min-w-[150px]">Status</TableHead>
-                <TableHead className="min-w-[130px]">Filed Date</TableHead>
-                <TableHead className="min-w-[140px]">Ack No</TableHead>
-                <TableHead className="min-w-[140px]">Assigned Staff</TableHead>
-                <TableHead className="min-w-[120px]">Remarks</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {profiles.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
-                    {search || filterStatus || filterForm || filterStaff
-                      ? "No matching profiles found."
-                      : "No clients with ITR service activated. Activate 'Income Tax Returns' service on clients first."}
-                  </TableCell>
-                </TableRow>
-              ) : profiles.map((p: ItrProfile) => (
-                <InlineEditableRow
-                  key={p.id}
-                  profile={p}
-                  staffUsers={staffUsers}
-                  workGroups={workGroups}
-                  onUpdate={onInlineUpdate}
-                  navigate={navigate}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+      {/* Filing sub-tabs */}
+      <Tabs value={filingSubTab} onValueChange={v => setFilingSubTab(v as FilingSubTab)}>
+        <TabsList>
+          <TabsTrigger value="audited">Audited ({subTabCounts.audited})</TabsTrigger>
+          <TabsTrigger value="non_audited">Non-Audited ({subTabCounts.non_audited})</TabsTrigger>
+          <TabsTrigger value="partner_in_audited_firm">Partner in Audited Firm ({subTabCounts.partner_in_audited_firm})</TabsTrigger>
+        </TabsList>
+
+        {(["audited", "non_audited", "partner_in_audited_firm"] as FilingSubTab[]).map(tab => (
+          <TabsContent key={tab} value={tab}>
+            {isLoading ? (
+              <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
+            ) : (
+              <div className="border rounded-lg overflow-auto">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-background">
+                    <TableRow>
+                      <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
+                      <TableHead className="min-w-[100px]">PAN</TableHead>
+                      <TableHead className="min-w-[100px]">Constitution</TableHead>
+                      <TableHead className="min-w-[120px]">Work Group</TableHead>
+                      <TableHead className="min-w-[100px]">ITR Form</TableHead>
+                      <TableHead className="min-w-[170px]">Status</TableHead>
+                      <TableHead className="min-w-[130px]">Filed Date</TableHead>
+                      <TableHead className="min-w-[140px]">Ack No</TableHead>
+                      <TableHead className="min-w-[130px]">Upload By</TableHead>
+                      <TableHead className="min-w-[130px]">Prepared By</TableHead>
+                      <TableHead className="min-w-[130px]">Checked By</TableHead>
+                      <TableHead className="min-w-[140px]">Assigned Staff</TableHead>
+                      <TableHead className="w-[60px]">Info</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {subTabProfiles.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={13} className="text-center text-muted-foreground py-8">
+                          No clients in this category.
+                        </TableCell>
+                      </TableRow>
+                    ) : subTabProfiles.map((p: ItrProfile) => (
+                      <InlineEditableRow
+                        key={p.id}
+                        profile={p}
+                        staffUsers={staffUsers}
+                        workGroups={workGroups}
+                        onUpdate={onInlineUpdate}
+                        navigate={navigate}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }
@@ -480,119 +559,252 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, navigate
   navigate: (path: string) => void;
 }) {
   const p = profile;
+  const [infoOpen, setInfoOpen] = useState(false);
+  const { toast } = useToast();
 
   return (
-    <TableRow className="hover:bg-muted/30">
-      {/* Client Name - non-editable, clickable */}
-      <TableCell className="sticky left-0 z-10 bg-background font-medium">
-        <button
-          className="text-left text-primary hover:underline truncate max-w-[170px] block"
-          onClick={() => navigate(`/clients/${p.client_id}`)}
-        >
-          {p.client_name}
-        </button>
-      </TableCell>
+    <>
+      <TableRow className="hover:bg-muted/30">
+        {/* Client Name with PAN tooltip */}
+        <TableCell className="sticky left-0 z-10 bg-background font-medium">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  className="text-left text-primary hover:underline truncate max-w-[170px] block"
+                  onClick={() => navigate(`/clients/${p.client_id}`)}
+                >
+                  {p.client_name}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="font-mono text-sm">{p.client_pan || "No PAN"}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </TableCell>
 
-      {/* PAN - non-editable */}
-      <TableCell className="font-mono text-xs text-muted-foreground">{p.client_pan || "—"}</TableCell>
+        {/* PAN */}
+        <TableCell className="font-mono text-xs text-muted-foreground">{p.client_pan || "—"}</TableCell>
 
-      {/* Constitution - non-editable */}
-      <TableCell className="text-xs">{p.entity_type || "—"}</TableCell>
+        {/* Constitution */}
+        <TableCell className="text-xs">{p.entity_type || "—"}</TableCell>
 
-      {/* Work Group - dropdown */}
-      <TableCell>
-        <Select
-          value={p.itr_work_group_id || "none"}
-          onValueChange={v => onUpdate(p, "itr_work_group_id", v === "none" ? null : v)}
-        >
-          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-            <SelectValue placeholder="—" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">—</SelectItem>
-            {workGroups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </TableCell>
+        {/* Work Group - read-only from client */}
+        <TableCell className="text-xs text-muted-foreground">{p.work_group_name || "—"}</TableCell>
 
-      {/* ITR Form - dropdown */}
-      <TableCell>
-        <Select
-          value={p.itr_form || "none"}
-          onValueChange={v => onUpdate(p, "itr_form", v === "none" ? null : v)}
-        >
-          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-            <SelectValue placeholder="—" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">—</SelectItem>
-            {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </TableCell>
+        {/* ITR Form */}
+        <TableCell>
+          <Select
+            value={p.itr_form || "none"}
+            onValueChange={v => onUpdate(p, "itr_form", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
 
-      {/* Status - color-coded dropdown */}
-      <TableCell>
-        <Select
-          value={p.filing_status || "Not Started"}
-          onValueChange={v => onUpdate(p, "filing_status", v)}
-        >
-          <SelectTrigger className={cn("h-7 text-xs border-none shadow-none px-1 rounded-full", STATUS_COLORS[p.filing_status || "Not Started"])}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {FILING_STATUSES.map(s => (
-              <SelectItem key={s} value={s}>
-                <span className={cn("inline-block w-2 h-2 rounded-full mr-1.5", STATUS_COLORS[s].split(" ")[0])} />
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </TableCell>
+        {/* Status */}
+        <TableCell>
+          <Select
+            value={p.filing_status || "Data Pending"}
+            onValueChange={v => onUpdate(p, "filing_status", v)}
+          >
+            <SelectTrigger className={cn("h-7 text-xs border-none shadow-none px-1 rounded-full", STATUS_COLORS[p.filing_status || "Data Pending"] || "")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {FILING_STATUSES.map(s => (
+                <SelectItem key={s} value={s}>
+                  <span className={cn("inline-block w-2 h-2 rounded-full mr-1.5", (STATUS_COLORS[s] || "").split(" ")[0])} />
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </TableCell>
 
-      {/* Filed Date - date picker */}
-      <TableCell>
-        <InlineDatePicker
-          value={p.date_filed}
-          onChange={v => onUpdate(p, "date_filed", v)}
-        />
-      </TableCell>
+        {/* Filed Date */}
+        <TableCell>
+          <InlineDatePicker
+            value={p.date_filed}
+            onChange={v => onUpdate(p, "date_filed", v)}
+          />
+        </TableCell>
 
-      {/* Ack No - text */}
-      <TableCell>
-        <InlineTextInput
-          value={p.acknowledgment_no || ""}
-          placeholder="—"
-          onSave={v => onUpdate(p, "acknowledgment_no", v)}
-        />
-      </TableCell>
+        {/* Ack No */}
+        <TableCell>
+          <InlineTextInput
+            value={p.acknowledgment_no || ""}
+            placeholder="—"
+            onSave={v => onUpdate(p, "acknowledgment_no", v)}
+          />
+        </TableCell>
 
-      {/* Assigned Staff - dropdown */}
-      <TableCell>
-        <Select
-          value={p.assigned_to || "none"}
-          onValueChange={v => onUpdate(p, "assigned_to", v === "none" ? null : v)}
-        >
-          <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-            <SelectValue placeholder="—" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">—</SelectItem>
-            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </TableCell>
+        {/* Upload By */}
+        <TableCell>
+          <Select
+            value={(p as any).upload_by || "none"}
+            onValueChange={v => onUpdate(p, "upload_by", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
 
-      {/* Remarks - inline text */}
-      <TableCell>
-        <InlineTextInput
-          value={(p as any).remarks || ""}
-          placeholder="—"
-          onSave={v => {/* remarks not in schema yet - could use acknowledgment or a JSONB field */}}
-        />
-      </TableCell>
-    </TableRow>
+        {/* Prepared By */}
+        <TableCell>
+          <Select
+            value={(p as any).prepared_by || "none"}
+            onValueChange={v => onUpdate(p, "prepared_by", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
+
+        {/* Checked By */}
+        <TableCell>
+          <Select
+            value={(p as any).checked_by || "none"}
+            onValueChange={v => onUpdate(p, "checked_by", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
+
+        {/* Assigned Staff */}
+        <TableCell>
+          <Select
+            value={p.assigned_to || "none"}
+            onValueChange={v => onUpdate(p, "assigned_to", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
+
+        {/* Info button */}
+        <TableCell>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setInfoOpen(true)}>
+            <Info size={14} />
+          </Button>
+        </TableCell>
+      </TableRow>
+
+      {/* Info Side Panel */}
+      <InfoPanel
+        open={infoOpen}
+        onOpenChange={setInfoOpen}
+        profile={p}
+        onUpdate={onUpdate}
+        staffUsers={staffUsers}
+      />
+    </>
+  );
+}
+
+// ─── Info Side Panel ───
+function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  profile: ItrProfile;
+  onUpdate: (p: ItrProfile, field: string, value: any) => void;
+  staffUsers: StaffUser[];
+}) {
+  const p = profile;
+  const [ackNo, setAckNo] = useState(p.acknowledgment_no || "");
+  const [remarks, setRemarks] = useState((p as any).remarks || "");
+  const [itrForm, setItrForm] = useState(p.itr_form || "");
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setAckNo(p.acknowledgment_no || "");
+    setRemarks((p as any).remarks || "");
+    setItrForm(p.itr_form || "");
+  }, [p.id]);
+
+  const handleSave = () => {
+    // Validation: if Filed, Ack No is mandatory
+    if ((p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && !ackNo.trim()) {
+      toast({ title: "Ack No is mandatory when status is Filed/Verified/Sent to CPC", variant: "destructive" });
+      return;
+    }
+    if (ackNo !== (p.acknowledgment_no || "")) onUpdate(p, "acknowledgment_no", ackNo);
+    if (itrForm !== (p.itr_form || "")) onUpdate(p, "itr_form", itrForm || null);
+    onOpenChange(false);
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle>{p.client_name} — Info</SheetTitle>
+        </SheetHeader>
+        <div className="space-y-4 mt-4">
+          <div>
+            <Label>PAN</Label>
+            <p className="font-mono text-sm text-muted-foreground">{p.client_pan || "—"}</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>ITR Form</Label>
+            <Select value={itrForm || "none"} onValueChange={v => setItrForm(v === "none" ? "" : v)}>
+              <SelectTrigger><SelectValue placeholder="Select form" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">—</SelectItem>
+                {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Ack No {(p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && <span className="text-destructive">*</span>}</Label>
+            <Input value={ackNo} onChange={e => setAckNo(e.target.value)} placeholder="Enter acknowledgement number" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Remarks</Label>
+            <Textarea value={remarks} onChange={e => setRemarks(e.target.value)} rows={3} placeholder="Any notes..." />
+          </div>
+          <div>
+            <Label>Status</Label>
+            <Badge className={cn("text-xs", STATUS_COLORS[p.filing_status || "Data Pending"] || "")}>
+              {p.filing_status || "Data Pending"}
+            </Badge>
+          </div>
+          <div>
+            <Label>Work Group</Label>
+            <p className="text-sm text-muted-foreground">{p.work_group_name || "—"}</p>
+          </div>
+          <Separator />
+          <Button onClick={handleSave} className="w-full">Save & Close</Button>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -764,7 +976,6 @@ function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
     });
   }, [notices, filters]);
 
-  // Demand reconciliation
   const demandStats = useMemo(() => {
     const total = notices.reduce((s: number, n: any) => s + (Number(n.amount_demanded) || 0), 0);
     const disputed = notices.reduce((s: number, n: any) => s + (Number(n.amount_disputed) || 0), 0);
@@ -772,7 +983,6 @@ function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
     return { total, disputed, outstanding };
   }, [notices]);
 
-  // Stats
   const openCount = notices.filter((n: any) => n.status !== "Closed/Appeal Filed" && n.status !== "Closed/Dropped").length;
   const overdueCount = notices.filter((n: any) => {
     const d = n.extended_due_date || n.reply_due_date;
@@ -920,7 +1130,6 @@ function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
               const daysRemaining = dueDate ? differenceInDays(new Date(dueDate), new Date()) : null;
               const daysColor = daysRemaining === null ? "" : daysRemaining < 0 ? "text-destructive font-bold" : daysRemaining <= 3 ? "text-destructive" : daysRemaining <= 7 ? "text-amber-600" : "text-emerald-600";
 
-              const currentIdx = [...NOTICE_STATUSES, "Received", "Awaiting Order", "Closed/Dropped"].indexOf(n.status);
               const mappedIdx = NOTICE_STATUSES.indexOf(n.status as any);
               const nextStatus = mappedIdx >= 0 && mappedIdx < NOTICE_STATUSES.length - 1 ? NOTICE_STATUSES[mappedIdx + 1] : null;
 
