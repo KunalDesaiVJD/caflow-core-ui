@@ -700,22 +700,6 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
         {/* Work Group - read-only from client */}
         <TableCell className="text-xs text-muted-foreground">{p.work_group_name || "—"}</TableCell>
 
-        {/* ITR Form */}
-        <TableCell>
-          <Select
-            value={p.itr_form || "none"}
-            onValueChange={v => onUpdate(p, "itr_form", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </TableCell>
-
         {/* Status */}
         <TableCell>
           <Select
@@ -741,15 +725,6 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
           <InlineDatePicker
             value={p.date_filed}
             onChange={v => onUpdate(p, "date_filed", v)}
-          />
-        </TableCell>
-
-        {/* Ack No */}
-        <TableCell>
-          <InlineTextInput
-            value={p.acknowledgment_no || ""}
-            placeholder="—"
-            onSave={v => onUpdate(p, "acknowledgment_no", v)}
           />
         </TableCell>
 
