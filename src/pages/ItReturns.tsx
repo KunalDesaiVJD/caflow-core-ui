@@ -515,10 +515,53 @@ function FilingTab({
           </Button>
         )}
         <div className="flex-1" />
+        <Button variant="outline" size="sm" onClick={openAddRowDialog} className="gap-1">
+          <Plus size={14} /> Add Row
+        </Button>
         <Button variant="outline" size="sm" onClick={onExport}>
           <Download size={14} className="mr-1.5" /> Export
         </Button>
       </div>
+
+      {/* Add Row Dialog */}
+      <Dialog open={showAddRowDialog} onOpenChange={setShowAddRowDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add ITR Row — Select Client</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Search client name or PAN..."
+              value={addRowSearch}
+              onChange={e => setAddRowSearch(e.target.value)}
+              className="h-9"
+            />
+            <div className="max-h-60 overflow-auto border rounded-lg">
+              {filteredAddRowClients.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No matching clients</p>
+              ) : filteredAddRowClients.map(c => (
+                <button
+                  key={c.id}
+                  className={cn(
+                    "w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/50 text-left border-b last:border-0",
+                    addRowClientId === c.id && "bg-primary/10"
+                  )}
+                  onClick={() => setAddRowClientId(c.id)}
+                >
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-xs text-muted-foreground font-mono">{c.pan || "—"}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddRowDialog(false)}>Cancel</Button>
+            <Button onClick={handleAddRow} disabled={addingRow || !addRowClientId}>
+              {addingRow ? "Adding..." : "Add Row"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Filing sub-tabs */}
       <Tabs value={filingSubTab} onValueChange={v => setFilingSubTab(v as FilingSubTab)}>
