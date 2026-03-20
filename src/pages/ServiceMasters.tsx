@@ -353,20 +353,6 @@ const ServiceMasters = () => {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Package</Label>
-              <Select value={form.package_name || "__none__"} onValueChange={v => setForm(p => ({ ...p, package_name: v === "__none__" ? "" : v }))}>
-                <SelectTrigger><SelectValue placeholder="Select package" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None</SelectItem>
-                  <SelectItem value="Basic">Basic</SelectItem>
-                  <SelectItem value="Standard">Standard</SelectItem>
-                  <SelectItem value="Premium">Premium</SelectItem>
-                  <SelectItem value="Enterprise">Enterprise</SelectItem>
-                  <SelectItem value="Custom">Custom</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
               <Label>Applicable Entity Types</Label>
               <div className="flex flex-wrap gap-2">
                 {ENTITY_TYPES.map(et => (
