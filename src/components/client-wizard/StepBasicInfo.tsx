@@ -112,11 +112,8 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
     onChange({ ...data, selectedGroupIds: next });
   };
 
-  const toggleClassification = (id: string) => {
-    const next = classifications.includes(id)
-      ? classifications.filter((c) => c !== id)
-      : [...classifications, id];
-    onChange({ ...data, client_classification: next });
+  const selectClassification = (id: string) => {
+    onChange({ ...data, client_classification: [id] });
   };
 
   const update = (field: keyof BasicInfoData, value: any) =>
