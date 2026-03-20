@@ -418,12 +418,34 @@ function FilingTab({
     return counts;
   }, [allProfiles]);
 
-  // Add Row handler
+  // Add Row handler — pick a client first
   const [addingRow, setAddingRow] = useState(false);
+  const [showAddRowDialog, setShowAddRowDialog] = useState(false);
+  const [addRowClientId, setAddRowClientId] = useState("");
+  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any}[]>([]);
+  const [addRowSearch, setAddRowSearch] = useState("");
+
+  const openAddRowDialog = async () => {
+    // Fetch all clients with ITR service active
+    const { data: cats } = await supabase.from("service_categories").select("id").eq("linked_module", "itr");
+    if (!cats?.length) { toast({ title: "No ITR service category found", variant: "destructive" }); return; }
+    const catIds = cats.map(c => c.id);
+    const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
+    const clientIds = [...new Set((cs || []).map(c => c.client_id))];
+    if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, client_classification").in("id", clientIds).order("name");
+    setAddRowClients((clients || []) as any);
+    setAddRowClientId("");
+    setAddRowSearch("");
+    setShowAddRowDialog(true);
+  };
+
   const handleAddRow = async () => {
+    if (!addRowClientId) { toast({ title: "Please select a client", variant: "destructive" }); return; }
     setAddingRow(true);
     try {
       const { error } = await supabase.from("itr_profiles").insert({
+        client_id: addRowClientId,
         firm_id: firmId,
         assessment_year: selectedAY,
         filing_status: "Data Pending",
@@ -431,12 +453,18 @@ function FilingTab({
       if (error) throw error;
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
       toast({ title: "New row added" });
+      setShowAddRowDialog(false);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
       setAddingRow(false);
     }
   };
+
+  const filteredAddRowClients = addRowClients.filter(c =>
+    !addRowSearch || (c.name || "").toLowerCase().includes(addRowSearch.toLowerCase()) ||
+    (c.pan || "").toLowerCase().includes(addRowSearch.toLowerCase())
+  );
 
   return (
     <div className="space-y-4">
