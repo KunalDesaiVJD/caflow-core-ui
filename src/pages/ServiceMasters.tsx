@@ -163,7 +163,7 @@ const ServiceMasters = () => {
   function openNew() {
     setEditing(null);
     const nextCode = `SVC${String(categories.length + 1).padStart(3, "0")}`;
-    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode, package_name: "" });
+    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode });
     setDrawerOpen(true);
   }
 
