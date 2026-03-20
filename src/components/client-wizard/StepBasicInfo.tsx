@@ -102,7 +102,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
   }, [user?.firm_id]);
 
   const selectedGroupIds = data.selectedGroupIds || [];
-  const classifications = data.client_classification || [];
+  const classification = (data.client_classification || [])[0] || "";
   const isIndividual = data.entity_type === "Individual";
 
   const toggleGroup = (id: string) => {
