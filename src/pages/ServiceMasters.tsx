@@ -105,7 +105,7 @@ const ServiceMasters = () => {
   const [form, setForm] = useState({
     name: "", description: "", frequency: "annual", default_due_day: "",
     applicable_entity_types: [] as string[], linked_module: "custom",
-    is_active: true, category_code: "",
+    is_active: true, category_code: "", package_name: "",
   });
 
   // Template form
