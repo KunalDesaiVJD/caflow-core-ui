@@ -105,7 +105,7 @@ const ServiceMasters = () => {
   const [form, setForm] = useState({
     name: "", description: "", frequency: "annual", default_due_day: "",
     applicable_entity_types: [] as string[], linked_module: "custom",
-    is_active: true, category_code: "",
+    is_active: true, category_code: "", package_name: "",
   });
 
   // Template form
@@ -163,7 +163,7 @@ const ServiceMasters = () => {
   function openNew() {
     setEditing(null);
     const nextCode = `SVC${String(categories.length + 1).padStart(3, "0")}`;
-    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode });
+    setForm({ name: "", description: "", frequency: "annual", default_due_day: "", applicable_entity_types: [], linked_module: "custom", is_active: true, category_code: nextCode, package_name: "" });
     setDrawerOpen(true);
   }
 
@@ -178,6 +178,7 @@ const ServiceMasters = () => {
       linked_module: cat.linked_module || "custom",
       is_active: cat.is_active,
       category_code: cat.category_code,
+      package_name: (cat as any).package || "",
     });
     setDrawerOpen(true);
   }
@@ -196,6 +197,7 @@ const ServiceMasters = () => {
         applicable_entity_types: form.applicable_entity_types,
         linked_module: form.linked_module,
         is_active: form.is_active,
+        package: form.package_name || null,
         updated_at: new Date().toISOString(),
       };
       if (editing) {
@@ -351,6 +353,10 @@ const ServiceMasters = () => {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{MODULES.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Package</Label>
+              <Input value={form.package_name} onChange={e => setForm(p => ({ ...p, package_name: e.target.value }))} placeholder="e.g. Basic, Premium, Enterprise" />
             </div>
             <div className="space-y-2">
               <Label>Applicable Entity Types</Label>

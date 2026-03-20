@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -34,10 +35,14 @@ export interface BasicInfoData {
   cin: string;
   selectedGroupIds?: string[];
   firm_id?: string;
+  email?: string;
+  mobile?: string;
+  address?: string;
+  client_classification?: string[];
 }
 
 const ENTITY_TYPES = [
-  "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd",
+  "Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd",
   "HUF", "Trust", "AOP", "BOI",
 ];
 
@@ -50,6 +55,12 @@ const STATES = [
   "West Bengal", "Andaman and Nicobar Islands", "Chandigarh",
   "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Jammu and Kashmir",
   "Ladakh", "Lakshadweep", "Puducherry",
+];
+
+const CLIENT_CLASSIFICATIONS = [
+  { id: "audit", label: "Audit" },
+  { id: "non_audit", label: "Non-Audit" },
+  { id: "partner_in_audited_firm", label: "Partner in Audited Firm" },
 ];
 
 interface GroupOption {
@@ -91,12 +102,21 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
   }, [user?.firm_id]);
 
   const selectedGroupIds = data.selectedGroupIds || [];
+  const classifications = data.client_classification || [];
+  const isIndividual = data.entity_type === "Individual";
 
   const toggleGroup = (id: string) => {
     const next = selectedGroupIds.includes(id)
       ? selectedGroupIds.filter((g) => g !== id)
       : [...selectedGroupIds, id];
     onChange({ ...data, selectedGroupIds: next });
+  };
+
+  const toggleClassification = (id: string) => {
+    const next = classifications.includes(id)
+      ? classifications.filter((c) => c !== id)
+      : [...classifications, id];
+    onChange({ ...data, client_classification: next });
   };
 
   const update = (field: keyof BasicInfoData, value: any) =>
@@ -167,49 +187,110 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         </Select>
       </div>
 
-      {/* Date of Incorporation */}
+      {/* Date of Incorporation — hidden for Individual */}
+      {!isIndividual && (
+        <div className="space-y-1.5">
+          <Label>Date of Incorporation</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                className={cn("w-full justify-start text-left font-normal", !data.date_of_incorporation && "text-muted-foreground")}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {data.date_of_incorporation ? format(data.date_of_incorporation, "PPP") : "Pick a date"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={data.date_of_incorporation}
+                onSelect={(d) => update("date_of_incorporation", d)}
+                disabled={(date) => date > new Date()}
+                initialFocus
+                className="p-3 pointer-events-auto"
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
+
+      {/* Registered State — hidden for Individual */}
+      {!isIndividual && (
+        <div className="space-y-1.5">
+          <Label>Registered State</Label>
+          <Select value={data.registered_state} onValueChange={(v) => update("registered_state", v)}>
+            <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
+            <SelectContent>
+              {STATES.map((s) => (
+                <SelectItem key={s} value={s}>{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Business Nature — hidden for Individual */}
+      {!isIndividual && (
+        <div className="space-y-1.5">
+          <Label>Business Nature / NIC Code</Label>
+          <Input value={data.business_nature} onChange={(e) => update("business_nature", e.target.value)} placeholder="e.g. Manufacturing — NIC 2410" />
+        </div>
+      )}
+
+      {/* Email */}
       <div className="space-y-1.5">
-        <Label>Date of Incorporation</Label>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              className={cn("w-full justify-start text-left font-normal", !data.date_of_incorporation && "text-muted-foreground")}
-            >
-              <CalendarIcon className="mr-2 h-4 w-4" />
-              {data.date_of_incorporation ? format(data.date_of_incorporation, "PPP") : "Pick a date"}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar
-              mode="single"
-              selected={data.date_of_incorporation}
-              onSelect={(d) => update("date_of_incorporation", d)}
-              disabled={(date) => date > new Date()}
-              initialFocus
-              className="p-3 pointer-events-auto"
-            />
-          </PopoverContent>
-        </Popover>
+        <Label>Email ID</Label>
+        <Input
+          type="email"
+          value={data.email || ""}
+          onChange={(e) => update("email", e.target.value)}
+          placeholder="client@example.com"
+        />
+        {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 
-      {/* Registered State */}
+      {/* Mobile */}
       <div className="space-y-1.5">
-        <Label>Registered State</Label>
-        <Select value={data.registered_state} onValueChange={(v) => update("registered_state", v)}>
-          <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
-          <SelectContent>
-            {STATES.map((s) => (
-              <SelectItem key={s} value={s}>{s}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Label>Mobile No</Label>
+        <Input
+          value={data.mobile || ""}
+          onChange={(e) => {
+            const val = e.target.value.replace(/\D/g, "").slice(0, 10);
+            update("mobile", val);
+          }}
+          placeholder="9876543210"
+          maxLength={10}
+        />
+        {errors.mobile && <p className="text-xs text-destructive">{errors.mobile}</p>}
       </div>
 
-      {/* Business Nature */}
+      {/* Address */}
       <div className="space-y-1.5">
-        <Label>Business Nature / NIC Code</Label>
-        <Input value={data.business_nature} onChange={(e) => update("business_nature", e.target.value)} placeholder="e.g. Manufacturing — NIC 2410" />
+        <Label>Address</Label>
+        <Textarea
+          value={data.address || ""}
+          onChange={(e) => update("address", e.target.value)}
+          placeholder="Full address"
+          rows={3}
+        />
+      </div>
+
+      {/* Client Classification */}
+      <div className="space-y-2">
+        <Label>Client Classification</Label>
+        <p className="text-xs text-muted-foreground">Select applicable categories. Audit-specific tabs will show only when "Audit" is selected.</p>
+        <div className="flex flex-wrap gap-4">
+          {CLIENT_CLASSIFICATIONS.map((c) => (
+            <label key={c.id} className="flex items-center gap-2 cursor-pointer text-sm">
+              <Checkbox
+                checked={classifications.includes(c.id)}
+                onCheckedChange={() => toggleClassification(c.id)}
+              />
+              {c.label}
+            </label>
+          ))}
+        </div>
       </div>
 
       {/* GSTIN */}

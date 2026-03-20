@@ -1429,17 +1429,21 @@ export type Database = {
       }
       clients: {
         Row: {
+          address: string | null
           audit_config: Json | null
           business_activity: string | null
           caro_applicable: boolean | null
           cin: string | null
+          client_classification: Json | null
           compliance_flags: Json | null
           created_at: string | null
+          email: string | null
           entity_type: string | null
           firm_id: string | null
           gstin: string[] | null
           id: string
           internal_audit_applicable: boolean | null
+          mobile: string | null
           name: string | null
           pan: string | null
           registered_office: string | null
@@ -1449,17 +1453,21 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          address?: string | null
           audit_config?: Json | null
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
+          client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          email?: string | null
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          mobile?: string | null
           name?: string | null
           pan?: string | null
           registered_office?: string | null
@@ -1469,17 +1477,21 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          address?: string | null
           audit_config?: Json | null
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
+          client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          email?: string | null
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          mobile?: string | null
           name?: string | null
           pan?: string | null
           registered_office?: string | null
@@ -3740,6 +3752,7 @@ export type Database = {
           is_active: boolean
           linked_module: string | null
           name: string
+          package: string | null
           sort_order: number | null
           updated_at: string | null
         }
@@ -3757,6 +3770,7 @@ export type Database = {
           is_active?: boolean
           linked_module?: string | null
           name: string
+          package?: string | null
           sort_order?: number | null
           updated_at?: string | null
         }
@@ -3774,6 +3788,7 @@ export type Database = {
           is_active?: boolean
           linked_module?: string | null
           name?: string
+          package?: string | null
           sort_order?: number | null
           updated_at?: string | null
         }
@@ -4556,6 +4571,83 @@ export type Database = {
           user_role?: string | null
         }
         Relationships: []
+      }
+      work_group_memberships: {
+        Row: {
+          added_at: string | null
+          added_by: string | null
+          client_id: string
+          group_id: string
+          id: string
+        }
+        Insert: {
+          added_at?: string | null
+          added_by?: string | null
+          client_id: string
+          group_id: string
+          id?: string
+        }
+        Update: {
+          added_at?: string | null
+          added_by?: string | null
+          client_id?: string
+          group_id?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_group_memberships_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "work_group_memberships_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "work_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      work_groups: {
+        Row: {
+          color: string | null
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          firm_id: string
+          id: string
+          name: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          firm_id: string
+          id?: string
+          name: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          firm_id?: string
+          id?: string
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_groups_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
