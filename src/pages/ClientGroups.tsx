@@ -46,13 +46,12 @@ interface GroupItem {
 }
 
 // Reusable group grid + CRUD component
-function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon, firmId, userId }: {
+function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon, userId }: {
   tableName: "client_groups" | "work_groups";
   membershipTable: "client_group_memberships" | "work_group_memberships";
   title: string;
   subtitle: string;
   icon: typeof Users;
-  firmId: string;
   userId: string | undefined;
 }) {
   const { toast } = useToast();
