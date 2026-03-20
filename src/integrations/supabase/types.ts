@@ -1299,7 +1299,7 @@ export type Database = {
           created_at: string | null
           created_by: string | null
           description: string | null
-          firm_id: string
+          firm_id: string | null
           id: string
           name: string
         }
@@ -1308,7 +1308,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           description?: string | null
-          firm_id: string
+          firm_id?: string | null
           id?: string
           name: string
         }
@@ -1317,7 +1317,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           description?: string | null
-          firm_id?: string
+          firm_id?: string | null
           id?: string
           name?: string
         }
@@ -2872,6 +2872,7 @@ export type Database = {
           ais_recon_data: Json | null
           assessment_year: string | null
           assigned_to: string | null
+          checked_by: string | null
           client_id: string | null
           date_data_received: string | null
           date_filed: string | null
@@ -2881,12 +2882,16 @@ export type Database = {
           id: string
           itr_form: string | null
           itr_work_group_id: string | null
+          prepared_by: string | null
+          remarks: string | null
+          upload_by: string | null
         }
         Insert: {
           acknowledgment_no?: string | null
           ais_recon_data?: Json | null
           assessment_year?: string | null
           assigned_to?: string | null
+          checked_by?: string | null
           client_id?: string | null
           date_data_received?: string | null
           date_filed?: string | null
@@ -2896,12 +2901,16 @@ export type Database = {
           id?: string
           itr_form?: string | null
           itr_work_group_id?: string | null
+          prepared_by?: string | null
+          remarks?: string | null
+          upload_by?: string | null
         }
         Update: {
           acknowledgment_no?: string | null
           ais_recon_data?: Json | null
           assessment_year?: string | null
           assigned_to?: string | null
+          checked_by?: string | null
           client_id?: string | null
           date_data_received?: string | null
           date_filed?: string | null
@@ -2911,11 +2920,21 @@ export type Database = {
           id?: string
           itr_form?: string | null
           itr_work_group_id?: string | null
+          prepared_by?: string | null
+          remarks?: string | null
+          upload_by?: string | null
         }
         Relationships: [
           {
             foreignKeyName: "itr_profiles_assigned_to_fkey"
             columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "itr_profiles_checked_by_fkey"
+            columns: ["checked_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
@@ -2939,6 +2958,20 @@ export type Database = {
             columns: ["itr_work_group_id"]
             isOneToOne: false
             referencedRelation: "itr_work_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "itr_profiles_prepared_by_fkey"
+            columns: ["prepared_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "itr_profiles_upload_by_fkey"
+            columns: ["upload_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -4693,7 +4726,7 @@ export type Database = {
           created_at: string | null
           created_by: string | null
           description: string | null
-          firm_id: string
+          firm_id: string | null
           id: string
           name: string
         }
@@ -4702,7 +4735,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           description?: string | null
-          firm_id: string
+          firm_id?: string | null
           id?: string
           name: string
         }
@@ -4711,7 +4744,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string | null
           description?: string | null
-          firm_id?: string
+          firm_id?: string | null
           id?: string
           name?: string
         }
