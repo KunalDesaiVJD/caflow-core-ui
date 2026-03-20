@@ -276,7 +276,7 @@ const ClientDetail = () => {
         <TabsList>
           <TabsTrigger value="basic">Basic Info</TabsTrigger>
           <TabsTrigger value="services">Service Activation</TabsTrigger>
-          <TabsTrigger value="audit">Audit Setup</TabsTrigger>
+          {isAuditClient && <TabsTrigger value="audit">Audit Setup</TabsTrigger>}
           <TabsTrigger value="groups">Work Groups</TabsTrigger>
         </TabsList>
 
