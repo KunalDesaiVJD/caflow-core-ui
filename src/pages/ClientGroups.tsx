@@ -311,6 +311,7 @@ const ClientGroups = () => {
             subtitle="Reusable work groups across modules."
             icon={Briefcase}
             userId={user?.id}
+            defaultFirmId={user?.firm_id || null}
           />
         </TabsContent>
       </Tabs>
