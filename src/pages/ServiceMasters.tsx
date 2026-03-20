@@ -178,7 +178,6 @@ const ServiceMasters = () => {
       linked_module: cat.linked_module || "custom",
       is_active: cat.is_active,
       category_code: cat.category_code,
-      package_name: (cat as any).package || "",
     });
     setDrawerOpen(true);
   }
