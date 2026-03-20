@@ -420,8 +420,8 @@ const ClientDetail = () => {
           </Card>
         </TabsContent>
 
-        {/* Tab 3: Audit Setup */}
-        <TabsContent value="audit">
+        {/* Tab 3: Audit Setup — only for audit clients */}
+        {isAuditClient && <TabsContent value="audit">
           <Card>
             <CardHeader><CardTitle className="text-sm">Audit Configuration</CardTitle></CardHeader>
             <CardContent className="space-y-4">
