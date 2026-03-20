@@ -300,6 +300,7 @@ const ClientGroups = () => {
             subtitle="Organize clients into groups for easy filtering."
             icon={Users}
             userId={user?.id}
+            defaultFirmId={user?.firm_id || null}
           />
         </TabsContent>
         <TabsContent value="work_groups" className="mt-4">
