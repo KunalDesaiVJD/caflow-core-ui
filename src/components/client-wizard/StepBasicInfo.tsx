@@ -273,16 +273,19 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         />
       </div>
 
-      {/* Client Classification */}
+      {/* Client Classification — single select */}
       <div className="space-y-2">
         <Label>Client Classification</Label>
-        <p className="text-xs text-muted-foreground">Select applicable categories. Audit-specific tabs will show only when "Audit" is selected.</p>
+        <p className="text-xs text-muted-foreground">Select one category. Audit-specific tabs will show only when "Audit" is selected.</p>
         <div className="flex flex-wrap gap-4">
           {CLIENT_CLASSIFICATIONS.map((c) => (
             <label key={c.id} className="flex items-center gap-2 cursor-pointer text-sm">
-              <Checkbox
-                checked={classifications.includes(c.id)}
-                onCheckedChange={() => toggleClassification(c.id)}
+              <input
+                type="radio"
+                name="client_classification"
+                checked={classification === c.id}
+                onChange={() => selectClassification(c.id)}
+                className="accent-primary"
               />
               {c.label}
             </label>
