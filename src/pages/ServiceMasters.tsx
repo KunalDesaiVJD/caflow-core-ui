@@ -355,6 +355,10 @@ const ServiceMasters = () => {
               </Select>
             </div>
             <div className="space-y-2">
+              <Label>Package</Label>
+              <Input value={form.package_name} onChange={e => setForm(p => ({ ...p, package_name: e.target.value }))} placeholder="e.g. Basic, Premium, Enterprise" />
+            </div>
+            <div className="space-y-2">
               <Label>Applicable Entity Types</Label>
               <div className="flex flex-wrap gap-2">
                 {ENTITY_TYPES.map(et => (
