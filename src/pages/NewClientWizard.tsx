@@ -327,12 +327,17 @@ const NewClientWizard = () => {
       if (!authUserId) throw new Error("You must be logged in to save this client.");
 
       if (isEditMode && clientId) {
-        const { error: clientError } = await supabase
+        const { data: updatedClient, error: clientError } = await supabase
           .from("clients")
           .update(buildClientPayload() as any)
-          .eq("id", clientId);
+          .eq("id", clientId)
+          .select("id")
+          .maybeSingle();
 
         if (clientError) throw clientError;
+        if (!updatedClient) {
+          throw new Error("Client update was not saved. Please verify you have access to edit this client and try again.");
+        }
 
         const { data: existingProfiles, error: profileFetchError } = await supabase
           .from("client_profiles")
@@ -345,11 +350,16 @@ const NewClientWizard = () => {
 
         const profilePayload = buildProfilePayload(clientId);
         if ((existingProfiles || []).length > 0) {
-          const { error: profileUpdateError } = await supabase
+          const { data: updatedProfile, error: profileUpdateError } = await supabase
             .from("client_profiles")
             .update(profilePayload)
-            .eq("id", existingProfiles![0].id);
+            .eq("id", existingProfiles![0].id)
+            .select("id")
+            .maybeSingle();
           if (profileUpdateError) throw profileUpdateError;
+          if (!updatedProfile) {
+            throw new Error("Client profile update was not saved. Please verify permissions and try again.");
+          }
         } else {
           const { error: profileInsertError } = await supabase
             .from("client_profiles")
