@@ -225,35 +225,6 @@ const ItReturns = () => {
         });
       }
 
-      // Missing clients → auto-create placeholder profiles
-      for (const cid of itrClientIds) {
-        if (!existingClientIds.has(cid)) {
-          const cl = clientMap.get(cid);
-          if (!cl) continue;
-          enriched.push({
-            id: `new_${cid}`,
-            client_id: cid,
-            firm_id: firmId || null,
-            financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
-            itr_form: null,
-            filing_status: "Data Pending",
-            itr_work_group_id: null,
-            assigned_to: null,
-            date_data_received: null,
-            date_filed: null,
-            acknowledgment_no: null,
-            assessment_year: selectedAY,
-            client_name: cl.name || "Unknown",
-            client_pan: cl.pan || "",
-            entity_type: cl.entity_type || "",
-            group_name: "",
-            assigned_name: "",
-            client_classification: (cl as any)?.client_classification || [],
-            work_group_name: clientWgMap.get(cid) || "",
-          });
-        }
-      }
-
       return enriched;
     },
     enabled: itrClientIds.length > 0,
@@ -262,7 +233,7 @@ const ItReturns = () => {
   // ─── Filtered profiles ───
   const filtered = useMemo(() => {
     return profiles.filter(p => {
-      if (search && !(p.client_name || "").toLowerCase().includes(search.toLowerCase()) && !(p.client_pan || "").toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !(p.client_name || "").toLowerCase().includes(search.toLowerCase())) return false;
       if (filterStatus && (p.filing_status || "Data Pending") !== filterStatus) return false;
       if (filterForm && p.itr_form !== filterForm) return false;
       if (filterStaff && p.assigned_to !== filterStaff) return false;
@@ -422,7 +393,7 @@ function FilingTab({
   const [addingRow, setAddingRow] = useState(false);
   const [showAddRowDialog, setShowAddRowDialog] = useState(false);
   const [addRowClientId, setAddRowClientId] = useState("");
-  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any}[]>([]);
+  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any;entity_type?:string|null}[]>([]);
   const [addRowSearch, setAddRowSearch] = useState("");
 
   const openAddRowDialog = async () => {
@@ -433,7 +404,7 @@ function FilingTab({
     const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
     const clientIds = [...new Set((cs || []).map(c => c.client_id))];
     if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
-    const { data: clients } = await supabase.from("clients").select("id, name, pan, client_classification").in("id", clientIds).order("name");
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type, client_classification").in("id", clientIds).order("name");
     setAddRowClients((clients || []) as any);
     setAddRowClientId("");
     setAddRowSearch("");
@@ -444,15 +415,17 @@ function FilingTab({
     if (!addRowClientId) { toast({ title: "Please select a client", variant: "destructive" }); return; }
     setAddingRow(true);
     try {
+      const selectedClient = addRowClients.find(c => c.id === addRowClientId);
       const { error } = await supabase.from("itr_profiles").insert({
         client_id: addRowClientId,
         firm_id: firmId,
         assessment_year: selectedAY,
+        financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
         filing_status: "Data Pending",
       });
       if (error) throw error;
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
-      toast({ title: "New row added" });
+      toast({ title: "New row added", description: `${selectedClient?.name || "Client"} added to the table.` });
       setShowAddRowDialog(false);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
@@ -462,9 +435,19 @@ function FilingTab({
   };
 
   const filteredAddRowClients = addRowClients.filter(c =>
-    !addRowSearch || (c.name || "").toLowerCase().includes(addRowSearch.toLowerCase()) ||
-    (c.pan || "").toLowerCase().includes(addRowSearch.toLowerCase())
+    !addRowSearch || (c.name || "").toLowerCase().includes(addRowSearch.toLowerCase())
   );
+
+  const handleDeleteRow = async (profile: ItrProfile) => {
+    if (!profile.id || profile.id.startsWith("new_") || !window.confirm(`Delete ITR row for ${profile.client_name}?`)) return;
+    const { error } = await supabase.from("itr_profiles").delete().eq("id", profile.id);
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
+    toast({ title: "Row deleted" });
+  };
 
   return (
     <div className="space-y-4">
@@ -489,7 +472,7 @@ function FilingTab({
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search client or PAN..."
+            placeholder="Search client..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="pl-9 h-9"
@@ -531,7 +514,7 @@ function FilingTab({
           </DialogHeader>
           <div className="space-y-3">
             <Input
-              placeholder="Search client name or PAN..."
+              placeholder="Search client name..."
               value={addRowSearch}
               onChange={e => setAddRowSearch(e.target.value)}
               className="h-9"
@@ -549,7 +532,7 @@ function FilingTab({
                   onClick={() => setAddRowClientId(c.id)}
                 >
                   <span className="font-medium">{c.name}</span>
-                  <span className="text-xs text-muted-foreground font-mono">{c.pan || "—"}</span>
+                  <span className="text-xs text-muted-foreground">{c.entity_type || "—"}</span>
                 </button>
               ))}
             </div>
@@ -581,7 +564,6 @@ function FilingTab({
                   <TableHeader className="sticky top-0 z-10 bg-background">
                     <TableRow>
                       <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
-                      <TableHead className="min-w-[100px]">PAN</TableHead>
                       <TableHead className="min-w-[100px]">Constitution</TableHead>
                       <TableHead className="min-w-[120px]">Work Group</TableHead>
                       <TableHead className="min-w-[100px]">ITR Form</TableHead>
@@ -591,14 +573,13 @@ function FilingTab({
                       <TableHead className="min-w-[130px]">Upload By</TableHead>
                       <TableHead className="min-w-[130px]">Prepared By</TableHead>
                       <TableHead className="min-w-[130px]">Checked By</TableHead>
-                      <TableHead className="min-w-[140px]">Assigned Staff</TableHead>
-                      <TableHead className="w-[60px]">Info</TableHead>
+                      <TableHead className="w-[110px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {subTabProfiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={13} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                           No clients in this category.
                         </TableCell>
                       </TableRow>
@@ -609,6 +590,7 @@ function FilingTab({
                         staffUsers={staffUsers}
                         workGroups={workGroups}
                         onUpdate={onInlineUpdate}
+                        onDelete={handleDeleteRow}
                         navigate={navigate}
                       />
                     ))}
@@ -624,9 +606,10 @@ function FilingTab({
 }
 
 // ─── Inline Editable Row ───
-function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, navigate }: {
+function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete, navigate }: {
   profile: ItrProfile; staffUsers: StaffUser[]; workGroups: any[];
   onUpdate: (p: ItrProfile, field: string, value: any) => void;
+  onDelete: (p: ItrProfile) => void;
   navigate: (path: string) => void;
 }) {
   const p = profile;
@@ -654,9 +637,6 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, navigate
             </Tooltip>
           </TooltipProvider>
         </TableCell>
-
-        {/* PAN */}
-        <TableCell className="font-mono text-xs text-muted-foreground">{p.client_pan || "—"}</TableCell>
 
         {/* Constitution */}
         <TableCell className="text-xs">{p.entity_type || "—"}</TableCell>
@@ -765,27 +745,15 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, navigate
           </Select>
         </TableCell>
 
-        {/* Assigned Staff */}
         <TableCell>
-          <Select
-            value={p.assigned_to || "none"}
-            onValueChange={v => onUpdate(p, "assigned_to", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </TableCell>
-
-        {/* Info button */}
-        <TableCell>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setInfoOpen(true)}>
-            <Info size={14} />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setInfoOpen(true)}>
+              <Info size={14} />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(p)}>
+              <X size={14} />
+            </Button>
+          </div>
         </TableCell>
       </TableRow>
 
