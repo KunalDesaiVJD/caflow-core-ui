@@ -1825,10 +1825,9 @@ return (
         </div>
         <Separator/>
         <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Opening Balances</p>
-        <div className='grid grid-cols-3 gap-3'>
+        <div className='grid grid-cols-2 gap-3'>
           <div><Label>Gross Block Opening (₹)</Label><Input type='number' value={editAsset.gross_block_opening} onChange={e=>setEditAsset((p:any)=>({...p,gross_block_opening:e.target.value}))}/></div>
           <div><Label>Acc Dep Opening (₹)</Label><Input type='number' value={editAsset.accumulated_dep_opening} onChange={e=>setEditAsset((p:any)=>({...p,accumulated_dep_opening:e.target.value}))}/></div>
-          <div><Label>Residual Value (₹)</Label><Input type='number' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from cat'/></div>
         </div>
         <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Movements</p>
         <div className='grid grid-cols-2 gap-3'>
@@ -1836,6 +1835,13 @@ return (
           <div><Label>Addition Date</Label><Input type='date' value={editAsset.addition_date||''} onChange={e=>setEditAsset((p:any)=>({...p,addition_date:e.target.value}))}/></div>
           <div><Label>Disposals (₹)</Label><Input type='number' value={editAsset.disposals_during_year} onChange={e=>setEditAsset((p:any)=>({...p,disposals_during_year:e.target.value}))}/></div>
           <div><Label>Disposal Date</Label><Input type='date' value={editAsset.disposal_date||''} onChange={e=>setEditAsset((p:any)=>({...p,disposal_date:e.target.value}))}/></div>
+        </div>
+        <div>
+          <Label>Residual Value (₹)</Label>
+          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+          {editAsset.residual_value && parseFloat(editAsset.residual_value) >= parseFloat(editAsset.gross_block_opening||'0') && parseFloat(editAsset.gross_block_opening||'0') > 0 && (
+            <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
+          )}
         </div>
         <div><Label>Narration</Label><Input value={editAsset.narration||''} onChange={e=>setEditAsset((p:any)=>({...p,narration:e.target.value}))}/></div>
       </div>
