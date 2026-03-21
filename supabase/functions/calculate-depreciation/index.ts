@@ -56,10 +56,9 @@ Deno.serve(async (req) => {
         const disps   = parseFloat(asset.disposals_during_year)   || 0;
         const wdvOpen = gbOpen - acOpen;
 
-        const residualPct = parseFloat(cat.residual_value_pct) || 5;
         const residual = (asset.residual_value != null && asset.residual_value !== '')
           ? parseFloat(asset.residual_value)
-          : Math.round((gbOpen * residualPct) / 100 * 100) / 100;
+          : 0;
 
         // ── Fully-depreciated check ──────────────────────────────────
         if (wdvOpen <= residual && addns === 0) {
@@ -168,8 +167,7 @@ Deno.serve(async (req) => {
         // ── Additions depreciation ──────────────────────────────────
         let depOnAdd = 0, depDaysAdd = 0;
         if (addns > 0) {
-          const addResidualPct = parseFloat(cat.residual_value_pct) || 5;
-          const addResidual    = Math.round(addns * addResidualPct / 100 * 100) / 100;
+          const addResidual    = 0;
           if (method === 'SLM') {
             const life      = cat.useful_life_years || 1;
             const addAnnual = Math.round(((addns - addResidual) / life) * 100) / 100;
