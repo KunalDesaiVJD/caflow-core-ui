@@ -672,7 +672,7 @@ const dataStart = 5;
   const gb   = parseFloat(a.gross_block_opening)    || 0;
   const ad   = parseFloat(a.accumulated_dep_opening) || 0;
   const addns = parseFloat(a.additions_during_year)  || 0;
-  const res   = a.residual_value ?? Math.round(gb * (parseFloat(a.fa_categories?.residual_value_pct)||5) / 100 * 100)/100;
+  const res   = a.residual_value ?? 0;
   const dep   = parseFloat(a.depreciation_for_year)  || 0;
   regData.push([
     i + 1, a.asset_code, a.asset_name,
@@ -845,7 +845,7 @@ const regBody = (assets||[]).map((a: any, i: number) => {
   const gb  = parseFloat(a.gross_block_opening)||0;
   const ad  = parseFloat(a.accumulated_dep_opening)||0;
   const addV = parseFloat(a.additions_during_year)||0;
-  const res = a.residual_value ?? Math.round(gb*(parseFloat(a.fa_categories?.residual_value_pct)||5)/100*100)/100;
+  const res = a.residual_value ?? 0;
   const dep = parseFloat(a.depreciation_for_year)||0;
   const wdvO = gb - ad;
   const wdvC = a.wdv_closing ?? wdvO + addV - dep;
@@ -1044,14 +1044,27 @@ return (
               const rateDisplay = method === 'SLM'
                 ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
                 : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
+              const resValDisplay = resVal ?? 0;
+              const liveDepAmount = dep ?? 0;
+              const liveOpeningWdv = wdvO;
+              const liveResidual = resValDisplay;
+              const depDays = (a as any).dep_formula_json?.dep_days;
+              const slmLife = a.fa_categories?.useful_life_years;
+              const wdvRate = a.fa_categories?.wdv_rate;
+              const slmAnnual = slmLife ? ((parseFloat(a.gross_block_opening) || 0) - resValDisplay) / slmLife : 0;
               const formulaText: string =
-                (a as any).dep_formula_json?.formula_text ||
-                (method === 'SLM' && a.fa_categories?.useful_life_years
-                  ? `(Cost ₹${fmt(parseFloat(a.gross_block_opening)||0)} − Residual ₹${fmt(resVal||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
-                  : 'Run Calculate Depreciation to see formula');
-              const isAtResidual = resVal != null && wdvC != null && Math.abs(wdvC - resVal) < 1;
-              const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-              const resValDisplay = resVal ?? Math.round(gb * residualPct / 100 * 100)/100;
+                method === 'SLM' && slmLife
+                  ? (a as any).dep_formula_json?.is_balancing_year
+                    ? `Opening WDV ₹${fmt(liveOpeningWdv)} − Residual ₹${fmt(liveResidual)} = ₹${fmt(liveDepAmount)} (Balancing Figure — Final Year of Useful Life)`
+                    : depDays && depDays < 365
+                      ? `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(slmAnnual)}/yr × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
+                      : `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(liveDepAmount)}`
+                  : method === 'WDV' && wdvRate
+                    ? depDays && depDays < 365
+                      ? `WDV ₹${fmt(liveOpeningWdv)} × ${wdvRate}% × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
+                      : `WDV ₹${fmt(liveOpeningWdv)} × ${wdvRate}% = ₹${fmt(liveDepAmount)}`
+                    : 'Run Calculate Depreciation to see formula';
+              const isAtResidual = wdvC != null && Math.abs(wdvC - resValDisplay) < 1;
               const warn   = wdvO < 0 || ad > gb;
               return (
                 <TableRow key={a.id} className={cn(a.is_fully_depreciated&&'bg-muted/20', warn&&'bg-red-50 dark:bg-red-950/20')}>
@@ -1093,17 +1106,11 @@ return (
                         <TooltipContent side='top' className='max-w-sm p-3'>
                           <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
                           <p className='text-xs mt-1'>{formulaText}</p>
-                          {(a as any).dep_formula_json?.dep_amount != null && (
-                            <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt((a as any).dep_formula_json.dep_amount)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.residual != null && (
-                            <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt((a as any).dep_formula_json.residual)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.wdv_open != null && (
-                            <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt((a as any).dep_formula_json.wdv_open)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
-                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
+                          <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt(liveDepAmount)}</p>
+                          <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt(liveResidual)}</p>
+                          <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt(liveOpeningWdv)}</p>
+                          {depDays && depDays < 366 && (
+                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {depDays} days used in this FY</p>
                           )}
                           {(a as any).dep_formula_json?.is_balancing_year && (
                             <p className='text-xs mt-1 text-orange-600'>Final year — dep restricted to (Opening WDV − Residual Value)</p>
@@ -1216,8 +1223,7 @@ return (
                       const wdvO = gb - ad;
                       const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
                       const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
-                      const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-                      const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
+                      const resVal = a.residual_value ?? 0;
                       return (
                         <TableRow key={a.id}>
                           <TableCell className='text-xs text-muted-foreground'>{i+1}</TableCell>
@@ -1321,7 +1327,7 @@ return (
               const method = ast?.depreciation_method_used || ast?.fa_categories?.depreciation_method||'WDV';
               const cat = ast?.fa_categories;
               const addAst = assets?.find((a:any) => a.id===s.asset_id);
-              const residual = addAst?.residual_value ?? Math.round((parseFloat(s.wdv_opening)+(parseFloat(ast?.accumulated_dep_opening)||0)) * (parseFloat(cat?.residual_value_pct)||5) / 100 * 100)/100;
+              const residual = addAst?.residual_value ?? 0;
               const rateBasis = method === 'SLM'
                 ? `(Cost-Res)/${cat?.useful_life_years}yr`
                 : `${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`;
@@ -1789,11 +1795,11 @@ return (
       </div>
       <div>
         <Label>Residual Value (₹)</Label>
-        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='0' />
         {na.residual_value && parseFloat(na.residual_value) >= parseFloat(na.gross_block_opening||'0') && parseFloat(na.gross_block_opening||'0') > 0 && (
           <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
         )}
-        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to auto-calculate from category default %</p>
+        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to treat residual value as 0</p>
       </div>
       <div><Label>Narration</Label><Input value={na.narration} onChange={e=>setNa(p=>({...p,narration:e.target.value}))}/></div>
     </div>
@@ -1853,7 +1859,7 @@ return (
         </div>
         <div>
           <Label>Residual Value (₹)</Label>
-          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='0' />
           {editAsset.residual_value && parseFloat(editAsset.residual_value) >= parseFloat(editAsset.gross_block_opening||'0') && parseFloat(editAsset.gross_block_opening||'0') > 0 && (
             <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
           )}
@@ -1945,7 +1951,7 @@ return (
                   <Input className='h-8 text-xs' type='number' value={row.residual_value}
                     onChange={e => setBulkRows(rows => rows.map((r,i) =>
                       i===idx ? {...r, residual_value: e.target.value} : r))}
-                    placeholder='Default from cat' />
+                    placeholder='0' />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.additions_during_year}
