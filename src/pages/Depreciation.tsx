@@ -672,7 +672,7 @@ const dataStart = 5;
   const gb   = parseFloat(a.gross_block_opening)    || 0;
   const ad   = parseFloat(a.accumulated_dep_opening) || 0;
   const addns = parseFloat(a.additions_during_year)  || 0;
-  const res   = a.residual_value ?? Math.round(gb * (parseFloat(a.fa_categories?.residual_value_pct)||5) / 100 * 100)/100;
+  const res   = a.residual_value ?? 0;
   const dep   = parseFloat(a.depreciation_for_year)  || 0;
   regData.push([
     i + 1, a.asset_code, a.asset_name,
@@ -845,7 +845,7 @@ const regBody = (assets||[]).map((a: any, i: number) => {
   const gb  = parseFloat(a.gross_block_opening)||0;
   const ad  = parseFloat(a.accumulated_dep_opening)||0;
   const addV = parseFloat(a.additions_during_year)||0;
-  const res = a.residual_value ?? Math.round(gb*(parseFloat(a.fa_categories?.residual_value_pct)||5)/100*100)/100;
+  const res = a.residual_value ?? 0;
   const dep = parseFloat(a.depreciation_for_year)||0;
   const wdvO = gb - ad;
   const wdvC = a.wdv_closing ?? wdvO + addV - dep;
@@ -1044,10 +1044,10 @@ return (
               const rateDisplay = method === 'SLM'
                 ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
                 : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
+              const resValDisplay = resVal ?? 0;
               const liveDepAmount = dep ?? 0;
               const liveOpeningWdv = wdvO;
               const liveResidual = resValDisplay;
-              const resValDisplay = resVal ?? 0;
               const depDays = (a as any).dep_formula_json?.dep_days;
               const slmLife = a.fa_categories?.useful_life_years;
               const wdvRate = a.fa_categories?.wdv_rate;
@@ -1223,8 +1223,7 @@ return (
                       const wdvO = gb - ad;
                       const dep  = a.depreciation_for_year != null ? parseFloat(a.depreciation_for_year) : null;
                       const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
-                      const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-                      const resVal = a.residual_value ?? Math.round(gb * residualPct / 100 * 100)/100;
+                      const resVal = a.residual_value ?? 0;
                       return (
                         <TableRow key={a.id}>
                           <TableCell className='text-xs text-muted-foreground'>{i+1}</TableCell>
@@ -1328,7 +1327,7 @@ return (
               const method = ast?.depreciation_method_used || ast?.fa_categories?.depreciation_method||'WDV';
               const cat = ast?.fa_categories;
               const addAst = assets?.find((a:any) => a.id===s.asset_id);
-              const residual = addAst?.residual_value ?? Math.round((parseFloat(s.wdv_opening)+(parseFloat(ast?.accumulated_dep_opening)||0)) * (parseFloat(cat?.residual_value_pct)||5) / 100 * 100)/100;
+              const residual = addAst?.residual_value ?? 0;
               const rateBasis = method === 'SLM'
                 ? `(Cost-Res)/${cat?.useful_life_years}yr`
                 : `${parseFloat(s.depreciation_rate).toFixed(2)}% WDV`;
