@@ -307,6 +307,7 @@ qc.invalidateQueries({queryKey:['fa-additions-log',clientId,fy]});
 setShowAdd(false);
 setNa({asset_name:'',category_id:'',location:'',date_of_purchase:'',
        gross_block_opening:'0',accumulated_dep_opening:'0',
+       residual_value:'',
        additions_during_year:'0',addition_date:'',
        disposals_during_year:'0',disposal_date:'',narration:''});
 },
