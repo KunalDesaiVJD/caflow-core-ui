@@ -70,6 +70,12 @@ if (d < new Date(fyY,3,1) || d > new Date(fyY+1,2,31))
       );
     }
   }
+  // Residual value validation
+  if (a.residual_value != null && a.residual_value !== '') {
+    const rv = parseFloat(a.residual_value) || 0;
+    if (rv < 0) errs.push('Residual Value cannot be negative.');
+    if (rv >= gb && gb > 0) errs.push('Residual Value must be less than Cost of Asset (Gross Block Opening).');
+  }
 return errs;
 }
 
@@ -118,6 +124,7 @@ const [unlocking, setUnlocking] = useState(false);
 const [na, setNa] = useState({
 asset_name:'', category_id:'', location:'', date_of_purchase:'',
 gross_block_opening:'0', accumulated_dep_opening:'0',
+residual_value:'',
 additions_during_year:'0', addition_date:'',
 disposals_during_year:'0', disposal_date:'', narration:'',
 });
@@ -275,6 +282,7 @@ asset_name:na.asset_name, category_id:na.category_id,
 location:na.location||null, date_of_purchase:na.date_of_purchase,
 gross_block_opening:     parseFloat(na.gross_block_opening)||0,
 accumulated_dep_opening: parseFloat(na.accumulated_dep_opening)||0,
+residual_value:          na.residual_value ? parseFloat(na.residual_value) : null,
 additions_during_year:   parseFloat(na.additions_during_year)||0,
 addition_date:           na.addition_date||null,
 disposals_during_year:   parseFloat(na.disposals_during_year)||0,
@@ -305,6 +313,7 @@ qc.invalidateQueries({queryKey:['fa-additions-log',clientId,fy]});
 setShowAdd(false);
 setNa({asset_name:'',category_id:'',location:'',date_of_purchase:'',
        gross_block_opening:'0',accumulated_dep_opening:'0',
+       residual_value:'',
        additions_during_year:'0',addition_date:'',
        disposals_during_year:'0',disposal_date:'',narration:''});
 },
@@ -1081,9 +1090,18 @@ return (
                             )}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent side='top' className='max-w-xs'>
+                        <TooltipContent side='top' className='max-w-sm p-3'>
                           <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
                           <p className='text-xs mt-1'>{formulaText}</p>
+                          {(a as any).dep_formula_json?.dep_amount != null && (
+                            <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt((a as any).dep_formula_json.dep_amount)}</p>
+                          )}
+                          {(a as any).dep_formula_json?.residual != null && (
+                            <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt((a as any).dep_formula_json.residual)}</p>
+                          )}
+                          {(a as any).dep_formula_json?.wdv_open != null && (
+                            <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt((a as any).dep_formula_json.wdv_open)}</p>
+                          )}
                           {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
                             <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
                           )}
@@ -1769,6 +1787,14 @@ return (
         <div><Label>Disposals During Year (₹)</Label><Input type='number' value={na.disposals_during_year} onChange={e=>setNa(p=>({...p,disposals_during_year:e.target.value}))}/></div>
         <div><Label>Disposal Date {parseFloat(na.disposals_during_year)>0&&'*'}</Label><Input type='date' value={na.disposal_date} onChange={e=>setNa(p=>({...p,disposal_date:e.target.value}))}/></div>
       </div>
+      <div>
+        <Label>Residual Value (₹)</Label>
+        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+        {na.residual_value && parseFloat(na.residual_value) >= parseFloat(na.gross_block_opening||'0') && parseFloat(na.gross_block_opening||'0') > 0 && (
+          <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
+        )}
+        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to auto-calculate from category default %</p>
+      </div>
       <div><Label>Narration</Label><Input value={na.narration} onChange={e=>setNa(p=>({...p,narration:e.target.value}))}/></div>
     </div>
     <DialogFooter>
@@ -1814,10 +1840,9 @@ return (
         </div>
         <Separator/>
         <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Opening Balances</p>
-        <div className='grid grid-cols-3 gap-3'>
+        <div className='grid grid-cols-2 gap-3'>
           <div><Label>Gross Block Opening (₹)</Label><Input type='number' value={editAsset.gross_block_opening} onChange={e=>setEditAsset((p:any)=>({...p,gross_block_opening:e.target.value}))}/></div>
           <div><Label>Acc Dep Opening (₹)</Label><Input type='number' value={editAsset.accumulated_dep_opening} onChange={e=>setEditAsset((p:any)=>({...p,accumulated_dep_opening:e.target.value}))}/></div>
-          <div><Label>Residual Value (₹)</Label><Input type='number' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from cat'/></div>
         </div>
         <p className='text-xs font-semibold text-muted-foreground uppercase tracking-wider'>Movements</p>
         <div className='grid grid-cols-2 gap-3'>
@@ -1825,6 +1850,13 @@ return (
           <div><Label>Addition Date</Label><Input type='date' value={editAsset.addition_date||''} onChange={e=>setEditAsset((p:any)=>({...p,addition_date:e.target.value}))}/></div>
           <div><Label>Disposals (₹)</Label><Input type='number' value={editAsset.disposals_during_year} onChange={e=>setEditAsset((p:any)=>({...p,disposals_during_year:e.target.value}))}/></div>
           <div><Label>Disposal Date</Label><Input type='date' value={editAsset.disposal_date||''} onChange={e=>setEditAsset((p:any)=>({...p,disposal_date:e.target.value}))}/></div>
+        </div>
+        <div>
+          <Label>Residual Value (₹)</Label>
+          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+          {editAsset.residual_value && parseFloat(editAsset.residual_value) >= parseFloat(editAsset.gross_block_opening||'0') && parseFloat(editAsset.gross_block_opening||'0') > 0 && (
+            <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
+          )}
         </div>
         <div><Label>Narration</Label><Input value={editAsset.narration||''} onChange={e=>setEditAsset((p:any)=>({...p,narration:e.target.value}))}/></div>
       </div>
