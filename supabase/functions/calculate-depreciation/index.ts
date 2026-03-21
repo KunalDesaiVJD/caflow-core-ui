@@ -157,6 +157,7 @@ Deno.serve(async (req) => {
             formula_text:
               `WDV ₹${fmtINR(wdvOpen)} × ${wdvRate}%${daysNote} = ₹${fmtINR(depOnOpen)}`,
             wdv_rate: wdvRate, dep_days: depDaysOpen, annual_dep: annualDep,
+            dep_amount: depOnOpen,
             residual, is_balancing_year: false, wdv_open: wdvOpen,
             is_pro_rata: depDaysOpen < FY_DAYS,
             is_disposal_year: isDisposalYear,
