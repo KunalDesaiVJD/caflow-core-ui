@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
               ? `Opening WDV ₹${fmtINR(wdvOpen)} − Residual ₹${fmtINR(residual)} = ₹${fmtINR(depOnOpen)} (Balancing Figure)`
               : `(₹${fmtINR(gbOpen)} − ₹${fmtINR(residual)}) ÷ ${life} yrs = ₹${fmtINR(annualDep)}/yr${daysNote} = ₹${fmtINR(depOnOpen)}`,
             cost: gbOpen, residual, useful_life_years: life,
-            annual_dep: annualDep, dep_days: depDaysOpen,
+            annual_dep: annualDep, dep_days: depDaysOpen, dep_amount: depOnOpen,
             is_pro_rata: depDaysOpen < FY_DAYS, is_balancing_year: isBalancing,
             is_disposal_year: isDisposalYear, wdv_open: wdvOpen,
             disposal_date: asset.disposal_date || null,
