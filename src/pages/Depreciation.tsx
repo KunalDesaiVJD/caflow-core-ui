@@ -1772,6 +1772,14 @@ return (
         <div><Label>Disposals During Year (₹)</Label><Input type='number' value={na.disposals_during_year} onChange={e=>setNa(p=>({...p,disposals_during_year:e.target.value}))}/></div>
         <div><Label>Disposal Date {parseFloat(na.disposals_during_year)>0&&'*'}</Label><Input type='date' value={na.disposal_date} onChange={e=>setNa(p=>({...p,disposal_date:e.target.value}))}/></div>
       </div>
+      <div>
+        <Label>Residual Value (₹)</Label>
+        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+        {na.residual_value && parseFloat(na.residual_value) >= parseFloat(na.gross_block_opening||'0') && parseFloat(na.gross_block_opening||'0') > 0 && (
+          <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
+        )}
+        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to auto-calculate from category default %</p>
+      </div>
       <div><Label>Narration</Label><Input value={na.narration} onChange={e=>setNa(p=>({...p,narration:e.target.value}))}/></div>
     </div>
     <DialogFooter>
