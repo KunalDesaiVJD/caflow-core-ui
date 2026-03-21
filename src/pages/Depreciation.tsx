@@ -1041,24 +1041,30 @@ return (
               const wdvC = a.wdv_closing != null ? parseFloat(a.wdv_closing) : null;
               const method = a.fa_categories?.depreciation_method || 'WDV';
               const resVal = a.residual_value != null ? parseFloat(a.residual_value) : null;
+              const depOnOpening = parseFloat(a.dep_on_opening_block) || 0;
+              const depOnAdditions = parseFloat(a.dep_on_additions) || 0;
               const rateDisplay = method === 'SLM'
                 ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
                 : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
               const resValDisplay = resVal ?? 0;
               const liveDepAmount = dep ?? 0;
-              const liveOpeningWdv = wdvO;
+              const isAdditionDrivenRow = gb === 0 && add > 0 && depOnOpening === 0 && depOnAdditions > 0;
+              const formulaCostBase = isAdditionDrivenRow ? add : gb;
+              const liveOpeningWdv = isAdditionDrivenRow ? add : wdvO;
               const liveResidual = resValDisplay;
-              const depDays = (a as any).dep_formula_json?.dep_days;
+              const depDays = isAdditionDrivenRow
+                ? (parseFloat(a.dep_days_addition) || (a as any).dep_formula_json?.dep_days)
+                : ((a as any).dep_formula_json?.dep_days || parseFloat(a.dep_days_opening) || undefined);
               const slmLife = a.fa_categories?.useful_life_years;
               const wdvRate = a.fa_categories?.wdv_rate;
-              const slmAnnual = slmLife ? ((parseFloat(a.gross_block_opening) || 0) - resValDisplay) / slmLife : 0;
+              const slmAnnual = slmLife ? (formulaCostBase - resValDisplay) / slmLife : 0;
               const formulaText: string =
                 method === 'SLM' && slmLife
                   ? (a as any).dep_formula_json?.is_balancing_year
                     ? `Opening WDV ₹${fmt(liveOpeningWdv)} − Residual ₹${fmt(liveResidual)} = ₹${fmt(liveDepAmount)} (Balancing Figure — Final Year of Useful Life)`
                     : depDays && depDays < 365
-                      ? `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(slmAnnual)}/yr × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
-                      : `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(liveDepAmount)}`
+                      ? `(₹${fmt(formulaCostBase)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(slmAnnual)}/yr × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
+                      : `(₹${fmt(formulaCostBase)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(liveDepAmount)}`
                   : method === 'WDV' && wdvRate
                     ? depDays && depDays < 365
                       ? `WDV ₹${fmt(liveOpeningWdv)} × ${wdvRate}% × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
