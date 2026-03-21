@@ -70,6 +70,12 @@ if (d < new Date(fyY,3,1) || d > new Date(fyY+1,2,31))
       );
     }
   }
+  // Residual value validation
+  if (a.residual_value != null && a.residual_value !== '') {
+    const rv = parseFloat(a.residual_value) || 0;
+    if (rv < 0) errs.push('Residual Value cannot be negative.');
+    if (rv >= gb && gb > 0) errs.push('Residual Value must be less than Cost of Asset (Gross Block Opening).');
+  }
 return errs;
 }
 
