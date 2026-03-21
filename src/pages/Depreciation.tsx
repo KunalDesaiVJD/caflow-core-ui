@@ -1090,9 +1090,18 @@ return (
                             )}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent side='top' className='max-w-xs'>
+                        <TooltipContent side='top' className='max-w-sm p-3'>
                           <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
                           <p className='text-xs mt-1'>{formulaText}</p>
+                          {(a as any).dep_formula_json?.dep_amount != null && (
+                            <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt((a as any).dep_formula_json.dep_amount)}</p>
+                          )}
+                          {(a as any).dep_formula_json?.residual != null && (
+                            <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt((a as any).dep_formula_json.residual)}</p>
+                          )}
+                          {(a as any).dep_formula_json?.wdv_open != null && (
+                            <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt((a as any).dep_formula_json.wdv_open)}</p>
+                          )}
                           {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
                             <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
                           )}
