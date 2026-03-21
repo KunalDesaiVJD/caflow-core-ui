@@ -1047,16 +1047,24 @@ return (
               const liveDepAmount = dep ?? 0;
               const liveOpeningWdv = wdvO;
               const liveResidual = resValDisplay;
+              const resValDisplay = resVal ?? 0;
+              const depDays = (a as any).dep_formula_json?.dep_days;
+              const slmLife = a.fa_categories?.useful_life_years;
+              const wdvRate = a.fa_categories?.wdv_rate;
+              const slmAnnual = slmLife ? ((parseFloat(a.gross_block_opening) || 0) - resValDisplay) / slmLife : 0;
               const formulaText: string =
-                (a as any).dep_formula_json?.formula_text ||
-                (method === 'SLM' && a.fa_categories?.useful_life_years
-                  ? `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
-                  : method === 'WDV' && a.fa_categories?.wdv_rate
-                    ? `WDV ₹${fmt(liveOpeningWdv)} × ${a.fa_categories.wdv_rate}% = ₹${fmt(liveDepAmount)}`
-                    : 'Run Calculate Depreciation to see formula');
-              const isAtResidual = resVal != null && wdvC != null && Math.abs(wdvC - resVal) < 1;
-              const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
-              const resValDisplay = resVal ?? Math.round(gb * residualPct / 100 * 100)/100;
+                method === 'SLM' && slmLife
+                  ? (a as any).dep_formula_json?.is_balancing_year
+                    ? `Opening WDV ₹${fmt(liveOpeningWdv)} − Residual ₹${fmt(liveResidual)} = ₹${fmt(liveDepAmount)} (Balancing Figure — Final Year of Useful Life)`
+                    : depDays && depDays < 365
+                      ? `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(slmAnnual)}/yr × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
+                      : `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual)}) ÷ ${slmLife} yrs = ₹${fmt(liveDepAmount)}`
+                  : method === 'WDV' && wdvRate
+                    ? depDays && depDays < 365
+                      ? `WDV ₹${fmt(liveOpeningWdv)} × ${wdvRate}% × (${depDays} ÷ 365) = ₹${fmt(liveDepAmount)}`
+                      : `WDV ₹${fmt(liveOpeningWdv)} × ${wdvRate}% = ₹${fmt(liveDepAmount)}`
+                    : 'Run Calculate Depreciation to see formula';
+              const isAtResidual = wdvC != null && Math.abs(wdvC - resValDisplay) < 1;
               const warn   = wdvO < 0 || ad > gb;
               return (
                 <TableRow key={a.id} className={cn(a.is_fully_depreciated&&'bg-muted/20', warn&&'bg-red-50 dark:bg-red-950/20')}>
@@ -1101,8 +1109,8 @@ return (
                           <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt(liveDepAmount)}</p>
                           <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt(liveResidual)}</p>
                           <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt(liveOpeningWdv)}</p>
-                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 366 && (
-                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
+                          {depDays && depDays < 366 && (
+                            <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {depDays} days used in this FY</p>
                           )}
                           {(a as any).dep_formula_json?.is_balancing_year && (
                             <p className='text-xs mt-1 text-orange-600'>Final year — dep restricted to (Opening WDV − Residual Value)</p>
@@ -1788,11 +1796,11 @@ return (
       </div>
       <div>
         <Label>Residual Value (₹)</Label>
-        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='0' />
         {na.residual_value && parseFloat(na.residual_value) >= parseFloat(na.gross_block_opening||'0') && parseFloat(na.gross_block_opening||'0') > 0 && (
           <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
         )}
-        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to auto-calculate from category default %</p>
+        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to treat residual value as 0</p>
       </div>
       <div><Label>Narration</Label><Input value={na.narration} onChange={e=>setNa(p=>({...p,narration:e.target.value}))}/></div>
     </div>
@@ -1852,7 +1860,7 @@ return (
         </div>
         <div>
           <Label>Residual Value (₹)</Label>
-          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='Default from category %' />
+          <Input type='number' min='0' value={editAsset.residual_value} onChange={e=>setEditAsset((p:any)=>({...p,residual_value:e.target.value}))} placeholder='0' />
           {editAsset.residual_value && parseFloat(editAsset.residual_value) >= parseFloat(editAsset.gross_block_opening||'0') && parseFloat(editAsset.gross_block_opening||'0') > 0 && (
             <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
           )}
@@ -1944,7 +1952,7 @@ return (
                   <Input className='h-8 text-xs' type='number' value={row.residual_value}
                     onChange={e => setBulkRows(rows => rows.map((r,i) =>
                       i===idx ? {...r, residual_value: e.target.value} : r))}
-                    placeholder='Default from cat' />
+                    placeholder='0' />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.additions_during_year}
