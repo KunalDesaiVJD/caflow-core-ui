@@ -1044,11 +1044,16 @@ return (
               const rateDisplay = method === 'SLM'
                 ? (a.fa_categories?.useful_life_years ? `${a.fa_categories.useful_life_years} yrs` : '—')
                 : (a.fa_categories?.wdv_rate          ? `${a.fa_categories.wdv_rate}%`             : '—');
+              const liveDepAmount = dep ?? 0;
+              const liveOpeningWdv = wdvO;
+              const liveResidual = resValDisplay;
               const formulaText: string =
                 (a as any).dep_formula_json?.formula_text ||
                 (method === 'SLM' && a.fa_categories?.useful_life_years
-                  ? `(Cost ₹${fmt(parseFloat(a.gross_block_opening)||0)} − Residual ₹${fmt(resVal||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
-                  : 'Run Calculate Depreciation to see formula');
+                  ? `(₹${fmt(parseFloat(a.gross_block_opening)||0)} − ₹${fmt(liveResidual||0)}) ÷ ${a.fa_categories.useful_life_years} yrs`
+                  : method === 'WDV' && a.fa_categories?.wdv_rate
+                    ? `WDV ₹${fmt(liveOpeningWdv)} × ${a.fa_categories.wdv_rate}% = ₹${fmt(liveDepAmount)}`
+                    : 'Run Calculate Depreciation to see formula');
               const isAtResidual = resVal != null && wdvC != null && Math.abs(wdvC - resVal) < 1;
               const residualPct = parseFloat(a.fa_categories?.residual_value_pct) || 5;
               const resValDisplay = resVal ?? Math.round(gb * residualPct / 100 * 100)/100;
@@ -1093,16 +1098,10 @@ return (
                         <TooltipContent side='top' className='max-w-sm p-3'>
                           <p className='font-semibold text-xs'>{method === 'SLM' ? 'SLM — Useful Life Method' : 'WDV — Written Down Value'}</p>
                           <p className='text-xs mt-1'>{formulaText}</p>
-                          {(a as any).dep_formula_json?.dep_amount != null && (
-                            <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt((a as any).dep_formula_json.dep_amount)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.residual != null && (
-                            <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt((a as any).dep_formula_json.residual)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.wdv_open != null && (
-                            <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt((a as any).dep_formula_json.wdv_open)}</p>
-                          )}
-                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 365 && (
+                          <p className='text-xs mt-1 font-semibold'>Depreciation: ₹{fmt(liveDepAmount)}</p>
+                          <p className='text-xs mt-0.5 text-muted-foreground'>Residual Value: ₹{fmt(liveResidual)}</p>
+                          <p className='text-xs mt-0.5 text-muted-foreground'>Opening WDV: ₹{fmt(liveOpeningWdv)}</p>
+                          {(a as any).dep_formula_json?.dep_days && (a as any).dep_formula_json.dep_days < 366 && (
                             <p className='text-xs mt-1 text-muted-foreground'>Pro-rata: {(a as any).dep_formula_json.dep_days} days used in this FY</p>
                           )}
                           {(a as any).dep_formula_json?.is_balancing_year && (
