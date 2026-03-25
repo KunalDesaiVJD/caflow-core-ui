@@ -71,7 +71,7 @@ const Clients = () => {
 
   const fetchData = async () => {
     const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(500),
+      supabase.from("clients").select("*").eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }).limit(500),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
