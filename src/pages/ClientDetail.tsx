@@ -139,6 +139,15 @@ const ClientDetail = () => {
       const c = clientRes.data as Client | null;
       setClient(c);
       setFindings(findingsData);
+
+      // Load responsible person name
+      if (c && (c as any).responsible_person_id) {
+        const rpUser = (staffRes.data || []).find((u: any) => u.id === (c as any).responsible_person_id);
+        setResponsiblePersonName(rpUser?.name || null);
+      } else {
+        setResponsiblePersonName(null);
+      }
+
       if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
       setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
