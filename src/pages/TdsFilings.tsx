@@ -247,7 +247,7 @@ const TdsFilings = () => {
 
     if (tdsClientIds.length === 0) { setClients([]); return; }
 
-    let q = supabase.from("clients").select("id, name, pan").in("id", tdsClientIds).order("name");
+    let q = supabase.from("clients").select("id, name, pan").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     const { data } = await q;
     setClients((data as ClientOption[]) || []);

@@ -186,7 +186,7 @@ export default function ImportTrialBalance() {
   useEffect(() => {
     if (routeClientId || contextClientId) return;
     const load = async () => {
-      let q = supabase.from("clients").select("id, name").order("name");
+      let q = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
       if (firmId) q = q.eq("firm_id", firmId);
       const { data } = await q;
       setClientsList(data || []);

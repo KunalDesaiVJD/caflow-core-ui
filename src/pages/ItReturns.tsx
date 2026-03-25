@@ -972,7 +972,7 @@ function ComplianceTab({ navigate }: { navigate: (path: string) => void }) {
   const { data: clients = [] } = useQuery({
     queryKey: ["compliance_clients"],
     queryFn: async () => {
-      const { data } = await supabase.from("clients").select("id, name").order("name");
+      const { data } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
       return data || [];
     },
   });
