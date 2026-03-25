@@ -80,6 +80,7 @@ const ClientDetail = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const [client, setClient] = useState<Client | null>(null);
+  const [responsiblePersonName, setResponsiblePersonName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Scrutiny
