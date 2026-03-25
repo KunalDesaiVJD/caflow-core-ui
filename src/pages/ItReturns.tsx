@@ -111,10 +111,10 @@ function formatDateDDMMYYYY(dateStr: string | null): string {
 // Classification to tab mapping
 type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm";
 
-function getClientSubTab(classification: string[] | undefined): FilingSubTab {
-  const cls = (classification || [])[0] || "non_audit";
+function getClientSubTab(classification: string | undefined): FilingSubTab {
+  const cls = (classification || "").toLowerCase();
   if (cls === "audit") return "audited";
-  if (cls === "partner_in_audited_firm") return "partner_in_audited_firm";
+  if (cls === "partner in audited firm" || cls === "partner_in_audited_firm") return "partner_in_audited_firm";
   return "non_audited";
 }
 
