@@ -150,17 +150,14 @@ const NewClientWizard = () => {
 
       setBasicInfo({
         name: client.name || "",
+        selectedGroupIds: [],
         pan: client.pan || "",
         entity_type: client.entity_type || "",
-        cin: client.cin || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
-        date_of_incorporation: basicExtra.date_of_incorporation ? new Date(basicExtra.date_of_incorporation) : undefined,
-        registered_state: basicExtra.registered_state || "",
-        business_nature: basicExtra.business_nature || "",
         email: client.email || "",
         mobile: client.mobile || "",
         address: client.address || "",
-        client_classification: Array.isArray(client.client_classification) ? client.client_classification : [],
+        tan_number: (client as any).tan_number || "",
       });
 
       setFinancialProfile({
