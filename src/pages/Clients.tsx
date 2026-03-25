@@ -514,12 +514,12 @@ const Clients = () => {
       <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Client</AlertDialogTitle>
-            <AlertDialogDescription>Are you sure you want to delete <strong>{deleteClient?.name}</strong>? This cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Archive Client</AlertDialogTitle>
+            <AlertDialogDescription>Are you sure you want to archive <strong>{deleteClient?.name}</strong>? The client will be hidden from all lists but data will be preserved.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteLoading ? "Deleting…" : "Delete"}</AlertDialogAction>
+            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteLoading ? "Archiving…" : "Archive"}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
