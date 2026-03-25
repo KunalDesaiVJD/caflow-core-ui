@@ -121,7 +121,7 @@ const ClientDetail = () => {
     try {
       const [clientRes, profileRes, catRes, csRes, staffRes] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId!).single(),
-        supabase.from("client_profiles").select("banking_data, loan_data").eq("client_id", clientId!).limit(1),
+        supabase.from("client_profiles").select("audit_questions").eq("client_id", clientId!).limit(1),
         supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("name"),
         supabase.from("client_services").select("*").eq("client_id", clientId!),
         supabase.from("users").select("id, name").order("name"),
