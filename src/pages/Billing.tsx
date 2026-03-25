@@ -273,7 +273,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
-    const { data: usersData } = await supabase.from("users").select("id, name").eq("is_active", true);
+    // Load firm-scoped active users for Responsible Person filter
+    let usersQuery = supabase.from("users").select("id, name").eq("is_active", true).order("name");
+    if (!isSuperadmin && firmId) usersQuery = usersQuery.eq("firm_id", firmId);
+    const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
     (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
