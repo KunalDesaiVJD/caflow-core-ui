@@ -185,9 +185,9 @@ export const StepServiceBilling = ({
     <div className="space-y-6">
       {/* ── Cross-step warnings ── */}
       {warnings.map((w) => (
-        <Alert key={w.type} variant="default" className="border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-950/20">
-          <AlertTriangle className="h-4 w-4 text-yellow-600" />
-          <AlertDescription className="text-sm text-yellow-800 dark:text-yellow-200">
+        <Alert key={w.type} variant="default" className="border-accent/50 bg-accent/10">
+          <AlertTriangle className="h-4 w-4 text-accent-foreground" />
+          <AlertDescription className="text-sm text-foreground">
             {w.message}
           </AlertDescription>
         </Alert>
