@@ -2808,9 +2808,15 @@ export type Database = {
         Row: {
           amount: number | null
           bank_details_snapshot: Json | null
+          base_turnover: number | null
           client_id: string | null
+          conversion_date: string | null
+          converted_to_id: string | null
           created_by: string | null
+          document_series: string
+          document_type: string
           due_date: string | null
+          financial_year: string | null
           firm_id: string | null
           footer_text: string | null
           from_address: string | null
@@ -2831,9 +2837,12 @@ export type Database = {
           payment_terms: string | null
           place_of_supply: string | null
           reference_no: string | null
+          remarks_conditions: string | null
           sent_at: string | null
+          seq_number: number | null
           show_logo: boolean | null
           signatory_name: string | null
+          source_document_id: string | null
           status: string | null
           subject: string | null
           subtotal: number | null
@@ -2850,9 +2859,15 @@ export type Database = {
         Insert: {
           amount?: number | null
           bank_details_snapshot?: Json | null
+          base_turnover?: number | null
           client_id?: string | null
+          conversion_date?: string | null
+          converted_to_id?: string | null
           created_by?: string | null
+          document_series?: string
+          document_type?: string
           due_date?: string | null
+          financial_year?: string | null
           firm_id?: string | null
           footer_text?: string | null
           from_address?: string | null
@@ -2873,9 +2888,12 @@ export type Database = {
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null
+          remarks_conditions?: string | null
           sent_at?: string | null
+          seq_number?: number | null
           show_logo?: boolean | null
           signatory_name?: string | null
+          source_document_id?: string | null
           status?: string | null
           subject?: string | null
           subtotal?: number | null
@@ -2892,9 +2910,15 @@ export type Database = {
         Update: {
           amount?: number | null
           bank_details_snapshot?: Json | null
+          base_turnover?: number | null
           client_id?: string | null
+          conversion_date?: string | null
+          converted_to_id?: string | null
           created_by?: string | null
+          document_series?: string
+          document_type?: string
           due_date?: string | null
+          financial_year?: string | null
           firm_id?: string | null
           footer_text?: string | null
           from_address?: string | null
@@ -2915,9 +2939,12 @@ export type Database = {
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null
+          remarks_conditions?: string | null
           sent_at?: string | null
+          seq_number?: number | null
           show_logo?: boolean | null
           signatory_name?: string | null
+          source_document_id?: string | null
           status?: string | null
           subject?: string | null
           subtotal?: number | null
@@ -2940,10 +2967,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "invoices_converted_to_id_fkey"
+            columns: ["converted_to_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "invoices_firm_id_fkey"
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_source_document_id_fkey"
+            columns: ["source_document_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
             referencedColumns: ["id"]
           },
         ]
