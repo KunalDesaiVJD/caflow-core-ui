@@ -29,7 +29,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     setLoading(true);
 
     const engQuery = supabase.from("audit_engagements").select("*");
-    const clientQuery = supabase.from("clients").select("id, name, entity_type, statutory_audit_applicable, tax_audit_type");
+    const clientQuery = supabase.from("clients").select("id, name, entity_type, statutory_audit_applicable, tax_audit_type").eq("is_draft", false).is("deleted_at", null);
 
     if (user?.firm_id) {
       engQuery.eq("firm_id", user.firm_id);
