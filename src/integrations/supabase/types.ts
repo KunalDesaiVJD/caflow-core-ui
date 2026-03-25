@@ -4959,6 +4959,15 @@ export type Database = {
     Functions: {
       current_user_firm_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
+      get_next_invoice_seq: {
+        Args: {
+          p_financial_year: string
+          p_firm_id: string
+          p_invoice_date: string
+          p_series: string
+        }
+        Returns: number
+      }
       is_chat_conversation_admin: {
         Args: { _conversation_id: string; _user_id: string }
         Returns: boolean
