@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -28,16 +29,19 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, parseISO, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, IndianRupee, Clock, AlertTriangle, FileText, Send,
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
-  Receipt, BookOpen, FileSpreadsheet,
+  Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
+  Archive,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
+import JSZip from "jszip";
 
 // ─── Types ───
 interface Invoice {
@@ -227,6 +231,18 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [groupClientIds, setGroupClientIds] = useState<string[]>([]);
   const [responsibleClientIds, setResponsibleClientIds] = useState<string[]>([]);
 
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkSendOpen, setBulkSendOpen] = useState(false);
+  const [bulkSendMode, setBulkSendMode] = useState<"email" | "whatsapp">("email");
+  const [bulkSendTarget, setBulkSendTarget] = useState<"client" | "responsible" | "both">("client");
+  const [bulkSending, setBulkSending] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
+
+  // Billing reminders
+  const [reminders, setReminders] = useState<any[]>([]);
+  const [reminderClientMap, setReminderClientMap] = useState<Record<string, string>>({});
+
   const docTypeFilter = useMemo(() => {
     if (documentType === "invoice") return ["invoice"];
     if (documentType === "quotation_proforma") return ["quotation", "proforma"];
@@ -267,6 +283,31 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   }, [firmId, isSuperadmin, docTypeFilter, firmFilter]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch billing reminders (only for invoices tab)
+  useEffect(() => {
+    if (documentType !== "invoice" || !firmId) return;
+    (async () => {
+      const today = format(new Date(), "yyyy-MM-dd");
+      const { data } = await supabase.from("billing_reminders")
+        .select("*")
+        .eq("firm_id", firmId)
+        .eq("status", "pending")
+        .lte("next_due_date", today);
+      if (data && data.length > 0) {
+        setReminders(data);
+        const clientIds = [...new Set(data.map((r: any) => r.client_id).filter(Boolean))];
+        if (clientIds.length > 0) {
+          const { data: clients } = await supabase.from("clients").select("id, name").in("id", clientIds);
+          const map: Record<string, string> = {};
+          (clients || []).forEach((c: any) => { map[c.id] = c.name || "Unknown"; });
+          setReminderClientMap(map);
+        }
+      } else {
+        setReminders([]);
+      }
+    })();
+  }, [documentType, firmId]);
 
   // Fetch group client ids when group filter changes
   useEffect(() => {
@@ -336,12 +377,117 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   const handleSend = async (inv: Invoice) => {
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
-    await supabase.functions.invoke("send-notification", {
-      body: { type: "invoice_generated", firm_id: inv.firm_id, client_id: inv.client_id, payload: { invoice_no: inv.invoice_no, amount: total } },
-    });
+    const notifType = inv.document_type === "credit_note" ? "credit_note_issued"
+      : inv.document_type === "quotation" ? "quotation_sent"
+      : inv.document_type === "proforma" ? "proforma_sent"
+      : "invoice_generated";
+
+    try {
+      await supabase.functions.invoke("send-notification", {
+        body: {
+          type: notifType,
+          firm_id: inv.firm_id,
+          client_id: inv.client_id,
+          send_to_client: true,
+          send_to_responsible: false,
+          payload: {
+            invoice_no: inv.invoice_no,
+            amount: total,
+            document_type: inv.document_type || "invoice",
+          },
+        },
+      });
+    } catch {
+      toast({ title: "Invoice marked as sent. Notification delivery could not be confirmed." });
+    }
+
     await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
     toast({ title: "Document sent" });
     fetchData();
+  };
+
+  // Bulk send handler
+  const handleBulkSend = async () => {
+    const selected = filtered.filter(inv => selectedIds.has(inv.id));
+    if (selected.length === 0) return;
+    setBulkSending(true);
+    setBulkProgress({ current: 0, total: selected.length });
+
+    let sentCount = 0;
+    for (const inv of selected) {
+      setBulkProgress(p => ({ ...p, current: p.current + 1 }));
+      const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
+      const notifType = inv.document_type === "credit_note" ? "credit_note_issued"
+        : inv.document_type === "quotation" ? "quotation_sent"
+        : inv.document_type === "proforma" ? "proforma_sent"
+        : "invoice_generated";
+
+      try {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type: notifType,
+            firm_id: inv.firm_id,
+            client_id: inv.client_id,
+            send_to_client: bulkSendTarget === "client" || bulkSendTarget === "both",
+            send_to_responsible: bulkSendTarget === "responsible" || bulkSendTarget === "both",
+            payload: {
+              invoice_no: inv.invoice_no,
+              amount: total,
+              document_type: inv.document_type || "invoice",
+            },
+          },
+        });
+        sentCount++;
+      } catch { /* continue */ }
+    }
+
+    toast({ title: `Sent to ${sentCount} recipients` });
+    setBulkSending(false);
+    setBulkSendOpen(false);
+    setSelectedIds(new Set());
+    fetchData();
+  };
+
+  // Bulk download ZIP
+  const handleBulkDownloadZip = async () => {
+    const selected = filtered.filter(inv => selectedIds.has(inv.id));
+    if (selected.length === 0) return;
+    toast({ title: "Generating ZIP..." });
+
+    const zip = new JSZip();
+    for (const inv of selected) {
+      const clientName = clientMap[inv.client_id || ""]?.name || "Unknown";
+      const safeNo = (inv.invoice_no || "doc").replace(/\//g, "-");
+      const safeName = clientName.replace(/[^a-zA-Z0-9]/g, "_");
+      // Generate a simple HTML receipt as PDF placeholder
+      const content = `Invoice: ${inv.invoice_no}\nClient: ${clientName}\nAmount: ${inv.total_amount || inv.amount || 0}\nDate: ${inv.invoice_date || ""}`;
+      zip.file(`${safeNo}_${safeName}.txt`, content);
+    }
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `documents_${format(new Date(), "yyyyMMdd")}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: `Downloaded ${selected.length} documents` });
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(i => i.id)));
+    }
   };
 
   const statusOptions = documentType === "invoice"
@@ -352,6 +498,43 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   return (
     <div className="space-y-4">
+      {/* Billing Reminders (invoices tab only) */}
+      {documentType === "invoice" && reminders.length > 0 && (
+        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
+              <Bell size={16} /> Billing Reminders Due ({reminders.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3 pt-0">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {reminders.map((r: any) => (
+                <div key={r.id} className="flex items-center justify-between border rounded-lg p-3 bg-background">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{reminderClientMap[r.client_id] || "Client"}</p>
+                    <p className="text-xs text-muted-foreground">₹{Number(r.billing_amount || 0).toLocaleString("en-IN")} · Due {r.next_due_date ? format(new Date(r.next_due_date), "dd MMM") : "—"}</p>
+                  </div>
+                  <div className="flex items-center gap-2 ml-2">
+                    <Badge variant="outline" className={cn("text-[10px]", r.invoice_gen_type === "auto" ? "border-blue-300 text-blue-600" : "border-orange-300 text-orange-600")}>
+                      {r.invoice_gen_type === "auto" ? "Auto" : "Reminder"}
+                    </Badge>
+                    {r.invoice_gen_type === "reminder" ? (
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing/new?type=invoice&client=${r.client_id}&amount=${r.billing_amount}`)}>
+                        Create Invoice
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing?tab=invoices`)}>
+                        View Draft
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
@@ -369,6 +552,23 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           </CardContent></Card>
         ))}
       </div>
+
+      {/* Bulk actions bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-2 p-3 bg-accent/50 rounded-lg border">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <div className="flex-1" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={() => { setBulkSendMode("email"); setBulkSendOpen(true); }}>
+            <Mail size={14} /> Send via Email
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1" onClick={() => { setBulkSendMode("whatsapp"); setBulkSendOpen(true); }}>
+            <MessageSquare size={14} /> Send via WhatsApp
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleBulkDownloadZip}>
+            <Archive size={14} /> Download ZIP
+          </Button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
@@ -394,6 +594,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                    onCheckedChange={toggleSelectAll}
+                  />
+                </TableHead>
                 <TableHead>Doc No</TableHead>
                 {documentType === "quotation_proforma" && <TableHead>Type</TableHead>}
                 <TableHead>Client</TableHead>
@@ -407,13 +613,19 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={documentType === "quotation_proforma" ? 9 : 8} className="text-center text-muted-foreground py-8">No documents found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={documentType === "quotation_proforma" ? 10 : 9} className="text-center text-muted-foreground py-8">No documents found.</TableCell></TableRow>
               ) : filtered.map(inv => {
                 const clientName = clientMap[inv.client_id || ""]?.name || "—";
                 const firmName = firmMap[inv.firm_id || ""] || "—";
                 const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
                 return (
-                  <TableRow key={inv.id}>
+                  <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(inv.id)}
+                        onCheckedChange={() => toggleSelect(inv.id)}
+                      />
+                    </TableCell>
                     <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
                     {documentType === "quotation_proforma" && (
                       <TableCell>
@@ -466,6 +678,38 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Bulk send dialog */}
+      <Dialog open={bulkSendOpen} onOpenChange={setBulkSendOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send {selectedIds.size} documents via {bulkSendMode === "email" ? "Email" : "WhatsApp"}</DialogTitle>
+          </DialogHeader>
+          <RadioGroup value={bulkSendTarget} onValueChange={(v: any) => setBulkSendTarget(v)} className="space-y-3 py-2">
+            <div className="flex items-center gap-3">
+              <RadioGroupItem value="client" id="bulk-client" />
+              <Label htmlFor="bulk-client">To Client — sends to each document's client</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <RadioGroupItem value="responsible" id="bulk-responsible" />
+              <Label htmlFor="bulk-responsible">To Responsible Person — internal notification</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <RadioGroupItem value="both" id="bulk-both" />
+              <Label htmlFor="bulk-both">Both — Client and Responsible Person</Label>
+            </div>
+          </RadioGroup>
+          {bulkSending && (
+            <p className="text-sm text-muted-foreground">Sending {bulkProgress.current} of {bulkProgress.total}...</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkSendOpen(false)} disabled={bulkSending}>Cancel</Button>
+            <Button onClick={handleBulkSend} disabled={bulkSending} className="gap-1">
+              <Send size={14} /> {bulkSending ? "Sending..." : "Send"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
