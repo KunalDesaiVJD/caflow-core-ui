@@ -112,9 +112,26 @@ const ClientDetail = () => {
   // Staff list
   const [staffList, setStaffList] = useState<{ id: string; name: string }[]>([]);
 
+  // Audit classification (FY-based)
+  const [isAuditClient, setIsAuditClient] = useState(false);
+
   useEffect(() => {
     if (!clientId) return;
     loadAllData();
+    // Check audit classification
+    const checkAuditClassification = async () => {
+      const now = new Date();
+      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      const currentFY = `${fyStart}-${String(fyStart + 1).slice(-2)}`;
+      const { data } = await supabase
+        .from("client_fy_classifications")
+        .select("classification")
+        .eq("client_id", clientId)
+        .eq("financial_year", currentFY)
+        .maybeSingle();
+      setIsAuditClient(data?.classification === "Audit");
+    };
+    checkAuditClassification();
   }, [clientId]);
 
   async function loadAllData() {
