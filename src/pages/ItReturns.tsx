@@ -92,7 +92,7 @@ interface ItrProfile {
   group_name?: string;
   assigned_name?: string;
   remarks?: string;
-  client_classification?: string[];
+  client_classification?: string;
   upload_by?: string | null;
   prepared_by?: string | null;
   checked_by?: string | null;
