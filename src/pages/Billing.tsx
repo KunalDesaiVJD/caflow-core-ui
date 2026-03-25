@@ -256,6 +256,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+
+    // Update overdue invoices in DB before fetching
+    if (documentType === "invoice" && firmId) {
+      await supabase.rpc("update_overdue_invoices", { p_firm_id: firmId });
+    }
+
     let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter).order("invoice_date", { ascending: false });
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
@@ -282,7 +288,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     setGroups((groupData || []).map((g: any) => ({ id: g.id, name: g.name })));
     setResponsiblePersons((usersData || []).map((u: any) => ({ id: u.id, name: u.name })));
     setLoading(false);
-  }, [firmId, isSuperadmin, docTypeFilter, firmFilter]);
+  }, [firmId, isSuperadmin, docTypeFilter, firmFilter, documentType]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -330,14 +336,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   }, [responsibleFilter]);
 
   const enriched = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    return invoices.map(inv => {
-      let computedStatus = inv.status || "draft";
-      if (!["paid", "voided", "converted"].includes(computedStatus) && inv.due_date && new Date(inv.due_date) < today) {
-        computedStatus = "overdue";
-      }
-      return { ...inv, effectiveStatus: computedStatus };
-    });
+    return invoices.map(inv => ({ ...inv, effectiveStatus: inv.status || "draft" }));
   }, [invoices]);
 
   const stats = useMemo(() => {
@@ -1019,13 +1018,18 @@ function TimesheetTab() {
   const handleApproveWeek = async () => {
     const from = format(weekDates[0], "yyyy-MM-dd");
     const to = format(weekDates[6], "yyyy-MM-dd");
-    const { error } = await supabase.from("timesheets")
-      .update({ approved_by: user?.id, approved_at: new Date().toISOString() })
-      .eq("user_id", selectedStaff)
-      .gte("work_date", from).lte("work_date", to)
-      .is("approved_by", null);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Week approved" }); fetchWeek(); }
+    const { data, error } = await supabase.rpc("approve_week_timesheets", {
+      p_user_id: selectedStaff,
+      p_from_date: from,
+      p_to_date: to,
+      p_approved_by: user?.id,
+    });
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: `${data} timesheet entries approved` });
+      fetchWeek();
+    }
   };
 
   return (
