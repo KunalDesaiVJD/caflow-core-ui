@@ -256,6 +256,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+
+    // Update overdue invoices in DB before fetching
+    if (documentType === "invoice" && firmId) {
+      await supabase.rpc("update_overdue_invoices", { p_firm_id: firmId });
+    }
+
     let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter).order("invoice_date", { ascending: false });
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
@@ -282,7 +288,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     setGroups((groupData || []).map((g: any) => ({ id: g.id, name: g.name })));
     setResponsiblePersons((usersData || []).map((u: any) => ({ id: u.id, name: u.name })));
     setLoading(false);
-  }, [firmId, isSuperadmin, docTypeFilter, firmFilter]);
+  }, [firmId, isSuperadmin, docTypeFilter, firmFilter, documentType]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
