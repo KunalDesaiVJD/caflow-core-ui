@@ -1364,7 +1364,7 @@ export type Database = {
           {
             foreignKeyName: "client_profiles_client_id_fkey"
             columns: ["client_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "clients"
             referencedColumns: ["id"]
           },
@@ -1437,20 +1437,27 @@ export type Database = {
           client_classification: Json | null
           compliance_flags: Json | null
           created_at: string | null
+          deleted_at: string | null
+          dsc_expiry_date: string | null
+          dsc_number: string | null
           email: string | null
           entity_type: string | null
           firm_id: string | null
           gstin: string[] | null
           id: string
           internal_audit_applicable: boolean | null
+          is_draft: boolean
           mobile: string | null
           name: string | null
           pan: string | null
           registered_office: string | null
+          responsible_person_id: string | null
           statutory_audit_applicable: boolean | null
           stock_audit_applicable: boolean | null
+          tan_number: string | null
           tax_audit_type: string | null
           user_id: string | null
+          work_group_type: string | null
         }
         Insert: {
           address?: string | null
@@ -1461,20 +1468,27 @@ export type Database = {
           client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          deleted_at?: string | null
+          dsc_expiry_date?: string | null
+          dsc_number?: string | null
           email?: string | null
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          is_draft?: boolean
           mobile?: string | null
           name?: string | null
           pan?: string | null
           registered_office?: string | null
+          responsible_person_id?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
+          tan_number?: string | null
           tax_audit_type?: string | null
           user_id?: string | null
+          work_group_type?: string | null
         }
         Update: {
           address?: string | null
@@ -1485,20 +1499,27 @@ export type Database = {
           client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          deleted_at?: string | null
+          dsc_expiry_date?: string | null
+          dsc_number?: string | null
           email?: string | null
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          is_draft?: boolean
           mobile?: string | null
           name?: string | null
           pan?: string | null
           registered_office?: string | null
+          responsible_person_id?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
+          tan_number?: string | null
           tax_audit_type?: string | null
           user_id?: string | null
+          work_group_type?: string | null
         }
         Relationships: [
           {
@@ -1506,6 +1527,13 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "clients_responsible_person_id_fkey"
+            columns: ["responsible_person_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
           {
