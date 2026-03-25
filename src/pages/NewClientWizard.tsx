@@ -339,8 +339,6 @@ const NewClientWizard = () => {
           firm_id: user?.firm_id || null,
           user_id: authUserId,
         };
-          user_id: authUserId,
-        };
 
         const { data: clientData, error: clientError } = await supabase
           .from("clients")
