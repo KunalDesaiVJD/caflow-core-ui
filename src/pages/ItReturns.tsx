@@ -191,12 +191,21 @@ const ItReturns = () => {
       q = q.in("client_id", itrClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details including classification
+      // Fetch client details
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type, client_classification")
+        .select("id, name, pan, entity_type")
         .in("id", itrClientIds);
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
+
+      // Fetch FY classifications for the selected AY
+      const fyFromAY = selectedAY ? `20${selectedAY.split("-")[0].slice(-2)}-${selectedAY.split("-")[1]?.slice(-2) || ""}` : "";
+      const { data: fyClassData } = await supabase
+        .from("client_fy_classifications")
+        .select("client_id, classification")
+        .in("client_id", itrClientIds)
+        .eq("financial_year", fyFromAY);
+      const classMap = new Map((fyClassData || []).map(c => [c.client_id, c.classification]));
 
       // Fetch users
       const { data: uData } = await supabase.from("users").select("id, name");
