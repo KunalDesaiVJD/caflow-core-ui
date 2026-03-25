@@ -337,8 +337,35 @@ const ClientDetail = () => {
 
   const bankAccounts: any[] = [];
 
+  const isDraft = (client as any).is_draft === true;
+
+  const handleDeleteDraft = async () => {
+    if (!clientId) return;
+    const confirmed = window.confirm("Delete this draft client?");
+    if (!confirmed) return;
+    try {
+      const { error } = await supabase.from("clients").delete().eq("id", clientId);
+      if (error) throw error;
+      toast({ title: "Draft deleted" });
+      navigate("/clients");
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {/* Draft banner */}
+      {isDraft && (
+        <div className="flex items-center justify-between rounded-lg border border-accent bg-accent/10 p-4">
+          <p className="text-sm font-medium text-foreground">This client is a draft. Complete setup to activate.</p>
+          <div className="flex gap-2">
+            <Button variant="destructive" size="sm" onClick={handleDeleteDraft}>Delete Draft</Button>
+            <Button size="sm" onClick={() => navigate(`/clients/edit/${client.id}`)}>Continue Setup</Button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -347,6 +374,7 @@ const ClientDetail = () => {
           <div className="flex items-center gap-2 mt-1">
             {client.entity_type && <Badge variant="outline">{client.entity_type}</Badge>}
             {client.pan && <span className="text-sm font-mono text-muted-foreground">{client.pan}</span>}
+            {isDraft && <Badge variant="secondary">Draft</Badge>}
           </div>
         </div>
         <div className="flex items-center gap-2">

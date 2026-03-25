@@ -112,7 +112,7 @@ export default function ItrDemands() {
     try {
       const [demandRes, clientRes] = await Promise.all([
         supabase.from("itr_demands").select("*"),
-        supabase.from("clients").select("id, name, entity_type"),
+        supabase.from("clients").select("id, name, entity_type").eq("is_draft", false).is("deleted_at", null),
       ]);
 
       const clientMap = new Map<string, Client>();

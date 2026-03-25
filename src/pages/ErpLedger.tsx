@@ -38,7 +38,7 @@ const ErpLedger = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [clientsRes, tbRes] = await Promise.all([
-      supabase.from("clients").select("id, name").order("name"),
+      supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name"),
       supabase.from("trial_balance_snapshots").select("id, client_id, financial_year, source_format, normalised_data"),
     ]);
     setClients(clientsRes.data || []);

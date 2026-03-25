@@ -94,7 +94,7 @@ const Timesheets = () => {
 
   // ─── Fetch data ───
   const fetchClients = useCallback(async () => {
-    let q = supabase.from("clients").select("id, name").order("name");
+    let q = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     const { data } = await q;
     setClients(data || []);

@@ -154,7 +154,7 @@ function InvoicesTab() {
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type");
+    let cQuery = supabase.from("clients").select("id, name, entity_type").eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
@@ -620,7 +620,7 @@ function TimesheetTab() {
 
   useEffect(() => {
     (async () => {
-      let q = supabase.from("clients").select("id, name").order("name");
+      let q = supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       const { data } = await q;
       setClients(data || []);

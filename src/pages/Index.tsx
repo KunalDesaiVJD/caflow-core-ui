@@ -83,7 +83,7 @@ const Index = () => {
     const firmId = user.firm_id;
     const isSuperadmin = user.role === "superadmin";
 
-    let clientsQ = supabase.from("clients").select("*", { count: "exact", head: true });
+    let clientsQ = supabase.from("clients").select("*", { count: "exact", head: true }).eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) clientsQ = clientsQ.eq("firm_id", firmId);
 
     let tdsQ = supabase.from("tds_entries").select("*", { count: "exact", head: true })

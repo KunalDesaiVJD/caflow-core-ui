@@ -71,7 +71,7 @@ const Clients = () => {
 
   const fetchData = async () => {
     const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*").order("created_at", { ascending: false }).limit(500),
+      supabase.from("clients").select("*").eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }).limit(500),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
@@ -105,13 +105,30 @@ const Clients = () => {
     if (!deleteClient) return;
     setDeleteLoading(true);
     try {
-      const { error, count } = await supabase.from("clients").delete({ count: "exact" }).eq("id", deleteClient.id);
-      if (error) throw error;
-      if (count === 0) {
-        toast({ title: "Delete failed", description: "You may not have permission.", variant: "destructive" });
-      } else {
-        toast({ title: "Client deleted" });
+      // Check for paid invoices
+      const { data: paidInvoices } = await supabase
+        .from("invoices")
+        .select("id")
+        .eq("client_id", deleteClient.id)
+        .eq("status", "paid")
+        .limit(1);
+      if (paidInvoices && paidInvoices.length > 0) {
+        toast({
+          title: "Cannot archive this client",
+          description: "They have paid invoices on record. Archive the client instead.",
+          variant: "destructive",
+        });
+        setDeleteClient(null);
+        setDeleteLoading(false);
+        return;
       }
+      // Soft delete
+      const { error } = await supabase
+        .from("clients")
+        .update({ deleted_at: new Date().toISOString() } as any)
+        .eq("id", deleteClient.id);
+      if (error) throw error;
+      toast({ title: "Client archived successfully" });
       setDeleteClient(null);
       fetchData();
     } catch (e: any) {
@@ -380,7 +397,7 @@ const Clients = () => {
                             <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -433,7 +450,7 @@ const Clients = () => {
                           <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                             <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -469,7 +486,7 @@ const Clients = () => {
                         <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                           <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Delete</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -497,12 +514,12 @@ const Clients = () => {
       <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Client</AlertDialogTitle>
-            <AlertDialogDescription>Are you sure you want to delete <strong>{deleteClient?.name}</strong>? This cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Archive Client</AlertDialogTitle>
+            <AlertDialogDescription>Are you sure you want to archive <strong>{deleteClient?.name}</strong>? The client will be hidden from all lists but data will be preserved.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteLoading ? "Deleting…" : "Delete"}</AlertDialogAction>
+            <AlertDialogAction onClick={handleDeleteClient} disabled={deleteLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{deleteLoading ? "Archiving…" : "Archive"}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
