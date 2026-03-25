@@ -428,7 +428,7 @@ function FilingTab({
   const [addingRow, setAddingRow] = useState(false);
   const [showAddRowDialog, setShowAddRowDialog] = useState(false);
   const [addRowClientId, setAddRowClientId] = useState("");
-  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any;entity_type?:string|null}[]>([]);
+  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;entity_type?:string|null}[]>([]);
   const [addRowSearch, setAddRowSearch] = useState("");
 
   const openAddRowDialog = async () => {
