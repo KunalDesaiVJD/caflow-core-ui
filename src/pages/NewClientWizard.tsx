@@ -126,7 +126,7 @@ const NewClientWizard = () => {
           .maybeSingle(),
         supabase
           .from("client_profiles")
-          .select("id, client_id, banking_data, loan_data, audit_questions")
+          .select("id, client_id, audit_questions")
           .eq("client_id", clientId)
           .order("id", { ascending: false })
           .limit(1),
