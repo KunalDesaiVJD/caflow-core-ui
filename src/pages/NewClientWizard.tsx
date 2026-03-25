@@ -10,6 +10,13 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft } from "lucide-react";
 import confetti from "canvas-confetti";
 import { StepBasicInfo, type BasicInfoData } from "@/components/client-wizard/StepBasicInfo";
+import { StepAdvancedInfo, type AdvancedInfoData, defaultAdvancedInfo } from "@/components/client-wizard/StepAdvancedInfo";
+import {
+  StepServiceBilling,
+  type ServiceBillingData,
+  type CrossStepWarning,
+  defaultServiceBilling,
+} from "@/components/client-wizard/StepServiceBilling";
 import { StepFinancialProfile, type FinancialProfileData } from "@/components/client-wizard/StepFinancialProfile";
 import { StepComplianceFlags, type ComplianceFlagsData } from "@/components/client-wizard/StepComplianceFlags";
 import { StepBankingLoans, type BankingLoansData, emptyBankingLoans } from "@/components/client-wizard/StepBankingLoans";
@@ -19,6 +26,8 @@ import { StepDone } from "@/components/client-wizard/StepDone";
 
 const ALL_STEPS = [
   { id: "basic", label: "Basic Info", auditOnly: false },
+  { id: "advanced", label: "Advanced Info", auditOnly: false },
+  { id: "service_billing", label: "Services & Billing", auditOnly: false },
   { id: "financial", label: "Financial Profile", auditOnly: true },
   { id: "compliance", label: "Compliance Flags", auditOnly: true },
   { id: "banking", label: "Banking & Loans", auditOnly: true },
@@ -65,11 +74,6 @@ const asRecord = (value: unknown): Record<string, any> => {
   return value as Record<string, any>;
 };
 
-const asArray = <T,>(value: unknown, fallback: T[]): T[] => {
-  if (!Array.isArray(value)) return fallback;
-  return value as T[];
-};
-
 const NewClientWizard = () => {
   const navigate = useNavigate();
   const { clientId } = useParams<{ clientId: string }>();
@@ -84,6 +88,8 @@ const NewClientWizard = () => {
   const [clientMissing, setClientMissing] = useState(false);
 
   const [basicInfo, setBasicInfo] = useState<BasicInfoData>(defaultBasicInfo);
+  const [advancedInfo, setAdvancedInfo] = useState<AdvancedInfoData>(defaultAdvancedInfo);
+  const [serviceBilling, setServiceBilling] = useState<ServiceBillingData>(defaultServiceBilling);
   const [financialProfile, setFinancialProfile] = useState<FinancialProfileData>(defaultFinancialProfile);
   const [complianceFlags, setComplianceFlags] = useState<ComplianceFlagsData>(defaultComplianceFlags);
   const [bankingLoans, setBankingLoans] = useState<BankingLoansData>(emptyBankingLoans);
@@ -91,14 +97,68 @@ const NewClientWizard = () => {
   const [importData, setImportData] = useState<ImportDataResult | null>(null);
 
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
+  const [advancedErrors, setAdvancedErrors] = useState<Record<string, string>>({});
+  const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({});
 
-  // For now, show all steps (classification moved to step 2)
-  const visibleSteps = useMemo(() => {
-    return ALL_STEPS;
-  }, []);
+  // Track linked modules of active services for cross-step logic
+  const [activeLinkedModules, setActiveLinkedModules] = useState<string[]>([]);
+
+  // Derive itrServiceActive from service billing state
+  const itrServiceActive = activeLinkedModules.includes("itr");
+
+  // For now, show all steps
+  const visibleSteps = useMemo(() => ALL_STEPS, []);
 
   const STEPS = visibleSteps.map((s) => s.label);
   const currentStepDef = visibleSteps[step];
+
+  // Load linked modules whenever serviceBilling changes
+  useEffect(() => {
+    const loadModules = async () => {
+      const activeIds = Object.keys(serviceBilling.activeServices);
+      const packageIds = serviceBilling.packageConfig.service_ids;
+      const allIds = [...new Set([...activeIds, ...packageIds])];
+      if (allIds.length === 0) {
+        setActiveLinkedModules([]);
+        return;
+      }
+      const { data: cats } = await supabase
+        .from("service_categories")
+        .select("linked_module")
+        .in("id", allIds);
+      if (cats) {
+        setActiveLinkedModules(
+          cats.map((c) => c.linked_module).filter(Boolean) as string[]
+        );
+      }
+    };
+    loadModules();
+  }, [serviceBilling.activeServices, serviceBilling.packageConfig.service_ids]);
+
+  // Cross-step warnings for Step 3
+  const crossStepWarnings = useMemo<CrossStepWarning[]>(() => {
+    const warnings: CrossStepWarning[] = [];
+    const hasGstin = basicInfo.gstins.some((g) => g.trim());
+    if (activeLinkedModules.includes("gst") && !hasGstin) {
+      warnings.push({
+        type: "gst",
+        message: "GSTIN is required for GST service. Please go back to Step 1 and add GSTIN.",
+      });
+    }
+    if (activeLinkedModules.includes("tds") && !basicInfo.tan_number?.trim()) {
+      warnings.push({
+        type: "tds",
+        message: "TAN Number is required for TDS service. Please go back to Step 1 and add TAN Number.",
+      });
+    }
+    if (activeLinkedModules.includes("itr") && !advancedInfo.work_group_type) {
+      warnings.push({
+        type: "itr",
+        message: "Work Group is required for ITR service. Please complete Work Group in Step 2 before proceeding.",
+      });
+    }
+    return warnings;
+  }, [activeLinkedModules, basicInfo.gstins, basicInfo.tan_number, advancedInfo.work_group_type]);
 
   useEffect(() => {
     if (!isEditMode || !clientId) {
@@ -145,7 +205,6 @@ const NewClientWizard = () => {
 
       const compliance = asRecord(client.compliance_flags);
       const financial = asRecord(compliance.financial_profile);
-      const basicExtra = asRecord(compliance.basic_info_extra);
       const auditData = asRecord(profile?.audit_questions);
 
       setBasicInfo({
@@ -189,9 +248,7 @@ const NewClientWizard = () => {
 
     loadClient();
 
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [clientId, isEditMode, toast]);
 
   const validateBasicInfo = async (): Promise<boolean> => {
@@ -212,7 +269,6 @@ const NewClientWizard = () => {
     if (basicInfo.mobile && basicInfo.mobile.length > 0 && basicInfo.mobile.length < 10) {
       errors.mobile = "Mobile number must be 10 digits";
     }
-    // Check duplicate PAN
     if (basicInfo.pan && !errors.pan) {
       const { data: existing } = await supabase
         .from("clients")
@@ -232,9 +288,44 @@ const NewClientWizard = () => {
     return Object.keys(errors).length === 0;
   };
 
+  const validateAdvancedInfo = (): boolean => {
+    const errors: Record<string, string> = {};
+    if (!advancedInfo.financial_year) errors.financial_year = "Financial year is required";
+    if (!advancedInfo.classification) errors.classification = "Classification is required";
+    if (advancedInfo.classification === "Audit" && !advancedInfo.audit_firm_id) {
+      errors.audit_firm_id = "Audit firm is required when classification is Audit";
+    }
+    const needsCIN = basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd";
+    if (needsCIN && advancedInfo.cin && advancedInfo.cin.length !== 21) {
+      errors.cin = "CIN must be exactly 21 characters for companies";
+    }
+    if (advancedInfo.dsc_number && !advancedInfo.dsc_expiry_date) {
+      errors.dsc_expiry_date = "DSC Expiry Date is required when DSC Number is provided";
+    }
+    setAdvancedErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const validateServiceBilling = (): boolean => {
+    const errors: Record<string, string> = {};
+    const hasActiveService = Object.keys(serviceBilling.activeServices).length > 0;
+    const hasPackageService = serviceBilling.packageConfig.service_ids.length > 0;
+
+    if (serviceBilling.billingMode === "service_specific" && !hasActiveService) {
+      errors.services = "Please activate at least one service before proceeding.";
+    }
+    if (serviceBilling.billingMode === "package_wise" && !hasPackageService && !hasActiveService) {
+      errors.services = "Please activate at least one service before proceeding.";
+    }
+    if (serviceBilling.billingMode === "package_wise" && hasPackageService && !serviceBilling.packageConfig.package_name.trim()) {
+      errors.package_name = "Package name is required when using package mode.";
+    }
+    setServiceErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const buildClientPayload = () => {
     const gstins = basicInfo.gstins.filter((g) => g.trim());
-
     return {
       name: basicInfo.name.trim(),
       pan: basicInfo.pan || null,
@@ -274,6 +365,73 @@ const NewClientWizard = () => {
       console.error("Failed to save trial balance:", error);
       toast({ title: "Warning", description: "Client saved but trial balance import failed: " + error.message, variant: "destructive" });
     }
+  };
+
+  const saveServiceBillingData = async (targetClientId: string) => {
+    const firmId = user?.firm_id;
+    if (!firmId) return;
+
+    // Save active individual services
+    const serviceEntries = Object.entries(serviceBilling.activeServices);
+    if (serviceEntries.length > 0) {
+      const rows = serviceEntries.map(([serviceId, cfg]) => ({
+        client_id: targetClientId,
+        service_category_id: serviceId,
+        is_active: true,
+        frequency_override: cfg.frequency,
+        billing_amount: cfg.billing_amount,
+        reminder_date: cfg.reminder_date,
+        invoice_gen_type: cfg.invoice_gen_type,
+        billing_mode: serviceBilling.billingMode,
+      }));
+      await supabase.from("client_services").upsert(rows as any, {
+        onConflict: "client_id,service_category_id",
+      });
+    }
+
+    // Save package if package mode
+    if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
+      const pkg = serviceBilling.packageConfig;
+      await supabase.from("client_service_packages").insert({
+        client_id: targetClientId,
+        package_name: pkg.package_name,
+        service_category_ids: pkg.service_ids as any,
+        frequency: pkg.frequency,
+        reminder_date: pkg.reminder_date,
+        billing_amount: pkg.billing_amount,
+        invoice_gen_type: pkg.invoice_gen_type,
+      } as any);
+    }
+
+    // Create billing reminders
+    const allActiveServiceIds = Object.keys(serviceBilling.activeServices);
+    for (const serviceId of allActiveServiceIds) {
+      const cfg = serviceBilling.activeServices[serviceId];
+      const nextDue = new Date();
+      nextDue.setDate(cfg.reminder_date);
+      if (nextDue <= new Date()) nextDue.setMonth(nextDue.getMonth() + 1);
+
+      await supabase.from("billing_reminders").insert({
+        client_id: targetClientId,
+        firm_id: firmId,
+        service_category_id: serviceId,
+        billing_amount: cfg.billing_amount,
+        frequency: cfg.frequency,
+        reminder_date: cfg.reminder_date,
+        next_due_date: nextDue.toISOString().split("T")[0],
+        invoice_gen_type: cfg.invoice_gen_type,
+      } as any);
+    }
+  };
+
+  const saveFYClassification = async (targetClientId: string) => {
+    if (!advancedInfo.classification || !advancedInfo.financial_year) return;
+    await supabase.from("client_fy_classifications").upsert({
+      client_id: targetClientId,
+      financial_year: advancedInfo.financial_year,
+      classification: advancedInfo.classification,
+      audit_firm_id: advancedInfo.audit_firm_id || null,
+    } as any, { onConflict: "client_id,financial_year" });
   };
 
   const handleFinalSubmit = async () => {
@@ -326,6 +484,9 @@ const NewClientWizard = () => {
           if (profileInsertError) throw profileInsertError;
         }
 
+        await saveFYClassification(clientId);
+        await saveServiceBillingData(clientId);
+
         toast({ title: "Client updated", description: "Full client profile saved successfully." });
 
         if (importData && importData.rows.length > 0) {
@@ -351,7 +512,6 @@ const NewClientWizard = () => {
         const { error: profileError } = await supabase
           .from("client_profiles")
           .insert(buildProfilePayload(clientData.id));
-
         if (profileError) throw profileError;
 
         if (importData && importData.rows.length > 0) {
@@ -370,6 +530,9 @@ const NewClientWizard = () => {
           );
         }
 
+        await saveFYClassification(clientData.id);
+        await saveServiceBillingData(clientData.id);
+
         confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
         toast({ title: "Client created!", description: "All wizard data saved successfully." });
         setTimeout(() => navigate(`/clients/${clientData.id}`), 700);
@@ -383,6 +546,8 @@ const NewClientWizard = () => {
 
   const handleNext = async () => {
     if (currentStepDef?.id === "basic" && !(await validateBasicInfo())) return;
+    if (currentStepDef?.id === "advanced" && !validateAdvancedInfo()) return;
+    if (currentStepDef?.id === "service_billing" && !validateServiceBilling()) return;
     if (step === visibleSteps.length - 1) {
       await handleFinalSubmit();
       return;
@@ -412,7 +577,7 @@ const NewClientWizard = () => {
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}> 
+        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/clients")}>
           <ArrowLeft className="h-3 w-3" /> Back to Clients
         </Button>
         <h1 className="text-2xl font-display font-bold text-foreground">{isEditMode ? "Edit Client" : "New Client"}</h1>
@@ -425,9 +590,9 @@ const NewClientWizard = () => {
 
       {/* Progress */}
       <div className="space-y-2">
-        <div className="flex justify-between text-xs text-muted-foreground">
+        <div className="flex justify-between text-xs text-muted-foreground overflow-x-auto gap-1">
           {STEPS.map((s, i) => (
-            <span key={s} className={i <= step ? "text-primary font-medium" : ""}>
+            <span key={s} className={`whitespace-nowrap ${i <= step ? "text-primary font-medium" : ""}`}>
               {s}
             </span>
           ))}
@@ -438,12 +603,44 @@ const NewClientWizard = () => {
       {/* Step Content */}
       <Card>
         <CardContent className="p-6">
-          {currentStepDef?.id === "basic" && <StepBasicInfo data={basicInfo} onChange={setBasicInfo} errors={basicErrors} />}
-          {currentStepDef?.id === "financial" && <StepFinancialProfile data={financialProfile} onChange={setFinancialProfile} />}
-          {currentStepDef?.id === "compliance" && <StepComplianceFlags data={complianceFlags} onChange={setComplianceFlags} />}
-          {currentStepDef?.id === "banking" && <StepBankingLoans data={bankingLoans} onChange={setBankingLoans} />}
-          {currentStepDef?.id === "audit_q" && <StepAuditQuestions data={auditQuestions} onChange={setAuditQuestions} />}
-          {currentStepDef?.id === "import" && <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep(s => s + 1)} clientId={isEditMode ? clientId : undefined} firmId={user?.firm_id} />}
+          {currentStepDef?.id === "basic" && (
+            <StepBasicInfo data={basicInfo} onChange={setBasicInfo} errors={basicErrors} />
+          )}
+          {currentStepDef?.id === "advanced" && (
+            <StepAdvancedInfo
+              data={advancedInfo}
+              onChange={setAdvancedInfo}
+              entityType={basicInfo.entity_type}
+              itrServiceActive={itrServiceActive}
+              errors={advancedErrors}
+            />
+          )}
+          {currentStepDef?.id === "service_billing" && (
+            <StepServiceBilling
+              data={serviceBilling}
+              onChange={setServiceBilling}
+              errors={serviceErrors}
+              gstins={basicInfo.gstins}
+              tanNumber={basicInfo.tan_number}
+              workGroupType={advancedInfo.work_group_type}
+              warnings={crossStepWarnings}
+            />
+          )}
+          {currentStepDef?.id === "financial" && (
+            <StepFinancialProfile data={financialProfile} onChange={setFinancialProfile} />
+          )}
+          {currentStepDef?.id === "compliance" && (
+            <StepComplianceFlags data={complianceFlags} onChange={setComplianceFlags} />
+          )}
+          {currentStepDef?.id === "banking" && (
+            <StepBankingLoans data={bankingLoans} onChange={setBankingLoans} />
+          )}
+          {currentStepDef?.id === "audit_q" && (
+            <StepAuditQuestions data={auditQuestions} onChange={setAuditQuestions} />
+          )}
+          {currentStepDef?.id === "import" && (
+            <StepImportData data={importData} onChange={setImportData} onSkip={() => setStep((s) => s + 1)} clientId={isEditMode ? clientId : undefined} firmId={user?.firm_id} />
+          )}
           {currentStepDef?.id === "done" && (
             <StepDone
               mode={isEditMode ? "edit" : "create"}
