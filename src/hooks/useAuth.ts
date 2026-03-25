@@ -22,35 +22,33 @@ export function useAuth() {
         return;
       }
 
-      setTimeout(async () => {
-        const { data: profile } = await supabase
-          .from("users")
-          .select("id, email, name, role, firm_id, must_change_password")
-          .eq("id", session.user.id)
-          .single();
+      const { data: profile } = await supabase
+        .from("users")
+        .select("id, email, name, role, firm_id, must_change_password")
+        .eq("id", session.user.id)
+        .single();
 
-        if (profile) {
-          setUser({
-            ...profile,
-            must_change_password: (profile as any).must_change_password ?? false,
-          });
-          await supabase.rpc("set_user_context", {
-            p_user_id: profile.id,
-            p_user_name: profile.name || session.user.email || "Unknown",
-            p_user_role: profile.role || "staff_article",
-          });
-        } else {
-          setUser({
-            id: session.user.id,
-            email: session.user.email || null,
-            name: session.user.user_metadata?.name || session.user.email || null,
-            role: session.user.user_metadata?.role || null,
-            firm_id: null,
-            must_change_password: false,
-          });
-        }
-        setLoading(false);
-      }, 0);
+      if (profile) {
+        setUser({
+          ...profile,
+          must_change_password: (profile as any).must_change_password ?? false,
+        });
+        await supabase.rpc("set_user_context", {
+          p_user_id: profile.id,
+          p_user_name: profile.name || session.user.email || "Unknown",
+          p_user_role: profile.role || "staff_article",
+        });
+      } else {
+        setUser({
+          id: session.user.id,
+          email: session.user.email || null,
+          name: session.user.user_metadata?.name || session.user.email || null,
+          role: session.user.user_metadata?.role || null,
+          firm_id: null,
+          must_change_password: false,
+        });
+      }
+      setLoading(false);
     });
 
     supabase.auth.getSession().then(({ data: { session } }) => {
