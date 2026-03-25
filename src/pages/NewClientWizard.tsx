@@ -29,18 +29,14 @@ const ALL_STEPS = [
 
 const defaultBasicInfo: BasicInfoData = {
   name: "",
+  selectedGroupIds: [],
   pan: "",
   entity_type: "",
-  date_of_incorporation: undefined,
-  registered_state: "",
-  business_nature: "",
-  gstins: [""],
-  cin: "",
-  selectedGroupIds: [],
   email: "",
   mobile: "",
   address: "",
-  client_classification: [],
+  gstins: [""],
+  tan_number: "",
 };
 
 const defaultFinancialProfile: FinancialProfileData = {
