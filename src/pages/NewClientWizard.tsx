@@ -239,20 +239,14 @@ const NewClientWizard = () => {
       name: basicInfo.name.trim(),
       pan: basicInfo.pan || null,
       entity_type: basicInfo.entity_type || null,
-      cin: basicInfo.cin || null,
       gstin: gstins.length > 0 ? gstins : null,
       email: basicInfo.email || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
-      client_classification: basicInfo.client_classification || [],
+      tan_number: basicInfo.tan_number || null,
       compliance_flags: {
         ...complianceFlags,
         financial_profile: financialProfile,
-        basic_info_extra: {
-          date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
-          registered_state: basicInfo.registered_state,
-          business_nature: basicInfo.business_nature,
-        },
       } as any,
     };
   };
