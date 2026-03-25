@@ -71,7 +71,7 @@ const Clients = () => {
 
   const fetchData = async () => {
     const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*").eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }).limit(500),
+      supabase.from("clients").select("*", { count: "exact" }).eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
@@ -206,19 +206,22 @@ const Clients = () => {
         const gstinRaw = (row["GSTIN"] || row["gstin"] || "").trim();
         const gstin = gstinRaw ? [gstinRaw] : null;
 
-        const { error } = await supabase.from("clients").insert({
+        const { data: insertedClient, error } = await supabase.from("clients").insert({
           name,
           pan: pan || null,
           entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
           gstin,
           firm_id: user?.firm_id || null,
           user_id: user?.id || null,
-        } as any);
+          is_draft: false,
+        } as any).select("id").single();
 
         if (error) {
           failed++;
           errors.push(`${name}: ${error.message}`);
         } else {
+          // Create client_profiles row
+          await supabase.from("client_profiles").insert({ client_id: insertedClient.id, audit_questions: {} as any });
           success++;
           if (pan) existingPans.add(pan);
         }
