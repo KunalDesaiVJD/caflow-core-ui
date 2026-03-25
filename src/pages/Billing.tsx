@@ -723,18 +723,7 @@ function ReceiptsTab() {
   return <ReceiptsTabComponent />;
 }
 
-// ═══════════════════════════════════════
-// LEDGER TAB (Placeholder)
-// ═══════════════════════════════════════
-function LedgerTab() {
-  return (
-    <Card><CardContent className="py-12 text-center text-muted-foreground">
-      <BookOpen size={40} className="mx-auto mb-3 opacity-40" />
-      <p className="text-lg font-medium">Client Ledger</p>
-      <p className="text-sm">Ledger view coming soon.</p>
-    </CardContent></Card>
-  );
-}
+// LedgerTab now imported from @/components/billing/LedgerTab
 
 // ═══════════════════════════════════════
 // ITEM MASTER TAB
