@@ -119,7 +119,7 @@ export function EngagementRiskAssessment({ engagement, client, onUpdate }: Props
 
     const payload = {
       client_industry: client?.business_nature || client?.entity_type || "unknown",
-      turnover_range: client?.compliance_flags?.turnover_range || "unknown",
+      turnover_range: "unknown",
       entity_type: client?.entity_type || "unknown",
       first_year_audit: false,
       high_severity_findings_count: count || 0,

@@ -92,7 +92,7 @@ interface ItrProfile {
   group_name?: string;
   assigned_name?: string;
   remarks?: string;
-  client_classification?: string[];
+  client_classification?: string;
   upload_by?: string | null;
   prepared_by?: string | null;
   checked_by?: string | null;
@@ -111,10 +111,10 @@ function formatDateDDMMYYYY(dateStr: string | null): string {
 // Classification to tab mapping
 type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm";
 
-function getClientSubTab(classification: string[] | undefined): FilingSubTab {
-  const cls = (classification || [])[0] || "non_audit";
+function getClientSubTab(classification: string | undefined): FilingSubTab {
+  const cls = (classification || "").toLowerCase();
   if (cls === "audit") return "audited";
-  if (cls === "partner_in_audited_firm") return "partner_in_audited_firm";
+  if (cls === "partner in audited firm" || cls === "partner_in_audited_firm") return "partner_in_audited_firm";
   return "non_audited";
 }
 
@@ -191,12 +191,21 @@ const ItReturns = () => {
       q = q.in("client_id", itrClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details including classification
+      // Fetch client details
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type, client_classification")
+        .select("id, name, pan, entity_type")
         .in("id", itrClientIds);
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
+
+      // Fetch FY classifications for the selected AY
+      const fyFromAY = selectedAY ? `20${selectedAY.split("-")[0].slice(-2)}-${selectedAY.split("-")[1]?.slice(-2) || ""}` : "";
+      const { data: fyClassData } = await supabase
+        .from("client_fy_classifications")
+        .select("client_id, classification")
+        .in("client_id", itrClientIds)
+        .eq("financial_year", fyFromAY);
+      const classMap = new Map((fyClassData || []).map(c => [c.client_id, c.classification]));
 
       // Fetch users
       const { data: uData } = await supabase.from("users").select("id, name");
@@ -226,7 +235,7 @@ const ItReturns = () => {
           entity_type: cl?.entity_type || "",
           group_name: (wg as any)?.name || "",
           assigned_name: userMap.get(p.assigned_to || "") || "",
-          client_classification: (cl as any)?.client_classification || [],
+          client_classification: classMap.get(p.client_id || "") || "",
           work_group_name: clientWgMap.get(p.client_id || "") || "",
         });
       }
@@ -419,7 +428,7 @@ function FilingTab({
   const [addingRow, setAddingRow] = useState(false);
   const [showAddRowDialog, setShowAddRowDialog] = useState(false);
   const [addRowClientId, setAddRowClientId] = useState("");
-  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;client_classification:any;entity_type?:string|null}[]>([]);
+  const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;entity_type?:string|null}[]>([]);
   const [addRowSearch, setAddRowSearch] = useState("");
 
   const openAddRowDialog = async () => {
@@ -430,7 +439,7 @@ function FilingTab({
     const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
     const clientIds = [...new Set((cs || []).map(c => c.client_id))];
     if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
-    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type, client_classification").eq("is_draft", false).is("deleted_at", null).in("id", clientIds).order("name");
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type").eq("is_draft", false).is("deleted_at", null).in("id", clientIds).order("name");
     setAddRowClients((clients || []) as any);
     setAddRowClientId("");
     setAddRowSearch("");
