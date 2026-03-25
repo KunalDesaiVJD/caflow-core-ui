@@ -92,10 +92,27 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
             name={('key' in definition ? definition.key : ('clauseNo' in definition ? definition.clauseNo : 'radio'))}
             options={[{ value: true, label: 'Yes' }, { value: false, label: 'No' }]}
             value={data._value}
-            onChange={v => update('_value', v)}
+            onChange={v => {
+              const next = { ...data, _value: v };
+              // Auto-fill default text when No is selected
+              if (v === false && definition.defaultValue) {
+                next._defaultText = definition.defaultValue;
+              }
+              onChange(next);
+            }}
             disabled={isLocked}
           />
-          {data._value === false && !definition.subClauses?.length && (
+          {data._value === false && definition.defaultValue && (
+            <div className="space-y-2">
+              <Input
+                value={data._defaultText || definition.defaultValue}
+                onChange={e => update('_defaultText', e.target.value)}
+                disabled={isLocked}
+                className="max-w-md"
+              />
+            </div>
+          )}
+          {data._value === false && !definition.defaultValue && !definition.subClauses?.length && (
             <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
           )}
           {definition.subClauses?.map(sub => (
@@ -118,11 +135,16 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
           {headingEl}
           <RadioControl
             name={('key' in definition ? definition.key : 'radio')}
-            options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }, { value: 'na', label: 'N/A' }]}
+            options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }, { value: 'na', label: 'Not Applicable' }]}
             value={data._value}
             onChange={v => update('_value', v)}
             disabled={isLocked}
           />
+          {(data._value === 'no' || data._value === 'na') && (
+            <div className="p-2 bg-muted rounded text-sm text-muted-foreground">
+              {data._value === 'na' ? 'Not Applicable' : 'No'}
+            </div>
+          )}
           {definition.subClauses?.map(sub => (
             <ClauseRenderer
               key={sub.key} definition={sub}
@@ -301,9 +323,97 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
-    case 'matrix':
     case 'note_reference':
-      // Fallback to simple field for now — these are specialized
+      return (
+        <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          {/* Not Applicable checkbox */}
+          <div className="flex items-center gap-6">
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              <Checkbox
+                checked={data._notApplicable === true}
+                onCheckedChange={v => {
+                  const next = { ...data, _notApplicable: !!v };
+                  if (v) { next._asPerAnnexure = false; }
+                  onChange(next);
+                }}
+                disabled={isLocked}
+              />
+              Not Applicable
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              <Checkbox
+                checked={data._asPerAnnexure === true}
+                onCheckedChange={v => {
+                  const next = { ...data, _asPerAnnexure: !!v };
+                  if (v) { next._notApplicable = false; }
+                  onChange(next);
+                }}
+                disabled={isLocked || data._notApplicable}
+              />
+              As Per Annexure
+            </label>
+          </div>
+          {data._notApplicable && (
+            <div className="p-2 bg-muted rounded text-sm text-muted-foreground">N/A</div>
+          )}
+          {!data._notApplicable && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">As per Note — </Label>
+              <Input
+                value={data._noteRef || ''}
+                onChange={e => update('_noteRef', e.target.value)}
+                disabled={isLocked}
+                placeholder="Enter note number"
+                className="max-w-xs"
+              />
+            </div>
+          )}
+          {data._asPerAnnexure && definition.annexureColumns && (
+            <AnnexureTable
+              columns={definition.annexureColumns}
+              rows={data._rows || []}
+              onChange={rows => update('_rows', rows)}
+              isLocked={isLocked}
+              showTotals={'showTotals' in definition ? definition.showTotals : false}
+              totalColumns={'totalColumns' in definition ? definition.totalColumns : undefined}
+            />
+          )}
+        </div>
+      );
+
+    case 'same_as_checkbox': {
+      const sameAsLabel = definition.defaultValue === 'same_as_11a' ? 'Same as 11(a)' : 'Same as Above';
+      return (
+        <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            <Checkbox
+              checked={data._sameAs === true}
+              onCheckedChange={v => update('_sameAs', !!v)}
+              disabled={isLocked}
+            />
+            {sameAsLabel}
+          </label>
+          {data._sameAs && (
+            <div className="p-2 bg-muted rounded text-sm text-muted-foreground italic">
+              Marked as "{sameAsLabel}" — status recorded.
+            </div>
+          )}
+          {!data._sameAs && (
+            <Textarea
+              value={data._value || ''}
+              onChange={e => update('_value', e.target.value)}
+              disabled={isLocked}
+              placeholder="Enter details here..."
+              className="min-h-[80px]"
+            />
+          )}
+        </div>
+      );
+    }
+
+    case 'matrix':
       return (
         <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
@@ -358,12 +468,25 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
 }) {
   function addRow() {
     const emptyRow: Record<string, any> = {};
-    columns.forEach(c => { emptyRow[c.key] = ''; });
+    columns.forEach((c, i) => {
+      // Auto-fill serial number for readonly sr_no columns
+      if (c.key === 'sr_no' && c.type === 'readonly') {
+        emptyRow[c.key] = String(rows.length + 1);
+      } else {
+        emptyRow[c.key] = '';
+      }
+    });
     onChange([...rows, emptyRow]);
   }
 
   function removeRow(i: number) {
-    onChange(rows.filter((_, idx) => idx !== i));
+    const newRows = rows.filter((_, idx) => idx !== i);
+    // Re-number sr_no if it's a readonly column
+    const srCol = columns.find(c => c.key === 'sr_no' && c.type === 'readonly');
+    if (srCol) {
+      newRows.forEach((r, idx) => { r.sr_no = String(idx + 1); });
+    }
+    onChange(newRows);
   }
 
   function updateCell(ri: number, key: string, val: string) {
@@ -462,14 +585,18 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
           ))}
           {rows.length > 0 && (showTotals || columns.some(c => c.type === 'auto_calc')) && (
             <TableRow className="bg-muted/30 font-semibold text-xs">
-              <TableCell className="p-1">Totals</TableCell>
-              {columns.map(col => {
-                const hasTotal = totalColumns?.includes(col.key);
-                const hasAutoTotal = col.type === 'auto_calc';
-                if (hasTotal) return <TableCell key={col.key} className="p-1 text-right tabular-nums">{fmt(totals[col.key] || 0)}</TableCell>;
-                if (hasAutoTotal) return <TableCell key={col.key} className="p-1 text-right tabular-nums">{fmt(autoCalcTotals[col.key] || 0)}</TableCell>;
-                return <TableCell key={col.key} className="p-1" />;
-              })}
+              <TableCell className="p-1 text-center">—</TableCell>
+              {columns.map(col => (
+                <TableCell key={col.key} className="p-1">
+                  {(totalColumns?.includes(col.key) && totals[col.key] !== undefined) ? (
+                    <span className="text-xs font-bold">₹{fmt(totals[col.key])}</span>
+                  ) : autoCalcTotals[col.key] !== undefined ? (
+                    <span className="text-xs font-bold">₹{fmt(autoCalcTotals[col.key])}</span>
+                  ) : col.key === columns[0]?.key ? (
+                    <span className="text-xs font-bold">Total</span>
+                  ) : ''}
+                </TableCell>
+              ))}
               {!isLocked && <TableCell />}
             </TableRow>
           )}
@@ -490,68 +617,60 @@ function CellInput({ column, value, onChange, disabled, row }: {
   value: any;
   onChange: (val: string) => void;
   disabled?: boolean;
-  row: Record<string, any>;
+  row?: Record<string, any>;
 }) {
-  const displayVal = String(value ?? '');
-
   switch (column.type) {
     case 'text':
-      return <Input value={displayVal} onChange={e => onChange(e.target.value)} className="h-8 text-xs" disabled={disabled} />;
-
+      return <Input value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-8 text-xs" />;
     case 'numeric':
-      return <Input type="number" value={displayVal} onChange={e => onChange(e.target.value)} className="h-8 text-xs" disabled={disabled} />;
-
+      return <Input type="number" value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-8 text-xs text-right" />;
     case 'date':
-      return <Input type="date" value={displayVal} onChange={e => onChange(e.target.value)} className="h-8 text-xs" disabled={disabled} />;
-
+      return <Input type="date" value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-8 text-xs" />;
     case 'pan':
       return (
         <Input
-          value={displayVal}
+          value={value || ''}
           onChange={e => onChange(e.target.value.toUpperCase())}
-          className="h-8 text-xs font-mono"
-          maxLength={10}
-          placeholder="AAAPZ1234C"
           disabled={disabled}
+          maxLength={10}
+          placeholder="AAAAA0000A"
+          className="h-8 text-xs font-mono"
         />
       );
-
     case 'dropdown': {
       const options = resolveDropdownOptions(column);
       return (
-        <Select value={displayVal} onValueChange={onChange} disabled={disabled}>
-          <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger>
+        <Select value={value || ''} onValueChange={onChange} disabled={disabled}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>
           <SelectContent className="max-h-60">
-            {options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            {options.map(o => (
+              <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
       );
     }
-
     case 'yes_no_dropdown':
       return (
-        <Select value={displayVal} onValueChange={onChange} disabled={disabled}>
+        <Select value={value || ''} onValueChange={onChange} disabled={disabled}>
           <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="—" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="Y">Yes</SelectItem>
-            <SelectItem value="N">No</SelectItem>
+            <SelectItem value="Y" className="text-xs">Yes</SelectItem>
+            <SelectItem value="N" className="text-xs">No</SelectItem>
           </SelectContent>
         </Select>
       );
-
     case 'auto_calc': {
-      const computed = column.formula ? evaluateFormula(column.formula, row) : 0;
+      const computed = column.formula && row ? evaluateFormula(column.formula, row) : value;
       return (
-        <span className="text-xs font-semibold text-right block pr-1">
-          {typeof computed === 'number' ? fmt(computed) : String(computed)}
+        <span className="text-xs px-2 py-1 block text-right font-medium">
+          {typeof computed === 'number' ? `₹${fmt(computed)}` : String(computed || '—')}
         </span>
       );
     }
-
     case 'readonly':
-      return <span className="text-xs text-muted-foreground block pr-1">{displayVal || '—'}</span>;
-
+      return <span className="text-xs px-2 py-1 block text-muted-foreground">{value || '—'}</span>;
     default:
-      return <Input value={displayVal} onChange={e => onChange(e.target.value)} className="h-8 text-xs" disabled={disabled} />;
+      return <Input value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-8 text-xs" />;
   }
 }

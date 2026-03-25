@@ -12,7 +12,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
   {
     clauseNo: '8', displayOrder: 8, isActive: true,
     title: 'Relevant clause of section 44AB',
-    heading: 'Indicate the relevant clause of section 44AB under which the audit has been conducted',
+    heading: 'Indicate the relevant clause of section 44AB under which audit has been conducted.',
     control: 'composite',
     subClauses: [
       {
@@ -33,167 +33,225 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     ],
   },
 
-  // ═══════ CLAUSE 9 ═══════
+  // ═══════ CLAUSE 9(a) — Partners/Members Profit Sharing ═══════
   {
-    clauseNo: '9', displayOrder: 9, isActive: true,
-    title: 'Books of Account',
-    heading: 'Books of Account — whether prescribed u/s 44AA, examined, and address of keeping',
-    control: 'composite',
+    clauseNo: '9a', displayOrder: 9, isActive: true,
+    title: 'Partners/Members profit sharing',
+    heading: 'If firm or Association of Persons, indicate names of partners/members and their profit-sharing ratios.',
+    control: 'note_reference',
+    annexureColumns: [
+      { key: 'name', label: 'Partner / Member Name', type: 'text', minWidth: 180 },
+      { key: 'profit_share', label: 'Profit Sharing %', type: 'numeric', width: 120 },
+      { key: 'remarks', label: 'Remarks', type: 'text', width: 160 },
+    ],
+  },
+
+  // ═══════ CLAUSE 9(b) — Change in Partners/Members ═══════
+  {
+    clauseNo: '9b', displayOrder: 9.5, isActive: true,
+    title: 'Change in partners/members',
+    heading: 'If there is any change in the partners/members or their profit-sharing ratios since the last date of preceding year, the particulars of such change.',
+    control: 'yes_no',
     subClauses: [
       {
-        key: 'cl_9a', heading: '9(a) Whether books of account prescribed u/s 44AA are maintained?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_9a_address', heading: 'Address at which books of account are kept',
-            control: 'single_field', fieldType: 'textarea',
-            dependsOn: 'cl_9a', dependsOnValue: true,
-          },
+        key: 'cl_9b_details', heading: 'Details of change',
+        control: 'note_reference',
+        dependsOn: 'cl_9b', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'particulars', label: 'Particulars of Change', type: 'text', minWidth: 200 },
+          { key: 'old_ratio', label: 'Old Ratio %', type: 'numeric', width: 100 },
+          { key: 'new_ratio', label: 'New Ratio %', type: 'numeric', width: 100 },
+          { key: 'remarks', label: 'Remarks', type: 'text', width: 160 },
         ],
       },
+    ],
+    defaultValue: 'No Change',
+  },
+
+  // ═══════ CLAUSE 10(a) — Nature of Business or Profession ═══════
+  {
+    clauseNo: '10a', displayOrder: 10, isActive: true,
+    title: 'Nature of business or profession',
+    heading: 'Nature of Business or Profession (if more than one business or profession is carried on during the previous year, nature of every business or profession).',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
+      { key: 'sector', label: 'Sector', type: 'text', minWidth: 160 },
+      { key: 'sub_sector', label: 'Sub Sector', type: 'text', minWidth: 160 },
+      { key: 'code', label: 'Code', type: 'text', width: 100 },
+    ],
+  },
+
+  // ═══════ CLAUSE 10(b) — Change in Nature of Business ═══════
+  {
+    clauseNo: '10b', displayOrder: 10.5, isActive: true,
+    title: 'Change in nature of business',
+    heading: 'If there is any change in the nature of business or profession, the particulars of such change.',
+    control: 'yes_no',
+    subClauses: [
       {
-        key: 'cl_9b', heading: '9(b) Whether books of account have been examined?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_9b_details', heading: 'Details of books examined',
-            control: 'structured_table', dependsOn: 'cl_9b', dependsOnValue: true,
-            annexureColumns: [
-              { key: 'sr_no', label: 'Sr No', type: 'text', width: 60 },
-              { key: 'period_from', label: 'Period From', type: 'date', width: 120 },
-              { key: 'period_to', label: 'Period To', type: 'date', width: 120 },
-              { key: 'nature', label: 'Nature of Books', type: 'text' },
-              { key: 'address', label: 'Address', type: 'text' },
-            ],
-          },
+        key: 'cl_10b_details', heading: 'Details of change',
+        control: 'not_applicable_annexure',
+        dependsOn: 'cl_10b', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'change_type', label: 'Business', type: 'dropdown', width: 140,
+            options: [{ value: 'Added', label: 'Added' }, { value: 'Discontinued', label: 'Discontinued' }] },
+          { key: 'sector', label: 'Sector', type: 'text', minWidth: 160 },
+          { key: 'sub_sector', label: 'Sub Sector', type: 'text', minWidth: 160 },
+          { key: 'code', label: 'Code', type: 'text', width: 100 },
         ],
       },
     ],
   },
 
-  // ═══════ CLAUSE 10 ═══════
+  // ═══════ CLAUSE 11(a) — Books of Account prescribed u/s 44AA ═══════
   {
-    clauseNo: '10', displayOrder: 10, isActive: true,
-    title: 'Nature of Business or Profession (Sector / Code)',
-    heading: 'Nature of business or profession — sector code and multi-business details',
-    control: 'composite',
+    clauseNo: '11a', displayOrder: 11, isActive: true,
+    title: 'Books prescribed u/s 44AA',
+    heading: 'Whether books of account are prescribed under section 44AA, if yes, list of books so prescribed.',
+    control: 'yes_no',
     subClauses: [
       {
-        key: 'cl_10a', heading: '10(a) Sector and Sub-sector Code',
-        control: 'note_reference', // Special: uses SectorPicker
-      },
-      {
-        key: 'cl_10b', heading: '10(b) Whether engaged in more than one business or profession?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_10b_details', heading: 'Details of businesses',
-            control: 'structured_table', dependsOn: 'cl_10b', dependsOnValue: true,
-            annexureColumns: [
-              { key: 'sector', label: 'Sector', type: 'text', width: 160 },
-              { key: 'code', label: 'Sub-sector Code', type: 'text', width: 160 },
-              { key: 'description', label: 'Description', type: 'readonly' },
-            ],
-          },
+        key: 'cl_11a_books', heading: 'List of books prescribed',
+        control: 'structured_table',
+        dependsOn: 'cl_11a', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'book', label: 'Book of Account', type: 'dropdown', dropdownRef: 'BOOKS_LIST', minWidth: 200 },
+          { key: 'specify', label: 'Specify (if Others)', type: 'text', width: 200 },
         ],
       },
     ],
   },
 
-  // ═══════ CLAUSE 11 ═══════
+  // ═══════ CLAUSE 11(b) — Books maintained — Address ═══════
   {
-    clauseNo: '11', displayOrder: 11, isActive: true,
-    title: 'Method of Accounting',
-    heading: 'Method of accounting employed',
-    control: 'composite',
-    subClauses: [
-      {
-        key: 'cl_11a', heading: '11(a) Whether method of accounting employed is the same as in the preceding year?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_11a_method', heading: 'State the new method employed',
-            control: 'dropdown', dropdownRef: 'ACCOUNTING_METHOD',
-            dependsOn: 'cl_11a', dependsOnValue: false,
-          },
-          {
-            key: 'cl_11b', heading: '11(b) Effect of change on profit/loss',
-            control: 'structured_table', dependsOn: 'cl_11a', dependsOnValue: false,
-            showTotals: true, totalColumns: ['increase', 'decrease'],
-            annexureColumns: [
-              { key: 'particulars', label: 'Particulars of Change', type: 'text' },
-              { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
-              { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
-            ],
-          },
-        ],
-      },
-      {
-        key: 'cl_11c', heading: '11(c) Method of valuation of closing stock employed in the previous year',
-        control: 'dropdown', dropdownRef: 'STOCK_VALUATION_14',
-      },
-    ],
+    clauseNo: '11b', displayOrder: 11.5, isActive: true,
+    title: 'Books maintained — address',
+    heading: 'List of books of account maintained and the address at which the books of account are kept.',
+    control: 'same_as_checkbox',
+    defaultValue: 'same_as_11a',
   },
 
-  // ═══════ CLAUSE 12 ═══════
+  // ═══════ CLAUSE 11(c) — Books and Documents Examined ═══════
+  {
+    clauseNo: '11c', displayOrder: 11.7, isActive: true,
+    title: 'Books & documents examined',
+    heading: 'List of books of account and nature of relevant documents examined.',
+    control: 'same_as_checkbox',
+    defaultValue: 'same_as_above',
+  },
+
+  // ═══════ CLAUSE 12 — Presumptive Basis Income ═══════
   {
     clauseNo: '12', displayOrder: 12, isActive: true,
-    title: 'Capital Assets Converted to Stock',
-    heading: '(a) Whether capital asset converted into stock-in-trade',
-    control: 'composite',
+    title: 'Presumptive basis income',
+    heading: 'Whether the profit and loss account includes any profits and gains assessable on presumptive basis, if yes, indicate the amount and the relevant section (44AD, 44ADA, 44AE, 44AF, 44B, 44BB, 44BBA, 44BBB, 44BBC, Chapter XII-G, First Schedule or any other relevant section.)',
+    control: 'yes_no_na',
     subClauses: [
       {
-        key: 'cl_12a', heading: '12(a) Whether any capital asset was converted into stock-in-trade?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_12a_details', heading: 'Details of conversion',
-            control: 'structured_table', dependsOn: 'cl_12a', dependsOnValue: true,
-            annexureColumns: [
-              { key: 'description', label: 'Description of Asset', type: 'text' },
-              { key: 'date', label: 'Date of Conversion', type: 'date', width: 120 },
-              { key: 'cost', label: 'Cost of Acquisition (₹)', type: 'numeric', width: 140 },
-              { key: 'fmv', label: 'Fair Market Value (₹)', type: 'numeric', width: 140 },
-            ],
-          },
+        key: 'cl_12_details', heading: 'Details of presumptive income',
+        control: 'not_applicable_annexure',
+        dependsOn: 'cl_12', dependsOnValue: 'yes',
+        annexureColumns: [
+          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'PRESUMPTIVE_SECTIONS', minWidth: 200 },
+          { key: 'description', label: 'Description / Other Section', type: 'text', minWidth: 180 },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
         ],
       },
     ],
   },
 
-  // ═══════ CLAUSE 13 ═══════
+  // ═══════ CLAUSE 13(a) — Method of Accounting ═══════
   {
-    clauseNo: '13', displayOrder: 13, isActive: true,
-    title: 'Speculative Transactions & ICDS',
-    heading: 'Method of accounting employed in respect of speculative transactions and ICDS compliance',
-    control: 'composite',
+    clauseNo: '13a', displayOrder: 13, isActive: true,
+    title: 'Method of accounting',
+    heading: 'Method of accounting employed in the previous year.',
+    control: 'dropdown',
+    dropdownRef: 'ACCOUNTING_METHOD',
+  },
+
+  // ═══════ CLAUSE 13(b) — Change in Method ═══════
+  {
+    clauseNo: '13b', displayOrder: 13.5, isActive: true,
+    title: 'Change in accounting method',
+    heading: 'Whether there had been any change in the method of accounting employed vis-a-vis the method employed in the immediately preceding previous year.',
+    control: 'yes_no',
+    defaultValue: 'No change in method',
     subClauses: [
       {
-        key: 'cl_13a', heading: '13(a) Method of accounting employed for speculative transactions?',
-        control: 'yes_no',
-        subClauses: [
-          {
-            key: 'cl_13a_details', heading: 'ICDS deviations and effect on profit',
-            control: 'structured_table', dependsOn: 'cl_13a', dependsOnValue: true,
-            annexureColumns: [
-              { key: 'icds', label: 'ICDS Number', type: 'dropdown', dropdownRef: 'ICDS', width: 220 },
-              { key: 'particulars', label: 'Particulars', type: 'text' },
-              { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
-              { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
-            ],
-          },
+        key: 'cl_13c', heading: 'Details of such change and effect on profit or loss',
+        control: 'not_applicable_annexure',
+        dependsOn: 'cl_13b', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
+          { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
+          { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
         ],
       },
     ],
   },
 
-  // ═══════ CLAUSE 14 ═══════
+  // ═══════ CLAUSE 13(d) — ICDS Adjustment Required ═══════
   {
-    clauseNo: '14', displayOrder: 14, isActive: true,
-    title: 'Method of Valuation',
-    heading: 'Method of valuation of closing stock employed in the previous year',
+    clauseNo: '13d', displayOrder: 13.7, isActive: true,
+    title: 'ICDS adjustment required',
+    heading: 'Whether any adjustment is required to be made to the profits or loss for complying with the provisions of income computation and disclosure standards (ICDS) notified under section 145(2).',
+    control: 'yes_no',
+    subClauses: [
+      {
+        key: 'cl_13e', heading: 'Details of ICDS adjustments',
+        control: 'structured_table',
+        dependsOn: 'cl_13d', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
+          { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
+          { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
+          { key: 'net_effect', label: 'Net Effect (₹)', type: 'auto_calc', width: 130, formula: 'increase - decrease' },
+        ],
+      },
+    ],
+  },
+
+  // ═══════ CLAUSE 13(f) — ICDS Disclosure ═══════
+  {
+    clauseNo: '13f', displayOrder: 13.8, isActive: true,
+    title: 'ICDS disclosure',
+    heading: 'Disclosure as per ICDS.',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
+      { key: 'disclosure', label: 'Disclosure', type: 'text', minWidth: 300 },
+    ],
+  },
+
+  // ═══════ CLAUSE 14(a) — Method of Valuation ═══════
+  {
+    clauseNo: '14a', displayOrder: 14, isActive: true,
+    title: 'Method of valuation of closing stock',
+    heading: 'Method of valuation of closing stock employed in the previous year.',
     control: 'dropdown',
     dropdownRef: 'STOCK_VALUATION_14',
+  },
+
+  // ═══════ CLAUSE 14(b) — Deviation from 145A ═══════
+  {
+    clauseNo: '14b', displayOrder: 14.5, isActive: true,
+    title: 'Deviation from section 145A',
+    heading: 'In case of deviation from the method of valuation prescribed under section 145A, and the effect thereof on the profit or loss, please furnish:',
+    control: 'yes_no',
+    defaultValue: 'Nil',
+    subClauses: [
+      {
+        key: 'cl_14b_details', heading: 'Details of deviation',
+        control: 'not_applicable_annexure',
+        dependsOn: 'cl_14b', dependsOnValue: true,
+        annexureColumns: [
+          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
+          { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
+          { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+    ],
   },
 
   // ═══════ CLAUSES 15–16 ═══════
