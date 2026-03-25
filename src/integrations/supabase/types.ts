@@ -1465,6 +1465,56 @@ export type Database = {
           },
         ]
       }
+      client_service_packages: {
+        Row: {
+          billing_amount: number | null
+          client_id: string
+          created_at: string | null
+          frequency: string
+          id: string
+          invoice_gen_type: string
+          is_active: boolean
+          package_name: string
+          reminder_date: number | null
+          service_category_ids: Json
+          updated_at: string | null
+        }
+        Insert: {
+          billing_amount?: number | null
+          client_id: string
+          created_at?: string | null
+          frequency: string
+          id?: string
+          invoice_gen_type?: string
+          is_active?: boolean
+          package_name: string
+          reminder_date?: number | null
+          service_category_ids?: Json
+          updated_at?: string | null
+        }
+        Update: {
+          billing_amount?: number | null
+          client_id?: string
+          created_at?: string | null
+          frequency?: string
+          id?: string
+          invoice_gen_type?: string
+          is_active?: boolean
+          package_name?: string
+          reminder_date?: number | null
+          service_category_ids?: Json
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_service_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_services: {
         Row: {
           activated_at: string | null
