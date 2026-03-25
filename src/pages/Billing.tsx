@@ -382,9 +382,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     fetchData();
   };
 
-  const handleSend = async (inv: Invoice) => {
+  const handleSend = async (inv: Invoice, sendToResponsible = false) => {
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
-    const notifType = inv.document_type === "credit_note" ? "credit_note_issued"
+    const notifType = sendToResponsible ? "internal_filing_reminder"
+      : inv.document_type === "credit_note" ? "credit_note_issued"
       : inv.document_type === "quotation" ? "quotation_sent"
       : inv.document_type === "proforma" ? "proforma_sent"
       : "invoice_generated";
@@ -395,21 +396,26 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           type: notifType,
           firm_id: inv.firm_id,
           client_id: inv.client_id,
-          send_to_client: true,
-          send_to_responsible: false,
+          send_to_client: !sendToResponsible,
+          send_to_responsible: sendToResponsible,
           payload: {
             invoice_no: inv.invoice_no,
             amount: total,
             document_type: inv.document_type || "invoice",
+            client_name: clientMap[inv.client_id || ""]?.name || "",
           },
         },
       });
     } catch {
-      toast({ title: "Invoice marked as sent. Notification delivery could not be confirmed." });
+      toast({ title: sendToResponsible ? "Notification could not be confirmed." : "Invoice marked as sent. Notification delivery could not be confirmed." });
     }
 
-    await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
-    toast({ title: "Document sent" });
+    if (!sendToResponsible) {
+      await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
+      toast({ title: "Document sent" });
+    } else {
+      toast({ title: "Responsible person notified" });
+    }
     fetchData();
   };
 
