@@ -1247,6 +1247,56 @@ export type Database = {
           },
         ]
       }
+      client_fy_audit_setup: {
+        Row: {
+          audit_billing_amount: number | null
+          caro_applicable: boolean
+          client_id: string
+          created_at: string | null
+          financial_year: string
+          id: string
+          internal_audit_applicable: boolean
+          statutory_audit_applicable: boolean
+          stock_audit_applicable: boolean
+          tax_audit_applicable: boolean
+          updated_at: string | null
+        }
+        Insert: {
+          audit_billing_amount?: number | null
+          caro_applicable?: boolean
+          client_id: string
+          created_at?: string | null
+          financial_year: string
+          id?: string
+          internal_audit_applicable?: boolean
+          statutory_audit_applicable?: boolean
+          stock_audit_applicable?: boolean
+          tax_audit_applicable?: boolean
+          updated_at?: string | null
+        }
+        Update: {
+          audit_billing_amount?: number | null
+          caro_applicable?: boolean
+          client_id?: string
+          created_at?: string | null
+          financial_year?: string
+          id?: string
+          internal_audit_applicable?: boolean
+          statutory_audit_applicable?: boolean
+          stock_audit_applicable?: boolean
+          tax_audit_applicable?: boolean
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_fy_audit_setup_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_fy_classifications: {
         Row: {
           audit_firm_id: string | null
