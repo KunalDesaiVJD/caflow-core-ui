@@ -98,7 +98,7 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Prop
     try {
       // Gather relevant data per note type
       let contextData: any = { note_number: note.num, note_title: note.title, entity_type: client?.entity_type };
-      const financialStandards = client?.compliance_flags?.financial_profile?.financial_standards || "indian_gaap";
+      const financialStandards = "indian_gaap";
       contextData.financial_standards = financialStandards;
 
       if (note.num === 10) {
