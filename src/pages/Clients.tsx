@@ -105,13 +105,30 @@ const Clients = () => {
     if (!deleteClient) return;
     setDeleteLoading(true);
     try {
-      const { error, count } = await supabase.from("clients").delete({ count: "exact" }).eq("id", deleteClient.id);
-      if (error) throw error;
-      if (count === 0) {
-        toast({ title: "Delete failed", description: "You may not have permission.", variant: "destructive" });
-      } else {
-        toast({ title: "Client deleted" });
+      // Check for paid invoices
+      const { data: paidInvoices } = await supabase
+        .from("invoices")
+        .select("id")
+        .eq("client_id", deleteClient.id)
+        .eq("status", "paid")
+        .limit(1);
+      if (paidInvoices && paidInvoices.length > 0) {
+        toast({
+          title: "Cannot archive this client",
+          description: "They have paid invoices on record. Archive the client instead.",
+          variant: "destructive",
+        });
+        setDeleteClient(null);
+        setDeleteLoading(false);
+        return;
       }
+      // Soft delete
+      const { error } = await supabase
+        .from("clients")
+        .update({ deleted_at: new Date().toISOString() } as any)
+        .eq("id", deleteClient.id);
+      if (error) throw error;
+      toast({ title: "Client archived successfully" });
       setDeleteClient(null);
       fetchData();
     } catch (e: any) {
