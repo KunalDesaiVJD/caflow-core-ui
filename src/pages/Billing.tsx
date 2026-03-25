@@ -336,14 +336,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   }, [responsibleFilter]);
 
   const enriched = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    return invoices.map(inv => {
-      let computedStatus = inv.status || "draft";
-      if (!["paid", "voided", "converted"].includes(computedStatus) && inv.due_date && new Date(inv.due_date) < today) {
-        computedStatus = "overdue";
-      }
-      return { ...inv, effectiveStatus: computedStatus };
-    });
+    return invoices.map(inv => ({ ...inv, effectiveStatus: inv.status || "draft" }));
   }, [invoices]);
 
   const stats = useMemo(() => {
