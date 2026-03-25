@@ -359,6 +359,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (statusFilter !== "all" && inv.effectiveStatus !== statusFilter) return false;
     if (groupFilter !== "all" && !groupClientIds.includes(inv.client_id || "")) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(inv.client_id || "")) return false;
+    if (multiFirmFilter.length > 0 && !multiFirmFilter.includes(inv.firm_id || "")) return false;
     if (search) {
       const s = search.toLowerCase();
       const cn = clientMap[inv.client_id || ""]?.name || "";
