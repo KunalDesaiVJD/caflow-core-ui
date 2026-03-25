@@ -1603,6 +1603,66 @@ export type Database = {
           },
         ]
       }
+      client_ledger_entries: {
+        Row: {
+          balance: number
+          client_id: string
+          created_at: string | null
+          credit_amount: number
+          debit_amount: number
+          document_id: string | null
+          entry_date: string
+          entry_type: string
+          financial_year: string | null
+          firm_id: string
+          id: string
+          narration: string | null
+        }
+        Insert: {
+          balance?: number
+          client_id: string
+          created_at?: string | null
+          credit_amount?: number
+          debit_amount?: number
+          document_id?: string | null
+          entry_date: string
+          entry_type: string
+          financial_year?: string | null
+          firm_id: string
+          id?: string
+          narration?: string | null
+        }
+        Update: {
+          balance?: number
+          client_id?: string
+          created_at?: string | null
+          credit_amount?: number
+          debit_amount?: number
+          document_id?: string | null
+          entry_date?: string
+          entry_type?: string
+          financial_year?: string | null
+          firm_id?: string
+          id?: string
+          narration?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_ledger_entries_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_profiles: {
         Row: {
           audit_questions: Json | null
