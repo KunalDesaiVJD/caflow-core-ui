@@ -936,6 +936,93 @@ export type Database = {
           },
         ]
       }
+      billing_reminders: {
+        Row: {
+          billing_amount: number
+          client_id: string
+          created_at: string | null
+          firm_id: string
+          frequency: string
+          id: string
+          invoice_gen_type: string
+          last_invoice_id: string | null
+          next_due_date: string | null
+          package_id: string | null
+          reminder_date: number | null
+          service_category_id: string | null
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          billing_amount: number
+          client_id: string
+          created_at?: string | null
+          firm_id: string
+          frequency: string
+          id?: string
+          invoice_gen_type?: string
+          last_invoice_id?: string | null
+          next_due_date?: string | null
+          package_id?: string | null
+          reminder_date?: number | null
+          service_category_id?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Update: {
+          billing_amount?: number
+          client_id?: string
+          created_at?: string | null
+          firm_id?: string
+          frequency?: string
+          id?: string
+          invoice_gen_type?: string
+          last_invoice_id?: string | null
+          next_due_date?: string | null
+          package_id?: string | null
+          reminder_date?: number | null
+          service_category_id?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_reminders_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_reminders_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_reminders_last_invoice_id_fkey"
+            columns: ["last_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_reminders_package_id_fkey"
+            columns: ["package_id"]
+            isOneToOne: false
+            referencedRelation: "client_service_packages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_reminders_service_category_id_fkey"
+            columns: ["service_category_id"]
+            isOneToOne: false
+            referencedRelation: "service_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       caro_master_templates: {
         Row: {
           clause_number: number
