@@ -12,7 +12,8 @@ export type ControlType =
   | 'structured_table'          // Fixed-row structured table (Cl.27a, Cl.40)
   | 'matrix'                    // Matrix/Annexure-6 style (Cl.34a)
   | 'note_reference'            // Note reference + optional annexure (Cl.9a)
-  | 'composite';                // Composite — uses subClauses with mixed controls
+  | 'composite'                 // Composite — uses subClauses with mixed controls
+  | 'same_as_checkbox';         // Same as X checkbox + free text (Cl.11b, 11c)
 
 export interface DropdownOption { value: string; label: string; }
 

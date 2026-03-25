@@ -37,10 +37,8 @@ export const DROPDOWN_LIBRARY: Record<string, { value: string; label: string }[]
   ],
 
   ACCOUNTING_METHOD: [
-    { value: 'mercantile', label: 'Mercantile System (Accrual Basis)' },
-    { value: 'cash', label: 'Cash System (Cash Basis)' },
-    { value: 'hybrid', label: 'Hybrid / Mixed Method' },
-    { value: 'other', label: 'Other (specify)' },
+    { value: 'cash', label: 'Cash system' },
+    { value: 'mercantile', label: 'Mercantile system' },
   ],
 
   PRESUMPTIVE_SECTIONS: [
