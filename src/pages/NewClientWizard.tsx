@@ -152,8 +152,6 @@ const NewClientWizard = () => {
       const compliance = asRecord(client.compliance_flags);
       const financial = asRecord(compliance.financial_profile);
       const basicExtra = asRecord(compliance.basic_info_extra);
-      const bankingData = asRecord(profile?.banking_data);
-      const loanData = asRecord(profile?.loan_data);
       const auditData = asRecord(profile?.audit_questions);
 
       setBasicInfo({
