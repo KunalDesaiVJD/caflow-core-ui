@@ -335,8 +335,7 @@ const ClientDetail = () => {
   const clientClassification = (client as any).client_classification;
   const isAuditClient = Array.isArray(clientClassification) && clientClassification.includes("audit");
 
-  const banking = bankingData?.banking_data as any;
-  const bankAccounts = Array.isArray(banking?.bank_accounts) ? banking.bank_accounts : [];
+  const bankAccounts: any[] = [];
 
   return (
     <div className="space-y-4">
