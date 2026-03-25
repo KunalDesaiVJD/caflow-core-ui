@@ -235,7 +235,7 @@ const ItReturns = () => {
           entity_type: cl?.entity_type || "",
           group_name: (wg as any)?.name || "",
           assigned_name: userMap.get(p.assigned_to || "") || "",
-          client_classification: (cl as any)?.client_classification || [],
+          client_classification: classMap.get(p.client_id || "") || "",
           work_group_name: clientWgMap.get(p.client_id || "") || "",
         });
       }
