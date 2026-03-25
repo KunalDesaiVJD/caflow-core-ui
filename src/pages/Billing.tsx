@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -715,16 +716,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 }
 
 // ═══════════════════════════════════════
-// RECEIPTS TAB (Placeholder)
+// RECEIPTS TAB (extracted component)
 // ═══════════════════════════════════════
 function ReceiptsTab() {
-  return (
-    <Card><CardContent className="py-12 text-center text-muted-foreground">
-      <Receipt size={40} className="mx-auto mb-3 opacity-40" />
-      <p className="text-lg font-medium">Receipts</p>
-      <p className="text-sm">Receipt management coming soon.</p>
-    </CardContent></Card>
-  );
+  return <ReceiptsTabComponent />;
 }
 
 // ═══════════════════════════════════════
