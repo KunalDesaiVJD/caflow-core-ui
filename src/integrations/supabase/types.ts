@@ -936,6 +936,89 @@ export type Database = {
           },
         ]
       }
+      billing_receipts: {
+        Row: {
+          amount_received: number
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          firm_id: string
+          gst_tds_amount: number | null
+          id: string
+          invoice_id: string | null
+          payment_mode: string
+          payment_reference: string | null
+          receipt_date: string
+          receipt_type: string
+          remarks: string | null
+          tds_amount: number | null
+          tds_date: string | null
+        }
+        Insert: {
+          amount_received: number
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id: string
+          gst_tds_amount?: number | null
+          id?: string
+          invoice_id?: string | null
+          payment_mode: string
+          payment_reference?: string | null
+          receipt_date: string
+          receipt_type: string
+          remarks?: string | null
+          tds_amount?: number | null
+          tds_date?: string | null
+        }
+        Update: {
+          amount_received?: number
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string
+          gst_tds_amount?: number | null
+          id?: string
+          invoice_id?: string | null
+          payment_mode?: string
+          payment_reference?: string | null
+          receipt_date?: string
+          receipt_type?: string
+          remarks?: string | null
+          tds_amount?: number | null
+          tds_date?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_receipts_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_receipts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_receipts_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_receipts_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_reminders: {
         Row: {
           billing_amount: number
