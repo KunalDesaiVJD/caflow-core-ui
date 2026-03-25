@@ -196,7 +196,7 @@ const Billing = () => {
         <TabsContent value="credit-notes"><DocumentListTab documentType="credit_note" /></TabsContent>
         <TabsContent value="timesheet"><TimesheetTab /></TabsContent>
         <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
-        <TabsContent value="ledger"><LedgerTab /></TabsContent>
+        <TabsContent value="ledger"><LedgerTabComponent /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
         <TabsContent value="reports"><ReportsTab /></TabsContent>
       </Tabs>
