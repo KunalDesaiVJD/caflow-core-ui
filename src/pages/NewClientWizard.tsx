@@ -228,13 +228,6 @@ const NewClientWizard = () => {
         errors[`gstin_${i}`] = "Invalid GSTIN format (15 chars)";
       }
     });
-    if (
-      (basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd") &&
-      basicInfo.cin &&
-      basicInfo.cin.length !== 21
-    ) {
-      errors.cin = "CIN must be exactly 21 characters";
-    }
     setBasicErrors(errors);
     return Object.keys(errors).length === 0;
   };
