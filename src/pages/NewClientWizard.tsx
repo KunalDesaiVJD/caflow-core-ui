@@ -92,12 +92,10 @@ const NewClientWizard = () => {
 
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
 
-  // Compute visible steps based on classification
-  const isAuditClient = (basicInfo.client_classification || []).includes("audit");
+  // For now, show all steps (classification moved to step 2)
   const visibleSteps = useMemo(() => {
-    if (isAuditClient) return ALL_STEPS;
-    return ALL_STEPS.filter((s) => !s.auditOnly);
-  }, [isAuditClient]);
+    return ALL_STEPS;
+  }, []);
 
   const STEPS = visibleSteps.map((s) => s.label);
   const currentStepDef = visibleSteps[step];
