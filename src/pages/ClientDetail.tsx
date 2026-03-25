@@ -80,6 +80,7 @@ const ClientDetail = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const [client, setClient] = useState<Client | null>(null);
+  const [responsiblePersonName, setResponsiblePersonName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Scrutiny
@@ -138,6 +139,15 @@ const ClientDetail = () => {
       const c = clientRes.data as Client | null;
       setClient(c);
       setFindings(findingsData);
+
+      // Load responsible person name
+      if (c && (c as any).responsible_person_id) {
+        const rpUser = (staffRes.data || []).find((u: any) => u.id === (c as any).responsible_person_id);
+        setResponsiblePersonName(rpUser?.name || null);
+      } else {
+        setResponsiblePersonName(null);
+      }
+
       if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
       setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
@@ -406,6 +416,7 @@ const ClientDetail = () => {
                     <div><span className="text-muted-foreground">Entity Type:</span> <span>{client.entity_type || "—"}</span></div>
                     <div><span className="text-muted-foreground">CIN:</span> <span className="font-mono">{client.cin || "—"}</span></div>
                     <div className="col-span-2"><span className="text-muted-foreground">GSTIN:</span> <span className="font-mono">{(client.gstin || []).join(", ") || "—"}</span></div>
+                    <div className="col-span-2"><span className="text-muted-foreground">Responsible Person:</span> <span className="font-medium">{responsiblePersonName || "—"}</span></div>
                   </div>
                 </CardContent>
               </Card>

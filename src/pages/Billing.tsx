@@ -31,6 +31,9 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, endOfMonth, parseISO, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -39,7 +42,7 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive,
+  Archive, ChevronDown, User,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -273,7 +276,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
-    const { data: usersData } = await supabase.from("users").select("id, name").eq("is_active", true);
+    // Load firm-scoped active users for Responsible Person filter
+    let usersQuery = supabase.from("users").select("id, name").eq("is_active", true).order("name");
+    if (!isSuperadmin && firmId) usersQuery = usersQuery.eq("firm_id", firmId);
+    const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
     (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
@@ -353,6 +359,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (statusFilter !== "all" && inv.effectiveStatus !== statusFilter) return false;
     if (groupFilter !== "all" && !groupClientIds.includes(inv.client_id || "")) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(inv.client_id || "")) return false;
+    if (multiFirmFilter.length > 0 && !multiFirmFilter.includes(inv.firm_id || "")) return false;
     if (search) {
       const s = search.toLowerCase();
       const cn = clientMap[inv.client_id || ""]?.name || "";
@@ -376,9 +383,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     fetchData();
   };
 
-  const handleSend = async (inv: Invoice) => {
+  const handleSend = async (inv: Invoice, sendToResponsible = false) => {
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
-    const notifType = inv.document_type === "credit_note" ? "credit_note_issued"
+    const notifType = sendToResponsible ? "internal_filing_reminder"
+      : inv.document_type === "credit_note" ? "credit_note_issued"
       : inv.document_type === "quotation" ? "quotation_sent"
       : inv.document_type === "proforma" ? "proforma_sent"
       : "invoice_generated";
@@ -389,21 +397,26 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           type: notifType,
           firm_id: inv.firm_id,
           client_id: inv.client_id,
-          send_to_client: true,
-          send_to_responsible: false,
+          send_to_client: !sendToResponsible,
+          send_to_responsible: sendToResponsible,
           payload: {
             invoice_no: inv.invoice_no,
             amount: total,
             document_type: inv.document_type || "invoice",
+            client_name: clientMap[inv.client_id || ""]?.name || "",
           },
         },
       });
     } catch {
-      toast({ title: "Invoice marked as sent. Notification delivery could not be confirmed." });
+      toast({ title: sendToResponsible ? "Notification could not be confirmed." : "Invoice marked as sent. Notification delivery could not be confirmed." });
     }
 
-    await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
-    toast({ title: "Document sent" });
+    if (!sendToResponsible) {
+      await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
+      toast({ title: "Document sent" });
+    } else {
+      toast({ title: "Responsible person notified" });
+    }
     fetchData();
   };
 
@@ -647,9 +660,21 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                           <Eye size={14} />
                         </Button>
                         {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Send" onClick={() => handleSend(inv)}>
-                            <Send size={14} />
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
+                                <Send size={14} />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
+                                <Mail size={14} /> Send to Client
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
+                                <User size={14} /> Notify Responsible Person
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         )}
                         {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
