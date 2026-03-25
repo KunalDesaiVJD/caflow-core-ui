@@ -430,7 +430,7 @@ function FilingTab({
     const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
     const clientIds = [...new Set((cs || []).map(c => c.client_id))];
     if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
-    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type, client_classification").in("id", clientIds).order("name");
+    const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type, client_classification").eq("is_draft", false).is("deleted_at", null).in("id", clientIds).order("name");
     setAddRowClients((clients || []) as any);
     setAddRowClientId("");
     setAddRowSearch("");
