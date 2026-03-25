@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface AuthUser {
@@ -10,7 +10,19 @@ interface AuthUser {
   must_change_password: boolean;
 }
 
-export function useAuth() {
+interface AuthContextValue {
+  user: AuthUser | null;
+  loading: boolean;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue>({
+  user: null,
+  loading: true,
+  signOut: async () => {},
+});
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -82,5 +94,11 @@ export function useAuth() {
     setUser(null);
   };
 
-  return { user, loading, signOut };
+  const value = useMemo(() => ({ user, loading, signOut }), [user, loading]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  return useContext(AuthContext);
 }
