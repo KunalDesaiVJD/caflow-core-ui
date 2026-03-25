@@ -5277,6 +5277,7 @@ export type Database = {
         Args: { p_user_id: string; p_user_name: string; p_user_role: string }
         Returns: undefined
       }
+      update_overdue_invoices: { Args: { p_firm_id: string }; Returns: number }
     }
     Enums: {
       [_ in never]: never

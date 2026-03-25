@@ -1018,13 +1018,18 @@ function TimesheetTab() {
   const handleApproveWeek = async () => {
     const from = format(weekDates[0], "yyyy-MM-dd");
     const to = format(weekDates[6], "yyyy-MM-dd");
-    const { error } = await supabase.from("timesheets")
-      .update({ approved_by: user?.id, approved_at: new Date().toISOString() })
-      .eq("user_id", selectedStaff)
-      .gte("work_date", from).lte("work_date", to)
-      .is("approved_by", null);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Week approved" }); fetchWeek(); }
+    const { data, error } = await supabase.rpc("approve_week_timesheets", {
+      p_user_id: selectedStaff,
+      p_from_date: from,
+      p_to_date: to,
+      p_approved_by: user?.id,
+    });
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: `${data} timesheet entries approved` });
+      fetchWeek();
+    }
   };
 
   return (

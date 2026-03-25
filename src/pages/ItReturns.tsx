@@ -442,12 +442,18 @@ function FilingTab({
     setAddingRow(true);
     try {
       const selectedClient = addRowClients.find(c => c.id === addRowClientId);
+
+      // Pre-fill assigned_to from client's responsible_person_id
+      const { data: clientData } = await supabase.from("clients").select("responsible_person_id").eq("id", addRowClientId).single();
+      const assignedTo = clientData?.responsible_person_id || null;
+
       const { error } = await supabase.from("itr_profiles").insert({
         client_id: addRowClientId,
         firm_id: firmId,
         assessment_year: selectedAY,
         financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
         filing_status: "Data Pending",
+        assigned_to: assignedTo,
       });
       if (error) throw error;
       queryClient.invalidateQueries({ queryKey: ["itr_profiles"] });
