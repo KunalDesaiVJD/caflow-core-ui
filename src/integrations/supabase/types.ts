@@ -1247,6 +1247,51 @@ export type Database = {
           },
         ]
       }
+      client_fy_classifications: {
+        Row: {
+          audit_firm_id: string | null
+          classification: string
+          client_id: string
+          created_at: string | null
+          financial_year: string
+          id: string
+          updated_at: string | null
+        }
+        Insert: {
+          audit_firm_id?: string | null
+          classification: string
+          client_id: string
+          created_at?: string | null
+          financial_year: string
+          id?: string
+          updated_at?: string | null
+        }
+        Update: {
+          audit_firm_id?: string | null
+          classification?: string
+          client_id?: string
+          created_at?: string | null
+          financial_year?: string
+          id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_fy_classifications_audit_firm_id_fkey"
+            columns: ["audit_firm_id"]
+            isOneToOne: false
+            referencedRelation: "audit_firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_fy_classifications_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_group_memberships: {
         Row: {
           added_at: string | null
