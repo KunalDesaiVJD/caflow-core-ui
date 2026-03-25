@@ -1,10 +1,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -14,64 +12,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { CalendarIcon, Plus, Trash2 } from "lucide-react";
-import { format } from "date-fns";
-import { cn } from "@/lib/utils";
+import { Plus, Trash2 } from "lucide-react";
 
 export interface BasicInfoData {
   name: string;
+  selectedGroupIds: string[];
   pan: string;
   entity_type: string;
-  date_of_incorporation: Date | undefined;
-  registered_state: string;
-  business_nature: string;
+  email: string;
+  mobile: string;
+  address: string;
   gstins: string[];
-  cin: string;
-  selectedGroupIds?: string[];
-  firm_id?: string;
-  email?: string;
-  mobile?: string;
-  address?: string;
-  client_classification?: string[];
+  tan_number: string;
 }
 
 const ENTITY_TYPES = [
-  "Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd",
-  "HUF", "Trust", "AOP", "BOI",
-];
-
-const STATES = [
-  "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
-  "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
-  "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya",
-  "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim",
-  "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand",
-  "West Bengal", "Andaman and Nicobar Islands", "Chandigarh",
-  "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Jammu and Kashmir",
-  "Ladakh", "Lakshadweep", "Puducherry",
-];
-
-const CLIENT_CLASSIFICATIONS = [
-  { id: "audit", label: "Audit" },
-  { id: "non_audit", label: "Non-Audit" },
-  { id: "partner_in_audited_firm", label: "Partner in Audited Firm" },
+  "Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd",
+  "Public Ltd", "HUF", "Trust", "AOP", "BOI",
 ];
 
 interface GroupOption {
   id: string;
   name: string;
   color: string | null;
-}
-
-interface FirmOption {
-  id: string;
-  name: string;
 }
 
 interface Props {
@@ -81,43 +44,23 @@ interface Props {
 }
 
 export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
-  const { user } = useAuth();
   const [groups, setGroups] = useState<GroupOption[]>([]);
-  const [firms, setFirms] = useState<FirmOption[]>([]);
 
   useEffect(() => {
     supabase.from("client_groups").select("id, name, color").order("name").then(({ data: g }) => {
       setGroups((g as GroupOption[]) || []);
     });
-    supabase.from("firms").select("id, name").order("name").then(({ data: f }) => {
-      setFirms((f as FirmOption[]) || []);
-    });
   }, []);
-
-  // Default firm_id to user's firm
-  useEffect(() => {
-    if (!data.firm_id && user?.firm_id) {
-      onChange({ ...data, firm_id: user.firm_id });
-    }
-  }, [user?.firm_id]);
-
-  const selectedGroupIds = data.selectedGroupIds || [];
-  const classification = (data.client_classification || [])[0] || "";
-  const isIndividual = data.entity_type === "Individual";
-
-  const toggleGroup = (id: string) => {
-    const next = selectedGroupIds.includes(id)
-      ? selectedGroupIds.filter((g) => g !== id)
-      : [...selectedGroupIds, id];
-    onChange({ ...data, selectedGroupIds: next });
-  };
-
-  const selectClassification = (id: string) => {
-    onChange({ ...data, client_classification: [id] });
-  };
 
   const update = (field: keyof BasicInfoData, value: any) =>
     onChange({ ...data, [field]: value });
+
+  const toggleGroup = (id: string) => {
+    const next = data.selectedGroupIds.includes(id)
+      ? data.selectedGroupIds.filter((g) => g !== id)
+      : [...data.selectedGroupIds, id];
+    onChange({ ...data, selectedGroupIds: next });
+  };
 
   const updateGstin = (index: number, value: string) => {
     const gstins = [...data.gstins];
@@ -131,37 +74,49 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
     onChange({ ...data, gstins: gstins.length ? gstins : [""] });
   };
 
-  const showCin = data.entity_type === "Private Ltd" || data.entity_type === "Public Ltd";
-
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold text-foreground">Step 1 — Basic Info</h2>
 
-      {/* Firm Assignment */}
-      {firms.length > 1 && (
-        <div className="space-y-1.5">
-          <Label>Firm <span className="text-destructive">*</span></Label>
-          <Select value={data.firm_id || ""} onValueChange={(v) => update("firm_id", v)}>
-            <SelectTrigger><SelectValue placeholder="Select Firm" /></SelectTrigger>
-            <SelectContent>
-              {firms.map((f) => (
-                <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      {/* Name */}
+      {/* 1. Full Legal Name */}
       <div className="space-y-1.5">
         <Label>Full Legal Name <span className="text-destructive">*</span></Label>
-        <Input value={data.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Acme Pvt Ltd" />
+        <Input
+          value={data.name}
+          onChange={(e) => update("name", e.target.value)}
+          placeholder="e.g. Acme Pvt Ltd"
+        />
         {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
       </div>
 
-      {/* PAN */}
+      {/* 2. Client Group (multi-select) */}
+      <div className="space-y-2">
+        <Label>Client Group <span className="text-destructive">*</span></Label>
+        {groups.length > 0 ? (
+          <div className="grid grid-cols-2 gap-2">
+            {groups.map((g) => (
+              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                <Checkbox
+                  checked={data.selectedGroupIds.includes(g.id)}
+                  onCheckedChange={() => toggleGroup(g.id)}
+                />
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: g.color || "hsl(var(--muted-foreground))" }}
+                />
+                {g.name}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No groups found. Create groups in Settings first.</p>
+        )}
+        {errors.selectedGroupIds && <p className="text-xs text-destructive">{errors.selectedGroupIds}</p>}
+      </div>
+
+      {/* 3. PAN */}
       <div className="space-y-1.5">
-        <Label>PAN</Label>
+        <Label>PAN <span className="text-destructive">*</span></Label>
         <Input
           value={data.pan}
           onChange={(e) => update("pan", e.target.value.toUpperCase())}
@@ -171,9 +126,9 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.pan && <p className="text-xs text-destructive">{errors.pan}</p>}
       </div>
 
-      {/* Entity Type */}
+      {/* 4. Entity Type */}
       <div className="space-y-1.5">
-        <Label>Entity Type</Label>
+        <Label>Entity Type <span className="text-destructive">*</span></Label>
         <Select value={data.entity_type} onValueChange={(v) => update("entity_type", v)}>
           <SelectTrigger><SelectValue placeholder="Select entity type" /></SelectTrigger>
           <SelectContent>
@@ -182,76 +137,26 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
             ))}
           </SelectContent>
         </Select>
+        {errors.entity_type && <p className="text-xs text-destructive">{errors.entity_type}</p>}
       </div>
 
-      {/* Date of Incorporation — hidden for Individual */}
-      {!isIndividual && (
-        <div className="space-y-1.5">
-          <Label>Date of Incorporation</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                className={cn("w-full justify-start text-left font-normal", !data.date_of_incorporation && "text-muted-foreground")}
-              >
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {data.date_of_incorporation ? format(data.date_of_incorporation, "PPP") : "Pick a date"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={data.date_of_incorporation}
-                onSelect={(d) => update("date_of_incorporation", d)}
-                disabled={(date) => date > new Date()}
-                initialFocus
-                className="p-3 pointer-events-auto"
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-      )}
-
-      {/* Registered State — hidden for Individual */}
-      {!isIndividual && (
-        <div className="space-y-1.5">
-          <Label>Registered State</Label>
-          <Select value={data.registered_state} onValueChange={(v) => update("registered_state", v)}>
-            <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
-            <SelectContent>
-              {STATES.map((s) => (
-                <SelectItem key={s} value={s}>{s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      {/* Business Nature — hidden for Individual */}
-      {!isIndividual && (
-        <div className="space-y-1.5">
-          <Label>Business Nature / NIC Code</Label>
-          <Input value={data.business_nature} onChange={(e) => update("business_nature", e.target.value)} placeholder="e.g. Manufacturing — NIC 2410" />
-        </div>
-      )}
-
-      {/* Email */}
+      {/* 5. Email ID */}
       <div className="space-y-1.5">
         <Label>Email ID</Label>
         <Input
           type="email"
-          value={data.email || ""}
+          value={data.email}
           onChange={(e) => update("email", e.target.value)}
           placeholder="client@example.com"
         />
         {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 
-      {/* Mobile */}
+      {/* 6. Mobile Number */}
       <div className="space-y-1.5">
-        <Label>Mobile No</Label>
+        <Label>Mobile Number</Label>
         <Input
-          value={data.mobile || ""}
+          value={data.mobile}
           onChange={(e) => {
             const val = e.target.value.replace(/\D/g, "").slice(0, 10);
             update("mobile", val);
@@ -262,98 +167,58 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.mobile && <p className="text-xs text-destructive">{errors.mobile}</p>}
       </div>
 
-      {/* Address */}
+      {/* 7. Address */}
       <div className="space-y-1.5">
         <Label>Address</Label>
         <Textarea
-          value={data.address || ""}
+          value={data.address}
           onChange={(e) => update("address", e.target.value)}
           placeholder="Full address"
           rows={3}
         />
       </div>
 
-      {/* Client Classification — single select */}
-      <div className="space-y-2">
-        <Label>Client Classification</Label>
-        <p className="text-xs text-muted-foreground">Select one category. Audit-specific tabs will show only when "Audit" is selected.</p>
-        <div className="flex flex-wrap gap-4">
-          {CLIENT_CLASSIFICATIONS.map((c) => (
-            <label key={c.id} className="flex items-center gap-2 cursor-pointer text-sm">
-              <input
-                type="radio"
-                name="client_classification"
-                checked={classification === c.id}
-                onChange={() => selectClassification(c.id)}
-                className="accent-primary"
-              />
-              {c.label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* GSTIN */}
+      {/* 8. GSTIN (dynamic rows) */}
       <div className="space-y-2">
         <Label>GSTIN</Label>
         {data.gstins.map((g, i) => (
-          <div key={i} className="flex gap-2">
-            <Input
-              value={g}
-              onChange={(e) => updateGstin(i, e.target.value)}
-              placeholder="22AAAAA0000A1Z5"
-              maxLength={15}
-              className="flex-1"
-            />
-            {data.gstins.length > 1 && (
-              <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => removeGstin(i)}>
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
+          <div key={i} className="space-y-1">
+            <div className="flex gap-2">
+              <Input
+                value={g}
+                onChange={(e) => updateGstin(i, e.target.value)}
+                placeholder="22AAAAA0000A1Z5"
+                maxLength={15}
+                className="flex-1"
+              />
+              {data.gstins.length > 1 && (
+                <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => removeGstin(i)}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              )}
+            </div>
+            {errors[`gstin_${i}`] && (
+              <p className="text-xs text-destructive">{errors[`gstin_${i}`]}</p>
             )}
           </div>
         ))}
-        {data.gstins.map((_, i) =>
-          errors[`gstin_${i}`] ? (
-            <p key={`err_${i}`} className="text-xs text-destructive">{errors[`gstin_${i}`]}</p>
-          ) : null,
-        )}
         <Button variant="outline" size="sm" className="gap-1" onClick={addGstin}>
           <Plus className="h-3 w-3" /> Add Another GSTIN
         </Button>
       </div>
 
-      {/* CIN — conditional */}
-      {showCin && (
-        <div className="space-y-1.5">
-          <Label>CIN (Corporate Identity Number)</Label>
-          <Input
-            value={data.cin}
-            onChange={(e) => update("cin", e.target.value.toUpperCase())}
-            placeholder="U12345MH2020PTC123456"
-            maxLength={21}
-          />
-          {errors.cin && <p className="text-xs text-destructive">{errors.cin}</p>}
-        </div>
-      )}
-
-      {/* Assign to Groups */}
-      {groups.length > 0 && (
-        <div className="space-y-2">
-          <Label>Assign to Groups (optional)</Label>
-          <div className="grid grid-cols-2 gap-2">
-            {groups.map((g) => (
-              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                <Checkbox
-                  checked={selectedGroupIds.includes(g.id)}
-                  onCheckedChange={() => toggleGroup(g.id)}
-                />
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: g.color || "#6B7280" }} />
-                {g.name}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* 9. TAN Number */}
+      <div className="space-y-1.5">
+        <Label>TAN Number</Label>
+        <Input
+          value={data.tan_number}
+          onChange={(e) => update("tan_number", e.target.value.toUpperCase())}
+          placeholder="DELA12345F"
+          maxLength={10}
+        />
+        <p className="text-xs text-muted-foreground">Required if TDS service is activated in Step 3</p>
+        {errors.tan_number && <p className="text-xs text-destructive">{errors.tan_number}</p>}
+      </div>
     </div>
   );
 };

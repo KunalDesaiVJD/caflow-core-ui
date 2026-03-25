@@ -29,18 +29,14 @@ const ALL_STEPS = [
 
 const defaultBasicInfo: BasicInfoData = {
   name: "",
+  selectedGroupIds: [],
   pan: "",
   entity_type: "",
-  date_of_incorporation: undefined,
-  registered_state: "",
-  business_nature: "",
-  gstins: [""],
-  cin: "",
-  selectedGroupIds: [],
   email: "",
   mobile: "",
   address: "",
-  client_classification: [],
+  gstins: [""],
+  tan_number: "",
 };
 
 const defaultFinancialProfile: FinancialProfileData = {
@@ -96,12 +92,10 @@ const NewClientWizard = () => {
 
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
 
-  // Compute visible steps based on classification
-  const isAuditClient = (basicInfo.client_classification || []).includes("audit");
+  // For now, show all steps (classification moved to step 2)
   const visibleSteps = useMemo(() => {
-    if (isAuditClient) return ALL_STEPS;
-    return ALL_STEPS.filter((s) => !s.auditOnly);
-  }, [isAuditClient]);
+    return ALL_STEPS;
+  }, []);
 
   const STEPS = visibleSteps.map((s) => s.label);
   const currentStepDef = visibleSteps[step];
@@ -156,17 +150,14 @@ const NewClientWizard = () => {
 
       setBasicInfo({
         name: client.name || "",
+        selectedGroupIds: [],
         pan: client.pan || "",
         entity_type: client.entity_type || "",
-        cin: client.cin || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
-        date_of_incorporation: basicExtra.date_of_incorporation ? new Date(basicExtra.date_of_incorporation) : undefined,
-        registered_state: basicExtra.registered_state || "",
-        business_nature: basicExtra.business_nature || "",
         email: client.email || "",
         mobile: client.mobile || "",
         address: client.address || "",
-        client_classification: Array.isArray(client.client_classification) ? client.client_classification : [],
+        tan_number: (client as any).tan_number || "",
       });
 
       setFinancialProfile({
@@ -206,9 +197,15 @@ const NewClientWizard = () => {
   const validateBasicInfo = async (): Promise<boolean> => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
-    if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
+    if (!basicInfo.selectedGroupIds || basicInfo.selectedGroupIds.length === 0) {
+      errors.selectedGroupIds = "At least one client group is required";
+    }
+    if (!basicInfo.pan) {
+      errors.pan = "PAN is required";
+    } else if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
       errors.pan = "Invalid PAN format. Example: ABCDE1234F";
     }
+    if (!basicInfo.entity_type) errors.entity_type = "Entity type is required";
     if (basicInfo.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(basicInfo.email)) {
       errors.email = "Invalid email format";
     }
@@ -231,13 +228,6 @@ const NewClientWizard = () => {
         errors[`gstin_${i}`] = "Invalid GSTIN format (15 chars)";
       }
     });
-    if (
-      (basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd") &&
-      basicInfo.cin &&
-      basicInfo.cin.length !== 21
-    ) {
-      errors.cin = "CIN must be exactly 21 characters";
-    }
     setBasicErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -249,20 +239,14 @@ const NewClientWizard = () => {
       name: basicInfo.name.trim(),
       pan: basicInfo.pan || null,
       entity_type: basicInfo.entity_type || null,
-      cin: basicInfo.cin || null,
       gstin: gstins.length > 0 ? gstins : null,
       email: basicInfo.email || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
-      client_classification: basicInfo.client_classification || [],
+      tan_number: basicInfo.tan_number || null,
       compliance_flags: {
         ...complianceFlags,
         financial_profile: financialProfile,
-        basic_info_extra: {
-          date_of_incorporation: basicInfo.date_of_incorporation?.toISOString() || null,
-          registered_state: basicInfo.registered_state,
-          business_nature: basicInfo.business_nature,
-        },
       } as any,
     };
   };
@@ -352,7 +336,7 @@ const NewClientWizard = () => {
       } else {
         const insertPayload = {
           ...buildClientPayload(),
-          firm_id: basicInfo.firm_id || user?.firm_id || null,
+          firm_id: user?.firm_id || null,
           user_id: authUserId,
         };
 
