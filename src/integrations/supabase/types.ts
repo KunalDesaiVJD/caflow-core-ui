@@ -1666,24 +1666,18 @@ export type Database = {
       client_profiles: {
         Row: {
           audit_questions: Json | null
-          banking_data: Json | null
           client_id: string | null
           id: string
-          loan_data: Json | null
         }
         Insert: {
           audit_questions?: Json | null
-          banking_data?: Json | null
           client_id?: string | null
           id?: string
-          loan_data?: Json | null
         }
         Update: {
           audit_questions?: Json | null
-          banking_data?: Json | null
           client_id?: string | null
           id?: string
-          loan_data?: Json | null
         }
         Relationships: [
           {
@@ -5249,6 +5243,15 @@ export type Database = {
       }
     }
     Functions: {
+      approve_week_timesheets: {
+        Args: {
+          p_approved_by: string
+          p_from_date: string
+          p_to_date: string
+          p_user_id: string
+        }
+        Returns: number
+      }
       current_user_firm_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
       get_next_invoice_seq: {

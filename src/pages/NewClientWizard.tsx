@@ -126,7 +126,7 @@ const NewClientWizard = () => {
           .maybeSingle(),
         supabase
           .from("client_profiles")
-          .select("id, client_id, banking_data, loan_data, audit_questions")
+          .select("id, client_id, audit_questions")
           .eq("client_id", clientId)
           .order("id", { ascending: false })
           .limit(1),
@@ -152,8 +152,6 @@ const NewClientWizard = () => {
       const compliance = asRecord(client.compliance_flags);
       const financial = asRecord(compliance.financial_profile);
       const basicExtra = asRecord(compliance.basic_info_extra);
-      const bankingData = asRecord(profile?.banking_data);
-      const loanData = asRecord(profile?.loan_data);
       const auditData = asRecord(profile?.audit_questions);
 
       setBasicInfo({
@@ -192,19 +190,7 @@ const NewClientWizard = () => {
         msme_suppliers: Boolean(compliance.msme_suppliers),
       });
 
-      const securedLoans = asArray(bankingData.secured_loans, asArray(loanData.secured_loans, []));
-      const unsecuredLoans = asArray(bankingData.unsecured_loans, asArray(loanData.unsecured_loans, []));
-
-      setBankingLoans({
-        bank_accounts: asArray(bankingData.bank_accounts, []).length > 0
-          ? asArray(bankingData.bank_accounts, [])
-          : [{ bank_name: "", branch: "", account_number: "", account_type: "" }],
-        secured_loans: securedLoans,
-        unsecured_loans: unsecuredLoans,
-        loans_to_related_parties: Boolean(bankingData.loans_to_related_parties),
-        related_party_loans: asArray(bankingData.related_party_loans, []),
-      });
-
+      setBankingLoans(emptyBankingLoans);
       setAuditQuestions({ ...emptyAuditQuestions, ...auditData });
       setImportData(null);
       setLoadingClient(false);
@@ -283,17 +269,6 @@ const NewClientWizard = () => {
 
   const buildProfilePayload = (targetClientId: string) => ({
     client_id: targetClientId,
-    banking_data: {
-      bank_accounts: bankingLoans.bank_accounts.filter((b) => b.bank_name),
-      secured_loans: bankingLoans.secured_loans,
-      unsecured_loans: bankingLoans.unsecured_loans,
-      loans_to_related_parties: bankingLoans.loans_to_related_parties,
-      related_party_loans: bankingLoans.related_party_loans,
-    } as any,
-    loan_data: {
-      secured_loans: bankingLoans.secured_loans,
-      unsecured_loans: bankingLoans.unsecured_loans,
-    } as any,
     audit_questions: auditQuestions as any,
   });
 
