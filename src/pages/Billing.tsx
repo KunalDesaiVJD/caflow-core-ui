@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
+import LedgerTabComponent from "@/components/billing/LedgerTab";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -195,7 +196,7 @@ const Billing = () => {
         <TabsContent value="credit-notes"><DocumentListTab documentType="credit_note" /></TabsContent>
         <TabsContent value="timesheet"><TimesheetTab /></TabsContent>
         <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
-        <TabsContent value="ledger"><LedgerTab /></TabsContent>
+        <TabsContent value="ledger"><LedgerTabComponent /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
         <TabsContent value="reports"><ReportsTab /></TabsContent>
       </Tabs>
@@ -722,18 +723,7 @@ function ReceiptsTab() {
   return <ReceiptsTabComponent />;
 }
 
-// ═══════════════════════════════════════
-// LEDGER TAB (Placeholder)
-// ═══════════════════════════════════════
-function LedgerTab() {
-  return (
-    <Card><CardContent className="py-12 text-center text-muted-foreground">
-      <BookOpen size={40} className="mx-auto mb-3 opacity-40" />
-      <p className="text-lg font-medium">Client Ledger</p>
-      <p className="text-sm">Ledger view coming soon.</p>
-    </CardContent></Card>
-  );
-}
+// LedgerTab now imported from @/components/billing/LedgerTab
 
 // ═══════════════════════════════════════
 // ITEM MASTER TAB
