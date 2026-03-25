@@ -269,17 +269,6 @@ const NewClientWizard = () => {
 
   const buildProfilePayload = (targetClientId: string) => ({
     client_id: targetClientId,
-    banking_data: {
-      bank_accounts: bankingLoans.bank_accounts.filter((b) => b.bank_name),
-      secured_loans: bankingLoans.secured_loans,
-      unsecured_loans: bankingLoans.unsecured_loans,
-      loans_to_related_parties: bankingLoans.loans_to_related_parties,
-      related_party_loans: bankingLoans.related_party_loans,
-    } as any,
-    loan_data: {
-      secured_loans: bankingLoans.secured_loans,
-      unsecured_loans: bankingLoans.unsecured_loans,
-    } as any,
     audit_questions: auditQuestions as any,
   });
 
