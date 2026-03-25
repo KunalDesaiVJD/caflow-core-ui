@@ -34,6 +34,7 @@ import {
   Plus, IndianRupee, Clock, AlertTriangle, FileText, Send,
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
+  Receipt, BookOpen, FileSpreadsheet,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -55,6 +56,10 @@ interface Invoice {
   paid_at: string | null;
   sent_at: string | null;
   created_at?: string | null;
+  document_type?: string | null;
+  document_series?: string | null;
+  seq_number?: number | null;
+  financial_year?: string | null;
 }
 
 interface ClientMap {
@@ -97,11 +102,66 @@ const STATUS_COLORS: Record<string, string> = {
   sent: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   paid: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   overdue: "bg-destructive/15 text-destructive",
+  converted: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ─── Shared Filter Bar ───
+function DocumentFilterBar({
+  search, setSearch, statusFilter, setStatusFilter,
+  firmFilter, setFirmFilter, groupFilter, setGroupFilter,
+  responsibleFilter, setResponsibleFilter, multiFirmFilter, setMultiFirmFilter,
+  firms, groups, responsiblePersons,
+  statusOptions,
+}: {
+  search: string; setSearch: (v: string) => void;
+  statusFilter: string; setStatusFilter: (v: string) => void;
+  firmFilter: string; setFirmFilter: (v: string) => void;
+  groupFilter: string; setGroupFilter: (v: string) => void;
+  responsibleFilter: string; setResponsibleFilter: (v: string) => void;
+  multiFirmFilter: string[]; setMultiFirmFilter: (v: string[]) => void;
+  firms: { id: string; name: string }[];
+  groups: { id: string; name: string }[];
+  responsiblePersons: { id: string; name: string }[];
+  statusOptions: string[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-3 items-end">
+      <Select value={firmFilter} onValueChange={v => { setFirmFilter(v); setGroupFilter("all"); setResponsibleFilter("all"); }}>
+        <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Firms" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Firms</SelectItem>
+          {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Select value={groupFilter} onValueChange={v => { setGroupFilter(v); setFirmFilter("all"); setResponsibleFilter("all"); }}>
+        <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Groups" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Groups</SelectItem>
+          {groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Select value={responsibleFilter} onValueChange={v => { setResponsibleFilter(v); setFirmFilter("all"); setGroupFilter("all"); }}>
+        <SelectTrigger className="w-[170px]"><SelectValue placeholder="Responsible Person" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Persons</SelectItem>
+          {responsiblePersons.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Status</SelectItem>
+          {statusOptions.map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Input placeholder="Search number, client, or firm..." value={search} onChange={e => setSearch(e.target.value)} className="w-[260px]" />
+    </div>
+  );
+}
 
 const Billing = () => {
   const [activeTab, setActiveTab] = useState("invoices");
@@ -110,19 +170,27 @@ const Billing = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground">Billing & Timesheet</h1>
-        <p className="text-sm text-muted-foreground">Invoices, time tracking, and revenue reports</p>
+        <p className="text-sm text-muted-foreground">Invoices, quotations, credit notes, time tracking, and revenue reports</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
+        <TabsList className="flex-wrap">
           <TabsTrigger value="invoices" className="gap-2"><FileText size={14} /> Invoices</TabsTrigger>
+          <TabsTrigger value="quotations" className="gap-2"><FileSpreadsheet size={14} /> Quotations & Proforma</TabsTrigger>
+          <TabsTrigger value="credit-notes" className="gap-2"><FileText size={14} /> Credit Notes</TabsTrigger>
           <TabsTrigger value="timesheet" className="gap-2"><Clock size={14} /> Timesheet</TabsTrigger>
+          <TabsTrigger value="receipts" className="gap-2"><Receipt size={14} /> Receipts</TabsTrigger>
+          <TabsTrigger value="ledger" className="gap-2"><BookOpen size={14} /> Ledger</TabsTrigger>
           <TabsTrigger value="item-master" className="gap-2"><Settings2 size={14} /> Item Master</TabsTrigger>
           <TabsTrigger value="reports" className="gap-2"><BarChart3 size={14} /> Reports</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="invoices"><InvoicesTab /></TabsContent>
+        <TabsContent value="invoices"><DocumentListTab documentType="invoice" /></TabsContent>
+        <TabsContent value="quotations"><DocumentListTab documentType="quotation_proforma" /></TabsContent>
+        <TabsContent value="credit-notes"><DocumentListTab documentType="credit_note" /></TabsContent>
         <TabsContent value="timesheet"><TimesheetTab /></TabsContent>
+        <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
+        <TabsContent value="ledger"><LedgerTab /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
         <TabsContent value="reports"><ReportsTab /></TabsContent>
       </Tabs>
@@ -131,9 +199,9 @@ const Billing = () => {
 };
 
 // ═══════════════════════════════════════
-// INVOICES TAB
+// DOCUMENT LIST TAB (Invoices / Quotations & Proforma / Credit Notes)
 // ═══════════════════════════════════════
-function InvoicesTab() {
+function DocumentListTab({ documentType }: { documentType: "invoice" | "quotation_proforma" | "credit_note" }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -146,12 +214,33 @@ function InvoicesTab() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [firmFilter, setFirmFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [responsibleFilter, setResponsibleFilter] = useState("all");
+  const [multiFirmFilter, setMultiFirmFilter] = useState<string[]>([]);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // For filter dropdowns
+  const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [responsiblePersons, setResponsiblePersons] = useState<{ id: string; name: string }[]>([]);
+  const [groupClientIds, setGroupClientIds] = useState<string[]>([]);
+  const [responsibleClientIds, setResponsibleClientIds] = useState<string[]>([]);
+
+  const docTypeFilter = useMemo(() => {
+    if (documentType === "invoice") return ["invoice"];
+    if (documentType === "quotation_proforma") return ["quotation", "proforma"];
+    return ["credit_note"];
+  }, [documentType]);
+
+  const tabLabel = documentType === "invoice" ? "Invoice" : documentType === "quotation_proforma" ? "Quotation / Proforma" : "Credit Note";
+  const newDocType = documentType === "invoice" ? "invoice" : documentType === "quotation_proforma" ? "quotation" : "credit_note";
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    let iQuery = supabase.from("invoices").select("*").order("invoice_date", { ascending: false });
+    let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter).order("invoice_date", { ascending: false });
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
+    if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
 
     let cQuery = supabase.from("clients").select("id, name, entity_type").eq("is_draft", false).is("deleted_at", null);
@@ -159,6 +248,8 @@ function InvoicesTab() {
     const { data: clientData } = await cQuery;
 
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
+    const { data: groupData } = await supabase.from("client_groups").select("id, name");
+    const { data: usersData } = await supabase.from("users").select("id, name").eq("is_active", true);
 
     const cMap: ClientMap = {};
     (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
@@ -169,16 +260,37 @@ function InvoicesTab() {
     setInvoices((invData as Invoice[]) || []);
     setClientMap(cMap);
     setFirmMap(fMap);
+    setFirms((firmData || []).map((f: any) => ({ id: f.id, name: f.display_name || f.name })));
+    setGroups((groupData || []).map((g: any) => ({ id: g.id, name: g.name })));
+    setResponsiblePersons((usersData || []).map((u: any) => ({ id: u.id, name: u.name })));
     setLoading(false);
-  }, [firmId, isSuperadmin]);
+  }, [firmId, isSuperadmin, docTypeFilter, firmFilter]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch group client ids when group filter changes
+  useEffect(() => {
+    if (groupFilter === "all") { setGroupClientIds([]); return; }
+    (async () => {
+      const { data } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupFilter);
+      setGroupClientIds((data || []).map((d: any) => d.client_id));
+    })();
+  }, [groupFilter]);
+
+  // Fetch responsible person client ids
+  useEffect(() => {
+    if (responsibleFilter === "all") { setResponsibleClientIds([]); return; }
+    (async () => {
+      const { data } = await supabase.from("clients").select("id").eq("responsible_person_id", responsibleFilter).eq("is_draft", false).is("deleted_at", null);
+      setResponsibleClientIds((data || []).map((d: any) => d.id));
+    })();
+  }, [responsibleFilter]);
 
   const enriched = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     return invoices.map(inv => {
       let computedStatus = inv.status || "draft";
-      if (!["paid", "voided"].includes(computedStatus) && inv.due_date && new Date(inv.due_date) < today) {
+      if (!["paid", "voided", "converted"].includes(computedStatus) && inv.due_date && new Date(inv.due_date) < today) {
         computedStatus = "overdue";
       }
       return { ...inv, effectiveStatus: computedStatus };
@@ -186,7 +298,7 @@ function InvoicesTab() {
   }, [invoices]);
 
   const stats = useMemo(() => {
-    const outstanding = enriched.filter(i => !["paid", "voided"].includes(i.effectiveStatus))
+    const outstanding = enriched.filter(i => !["paid", "voided", "converted"].includes(i.effectiveStatus))
       .reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
     const collected = enriched.filter(i => i.effectiveStatus === "paid")
       .reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
@@ -197,6 +309,8 @@ function InvoicesTab() {
 
   const filtered = useMemo(() => enriched.filter(inv => {
     if (statusFilter !== "all" && inv.effectiveStatus !== statusFilter) return false;
+    if (groupFilter !== "all" && !groupClientIds.includes(inv.client_id || "")) return false;
+    if (responsibleFilter !== "all" && !responsibleClientIds.includes(inv.client_id || "")) return false;
     if (search) {
       const s = search.toLowerCase();
       const cn = clientMap[inv.client_id || ""]?.name || "";
@@ -206,65 +320,18 @@ function InvoicesTab() {
         !fn.toLowerCase().includes(s)) return false;
     }
     return true;
-  }), [enriched, statusFilter, search, clientMap, firmMap]);
+  }), [enriched, statusFilter, search, clientMap, firmMap, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
     const { error } = await supabase.from("invoices").delete().eq("id", deleteId);
     if (error) {
-      toast({ title: "Error deleting invoice", description: error.message, variant: "destructive" });
+      toast({ title: "Error deleting document", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Invoice deleted" });
+      toast({ title: "Document deleted" });
     }
     setDeleteId(null);
     fetchData();
-  };
-
-  const handleDuplicate = async (inv: Invoice & { effectiveStatus?: string }) => {
-    const targetFirmId = inv.firm_id || firmId;
-    if (!targetFirmId) {
-      toast({ title: "Error", description: "Firm not found for this invoice.", variant: "destructive" });
-      return;
-    }
-
-    const sourceDate = inv.invoice_date ? new Date(inv.invoice_date) : new Date();
-    const fyStart = sourceDate.getMonth() >= 3 ? sourceDate.getFullYear() : sourceDate.getFullYear() - 1;
-    const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
-
-    const { data: existing, error: existingError } = await supabase
-      .from("invoices")
-      .select("invoice_no")
-      .eq("firm_id", targetFirmId)
-      .ilike("invoice_no", `%/${fy}`)
-      .limit(1000);
-
-    if (existingError) {
-      toast({ title: "Error", description: existingError.message, variant: "destructive" });
-      return;
-    }
-
-    let maxNum = 0;
-    (existing || []).forEach((e: any) => {
-      const match = e.invoice_no?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
-      if (match) maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
-    });
-    const newNo = `${maxNum + 1}/${fy}`;
-
-    const { id: _id, effectiveStatus: _effectiveStatus, ...rest } = inv as any;
-    const duplicatePayload = {
-      ...rest,
-      firm_id: targetFirmId,
-      invoice_no: newNo,
-      status: "draft",
-      invoice_date: format(new Date(), "yyyy-MM-dd"),
-      due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
-      sent_at: null,
-      paid_at: null,
-    };
-
-    const { error } = await supabase.from("invoices").insert(duplicatePayload);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: `Duplicated as ${newNo}` }); fetchData(); }
   };
 
   const handleSend = async (inv: Invoice) => {
@@ -273,9 +340,15 @@ function InvoicesTab() {
       body: { type: "invoice_generated", firm_id: inv.firm_id, client_id: inv.client_id, payload: { invoice_no: inv.invoice_no, amount: total } },
     });
     await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
-    toast({ title: "Invoice sent" });
+    toast({ title: "Document sent" });
     fetchData();
   };
+
+  const statusOptions = documentType === "invoice"
+    ? ["draft", "finalized", "sent", "paid", "overdue"]
+    : documentType === "quotation_proforma"
+      ? ["draft", "finalized", "sent", "converted"]
+      : ["draft", "finalized", "sent", "paid"];
 
   return (
     <div className="space-y-4">
@@ -299,18 +372,18 @@ function InvoicesTab() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            {["draft", "finalized", "sent", "paid", "overdue"].map(s =>
-              <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
-            )}
-          </SelectContent>
-        </Select>
-        <Input placeholder="Search invoice, client, or firm..." value={search} onChange={e => setSearch(e.target.value)} className="w-[280px]" />
+        <DocumentFilterBar
+          search={search} setSearch={setSearch}
+          statusFilter={statusFilter} setStatusFilter={setStatusFilter}
+          firmFilter={firmFilter} setFirmFilter={setFirmFilter}
+          groupFilter={groupFilter} setGroupFilter={setGroupFilter}
+          responsibleFilter={responsibleFilter} setResponsibleFilter={setResponsibleFilter}
+          multiFirmFilter={multiFirmFilter} setMultiFirmFilter={setMultiFirmFilter}
+          firms={firms} groups={groups} responsiblePersons={responsiblePersons}
+          statusOptions={statusOptions}
+        />
         <div className="flex-1" />
-        <Button onClick={() => navigate("/billing/new")} className="gap-1"><Plus size={14} /> New Invoice</Button>
+        <Button onClick={() => navigate(`/billing/new?type=${newDocType}`)} className="gap-1"><Plus size={14} /> New {tabLabel}</Button>
       </div>
 
       {/* Table */}
@@ -321,7 +394,8 @@ function InvoicesTab() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Invoice No</TableHead>
+                <TableHead>Doc No</TableHead>
+                {documentType === "quotation_proforma" && <TableHead>Type</TableHead>}
                 <TableHead>Client</TableHead>
                 <TableHead>Firm</TableHead>
                 <TableHead>Date</TableHead>
@@ -333,7 +407,7 @@ function InvoicesTab() {
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No invoices found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={documentType === "quotation_proforma" ? 9 : 8} className="text-center text-muted-foreground py-8">No documents found.</TableCell></TableRow>
               ) : filtered.map(inv => {
                 const clientName = clientMap[inv.client_id || ""]?.name || "—";
                 const firmName = firmMap[inv.firm_id || ""] || "—";
@@ -341,12 +415,17 @@ function InvoicesTab() {
                 return (
                   <TableRow key={inv.id}>
                     <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
+                    {documentType === "quotation_proforma" && (
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs capitalize">{inv.document_type}</Badge>
+                      </TableCell>
+                    )}
                     <TableCell className="font-medium">{clientName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
                     <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
                     <TableCell>
-                      <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus])}>{inv.effectiveStatus}</Badge>
+                      <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
                     </TableCell>
                     <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
                     <TableCell>
@@ -354,15 +433,12 @@ function InvoicesTab() {
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
                           <Eye size={14} />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => handleDuplicate(inv)}>
-                          <Copy size={14} />
-                        </Button>
-                        {inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized" ? (
+                        {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Send" onClick={() => handleSend(inv)}>
                             <Send size={14} />
                           </Button>
-                        ) : null}
-                        {inv.effectiveStatus !== "paid" && (
+                        )}
+                        {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
                             <Trash2 size={14} className="text-destructive" />
                           </Button>
@@ -381,16 +457,42 @@ function InvoicesTab() {
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Invoice?</AlertDialogTitle>
-            <AlertDialogDescription>This will permanently delete the invoice. This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Delete Document?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently delete this document. This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete Invoice</AlertDialogAction>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// RECEIPTS TAB (Placeholder)
+// ═══════════════════════════════════════
+function ReceiptsTab() {
+  return (
+    <Card><CardContent className="py-12 text-center text-muted-foreground">
+      <Receipt size={40} className="mx-auto mb-3 opacity-40" />
+      <p className="text-lg font-medium">Receipts</p>
+      <p className="text-sm">Receipt management coming soon.</p>
+    </CardContent></Card>
+  );
+}
+
+// ═══════════════════════════════════════
+// LEDGER TAB (Placeholder)
+// ═══════════════════════════════════════
+function LedgerTab() {
+  return (
+    <Card><CardContent className="py-12 text-center text-muted-foreground">
+      <BookOpen size={40} className="mx-auto mb-3 opacity-40" />
+      <p className="text-lg font-medium">Client Ledger</p>
+      <p className="text-sm">Ledger view coming soon.</p>
+    </CardContent></Card>
   );
 }
 
@@ -608,7 +710,6 @@ function TimesheetTab() {
   const [loading, setLoading] = useState(true);
   const [selectedStaff, setSelectedStaff] = useState(user?.id || "");
 
-  // Add form state
   const [addDate, setAddDate] = useState<Date | null>(null);
   const [addClient, setAddClient] = useState("");
   const [addDesc, setAddDesc] = useState("");
@@ -700,7 +801,6 @@ function TimesheetTab() {
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
         {(isManager || isSuperadmin) && (
           <Select value={selectedStaff} onValueChange={setSelectedStaff}>
@@ -729,7 +829,6 @@ function TimesheetTab() {
         )}
       </div>
 
-      {/* Calendar grid */}
       <Card><CardContent className="p-0">
         {loading ? (
           <div className="p-6 space-y-3">{[1, 2, 3].map(i => <Skeleton key={i} className="h-24 w-full" />)}</div>
@@ -809,7 +908,6 @@ function TimesheetTab() {
                 );
               })}
             </div>
-            {/* Day totals row */}
             <div className="grid grid-cols-7 border-t border-border bg-muted/30">
               {dayTotals.map((t, i) => (
                 <div key={i} className="text-center py-1.5 text-xs font-semibold text-foreground">{t}h</div>
@@ -855,7 +953,6 @@ function ReportsTab() {
     })();
   }, [firmId, isSuperadmin, user?.id]);
 
-  // Revenue by month
   const revenueByMonth = useMemo(() => {
     const map: Record<string, number> = {};
     invoices.filter(i => i.status === "paid").forEach(i => {
@@ -865,7 +962,6 @@ function ReportsTab() {
     return Object.entries(map).map(([name, revenue]) => ({ name, revenue })).slice(0, 12);
   }, [invoices]);
 
-  // Outstanding aging
   const aging = useMemo(() => {
     const today = new Date();
     const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
@@ -880,7 +976,6 @@ function ReportsTab() {
     return Object.entries(buckets).map(([name, amount]) => ({ name, amount }));
   }, [invoices]);
 
-  // Staff utilization
   const staffUtil = useMemo(() => {
     const map: Record<string, { total: number; billable: number }> = {};
     timesheets.forEach(t => {
@@ -904,7 +999,6 @@ function ReportsTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Revenue chart */}
         <Card>
           <CardHeader><CardTitle className="text-base">Revenue by Month</CardTitle></CardHeader>
           <CardContent>
@@ -922,7 +1016,6 @@ function ReportsTab() {
           </CardContent>
         </Card>
 
-        {/* Aging */}
         <Card>
           <CardHeader><CardTitle className="text-base">Outstanding Aging</CardTitle></CardHeader>
           <CardContent>
@@ -938,7 +1031,6 @@ function ReportsTab() {
         </Card>
       </div>
 
-      {/* Staff utilization */}
       <Card>
         <CardHeader><CardTitle className="text-base">Staff Utilization</CardTitle></CardHeader>
         <CardContent className="p-0">

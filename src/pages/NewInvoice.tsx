@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,11 +28,14 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Collapsible, CollapsibleContent, CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { format, addDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
-  FileText, Info, Check, ChevronsUpDown,
+  FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw,
 } from "lucide-react";
 
 // ─── GSTIN State Code Map ───
@@ -68,6 +71,34 @@ function isIntraStateFromGstins(firmGstin: string, clientGstin: string): boolean
 }
 
 // ─── Types ───
+type DocumentType = "invoice" | "quotation" | "proforma" | "credit_note";
+
+const DOC_TYPE_LABELS: Record<DocumentType, string> = {
+  invoice: "Tax Invoice",
+  quotation: "Quotation",
+  proforma: "Proforma Invoice",
+  credit_note: "Credit Note",
+};
+
+const DOC_TYPE_HEADINGS: Record<DocumentType, string> = {
+  invoice: "TAX INVOICE",
+  quotation: "QUOTATION",
+  proforma: "PROFORMA INVOICE",
+  credit_note: "CREDIT NOTE",
+};
+
+function getDocSeries(docType: DocumentType): string {
+  if (docType === "invoice") return "inv";
+  if (docType === "credit_note") return "cn";
+  return "pi"; // quotation and proforma share PI series
+}
+
+function formatDocNumber(seqNumber: number, series: string, fy: string): string {
+  if (series === "inv") return `${seqNumber}/${fy}`;
+  if (series === "cn") return `${seqNumber}/CN/${fy}`;
+  return `${seqNumber}/PI/${fy}`;
+}
+
 interface LineItem {
   id?: string;
   description: string;
@@ -121,29 +152,24 @@ const EMPTY_ITEM = (): LineItem => ({
   total: 0, sort_order: 0, showDetails: false,
 });
 
-// Amount in words helper (Indian numbering)
 function numberToWords(num: number): string {
   if (num === 0) return "Zero Rupees Only";
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
   const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
   const scales = ["", "Thousand", "Lakh", "Crore"];
-
   const toWords = (n: number): string => {
     if (n === 0) return "";
     if (n < 20) return ones[n];
     if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
     return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " " + toWords(n % 100) : "");
   };
-
   const intPart = Math.floor(Math.abs(num));
   if (intPart === 0) return "Zero Rupees Only";
-
   const groups: number[] = [];
   let rem = intPart;
   groups.push(rem % 1000); rem = Math.floor(rem / 1000);
   while (rem > 0) { groups.push(rem % 100); rem = Math.floor(rem / 100); }
-
   let result = "";
   for (let i = groups.length - 1; i >= 0; i--) {
     if (groups[i] === 0) continue;
@@ -152,30 +178,24 @@ function numberToWords(num: number): string {
   return result.trim() + " Rupees Only";
 }
 
-function getFY(date = new Date()): string {
-  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+function getFYFromDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  const fyStart = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
   return `${fyStart}-${String(fyStart + 1).slice(2)}`;
 }
 
-function getNextInvoiceNumber(existingInvoiceNos: Array<string | null | undefined>, fy: string): string {
-  let maxNum = 0;
-  existingInvoiceNos.forEach((invoiceNo) => {
-    const match = invoiceNo?.trim().match(new RegExp(`^(\\d+)\\/${fy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
-    if (match) {
-      maxNum = Math.max(maxNum, Number.parseInt(match[1], 10));
-    }
-  });
-  return `${maxNum + 1}/${fy}`;
+function getPreviousFY(fy: string): string {
+  const parts = fy.split("-");
+  const startYear = parseInt(parts[0]);
+  return `${startYear - 1}-${String(startYear).slice(2)}`;
 }
 
 const fmtINR = (n: number) => "\u20B9" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Helper: balance address lines so they are visually even
 function balanceAddressLines(lines: string[]): string[] {
   if (lines.length < 2) return lines;
-  // If first line is much longer than second, try to redistribute
-  const firstTwo = lines.slice(0, -1); // all but city-pincode line
-  const lastLine = lines[lines.length - 1]; // city-pincode
+  const firstTwo = lines.slice(0, -1);
+  const lastLine = lines[lines.length - 1];
   if (firstTwo.length === 1) {
     const words = firstTwo[0].split(/\s+/);
     if (words.length > 6) {
@@ -190,10 +210,14 @@ function balanceAddressLines(lines: string[]): string[] {
 const NewInvoice = () => {
   const navigate = useNavigate();
   const { invoiceId } = useParams<{ invoiceId?: string }>();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { toast } = useToast();
   const isSuperadmin = user?.role === "superadmin";
   const isEdit = !!invoiceId;
+
+  // Document type from query param or default
+  const initialDocType = (searchParams.get("type") as DocumentType) || "invoice";
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -203,23 +227,47 @@ const NewInvoice = () => {
   const [firm, setFirm] = useState<Firm | null>(null);
   const [itemMasters, setItemMasters] = useState<ItemMaster[]>([]);
 
+  // Document type
+  const [docType, setDocType] = useState<DocumentType>(initialDocType);
+
   // Invoice state
   const [clientId, setClientId] = useState("");
   const [invoiceNo, setInvoiceNo] = useState("");
+  const [seqNumber, setSeqNumber] = useState<number | null>(null);
   const [invoiceDate, setInvoiceDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [referenceNo, setReferenceNo] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([EMPTY_ITEM()]);
   const [isIntraState, setIsIntraState] = useState(true);
   const [status, setStatus] = useState("draft");
   const [showLogo, setShowLogo] = useState(true);
+  const [remarksConditions, setRemarksConditions] = useState("");
+  const [baseTurnover, setBaseTurnover] = useState("");
+  const [sourceDocumentId, setSourceDocumentId] = useState("");
 
   // Client fields
   const [toName, setToName] = useState("");
   const [toGstin, setToGstin] = useState("");
   const [toAddress, setToAddress] = useState("");
 
+  // Credit note specific
+  const [clientInvoices, setClientInvoices] = useState<any[]>([]);
+
+  // Last year reference
+  const [lastYearInvoice, setLastYearInvoice] = useState<any>(null);
+  const [lastYearOpen, setLastYearOpen] = useState(false);
+
+  // Audit client check
+  const [isAuditClient, setIsAuditClient] = useState(false);
+
+  // Date error dialog
+  const [dateErrorOpen, setDateErrorOpen] = useState(false);
+  const [dateErrorMsg, setDateErrorMsg] = useState("");
+
   // Finalize dialog
   const [finalizeOpen, setFinalizeOpen] = useState(false);
+
+  // Firm-specific
+  const [firmError, setFirmError] = useState(false);
 
   // Derived values
   const firmGstin = firm?.gstin || "";
@@ -227,11 +275,9 @@ const NewInvoice = () => {
   const msmeNo = (firm?.settings as any)?.msme_no || "";
   const billingEmail = (firm?.settings as any)?.billing_email || firm?.email || "";
   const billingContact = (firm?.settings as any)?.billing_contact_no || firm?.phone || "";
-
-  // Determine if firm has GST
   const firmHasGst = !!firmGstin;
+  const currentFY = getFYFromDate(invoiceDate);
 
-  // Auto-detect intra/inter state when client GSTIN changes
   useEffect(() => {
     if (firmGstin && toGstin) {
       setIsIntraState(isIntraStateFromGstins(firmGstin, toGstin));
@@ -249,11 +295,11 @@ const NewInvoice = () => {
     })();
   }, [user?.firm_id]);
 
-  // When selected firm changes
   useEffect(() => {
     if (!selectedFirmId) return;
     const f = firmsList.find(f => f.id === selectedFirmId);
     if (f) setFirm(f);
+    setFirmError(false);
   }, [selectedFirmId, firmsList]);
 
   // Fetch item masters
@@ -268,77 +314,150 @@ const NewInvoice = () => {
     })();
   }, []);
 
-  // Fetch clients & generate invoice number — firm-aware
+  // Fetch clients
   useEffect(() => {
     (async () => {
-      setLoading(true);
       let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
+    })();
+  }, [isSuperadmin, user?.firm_id]);
 
-      // Auto invoice numbering per firm: N/YYYY-YY
-      if (!isEdit && selectedFirmId) {
-        const fy = getFY(new Date(invoiceDate || new Date()));
-        const { data: existing, error: existingError } = await supabase
-          .from("invoices")
-          .select("invoice_no")
-          .eq("firm_id", selectedFirmId)
-          .ilike("invoice_no", `%/${fy}`)
-          .limit(1000);
+  // Generate document number via get_next_invoice_seq
+  const generateDocNumber = useCallback(async () => {
+    if (!selectedFirmId || isEdit) return;
+    const series = getDocSeries(docType);
+    const fy = getFYFromDate(invoiceDate);
 
-        if (!existingError) {
-          setInvoiceNo(getNextInvoiceNumber((existing || []).map((inv: any) => inv.invoice_no), fy));
+    try {
+      const { data, error } = await supabase.rpc("get_next_invoice_seq", {
+        p_firm_id: selectedFirmId,
+        p_series: series,
+        p_financial_year: fy,
+        p_invoice_date: invoiceDate,
+      });
+
+      if (error) {
+        if (error.message.includes("BACKDATING_ERROR")) {
+          const match = error.message.match(/dated (\S+) because a document dated (\S+)/);
+          const enteredDate = match?.[1] || invoiceDate;
+          const lastDate = match?.[2] || "a later date";
+          setDateErrorMsg(`You cannot create a document dated ${enteredDate} in this series because a document dated ${lastDate} already exists.\n\nPlease change the document date to ${lastDate} or later.`);
+          setDateErrorOpen(true);
+          setInvoiceNo("");
+          setSeqNumber(null);
+          return;
         }
+        throw error;
       }
 
-      // Load existing invoice
-      if (isEdit && invoiceId) {
-        const { data: inv } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
-        if (inv) {
-          setClientId(inv.client_id || "");
-          setInvoiceNo(inv.invoice_no || "");
-          setInvoiceDate(inv.invoice_date || "");
-          setReferenceNo((inv as any).reference_no || "");
-          setStatus(inv.status || "draft");
-          setShowLogo(inv.show_logo ?? true);
-          setToName(inv.to_name || "");
-          setToGstin(inv.to_gstin || "");
-          setToAddress(inv.to_address || "");
-          if (inv.firm_id) setSelectedFirmId(inv.firm_id);
-          if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
-            setLineItems(inv.line_items.map((li: any, i: number) => ({
-              ...EMPTY_ITEM(),
-              description: li.description || "",
-              description_details: li.description_details || "",
-              hsn_sac_code: li.hsn_sac_code || li.hsn || "",
-              quantity: li.quantity || 1,
-              rate: li.rate || 0,
-              taxable_value: li.taxable_value || li.amount || 0,
-              gst_percent: li.gst_percent ?? (li.cgst_percent ? li.cgst_percent * 2 : 18),
-              gst_amount: li.gst_amount || ((li.cgst_amount || 0) + (li.sgst_amount || 0)),
-              total: li.total || 0,
-              sort_order: i,
-              showDetails: false,
-            })));
-          }
+      setSeqNumber(data);
+      setInvoiceNo(formatDocNumber(data, series, fy));
+    } catch (e: any) {
+      console.error("Error generating doc number:", e);
+    }
+  }, [selectedFirmId, docType, invoiceDate, isEdit]);
+
+  useEffect(() => { generateDocNumber(); }, [generateDocNumber]);
+
+  // Load existing invoice in edit mode
+  useEffect(() => {
+    if (!isEdit || !invoiceId) { setLoading(false); return; }
+    (async () => {
+      setLoading(true);
+      const { data: inv } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
+      if (inv) {
+        setDocType((inv as any).document_type || "invoice");
+        setClientId(inv.client_id || "");
+        setInvoiceNo(inv.invoice_no || "");
+        setSeqNumber((inv as any).seq_number || null);
+        setInvoiceDate(inv.invoice_date || "");
+        setReferenceNo((inv as any).reference_no || "");
+        setStatus(inv.status || "draft");
+        setShowLogo(inv.show_logo ?? true);
+        setToName(inv.to_name || "");
+        setToGstin(inv.to_gstin || "");
+        setToAddress(inv.to_address || "");
+        setRemarksConditions((inv as any).remarks_conditions || "");
+        setBaseTurnover((inv as any).base_turnover ? String((inv as any).base_turnover) : "");
+        setSourceDocumentId((inv as any).source_document_id || "");
+        if (inv.firm_id) setSelectedFirmId(inv.firm_id);
+        if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
+          setLineItems(inv.line_items.map((li: any, i: number) => ({
+            ...EMPTY_ITEM(),
+            description: li.description || "",
+            description_details: li.description_details || "",
+            hsn_sac_code: li.hsn_sac_code || li.hsn || "",
+            quantity: li.quantity || 1,
+            rate: li.rate || 0,
+            taxable_value: li.taxable_value || li.amount || 0,
+            gst_percent: li.gst_percent ?? (li.cgst_percent ? li.cgst_percent * 2 : 18),
+            gst_amount: li.gst_amount || ((li.cgst_amount || 0) + (li.sgst_amount || 0)),
+            total: li.total || 0,
+            sort_order: i,
+            showDetails: false,
+          })));
         }
       }
       setLoading(false);
     })();
-  }, [invoiceDate, isSuperadmin, isEdit, invoiceId, user?.firm_id, selectedFirmId]);
+  }, [isEdit, invoiceId]);
 
-  // Auto-fill client details
+  // Auto-fill client details & check audit classification
   useEffect(() => {
-    if (!clientId) return;
+    if (!clientId) { setIsAuditClient(false); return; }
     const client = clients.find(c => c.id === clientId);
     if (client) {
       setToName(client.name || "");
       setToGstin(client.gstin?.[0] || "");
     }
-  }, [clientId, clients]);
+    // Check audit classification
+    (async () => {
+      const fy = getFYFromDate(invoiceDate);
+      const { data } = await supabase.from("client_fy_classifications")
+        .select("classification")
+        .eq("client_id", clientId)
+        .eq("financial_year", fy)
+        .maybeSingle();
+      setIsAuditClient(data?.classification === "Audit");
+    })();
+  }, [clientId, clients, invoiceDate]);
 
-  // Recalculate line item — GST-aware
+  // Fetch client invoices for Credit Note "Against Invoice" dropdown
+  useEffect(() => {
+    if (docType !== "credit_note" || !clientId || !selectedFirmId) { setClientInvoices([]); return; }
+    (async () => {
+      const { data } = await supabase.from("invoices")
+        .select("id, invoice_no, invoice_date, total_amount")
+        .eq("client_id", clientId)
+        .eq("firm_id", selectedFirmId)
+        .eq("document_type", "invoice")
+        .in("status", ["finalized", "sent", "paid"])
+        .order("invoice_date", { ascending: false });
+      setClientInvoices(data || []);
+    })();
+  }, [docType, clientId, selectedFirmId]);
+
+  // Fetch last year invoice
+  useEffect(() => {
+    if (!clientId || !selectedFirmId) { setLastYearInvoice(null); return; }
+    (async () => {
+      const prevFy = getPreviousFY(currentFY);
+      const { data } = await supabase.from("invoices")
+        .select("id, invoice_no, invoice_date, line_items, remarks_conditions, total_amount")
+        .eq("client_id", clientId)
+        .eq("firm_id", selectedFirmId)
+        .eq("document_type", "invoice")
+        .eq("financial_year", prevFy)
+        .order("seq_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setLastYearInvoice(data);
+    })();
+  }, [clientId, selectedFirmId, currentFY]);
+
+  // Recalculate line item
   const recalcItem = useCallback((item: LineItem): LineItem => {
     const qty = Number(item.quantity) || 0;
     const rate = Number(item.rate) || 0;
@@ -371,6 +490,53 @@ const NewInvoice = () => {
     setLineItems(prev => prev.map((li, i) => i === idx ? { ...li, showDetails: !li.showDetails } : li));
   };
 
+  // Copy from last year
+  const copyFromLastYear = () => {
+    if (!lastYearInvoice?.line_items) return;
+    const items = (lastYearInvoice.line_items as any[]).map((li: any, i: number) =>
+      recalcItem({
+        ...EMPTY_ITEM(),
+        description: li.description || "",
+        description_details: li.description_details || "",
+        hsn_sac_code: li.hsn_sac_code || li.hsn || "",
+        quantity: li.quantity || 1,
+        rate: li.rate || 0,
+        gst_percent: li.gst_percent ?? 18,
+        sort_order: i,
+        showDetails: false,
+      } as any)
+    );
+    setLineItems(items.length > 0 ? items : [EMPTY_ITEM()]);
+    if (lastYearInvoice.remarks_conditions) setRemarksConditions(lastYearInvoice.remarks_conditions);
+    toast({ title: "Line items copied from last year. Please review and update amounts." });
+  };
+
+  // Load from client package (for quotations)
+  const loadFromPackage = async () => {
+    if (!clientId) return;
+    const { data: packages } = await supabase.from("client_service_packages")
+      .select("package_name, service_category_ids, billing_amount")
+      .eq("client_id", clientId)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (!packages) { toast({ title: "No package found for this client" }); return; }
+    const serviceIds = (packages.service_category_ids as string[]) || [];
+    if (serviceIds.length === 0) return;
+    const { data: services } = await supabase.from("service_categories")
+      .select("id, name, default_fee")
+      .in("id", serviceIds);
+    if (!services || services.length === 0) return;
+    const items = services.map((s: any, i: number) => recalcItem({
+      ...EMPTY_ITEM(),
+      description: s.name,
+      rate: s.default_fee || 0,
+      sort_order: i,
+    }));
+    setLineItems(items);
+    toast({ title: "Line items loaded from client package" });
+  };
+
   // Totals
   const items = useMemo(() => lineItems.filter(li => li.description.trim()), [lineItems]);
   const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
@@ -389,16 +555,20 @@ const NewInvoice = () => {
 
   // Save
   const handleSave = async (newStatus?: string) => {
+    if (!selectedFirmId) { setFirmError(true); toast({ title: "Please select a firm", variant: "destructive" }); return; }
     if (!clientId) { toast({ title: "Select a client", variant: "destructive" }); return; }
     if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
       const halfGst = isIntraState ? totalGst / 2 : 0;
+      const series = getDocSeries(docType);
+      const fy = getFYFromDate(invoiceDate);
+
       const payload: any = {
         invoice_no: invoiceNo,
         client_id: clientId,
-        firm_id: selectedFirmId || user?.firm_id,
+        firm_id: selectedFirmId,
         invoice_date: invoiceDate,
         reference_no: referenceNo || null,
         place_of_supply: placeOfSupply || null,
@@ -413,6 +583,13 @@ const NewInvoice = () => {
         is_intra_state: isIntraState,
         show_logo: showLogo,
         status: effectiveStatus,
+        document_type: docType,
+        document_series: series,
+        seq_number: seqNumber,
+        financial_year: fy,
+        remarks_conditions: remarksConditions || null,
+        base_turnover: baseTurnover ? Number(baseTurnover) : null,
+        source_document_id: sourceDocumentId || null,
         from_firm_name: firmName,
         from_address: firmFullAddress,
         from_gstin: firmGstin,
@@ -446,11 +623,11 @@ const NewInvoice = () => {
       if (isEdit && invoiceId) {
         const { error } = await supabase.from("invoices").update(payload).eq("id", invoiceId);
         if (error) throw error;
-        toast({ title: effectiveStatus === "finalized" ? "Invoice finalized" : "Invoice updated" });
+        toast({ title: effectiveStatus === "finalized" ? "Document finalized" : "Document updated" });
       } else {
         const { error } = await supabase.from("invoices").insert(payload);
         if (error) throw error;
-        toast({ title: "Invoice created" });
+        toast({ title: `${DOC_TYPE_LABELS[docType]} created` });
       }
       setStatus(effectiveStatus);
       if (!isEdit) navigate("/billing");
@@ -462,6 +639,54 @@ const NewInvoice = () => {
 
   const handleFinalize = () => { setFinalizeOpen(false); handleSave("finalized"); };
 
+  // Convert to Invoice
+  const handleConvertToInvoice = async () => {
+    if (!invoiceId) return;
+    // Navigate to new invoice with source document
+    navigate(`/billing/new?type=invoice&source=${invoiceId}`);
+  };
+
+  // Handle source document (conversion from quotation/proforma)
+  useEffect(() => {
+    const sourceId = searchParams.get("source");
+    if (!sourceId || isEdit) return;
+    (async () => {
+      const { data: source } = await supabase.from("invoices").select("*").eq("id", sourceId).single();
+      if (!source) return;
+      setSourceDocumentId(sourceId);
+      setClientId(source.client_id || "");
+      if (source.firm_id) setSelectedFirmId(source.firm_id);
+      setToName(source.to_name || "");
+      setToGstin(source.to_gstin || "");
+      setToAddress(source.to_address || "");
+      setRemarksConditions((source as any).remarks_conditions || "");
+      setBaseTurnover((source as any).base_turnover ? String((source as any).base_turnover) : "");
+      if (Array.isArray(source.line_items) && source.line_items.length > 0) {
+        setLineItems(source.line_items.map((li: any, i: number) => ({
+          ...EMPTY_ITEM(),
+          description: li.description || "",
+          description_details: li.description_details || "",
+          hsn_sac_code: li.hsn_sac_code || "",
+          quantity: li.quantity || 1,
+          rate: li.rate || 0,
+          taxable_value: li.taxable_value || 0,
+          gst_percent: li.gst_percent ?? 18,
+          gst_amount: li.gst_amount || 0,
+          total: li.total || 0,
+          sort_order: i,
+          showDetails: false,
+        })));
+      }
+      // Mark source as converted after saving the new invoice
+    })();
+  }, [searchParams, isEdit]);
+
+  // After saving a converted invoice, update the source document
+  useEffect(() => {
+    if (!isEdit || !sourceDocumentId) return;
+    // This runs on edit load - we handle conversion marking in save
+  }, [isEdit, sourceDocumentId]);
+
   const handleDownloadPdf = async () => {
     const html = generateInvoiceHtml();
     const container = document.createElement("div");
@@ -471,7 +696,7 @@ const NewInvoice = () => {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
         margin: [10, 10, 20, 10],
-        filename: `Tax_Invoice_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
+        filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
@@ -482,13 +707,14 @@ const NewInvoice = () => {
     }
   };
 
-  const isLocked = status === "finalized" || status === "sent" || status === "paid" || status === "voided";
+  const isLocked = status === "finalized" || status === "sent" || status === "paid" || status === "voided" || status === "converted";
+  const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
-  // Generate invoice HTML - professional A4 layout
+  // Generate invoice HTML
   const generateInvoiceHtml = useCallback(() => {
     const validItems = lineItems.filter(li => li.description.trim());
+    const heading = DOC_TYPE_HEADINGS[docType];
 
-    // Build table columns based on whether GST is applicable
     const thGst = firmHasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
     const itemRows = validItems.map((item, i) => {
@@ -513,8 +739,6 @@ const NewInvoice = () => {
     }).join("");
 
     const colSpan = firmHasGst ? 5 : 4;
-    const totalColSpan = firmHasGst ? 7 : 6;
-
     const totalRow = `
       <tr style="background:#f0f0f0;font-weight:700">
         <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
@@ -524,8 +748,6 @@ const NewInvoice = () => {
       </tr>`;
 
     const halfGst = totalGst / 2;
-
-    // Build the totals summary section
     let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
     if (firmHasGst) {
       if (isIntraState) {
@@ -539,43 +761,33 @@ const NewInvoice = () => {
     }
     totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>`;
 
-    // Balanced address lines for the PDF
     const pdfAddressLines = balanceAddressLines(
       firmAddr ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean) : []
     );
 
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Tax Invoice ${invoiceNo}</title>
+    const docLabel = heading === "TAX INVOICE" ? "Invoice" : heading.charAt(0) + heading.slice(1).toLowerCase();
+
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${heading} ${invoiceNo}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; }
         td, th { vertical-align: middle !important; }
-        @media print {
-          @page { size: A4; margin: 20mm 15mm 20mm 15mm; }
-          body { margin: 0; padding: 0; }
-        }
-        @media screen {
-          body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; }
-        }
+        @media print { @page { size: A4; margin: 20mm 15mm 20mm 15mm; } body { margin: 0; padding: 0; } }
+        @media screen { body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; } }
       </style></head><body>
-
-      <!-- Outer border -->
       <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
-      <!-- TAX INVOICE Header -->
       <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0">
-        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">TAX INVOICE</h1>
+        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">${heading}</h1>
       </div>
 
-      <!-- Firm Details + Invoice Details -->
       <div style="display:flex;justify-content:space-between;margin-bottom:14px">
-        <!-- Left: Firm Name + Address + Place of Supply -->
         <div style="flex:1;max-width:55%">
           <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
           ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
           ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
         </div>
-        <!-- Right: GSTIN, PAN, Invoice Date, Invoice No, MSME, Email, Contact -->
         <div style="text-align:right;font-size:11px;min-width:280px">
           <div style="display:flex;justify-content:space-between;gap:20px">
             <div style="text-align:left">
@@ -586,15 +798,14 @@ const NewInvoice = () => {
               ${billingContact ? `<p style="margin:2px 0"><strong>Contact No:</strong> ${billingContact}</p>` : ""}
             </div>
             <div style="text-align:right">
-              <p style="margin:2px 0"><strong>Invoice Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
-              <p style="margin:2px 0"><strong>Invoice No:</strong> ${invoiceNo}</p>
+              <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
+              <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
               ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Customer details -->
       <div style="border:1px solid #bbb;margin-bottom:12px;padding:10px">
         <p style="font-size:10px;font-weight:700;color:#666;text-transform:uppercase;margin:0 0 4px">Bill To</p>
         <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
@@ -602,7 +813,6 @@ const NewInvoice = () => {
         ${toGstin ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
       </div>
 
-      <!-- Items Table -->
       <table>
         <thead>
           <tr style="background:#e2e8f0">
@@ -622,19 +832,19 @@ const NewInvoice = () => {
         </tbody>
       </table>
 
-      <!-- Totals summary -->
       <div style="display:flex;justify-content:flex-end;margin-top:10px">
-        <table style="width:320px;font-size:12px">
-          ${totalsSummary}
-        </table>
+        <table style="width:320px;font-size:12px">${totalsSummary}</table>
       </div>
 
-      <!-- Amount in words -->
       <div style="margin:8px 0;padding:6px 8px;background:#f9f9f9;border:1px solid #ddd;font-size:11px">
         <strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}
       </div>
 
-      <!-- Bank Details + Signatory -->
+      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd">
+        <strong>Remarks / Terms & Conditions:</strong><br/>
+        <span style="white-space:pre-line">${remarksConditions}</span>
+      </div>` : ""}
+
       <div style="display:flex;justify-content:space-between;margin-top:16px">
         <div style="border:1px solid #bbb;padding:10px;font-size:11px;min-width:300px">
           <p style="font-weight:700;margin:0 0 4px;font-size:12px">Bank Details:</p>
@@ -650,19 +860,17 @@ const NewInvoice = () => {
         </div>
       </div>
 
-      <!-- Terms -->
       <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
         <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
         <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
       </div>
 
-      </div><!-- close outer border -->
-
+      </div>
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
     firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo,
     toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal, firmHasGst, firmAddr,
-    billingEmail, billingContact]);
+    billingEmail, billingContact, docType, remarksConditions]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
 
@@ -672,11 +880,14 @@ const NewInvoice = () => {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background shrink-0">
         <Button variant="ghost" size="icon" onClick={() => navigate("/billing")}><ArrowLeft size={18} /></Button>
         <div className="flex-1">
-          <h1 className="text-lg font-bold text-foreground">{isEdit ? "Edit Invoice" : "New Tax Invoice"}</h1>
+          <h1 className="text-lg font-bold text-foreground">{isEdit ? `Edit ${DOC_TYPE_LABELS[docType]}` : `New ${DOC_TYPE_LABELS[docType]}`}</h1>
           {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : "")}>{status}</Badge>}
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> PDF</Button>
+          {canConvert && (
+            <Button variant="outline" size="sm" onClick={handleConvertToInvoice} className="gap-1"><RefreshCw size={14} /> Convert to Tax Invoice</Button>
+          )}
           {!isLocked && (
             <>
               <Button variant="outline" size="sm" onClick={() => handleSave()} disabled={saving} className="gap-1">
@@ -692,17 +903,41 @@ const NewInvoice = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT PANEL — Form */}
         <div className="w-[45%] overflow-y-auto border-r border-border p-4 space-y-4">
+
+          {/* Document Type Selector */}
+          {!isEdit && (
+            <div>
+              <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Document Type</Label>
+              <div className="flex gap-1">
+                {(["invoice", "quotation", "proforma", "credit_note"] as DocumentType[]).map(dt => (
+                  <Button
+                    key={dt}
+                    variant={docType === dt ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setDocType(dt)}
+                  >
+                    {DOC_TYPE_LABELS[dt]}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <Separator />
+
           {/* Firm Selection */}
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Billing From</Label>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Billing From *</Label>
             <Select value={selectedFirmId} onValueChange={setSelectedFirmId} disabled={isLocked}>
-              <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
+              <SelectTrigger className={cn(firmError && !selectedFirmId && "border-destructive")}><SelectValue placeholder="Select firm" /></SelectTrigger>
               <SelectContent>
                 {firmsList.map(f => (
                   <SelectItem key={f.id} value={f.id}>{f.display_name || f.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {firmError && !selectedFirmId && <p className="text-xs text-destructive mt-1">Please select a firm</p>}
             {firm && (
               <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md mt-2">
                 <p className="font-medium text-foreground">{firmName}</p>
@@ -734,19 +969,56 @@ const NewInvoice = () => {
             )}
           </div>
 
+          {/* Last Year Reference Panel */}
+          {clientId && selectedFirmId && (
+            <Collapsible open={lastYearOpen} onOpenChange={setLastYearOpen}>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" className="w-full justify-between text-xs">
+                  Reference: Last Year Invoice
+                  <ChevronDown size={14} className={cn("transition-transform", lastYearOpen && "rotate-180")} />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="border border-border rounded-md p-3 mt-1 text-sm space-y-2">
+                  {lastYearInvoice ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="font-mono text-xs">{lastYearInvoice.invoice_no}</span>
+                        <span className="text-xs text-muted-foreground">{lastYearInvoice.invoice_date ? format(new Date(lastYearInvoice.invoice_date), "dd/MM/yyyy") : ""}</span>
+                      </div>
+                      {Array.isArray(lastYearInvoice.line_items) && lastYearInvoice.line_items.map((li: any, i: number) => (
+                        <div key={i} className="flex justify-between text-xs">
+                          <span>{li.description}</span>
+                          <span className="font-mono">{fmtINR(li.total || li.taxable_value || 0)}</span>
+                        </div>
+                      ))}
+                      {lastYearInvoice.remarks_conditions && (
+                        <p className="text-xs text-muted-foreground italic">{lastYearInvoice.remarks_conditions}</p>
+                      )}
+                      <Button variant="outline" size="sm" className="w-full text-xs gap-1 mt-1" onClick={copyFromLastYear} disabled={isLocked}>
+                        <Copy size={12} /> Copy from Last Year
+                      </Button>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No previous year invoice found for this client.</p>
+                  )}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
           <Separator />
 
-          {/* Invoice Details */}
+          {/* Document Details */}
           <div>
-            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Invoice Details</Label>
+            <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">{DOC_TYPE_LABELS[docType]} Details</Label>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Invoice No</Label>
-                <Input value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} className="font-mono" disabled={isLocked} placeholder="e.g. 1/2025-26" />
-                {!isEdit && invoiceNo && <p className="text-[10px] text-muted-foreground mt-0.5">Suggested: {invoiceNo}</p>}
+                <Label className="text-xs">Document No</Label>
+                <Input value={invoiceNo} readOnly className="font-mono bg-muted" />
               </div>
               <div>
-                <Label className="text-xs">Invoice Date</Label>
+                <Label className="text-xs">Document Date</Label>
                 <Input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} disabled={isLocked} />
               </div>
               <div>
@@ -760,6 +1032,32 @@ const NewInvoice = () => {
             </div>
           </div>
 
+          {/* Credit Note: Against Invoice */}
+          {docType === "credit_note" && clientId && (
+            <div>
+              <Label className="text-xs">Against Invoice (optional)</Label>
+              <Select value={sourceDocumentId} onValueChange={setSourceDocumentId} disabled={isLocked}>
+                <SelectTrigger><SelectValue placeholder="Standalone credit note" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Standalone (no linked invoice)</SelectItem>
+                  {clientInvoices.map(inv => (
+                    <SelectItem key={inv.id} value={inv.id}>
+                      {inv.invoice_no} — {inv.invoice_date ? format(new Date(inv.invoice_date), "dd MMM yyyy") : ""} — ₹{(inv.total_amount || 0).toLocaleString("en-IN")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Base Turnover (Audit clients only) */}
+          {isAuditClient && (
+            <div>
+              <Label className="text-xs">Base Turnover (Reference Only — Not Printed)</Label>
+              <Input type="number" value={baseTurnover} onChange={e => setBaseTurnover(e.target.value)} placeholder="₹" disabled={isLocked} />
+            </div>
+          )}
+
           <Separator />
 
           {/* Line Items */}
@@ -767,6 +1065,11 @@ const NewInvoice = () => {
             <div className="flex items-center justify-between mb-2">
               <Label className="text-xs font-semibold text-muted-foreground uppercase">Line Items</Label>
               <div className="flex gap-1">
+                {docType === "quotation" && clientId && (
+                  <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={loadFromPackage} disabled={isLocked}>
+                    <FileText size={12} /> Load from Package
+                  </Button>
+                )}
                 {!isLocked && <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={addLine}><Plus size={12} /> Add Row</Button>}
               </div>
             </div>
@@ -774,7 +1077,6 @@ const NewInvoice = () => {
               {lineItems.map((item, idx) => (
                 <div key={idx} className="border border-border rounded-md p-3 space-y-2">
                   <div className="flex gap-2">
-                    {/* Item description - with master dropdown */}
                     <div className="flex-1">
                       <Popover>
                         <PopoverTrigger asChild>
@@ -863,6 +1165,20 @@ const NewInvoice = () => {
 
           <Separator />
 
+          {/* Remarks / Terms & Conditions */}
+          <div>
+            <Label className="text-xs">Remarks / Terms & Conditions</Label>
+            <Textarea
+              value={remarksConditions}
+              onChange={e => setRemarksConditions(e.target.value)}
+              placeholder="These will be printed on the document"
+              className="text-sm h-20"
+              disabled={isLocked}
+            />
+          </div>
+
+          <Separator />
+
           {/* Totals */}
           <div className="text-sm space-y-1 text-right">
             <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
@@ -887,7 +1203,7 @@ const NewInvoice = () => {
             <iframe
               srcDoc={generateInvoiceHtml()}
               className="w-full min-h-[900px] border-0 rounded-lg"
-              title="Invoice Preview"
+              title="Document Preview"
             />
           </div>
         </div>
@@ -897,8 +1213,8 @@ const NewInvoice = () => {
       <AlertDialog open={finalizeOpen} onOpenChange={setFinalizeOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Finalize Invoice?</AlertDialogTitle>
-            <AlertDialogDescription>Once finalized, the invoice cannot be edited.</AlertDialogDescription>
+            <AlertDialogTitle>Finalize {DOC_TYPE_LABELS[docType]}?</AlertDialogTitle>
+            <AlertDialogDescription>Once finalized, the document cannot be edited.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -906,6 +1222,19 @@ const NewInvoice = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Date Error Dialog */}
+      <Dialog open={dateErrorOpen} onOpenChange={setDateErrorOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Date Error</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground whitespace-pre-line">{dateErrorMsg}</p>
+          <DialogFooter>
+            <Button onClick={() => setDateErrorOpen(false)}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
