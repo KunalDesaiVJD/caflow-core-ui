@@ -190,19 +190,7 @@ const NewClientWizard = () => {
         msme_suppliers: Boolean(compliance.msme_suppliers),
       });
 
-      const securedLoans = asArray(bankingData.secured_loans, asArray(loanData.secured_loans, []));
-      const unsecuredLoans = asArray(bankingData.unsecured_loans, asArray(loanData.unsecured_loans, []));
-
-      setBankingLoans({
-        bank_accounts: asArray(bankingData.bank_accounts, []).length > 0
-          ? asArray(bankingData.bank_accounts, [])
-          : [{ bank_name: "", branch: "", account_number: "", account_type: "" }],
-        secured_loans: securedLoans,
-        unsecured_loans: unsecuredLoans,
-        loans_to_related_parties: Boolean(bankingData.loans_to_related_parties),
-        related_party_loans: asArray(bankingData.related_party_loans, []),
-      });
-
+      setBankingLoans(emptyBankingLoans);
       setAuditQuestions({ ...emptyAuditQuestions, ...auditData });
       setImportData(null);
       setLoadingClient(false);
