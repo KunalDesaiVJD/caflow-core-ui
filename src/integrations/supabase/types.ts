@@ -1519,40 +1519,52 @@ export type Database = {
         Row: {
           activated_at: string | null
           assigned_staff: Json | null
+          billing_amount: number | null
+          billing_mode: string | null
           client_id: string
           deactivated_at: string | null
           due_date_override: number | null
           fee_override: number | null
           frequency_override: string | null
           id: string
+          invoice_gen_type: string | null
           is_active: boolean
           notes: string | null
+          reminder_date: number | null
           service_category_id: string
         }
         Insert: {
           activated_at?: string | null
           assigned_staff?: Json | null
+          billing_amount?: number | null
+          billing_mode?: string | null
           client_id: string
           deactivated_at?: string | null
           due_date_override?: number | null
           fee_override?: number | null
           frequency_override?: string | null
           id?: string
+          invoice_gen_type?: string | null
           is_active?: boolean
           notes?: string | null
+          reminder_date?: number | null
           service_category_id: string
         }
         Update: {
           activated_at?: string | null
           assigned_staff?: Json | null
+          billing_amount?: number | null
+          billing_mode?: string | null
           client_id?: string
           deactivated_at?: string | null
           due_date_override?: number | null
           fee_override?: number | null
           frequency_override?: string | null
           id?: string
+          invoice_gen_type?: string | null
           is_active?: boolean
           notes?: string | null
+          reminder_date?: number | null
           service_category_id?: string
         }
         Relationships: [
