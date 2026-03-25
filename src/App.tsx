@@ -12,6 +12,7 @@ import { FeedbackWidget } from "./components/FeedbackWidget";
 import { ChatFloatingWidget } from "./components/ChatFloatingWidget";
 import { PermissionsProvider } from "./hooks/usePermissions";
 import { AuditContextProvider } from "./hooks/useAuditContext";
+import { Skeleton } from "./components/ui/skeleton";
 import Index from "./pages/Index";
 import Clients from "./pages/Clients";
 import ImportTrialBalance from "./pages/ImportTrialBalance";
@@ -63,7 +64,7 @@ import ServiceMasters from "./pages/ServiceMasters";
 import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
-import { useAuth } from "./hooks/useAuth";
+import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -77,7 +78,17 @@ const queryClient = new QueryClient({
 
 function PortalGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="space-y-4 w-64">
+          <Skeleton className="h-8 w-48 mx-auto" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== "client") return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -85,20 +96,31 @@ function PortalGuard({ children }: { children: React.ReactNode }) {
 
 function CAGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="space-y-4 w-64">
+          <Skeleton className="h-8 w-48 mx-auto" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
+      </div>
+    );
+  }
   if (user?.role === "client") return <Navigate to="/portal" replace />;
   return <>{children}</>;
 }
 
 const App = () => (
   <ErrorBoundary>
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <PermissionsProvider>
-          <Routes>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <PermissionsProvider>
+            <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
@@ -181,13 +203,14 @@ const App = () => (
               <Route path="/settings/audit-firms" element={<Navigate to="/settings/firm" replace />} />
             </Route>
             <Route path="*" element={<NotFound />} />
-          </Routes>
-          <FeedbackWidget />
-          <ChatFloatingWidget />
-          </PermissionsProvider>
-        </BrowserRouter>
-      </TooltipProvider>
-    </QueryClientProvider>
+            </Routes>
+            <FeedbackWidget />
+            <ChatFloatingWidget />
+            </PermissionsProvider>
+          </BrowserRouter>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </AuthProvider>
   </ErrorBoundary>
 );
 
