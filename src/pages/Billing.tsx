@@ -659,9 +659,21 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                           <Eye size={14} />
                         </Button>
                         {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Send" onClick={() => handleSend(inv)}>
-                            <Send size={14} />
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
+                                <Send size={14} />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
+                                <Mail size={14} /> Send to Client
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
+                                <User size={14} /> Notify Responsible Person
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         )}
                         {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
