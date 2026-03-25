@@ -197,9 +197,15 @@ const NewClientWizard = () => {
   const validateBasicInfo = async (): Promise<boolean> => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
-    if (basicInfo.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
+    if (!basicInfo.selectedGroupIds || basicInfo.selectedGroupIds.length === 0) {
+      errors.selectedGroupIds = "At least one client group is required";
+    }
+    if (!basicInfo.pan) {
+      errors.pan = "PAN is required";
+    } else if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(basicInfo.pan)) {
       errors.pan = "Invalid PAN format. Example: ABCDE1234F";
     }
+    if (!basicInfo.entity_type) errors.entity_type = "Entity type is required";
     if (basicInfo.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(basicInfo.email)) {
       errors.email = "Invalid email format";
     }
