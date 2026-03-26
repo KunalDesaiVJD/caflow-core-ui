@@ -473,7 +473,7 @@ const NewClientWizard = () => {
             responsible_person_id: advancedInfo.responsible_person_id || null,
             date_of_incorporation: advancedInfo.date_of_incorporation?.toISOString().split("T")[0] || null,
             registered_state: advancedInfo.registered_state || null,
-            business_nature: advancedInfo.business_nature || null,
+            business_activity: advancedInfo.business_nature || null,
             cin: advancedInfo.cin || null,
           } as any)
           .eq("id", clientId);
