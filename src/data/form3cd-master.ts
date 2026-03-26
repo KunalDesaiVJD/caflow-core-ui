@@ -26,6 +26,8 @@ export interface AnnexureColumn {
   formula?: string;             // e.g. 'col_a + col_b' for auto_calc
   mandatory?: boolean;
   conditionalOn?: string;       // show/require only when this column = specific value
+  conditionalOnValue?: string;
+  dependsOnColumn?: string;     // key of another column in the same row that drives this dropdown options
   width?: number;               // relative width hint (in px)
   minWidth?: number;
 }
