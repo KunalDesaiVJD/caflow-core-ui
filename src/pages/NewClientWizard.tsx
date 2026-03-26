@@ -52,6 +52,7 @@ const NewClientWizard = () => {
   const { user } = useAuth();
 
   const isEditMode = Boolean(clientId);
+  const [draftId, setDraftId] = useState<string | null>(clientId || null);
 
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
