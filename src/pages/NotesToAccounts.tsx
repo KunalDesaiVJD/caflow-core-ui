@@ -168,7 +168,37 @@ function SNoRow({ sno, label, prefix, data, onChange, indent = false }: { sno: s
   );
 }
 
-/* ───────── MAIN COMPONENT ───────── */
+/* ───────── Generic Note (for notes 3-28 without custom rendering) ───────── */
+function GenericNote({ data, onChange, title, rolloverFy }: { data: any; onChange: (f: string, v: string) => void; title: string; rolloverFy?: string }) {
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <Card>
+        <CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <table className="w-full border-collapse">
+            <NoteTableHeader rolloverFy={rolloverFy} />
+            <tbody>
+              <TwoColRow label={`${title} — Line 1`} prefix="line1" cy={data.line1_cy || ""} py={data.line1_py || ""} onChange={onChange} />
+              <TwoColRow label={`${title} — Line 2`} prefix="line2" cy={data.line2_cy || ""} py={data.line2_py || ""} onChange={onChange} />
+              <TwoColRow label={`${title} — Line 3`} prefix="line3" cy={data.line3_cy || ""} py={data.line3_py || ""} onChange={onChange} />
+              <tr className="border-t-2 border-border font-semibold">
+                <td className="py-2 px-3 text-sm">Total</td>
+                <td className="py-2 px-3 text-right text-sm">{fmt(p(data.line1_cy) + p(data.line2_cy) + p(data.line3_cy))}</td>
+                <td className="py-2 px-3 text-right text-sm">{fmt(p(data.line1_py) + p(data.line2_py) + p(data.line3_py))}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="pt-2">
+            <Label className="text-sm font-medium">Additional Remarks</Label>
+            <Textarea value={data.remarks || ""} onChange={e => onChange("remarks", e.target.value)} placeholder="Any additional disclosure or details..." rows={3} className="mt-1 text-sm" />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+
 export default function NotesToAccounts({ engagementIdProp, onFinalise }: { engagementIdProp?: string; onFinalise?: () => void } = {}) {
   const [sp] = useSearchParams();
   const engagementId = engagementIdProp || sp.get("engagementId") || "";
