@@ -115,7 +115,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
           {data._value === false && !definition.defaultValue && !definition.subClauses?.length && (
             <div className="p-2 bg-muted rounded text-sm text-muted-foreground">Not Applicable</div>
           )}
-          {definition.subClauses?.map(sub => (
+          {data._value === true && definition.subClauses?.map(sub => (
             <ClauseRenderer
               key={sub.key}
               definition={sub}

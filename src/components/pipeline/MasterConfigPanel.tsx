@@ -100,26 +100,26 @@ const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
   { clause: "44", heading: "Break-up of expenditure in Statement of P&L (GST breakup)" },
 ];
 
-// Notes templates matching NotesToAccounts structure exactly
+// Notes templates matching NotesToAccounts structure exactly (19 notes: 1, 2, 29-45)
 const NOTES_DEFAULTS: { num: number; title: string }[] = [
-  { num: 1, title: "Background" },
+  { num: 1, title: "Corporate Information" },
   { num: 2, title: "Significant Accounting Policies" },
-  { num: 29, title: "Construction Contracts" },
-  { num: 30, title: "Revenue Recognition" },
-  { num: 31, title: "Foreign Currency" },
-  { num: 32, title: "Government Grants" },
-  { num: 33, title: "Accounting for Investments" },
-  { num: 34, title: "Employee Benefits" },
-  { num: 35, title: "Borrowing Costs" },
-  { num: 36, title: "Segment Reporting" },
-  { num: 37, title: "Related Parties" },
+  { num: 29, title: "Finance Costs" },
+  { num: 30, title: "Depreciation and Amortisation" },
+  { num: 31, title: "Other Expenses" },
+  { num: 32, title: "Exceptional Items" },
+  { num: 33, title: "Tax Expense" },
+  { num: 34, title: "Earnings Per Share" },
+  { num: 35, title: "Contingent Liabilities and Commitments" },
+  { num: 36, title: "Related Party Disclosures" },
+  { num: 37, title: "Segment Reporting" },
   { num: 38, title: "Leases" },
-  { num: 39, title: "Earnings per Share" },
-  { num: 40, title: "Accounting for Taxes on Income" },
-  { num: 41, title: "Discontinuing Operations" },
-  { num: 42, title: "Intangible Assets" },
-  { num: 43, title: "Impairment of Assets" },
-  { num: 44, title: "Events after the Reporting Period" },
+  { num: 39, title: "Foreign Currency Transactions" },
+  { num: 40, title: "Government Grants" },
+  { num: 41, title: "Deferred Tax" },
+  { num: 42, title: "CSR Expenditure" },
+  { num: 43, title: "Details of Benami Property" },
+  { num: 44, title: "Events After Reporting Period" },
   { num: 45, title: "Previous Year Figures" },
 ];
 
