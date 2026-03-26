@@ -105,7 +105,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_10b_details', heading: 'Details of change',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_10b', dependsOnValue: true,
+        dependsOn: '10b', dependsOnValue: true,
         annexureColumns: [
           { key: 'change_type', label: 'Business', type: 'dropdown', width: 140,
             options: [{ value: 'Added', label: 'Added' }, { value: 'Discontinued', label: 'Discontinued' }] },
