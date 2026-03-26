@@ -89,9 +89,9 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     control: 'not_applicable_annexure',
     annexureColumns: [
       { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
-      { key: 'sector', label: 'Sector', type: 'text', minWidth: 160 },
-      { key: 'sub_sector', label: 'Sub Sector', type: 'text', minWidth: 160 },
-      { key: 'code', label: 'Code', type: 'text', width: 100 },
+      { key: 'sector', label: 'Sector', type: 'dropdown', minWidth: 220 },
+      { key: 'sub_sector', label: 'Sub Sector (dependent on Sector)', type: 'dropdown', dependsOnColumn: 'sector', minWidth: 280 },
+      { key: 'code', label: 'Code (Auto)', type: 'readonly', width: 90 },
     ],
   },
 
