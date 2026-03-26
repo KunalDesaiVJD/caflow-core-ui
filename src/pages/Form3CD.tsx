@@ -133,8 +133,18 @@ export default function Form3CD() {
       // Load all clause data from the row
       const loaded: Record<string, ClauseData> = {};
       activeClauses.forEach(c => {
-        const key = clauseStateKey(c.clauseNo);
-        loaded[key] = e[key] || {};
+        const stateKey = clauseStateKey(c.clauseNo);
+        const dbCol = clauseDbColumn(c.clauseNo);
+        const dbData = e[dbCol];
+        // If the DB column stores grouped sub-clauses, extract by clauseNo
+        if (dbData && typeof dbData === 'object' && c.clauseNo in dbData) {
+          loaded[stateKey] = (dbData as any)[c.clauseNo];
+        } else if (dbData && typeof dbData === 'object') {
+          // Check if data is stored flat (legacy) or is the direct value
+          loaded[stateKey] = dbData;
+        } else {
+          loaded[stateKey] = {};
+        }
       });
       setClauseData(loaded);
     } else {
