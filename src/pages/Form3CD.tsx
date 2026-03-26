@@ -45,6 +45,12 @@ function clauseStateKey(clauseNo: string): string {
   return `cl_${clauseNo}`;
 }
 
+// Maps clauseNo like "10a" to its DB column "cl_10"
+function clauseDbColumn(clauseNo: string): string {
+  const match = clauseNo.match(/^(\d+(?:_\d+)?)/);
+  return `cl_${match ? match[1] : clauseNo}`;
+}
+
 /* ──────── main component ──────── */
 export default function Form3CD() {
   const [searchParams] = useSearchParams();
