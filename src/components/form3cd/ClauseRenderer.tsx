@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Trash2, RotateCcw } from "lucide-react";
 import type { ClauseDefinition, SubClause, AnnexureColumn, ControlType } from "@/data/form3cd-master";
-import { DROPDOWN_LIBRARY } from "@/data/form3cd-dropdowns";
+import { DROPDOWN_LIBRARY, BUSINESS_SECTORS, BUSINESS_SUBSECTORS } from "@/data/form3cd-dropdowns";
 
 interface ClauseRendererProps {
   definition: ClauseDefinition | SubClause;
@@ -494,6 +494,17 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
       if (idx !== ri) return r;
       const next = { ...r, [key]: val };
 
+      // When sector changes, clear sub_sector and code
+      if (key === 'sector') {
+        next.sub_sector = '';
+        next.code = '';
+      }
+
+      // When sub_sector changes, auto-set code to the selected value (5-digit code)
+      if (key === 'sub_sector' && val) {
+        next.code = val;
+      }
+
       // Auto-fill TDS nature from section
       const col = columns.find(c => c.key === key);
       if (col?.type === 'dropdown' && col.dropdownRef === 'TDS_SECTIONS') {
@@ -638,7 +649,25 @@ function CellInput({ column, value, onChange, disabled, row }: {
         />
       );
     case 'dropdown': {
-      const options = resolveDropdownOptions(column);
+      let options = resolveDropdownOptions(column);
+
+      // Handle dependent sector/sub_sector dropdowns
+      if (column.key === 'sector' && !options.length) {
+        options = BUSINESS_SECTORS;
+      }
+      if (column.key === 'sub_sector' && column.dependsOnColumn === 'sector') {
+        const sectorValue = row?.[column.dependsOnColumn] || '';
+        options = sectorValue ? (BUSINESS_SUBSECTORS[sectorValue] || []) : [];
+        if (!sectorValue) {
+          return (
+            <Select value="" disabled>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select Sector first" /></SelectTrigger>
+              <SelectContent><SelectItem value="_" className="text-xs">Select Sector first</SelectItem></SelectContent>
+            </Select>
+          );
+        }
+      }
+
       return (
         <Select value={value || ''} onValueChange={onChange} disabled={disabled}>
           <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>
