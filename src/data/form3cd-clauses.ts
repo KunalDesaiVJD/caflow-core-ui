@@ -194,7 +194,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13c', heading: 'Details of such change and effect on profit or loss',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_13b', dependsOnValue: true,
+        dependsOn: '13b', dependsOnValue: true,
         annexureColumns: [
           { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
