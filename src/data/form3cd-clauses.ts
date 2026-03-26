@@ -127,7 +127,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_11a_books', heading: 'List of books prescribed',
         control: 'structured_table',
-        dependsOn: 'cl_11a', dependsOnValue: true,
+        dependsOn: '11a', dependsOnValue: true,
         annexureColumns: [
           { key: 'book', label: 'Book of Account', type: 'dropdown', dropdownRef: 'BOOKS_LIST', minWidth: 200 },
           { key: 'specify', label: 'Specify (if Others)', type: 'text', width: 200 },
