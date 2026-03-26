@@ -95,7 +95,32 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
-  // Load linked modules whenever serviceBilling changes
+  // Create draft client on wizard open (create mode only)
+  useEffect(() => {
+    if (isEditMode || draftId) return;
+    const createDraft = async () => {
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user?.id) return;
+      const { data: draft, error } = await supabase
+        .from("clients")
+        .insert({
+          name: null,
+          firm_id: user?.firm_id || null,
+          user_id: authData.user.id,
+          is_draft: true,
+        } as any)
+        .select("id")
+        .single();
+      if (!error && draft) {
+        setDraftId(draft.id);
+        // Also create client_profiles
+        await supabase.from("client_profiles").insert({ client_id: draft.id, audit_questions: {} as any });
+      }
+    };
+    createDraft();
+  }, [isEditMode, user?.firm_id]);
+
+
   useEffect(() => {
     const loadModules = async () => {
       const activeIds = Object.keys(serviceBilling.activeServices);
