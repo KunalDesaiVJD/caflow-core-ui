@@ -216,15 +216,6 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
 
   const stateMap: Record<string, [any, (v: any) => void]> = {
     note_1: [note1, setNote1], note_2: [note2, setNote2],
-    note_3: [note3, setNote3], note_4: [note4, setNote4], note_5: [note5, setNote5],
-    note_6: [note6, setNote6], note_7: [note7, setNote7], note_8: [note8, setNote8],
-    note_9: [note9, setNote9], note_10: [note10, setNote10], note_11: [note11, setNote11],
-    note_12: [note12, setNote12], note_13: [note13, setNote13], note_14: [note14, setNote14],
-    note_15: [note15, setNote15], note_16: [note16, setNote16], note_17: [note17, setNote17],
-    note_18: [note18, setNote18], note_19: [note19, setNote19], note_20: [note20, setNote20],
-    note_21: [note21, setNote21], note_22: [note22, setNote22], note_23: [note23, setNote23],
-    note_24: [note24, setNote24], note_25: [note25, setNote25], note_26: [note26, setNote26],
-    note_27: [note27, setNote27], note_28: [note28, setNote28],
     note_29: [note29, setNote29], note_30: [note30, setNote30], note_31: [note31, setNote31],
     note_32: [note32, setNote32], note_33: [note33, setNote33], note_34: [note34, setNote34],
     note_35: [note35, setNote35], note_36: [note36, setNote36], note_37: [note37, setNote37],
