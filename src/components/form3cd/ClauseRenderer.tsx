@@ -494,6 +494,17 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
       if (idx !== ri) return r;
       const next = { ...r, [key]: val };
 
+      // When sector changes, clear sub_sector and code
+      if (key === 'sector') {
+        next.sub_sector = '';
+        next.code = '';
+      }
+
+      // When sub_sector changes, auto-set code to the selected value (5-digit code)
+      if (key === 'sub_sector' && val) {
+        next.code = val;
+      }
+
       // Auto-fill TDS nature from section
       const col = columns.find(c => c.key === key);
       if (col?.type === 'dropdown' && col.dropdownRef === 'TDS_SECTIONS') {
