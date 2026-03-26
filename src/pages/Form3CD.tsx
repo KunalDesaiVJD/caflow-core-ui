@@ -105,7 +105,12 @@ export default function Form3CD() {
       .eq("id", engagementId!)
       .single();
 
-    if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }
+    if (!eng || !(eng as any).clients) { setLoading(false); toast.error("Engagement not found"); return; }
+    const clientData = (eng as any).clients;
+    // Filter out draft/deleted clients
+    if (clientData?.is_draft === true || clientData?.deleted_at != null) {
+      setLoading(false); toast.error("Client is archived or in draft"); return;
+    }
     setEngagement(eng);
     setClient((eng as any).clients);
 

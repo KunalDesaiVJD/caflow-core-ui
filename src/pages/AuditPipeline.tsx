@@ -140,6 +140,8 @@ export default function AuditPipeline() {
       let query = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
         .order("name");
 
       if (user?.firm_id) {
