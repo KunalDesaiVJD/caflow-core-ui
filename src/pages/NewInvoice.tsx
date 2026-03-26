@@ -475,6 +475,8 @@ const NewInvoice = () => {
     });
   };
 
+  const [openItemPopover, setOpenItemPopover] = useState<number | null>(null);
+
   const selectMasterItem = (idx: number, master: ItemMaster) => {
     setLineItems(prev => {
       const next = [...prev];
@@ -482,6 +484,7 @@ const NewInvoice = () => {
       next[idx] = recalcItem(item);
       return next;
     });
+    setOpenItemPopover(null);
   };
 
   const addLine = () => setLineItems(prev => [...prev, { ...EMPTY_ITEM(), sort_order: prev.length }]);
@@ -1098,7 +1101,7 @@ const NewInvoice = () => {
                 <div key={idx} className="border border-border rounded-md p-3 space-y-2">
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <Popover>
+                      <Popover open={openItemPopover === idx} onOpenChange={(open) => setOpenItemPopover(open ? idx : null)}>
                         <PopoverTrigger asChild>
                           <div className="relative">
                             <Input

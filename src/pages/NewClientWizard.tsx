@@ -52,6 +52,7 @@ const NewClientWizard = () => {
   const { user } = useAuth();
 
   const isEditMode = Boolean(clientId);
+  const [draftId, setDraftId] = useState<string | null>(clientId || null);
 
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -94,7 +95,32 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
-  // Load linked modules whenever serviceBilling changes
+  // Create draft client on wizard open (create mode only)
+  useEffect(() => {
+    if (isEditMode || draftId) return;
+    const createDraft = async () => {
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user?.id) return;
+      const { data: draft, error } = await supabase
+        .from("clients")
+        .insert({
+          name: null,
+          firm_id: user?.firm_id || null,
+          user_id: authData.user.id,
+          is_draft: true,
+        } as any)
+        .select("id")
+        .single();
+      if (!error && draft) {
+        setDraftId(draft.id);
+        // Also create client_profiles
+        await supabase.from("client_profiles").insert({ client_id: draft.id, audit_questions: {} as any });
+      }
+    };
+    createDraft();
+  }, [isEditMode, user?.firm_id]);
+
+
   useEffect(() => {
     const loadModules = async () => {
       const activeIds = Object.keys(serviceBilling.activeServices);
@@ -503,26 +529,38 @@ const NewClientWizard = () => {
       const authUserId = authData.user?.id;
       if (!authUserId) throw new Error("You must be logged in to save this client.");
 
-      // 1. INSERT client
-      const insertPayload = {
+      const payload = {
         ...buildClientPayload(),
         firm_id: user?.firm_id || null,
         user_id: authUserId,
       };
-      const { data: clientData, error: clientError } = await supabase
-        .from("clients")
-        .insert(insertPayload as any)
-        .select("id")
-        .single();
-      if (clientError) throw clientError;
 
-      const newId = clientData.id;
+      let newId: string;
 
-      // 2. INSERT client_profiles
-      const { error: profileError } = await supabase
-        .from("client_profiles")
-        .insert({ client_id: newId, audit_questions: {} as any });
-      if (profileError) throw profileError;
+      if (draftId) {
+        // Update the existing draft client
+        const { data: updated, error: updateError } = await supabase
+          .from("clients")
+          .update(payload as any)
+          .eq("id", draftId)
+          .select("id")
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (!updated) throw new Error("Failed to update draft client. Permission denied.");
+        newId = updated.id;
+      } else {
+        // Fallback: insert new
+        const { data: clientData, error: clientError } = await supabase
+          .from("clients")
+          .insert(payload as any)
+          .select("id")
+          .single();
+        if (clientError) throw clientError;
+        newId = clientData.id;
+
+        // Create client_profiles only for new inserts (draft already has it)
+        await supabase.from("client_profiles").insert({ client_id: newId, audit_questions: {} as any });
+      }
 
       // 3. INSERT client_fy_classifications
       await saveFYClassification(newId);

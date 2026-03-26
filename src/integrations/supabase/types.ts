@@ -1818,6 +1818,7 @@ export type Database = {
           client_classification: Json | null
           compliance_flags: Json | null
           created_at: string | null
+          date_of_incorporation: string | null
           deleted_at: string | null
           dsc_expiry_date: string | null
           dsc_number: string | null
@@ -1832,6 +1833,7 @@ export type Database = {
           name: string | null
           pan: string | null
           registered_office: string | null
+          registered_state: string | null
           responsible_person_id: string | null
           statutory_audit_applicable: boolean | null
           stock_audit_applicable: boolean | null
@@ -1849,6 +1851,7 @@ export type Database = {
           client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          date_of_incorporation?: string | null
           deleted_at?: string | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
@@ -1863,6 +1866,7 @@ export type Database = {
           name?: string | null
           pan?: string | null
           registered_office?: string | null
+          registered_state?: string | null
           responsible_person_id?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
@@ -1880,6 +1884,7 @@ export type Database = {
           client_classification?: Json | null
           compliance_flags?: Json | null
           created_at?: string | null
+          date_of_incorporation?: string | null
           deleted_at?: string | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
@@ -1894,6 +1899,7 @@ export type Database = {
           name?: string | null
           pan?: string | null
           registered_office?: string | null
+          registered_state?: string | null
           responsible_person_id?: string | null
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null

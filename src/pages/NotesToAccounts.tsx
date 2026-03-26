@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -17,24 +18,50 @@ import { Checkbox } from "@/components/ui/checkbox";
 
 /* ───────────── constants (fallback) ───────────── */
 const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string }[] = [
-  { key: "note_1", num: 1, title: "Background" },
+  { key: "note_1", num: 1, title: "Corporate Information" },
   { key: "note_2", num: 2, title: "Significant Accounting Policies" },
-  { key: "note_29", num: 29, title: "Construction Contracts" },
-  { key: "note_30", num: 30, title: "Revenue Recognition" },
-  { key: "note_31", num: 31, title: "Foreign Currency" },
-  { key: "note_32", num: 32, title: "Government Grants" },
-  { key: "note_33", num: 33, title: "Accounting for Investments" },
-  { key: "note_34", num: 34, title: "Employee Benefits" },
-  { key: "note_35", num: 35, title: "Borrowing Costs" },
-  { key: "note_36", num: 36, title: "Segment Reporting" },
-  { key: "note_37", num: 37, title: "Related Parties" },
+  { key: "note_3", num: 3, title: "Share Capital" },
+  { key: "note_4", num: 4, title: "Reserves and Surplus" },
+  { key: "note_5", num: 5, title: "Long-term Borrowings" },
+  { key: "note_6", num: 6, title: "Deferred Tax Liabilities (Net)" },
+  { key: "note_7", num: 7, title: "Other Long-term Liabilities" },
+  { key: "note_8", num: 8, title: "Long-term Provisions" },
+  { key: "note_9", num: 9, title: "Short-term Borrowings" },
+  { key: "note_10", num: 10, title: "Trade Payables" },
+  { key: "note_11", num: 11, title: "Other Current Liabilities" },
+  { key: "note_12", num: 12, title: "Short-term Provisions" },
+  { key: "note_13", num: 13, title: "Tangible Assets (PPE)" },
+  { key: "note_14", num: 14, title: "Intangible Assets" },
+  { key: "note_15", num: 15, title: "Capital Work-in-Progress" },
+  { key: "note_16", num: 16, title: "Non-current Investments" },
+  { key: "note_17", num: 17, title: "Long-term Loans and Advances" },
+  { key: "note_18", num: 18, title: "Other Non-current Assets" },
+  { key: "note_19", num: 19, title: "Current Investments" },
+  { key: "note_20", num: 20, title: "Inventories" },
+  { key: "note_21", num: 21, title: "Trade Receivables" },
+  { key: "note_22", num: 22, title: "Cash and Cash Equivalents" },
+  { key: "note_23", num: 23, title: "Short-term Loans and Advances" },
+  { key: "note_24", num: 24, title: "Other Current Assets" },
+  { key: "note_25", num: 25, title: "Revenue from Operations" },
+  { key: "note_26", num: 26, title: "Other Income" },
+  { key: "note_27", num: 27, title: "Cost of Materials Consumed" },
+  { key: "note_28", num: 28, title: "Employee Benefits Expense" },
+  { key: "note_29", num: 29, title: "Finance Costs" },
+  { key: "note_30", num: 30, title: "Depreciation and Amortisation" },
+  { key: "note_31", num: 31, title: "Other Expenses" },
+  { key: "note_32", num: 32, title: "Exceptional Items" },
+  { key: "note_33", num: 33, title: "Tax Expense" },
+  { key: "note_34", num: 34, title: "Earnings Per Share" },
+  { key: "note_35", num: 35, title: "Contingent Liabilities and Commitments" },
+  { key: "note_36", num: 36, title: "Related Party Disclosures" },
+  { key: "note_37", num: 37, title: "Segment Reporting" },
   { key: "note_38", num: 38, title: "Leases" },
-  { key: "note_39", num: 39, title: "Earnings per Share" },
-  { key: "note_40", num: 40, title: "Accounting for Taxes on Income" },
-  { key: "note_41", num: 41, title: "Discontinuing Operations" },
-  { key: "note_42", num: 42, title: "Intangible Assets" },
-  { key: "note_43", num: 43, title: "Impairment of Assets" },
-  { key: "note_44", num: 44, title: "Events after the Reporting Period" },
+  { key: "note_39", num: 39, title: "Foreign Currency Transactions" },
+  { key: "note_40", num: 40, title: "Government Grants" },
+  { key: "note_41", num: 41, title: "Deferred Tax" },
+  { key: "note_42", num: 42, title: "CSR Expenditure" },
+  { key: "note_43", num: 43, title: "Details of Benami Property" },
+  { key: "note_44", num: 44, title: "Events After Reporting Period" },
   { key: "note_45", num: 45, title: "Previous Year Figures" },
 ];
 
@@ -142,7 +169,37 @@ function SNoRow({ sno, label, prefix, data, onChange, indent = false }: { sno: s
   );
 }
 
-/* ───────── MAIN COMPONENT ───────── */
+/* ───────── Generic Note (for notes 3-28 without custom rendering) ───────── */
+function GenericNote({ data, onChange, title, rolloverFy }: { data: any; onChange: (f: string, v: string) => void; title: string; rolloverFy?: string }) {
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <Card>
+        <CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <table className="w-full border-collapse">
+            <NoteTableHeader rolloverFy={rolloverFy} />
+            <tbody>
+              <TwoColRow label={`${title} — Line 1`} prefix="line1" cy={data.line1_cy || ""} py={data.line1_py || ""} onChange={onChange} />
+              <TwoColRow label={`${title} — Line 2`} prefix="line2" cy={data.line2_cy || ""} py={data.line2_py || ""} onChange={onChange} />
+              <TwoColRow label={`${title} — Line 3`} prefix="line3" cy={data.line3_cy || ""} py={data.line3_py || ""} onChange={onChange} />
+              <tr className="border-t-2 border-border font-semibold">
+                <td className="py-2 px-3 text-sm">Total</td>
+                <td className="py-2 px-3 text-right text-sm">{fmt(p(data.line1_cy) + p(data.line2_cy) + p(data.line3_cy))}</td>
+                <td className="py-2 px-3 text-right text-sm">{fmt(p(data.line1_py) + p(data.line2_py) + p(data.line3_py))}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="pt-2">
+            <Label className="text-sm font-medium">Additional Remarks</Label>
+            <Textarea value={data.remarks || ""} onChange={e => onChange("remarks", e.target.value)} placeholder="Any additional disclosure or details..." rows={3} className="mt-1 text-sm" />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+
 export default function NotesToAccounts({ engagementIdProp, onFinalise }: { engagementIdProp?: string; onFinalise?: () => void } = {}) {
   const [sp] = useSearchParams();
   const engagementId = engagementIdProp || sp.get("engagementId") || "";
@@ -163,9 +220,35 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, true]))
   );
 
-  // All note states
+  // All note states — using a single dynamic state object for notes 3-28 (generic)
   const [note1, setNote1] = useState<any>({});
   const [note2, setNote2] = useState<any>({});
+  const [note3, setNote3] = useState<any>({});
+  const [note4, setNote4] = useState<any>({});
+  const [note5, setNote5] = useState<any>({});
+  const [note6, setNote6] = useState<any>({});
+  const [note7, setNote7] = useState<any>({});
+  const [note8, setNote8] = useState<any>({});
+  const [note9, setNote9] = useState<any>({});
+  const [note10, setNote10] = useState<any>({});
+  const [note11, setNote11] = useState<any>({});
+  const [note12, setNote12] = useState<any>({});
+  const [note13, setNote13] = useState<any>({});
+  const [note14, setNote14] = useState<any>({});
+  const [note15, setNote15] = useState<any>({});
+  const [note16, setNote16] = useState<any>({});
+  const [note17, setNote17] = useState<any>({});
+  const [note18, setNote18] = useState<any>({});
+  const [note19, setNote19] = useState<any>({});
+  const [note20, setNote20] = useState<any>({});
+  const [note21, setNote21] = useState<any>({});
+  const [note22, setNote22] = useState<any>({});
+  const [note23, setNote23] = useState<any>({});
+  const [note24, setNote24] = useState<any>({});
+  const [note25, setNote25] = useState<any>({});
+  const [note26, setNote26] = useState<any>({});
+  const [note27, setNote27] = useState<any>({});
+  const [note28, setNote28] = useState<any>({});
   const [note29, setNote29] = useState<any>({});
   const [note30, setNote30] = useState<any>({});
   const [note31, setNote31] = useState<any>({});
@@ -186,6 +269,15 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
 
   const stateMap: Record<string, [any, (v: any) => void]> = {
     note_1: [note1, setNote1], note_2: [note2, setNote2],
+    note_3: [note3, setNote3], note_4: [note4, setNote4], note_5: [note5, setNote5],
+    note_6: [note6, setNote6], note_7: [note7, setNote7], note_8: [note8, setNote8],
+    note_9: [note9, setNote9], note_10: [note10, setNote10], note_11: [note11, setNote11],
+    note_12: [note12, setNote12], note_13: [note13, setNote13], note_14: [note14, setNote14],
+    note_15: [note15, setNote15], note_16: [note16, setNote16], note_17: [note17, setNote17],
+    note_18: [note18, setNote18], note_19: [note19, setNote19], note_20: [note20, setNote20],
+    note_21: [note21, setNote21], note_22: [note22, setNote22], note_23: [note23, setNote23],
+    note_24: [note24, setNote24], note_25: [note25, setNote25], note_26: [note26, setNote26],
+    note_27: [note27, setNote27], note_28: [note28, setNote28],
     note_29: [note29, setNote29], note_30: [note30, setNote30], note_31: [note31, setNote31],
     note_32: [note32, setNote32], note_33: [note33, setNote33], note_34: [note34, setNote34],
     note_35: [note35, setNote35], note_36: [note36, setNote36], note_37: [note37, setNote37],
@@ -363,7 +455,11 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       case "note_43": return <Note43 data={data} onChange={onChange} />;
       case "note_44": return <Note44 data={data} onChange={onChange} />;
       case "note_45": return <Note45 data={data} onChange={onChange} />;
-      default: return null;
+      default: {
+        // Generic note renderer for notes 3-28 and any others without custom rendering
+        const noteTitle = NOTE_LIST.find(n => n.key === noteKey)?.title || "Note";
+        return <GenericNote data={data} onChange={onChange} title={noteTitle} rolloverFy={rolledFromFy} />;
+      }
     }
   };
 
