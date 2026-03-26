@@ -122,7 +122,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
               value={data[sub.key] || {}}
               onChange={v => update(sub.key, v)}
               isLocked={isLocked}
-              parentValues={{ ...parentValues, [('key' in definition ? definition.key : '')]: data._value }}
+              parentValues={{ ...parentValues, [('key' in definition ? definition.key : ('clauseNo' in definition ? (definition as any).clauseNo : ''))]: data._value }}
               depth={depth + 1}
             />
           ))}
