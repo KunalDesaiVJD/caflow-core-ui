@@ -257,7 +257,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_14b_details', heading: 'Details of deviation',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_14b', dependsOnValue: true,
+        dependsOn: '14b', dependsOnValue: true,
         annexureColumns: [
           { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
