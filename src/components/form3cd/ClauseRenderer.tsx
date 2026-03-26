@@ -649,7 +649,25 @@ function CellInput({ column, value, onChange, disabled, row }: {
         />
       );
     case 'dropdown': {
-      const options = resolveDropdownOptions(column);
+      let options = resolveDropdownOptions(column);
+
+      // Handle dependent sector/sub_sector dropdowns
+      if (column.key === 'sector' && !options.length) {
+        options = BUSINESS_SECTORS;
+      }
+      if (column.key === 'sub_sector' && column.dependsOnColumn === 'sector') {
+        const sectorValue = row?.[column.dependsOnColumn] || '';
+        options = sectorValue ? (BUSINESS_SUBSECTORS[sectorValue] || []) : [];
+        if (!sectorValue) {
+          return (
+            <Select value="" disabled>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select Sector first" /></SelectTrigger>
+              <SelectContent><SelectItem value="_" className="text-xs">Select Sector first</SelectItem></SelectContent>
+            </Select>
+          );
+        }
+      }
+
       return (
         <Select value={value || ''} onValueChange={onChange} disabled={disabled}>
           <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select..." /></SelectTrigger>

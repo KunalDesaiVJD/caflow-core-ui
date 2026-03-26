@@ -109,9 +109,9 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         annexureColumns: [
           { key: 'change_type', label: 'Business', type: 'dropdown', width: 140,
             options: [{ value: 'Added', label: 'Added' }, { value: 'Discontinued', label: 'Discontinued' }] },
-          { key: 'sector', label: 'Sector', type: 'text', minWidth: 160 },
-          { key: 'sub_sector', label: 'Sub Sector', type: 'text', minWidth: 160 },
-          { key: 'code', label: 'Code', type: 'text', width: 100 },
+          { key: 'sector', label: 'Sector', type: 'dropdown', minWidth: 220 },
+          { key: 'sub_sector', label: 'Sub Sector (dependent on Sector)', type: 'dropdown', dependsOnColumn: 'sector', minWidth: 280 },
+          { key: 'code', label: 'Code (Auto)', type: 'readonly', width: 90 },
         ],
       },
     ],
