@@ -54,14 +54,27 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     control: 'yes_no',
     subClauses: [
       {
-        key: 'cl_9b_details', heading: 'Details of change',
-        control: 'note_reference',
-        dependsOn: 'cl_9b', dependsOnValue: true,
+        key: 'cl_9b_details',
+        heading: 'Details of change in partners/members',
+        control: 'structured_table',
+        dependsOn: '9b',
+        dependsOnValue: true,
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars of Change', type: 'text', minWidth: 200 },
-          { key: 'old_ratio', label: 'Old Ratio %', type: 'numeric', width: 100 },
-          { key: 'new_ratio', label: 'New Ratio %', type: 'numeric', width: 100 },
-          { key: 'remarks', label: 'Remarks', type: 'text', width: 160 },
+          { key: 'date_of_change', label: 'Date of Change', type: 'date', width: 130 },
+          { key: 'name', label: 'Name of Partner/Member', type: 'text', minWidth: 180 },
+          {
+            key: 'type_of_change',
+            label: 'Type of Change',
+            type: 'dropdown',
+            width: 210,
+            options: [
+              { value: 'Addition', label: 'Addition' },
+              { value: 'Deletion', label: 'Deletion' },
+              { value: 'Change in profit sharing ratio', label: 'Change in profit sharing ratio' }
+            ]
+          },
+          { key: 'old_ratio', label: 'Old Profit Sharing Ratio', type: 'text', width: 170 },
+          { key: 'new_ratio', label: 'New Profit Sharing Ratio', type: 'text', width: 170 },
         ],
       },
     ],
