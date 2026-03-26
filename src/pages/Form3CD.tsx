@@ -45,6 +45,12 @@ function clauseStateKey(clauseNo: string): string {
   return `cl_${clauseNo}`;
 }
 
+// Maps clauseNo like "10a" to its DB column "cl_10"
+function clauseDbColumn(clauseNo: string): string {
+  const match = clauseNo.match(/^(\d+(?:_\d+)?)/);
+  return `cl_${match ? match[1] : clauseNo}`;
+}
+
 /* ──────── main component ──────── */
 export default function Form3CD() {
   const [searchParams] = useSearchParams();
@@ -127,8 +133,18 @@ export default function Form3CD() {
       // Load all clause data from the row
       const loaded: Record<string, ClauseData> = {};
       activeClauses.forEach(c => {
-        const key = clauseStateKey(c.clauseNo);
-        loaded[key] = e[key] || {};
+        const stateKey = clauseStateKey(c.clauseNo);
+        const dbCol = clauseDbColumn(c.clauseNo);
+        const dbData = e[dbCol];
+        // If the DB column stores grouped sub-clauses, extract by clauseNo
+        if (dbData && typeof dbData === 'object' && c.clauseNo in dbData) {
+          loaded[stateKey] = (dbData as any)[c.clauseNo];
+        } else if (dbData && typeof dbData === 'object') {
+          // Check if data is stored flat (legacy) or is the direct value
+          loaded[stateKey] = dbData;
+        } else {
+          loaded[stateKey] = {};
+        }
       });
       setClauseData(loaded);
     } else {
@@ -171,11 +187,23 @@ export default function Form3CD() {
       last_saved_at: new Date().toISOString(),
       last_saved_by: user?.id,
     };
-    // Include all clause data
+    // Group clause data by DB column (e.g. cl_9a + cl_9b → cl_9: { "9a": {...}, "9b": {...} })
+    const dbGrouped: Record<string, any> = {};
     activeClauses.forEach(c => {
-      const key = clauseStateKey(c.clauseNo);
-      updatePayload[key] = clauseData[key] || {};
+      const stateKey = clauseStateKey(c.clauseNo);
+      const dbCol = clauseDbColumn(c.clauseNo);
+      // Check if multiple clauses share the same DB column
+      const siblingsInSameCol = activeClauses.filter(x => clauseDbColumn(x.clauseNo) === dbCol);
+      if (siblingsInSameCol.length > 1) {
+        // Group under parent column with clauseNo as sub-key
+        if (!dbGrouped[dbCol]) dbGrouped[dbCol] = {};
+        dbGrouped[dbCol][c.clauseNo] = clauseData[stateKey] || {};
+      } else {
+        // Single clause maps directly to DB column
+        dbGrouped[dbCol] = clauseData[stateKey] || {};
+      }
     });
+    Object.assign(updatePayload, dbGrouped);
 
     const { error } = await supabase
       .from("form_3cd" as any)
