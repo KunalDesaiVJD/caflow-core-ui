@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Trash2, RotateCcw } from "lucide-react";
 import type { ClauseDefinition, SubClause, AnnexureColumn, ControlType } from "@/data/form3cd-master";
-import { DROPDOWN_LIBRARY } from "@/data/form3cd-dropdowns";
+import { DROPDOWN_LIBRARY, BUSINESS_SECTORS, BUSINESS_SUBSECTORS } from "@/data/form3cd-dropdowns";
 
 interface ClauseRendererProps {
   definition: ClauseDefinition | SubClause;
