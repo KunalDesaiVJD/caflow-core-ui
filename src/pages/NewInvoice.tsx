@@ -475,7 +475,7 @@ const NewInvoice = () => {
     });
   };
 
-  const [openItemPopover, setOpenItemPopover] = React.useState<number | null>(null);
+  const [openItemPopover, setOpenItemPopover] = useState<number | null>(null);
 
   const selectMasterItem = (idx: number, master: ItemMaster) => {
     setLineItems(prev => {
