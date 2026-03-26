@@ -42,7 +42,7 @@ export const DROPDOWN_LIBRARY: Record<string, { value: string; label: string }[]
   ],
 
   PRESUMPTIVE_SECTIONS: [
-    '44AD', '44ADA', '44AE', '44AF', '44B', '44BB', '44BBA', '44BBB', '44BBC',
+    '44AD', '44AE', '44ADA', '44AF', '44B', '44BB', '44BBA', '44BBB', '44BBC',
     'Chapter XII-G', 'First Schedule', 'Any other relevant section'
   ].map(v => ({ value: v, label: v })),
 

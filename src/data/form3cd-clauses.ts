@@ -54,14 +54,27 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     control: 'yes_no',
     subClauses: [
       {
-        key: 'cl_9b_details', heading: 'Details of change',
-        control: 'note_reference',
-        dependsOn: 'cl_9b', dependsOnValue: true,
+        key: 'cl_9b_details',
+        heading: 'Details of change in partners/members',
+        control: 'structured_table',
+        dependsOn: '9b',
+        dependsOnValue: true,
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars of Change', type: 'text', minWidth: 200 },
-          { key: 'old_ratio', label: 'Old Ratio %', type: 'numeric', width: 100 },
-          { key: 'new_ratio', label: 'New Ratio %', type: 'numeric', width: 100 },
-          { key: 'remarks', label: 'Remarks', type: 'text', width: 160 },
+          { key: 'date_of_change', label: 'Date of Change', type: 'date', width: 130 },
+          { key: 'name', label: 'Name of Partner/Member', type: 'text', minWidth: 180 },
+          {
+            key: 'type_of_change',
+            label: 'Type of Change',
+            type: 'dropdown',
+            width: 210,
+            options: [
+              { value: 'Addition', label: 'Addition' },
+              { value: 'Deletion', label: 'Deletion' },
+              { value: 'Change in profit sharing ratio', label: 'Change in profit sharing ratio' }
+            ]
+          },
+          { key: 'old_ratio', label: 'Old Profit Sharing Ratio', type: 'text', width: 170 },
+          { key: 'new_ratio', label: 'New Profit Sharing Ratio', type: 'text', width: 170 },
         ],
       },
     ],
@@ -92,7 +105,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_10b_details', heading: 'Details of change',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_10b', dependsOnValue: true,
+        dependsOn: '10b', dependsOnValue: true,
         annexureColumns: [
           { key: 'change_type', label: 'Business', type: 'dropdown', width: 140,
             options: [{ value: 'Added', label: 'Added' }, { value: 'Discontinued', label: 'Discontinued' }] },
@@ -114,7 +127,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_11a_books', heading: 'List of books prescribed',
         control: 'structured_table',
-        dependsOn: 'cl_11a', dependsOnValue: true,
+        dependsOn: '11a', dependsOnValue: true,
         annexureColumns: [
           { key: 'book', label: 'Book of Account', type: 'dropdown', dropdownRef: 'BOOKS_LIST', minWidth: 200 },
           { key: 'specify', label: 'Specify (if Others)', type: 'text', width: 200 },
@@ -151,7 +164,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_12_details', heading: 'Details of presumptive income',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_12', dependsOnValue: 'yes',
+        dependsOn: '12', dependsOnValue: 'yes',
         annexureColumns: [
           { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'PRESUMPTIVE_SECTIONS', minWidth: 200 },
           { key: 'description', label: 'Description / Other Section', type: 'text', minWidth: 180 },
@@ -181,7 +194,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13c', heading: 'Details of such change and effect on profit or loss',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_13b', dependsOnValue: true,
+        dependsOn: '13b', dependsOnValue: true,
         annexureColumns: [
           { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
@@ -201,7 +214,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13e', heading: 'Details of ICDS adjustments',
         control: 'structured_table',
-        dependsOn: 'cl_13d', dependsOnValue: true,
+        dependsOn: '13d', dependsOnValue: true,
         annexureColumns: [
           { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
@@ -244,7 +257,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_14b_details', heading: 'Details of deviation',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_14b', dependsOnValue: true,
+        dependsOn: '14b', dependsOnValue: true,
         annexureColumns: [
           { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
