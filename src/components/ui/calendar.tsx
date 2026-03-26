@@ -4,19 +4,39 @@ import { DayPicker } from "react-day-picker";
 
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
 function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {
+  const [displayMonth, setDisplayMonth] = React.useState<Date>(
+    props.selected instanceof Date ? props.selected : new Date()
+  );
+
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 50 }, (_, i) => currentYear - 40 + i);
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
-      className={cn("p-3", className)}
+      month={displayMonth}
+      onMonthChange={setDisplayMonth}
+      className={cn("p-3 pointer-events-auto", className)}
       classNames={{
         months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
         month: "space-y-4",
         caption: "flex justify-center pt-1 relative items-center",
-        caption_label: "text-sm font-medium",
+        caption_label: "hidden",
         nav: "space-x-1 flex items-center",
         nav_button: cn(
           buttonVariants({ variant: "outline" }),
@@ -44,6 +64,46 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
       components={{
         IconLeft: ({ ..._props }) => <ChevronLeft className="h-4 w-4" />,
         IconRight: ({ ..._props }) => <ChevronRight className="h-4 w-4" />,
+        Caption: ({ displayMonth: dm }) => {
+          return (
+            <div className="flex items-center justify-center gap-1 px-8">
+              <Select
+                value={String(dm.getMonth())}
+                onValueChange={(val) => {
+                  const newDate = new Date(dm);
+                  newDate.setMonth(parseInt(val));
+                  setDisplayMonth(newDate);
+                }}
+              >
+                <SelectTrigger className="h-7 w-[110px] text-xs font-medium border-none shadow-none focus:ring-0 px-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="pointer-events-auto">
+                  {months.map((m, i) => (
+                    <SelectItem key={m} value={String(i)} className="text-xs">{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={String(dm.getFullYear())}
+                onValueChange={(val) => {
+                  const newDate = new Date(dm);
+                  newDate.setFullYear(parseInt(val));
+                  setDisplayMonth(newDate);
+                }}
+              >
+                <SelectTrigger className="h-7 w-[72px] text-xs font-medium border-none shadow-none focus:ring-0 px-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="pointer-events-auto max-h-[200px]">
+                  {years.map((y) => (
+                    <SelectItem key={y} value={String(y)} className="text-xs">{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          );
+        },
       }}
       {...props}
     />

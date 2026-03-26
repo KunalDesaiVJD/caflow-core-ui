@@ -475,6 +475,8 @@ const NewInvoice = () => {
     });
   };
 
+  const [openItemPopover, setOpenItemPopover] = React.useState<number | null>(null);
+
   const selectMasterItem = (idx: number, master: ItemMaster) => {
     setLineItems(prev => {
       const next = [...prev];
@@ -482,6 +484,7 @@ const NewInvoice = () => {
       next[idx] = recalcItem(item);
       return next;
     });
+    setOpenItemPopover(null);
   };
 
   const addLine = () => setLineItems(prev => [...prev, { ...EMPTY_ITEM(), sort_order: prev.length }]);
