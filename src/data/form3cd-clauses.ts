@@ -164,7 +164,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_12_details', heading: 'Details of presumptive income',
         control: 'not_applicable_annexure',
-        dependsOn: 'cl_12', dependsOnValue: 'yes',
+        dependsOn: '12', dependsOnValue: 'yes',
         annexureColumns: [
           { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'PRESUMPTIVE_SECTIONS', minWidth: 200 },
           { key: 'description', label: 'Description / Other Section', type: 'text', minWidth: 180 },
