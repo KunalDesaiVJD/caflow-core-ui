@@ -219,7 +219,7 @@ const NewClientWizard = () => {
         responsible_person_id: client.responsible_person_id || "",
         date_of_incorporation: client.date_of_incorporation ? new Date(client.date_of_incorporation) : undefined,
         registered_state: client.registered_state || "",
-        business_nature: client.business_nature || "",
+        business_nature: client.business_activity || "",
         cin: client.cin || "",
         dsc_number: client.dsc_number || "",
         dsc_expiry_date: client.dsc_expiry_date ? new Date(client.dsc_expiry_date) : undefined,
