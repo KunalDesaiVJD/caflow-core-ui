@@ -214,7 +214,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13e', heading: 'Details of ICDS adjustments',
         control: 'structured_table',
-        dependsOn: 'cl_13d', dependsOnValue: true,
+        dependsOn: '13d', dependsOnValue: true,
         annexureColumns: [
           { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
