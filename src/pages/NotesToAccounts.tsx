@@ -189,9 +189,35 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, true]))
   );
 
-  // All note states
+  // All note states — using a single dynamic state object for notes 3-28 (generic)
   const [note1, setNote1] = useState<any>({});
   const [note2, setNote2] = useState<any>({});
+  const [note3, setNote3] = useState<any>({});
+  const [note4, setNote4] = useState<any>({});
+  const [note5, setNote5] = useState<any>({});
+  const [note6, setNote6] = useState<any>({});
+  const [note7, setNote7] = useState<any>({});
+  const [note8, setNote8] = useState<any>({});
+  const [note9, setNote9] = useState<any>({});
+  const [note10, setNote10] = useState<any>({});
+  const [note11, setNote11] = useState<any>({});
+  const [note12, setNote12] = useState<any>({});
+  const [note13, setNote13] = useState<any>({});
+  const [note14, setNote14] = useState<any>({});
+  const [note15, setNote15] = useState<any>({});
+  const [note16, setNote16] = useState<any>({});
+  const [note17, setNote17] = useState<any>({});
+  const [note18, setNote18] = useState<any>({});
+  const [note19, setNote19] = useState<any>({});
+  const [note20, setNote20] = useState<any>({});
+  const [note21, setNote21] = useState<any>({});
+  const [note22, setNote22] = useState<any>({});
+  const [note23, setNote23] = useState<any>({});
+  const [note24, setNote24] = useState<any>({});
+  const [note25, setNote25] = useState<any>({});
+  const [note26, setNote26] = useState<any>({});
+  const [note27, setNote27] = useState<any>({});
+  const [note28, setNote28] = useState<any>({});
   const [note29, setNote29] = useState<any>({});
   const [note30, setNote30] = useState<any>({});
   const [note31, setNote31] = useState<any>({});
