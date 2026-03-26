@@ -393,11 +393,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       case "note_43": return <Note43 data={data} onChange={onChange} />;
       case "note_44": return <Note44 data={data} onChange={onChange} />;
       case "note_45": return <Note45 data={data} onChange={onChange} />;
-      default: {
-        // Generic note renderer for notes 3-28 and any others without custom rendering
-        const noteTitle = NOTE_LIST.find(n => n.key === noteKey)?.title || "Note";
-        return <GenericNote data={data} onChange={onChange} title={noteTitle} rolloverFy={rolledFromFy} />;
-      }
+      default: return <div className="p-8 text-muted-foreground">Select a note from the left panel.</div>;
     }
   };
 
