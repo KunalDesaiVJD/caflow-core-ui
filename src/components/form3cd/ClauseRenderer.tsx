@@ -574,17 +574,26 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
           {rows.map((row, ri) => (
             <TableRow key={ri}>
               <TableCell className="p-1 text-xs text-center text-muted-foreground">{ri + 1}</TableCell>
-              {columns.map(col => (
-                <TableCell key={col.key} className={`p-1 ${col.type === 'auto_calc' || col.type === 'readonly' ? 'bg-muted/30' : ''}`}>
-                  <CellInput
-                    column={col}
-                    value={row[col.key] ?? ''}
-                    onChange={val => updateCell(ri, col.key, val)}
-                    disabled={isLocked}
-                    row={row}
-                  />
-                </TableCell>
-              ))}
+              {columns.map(col => {
+                // Conditional visibility: if conditionalOn is set, check if the driving column matches
+                const isConditionallyHidden = col.conditionalOn && col.conditionalOnValue !== undefined
+                  && row[col.conditionalOn] !== col.conditionalOnValue;
+                return (
+                  <TableCell key={col.key} className={`p-1 ${col.type === 'auto_calc' || col.type === 'readonly' || isConditionallyHidden ? 'bg-muted/30' : ''}`}>
+                    {isConditionallyHidden ? (
+                      <span className="text-xs text-muted-foreground px-2">—</span>
+                    ) : (
+                      <CellInput
+                        column={col}
+                        value={row[col.key] ?? ''}
+                        onChange={val => updateCell(ri, col.key, val)}
+                        disabled={isLocked}
+                        row={row}
+                      />
+                    )}
+                  </TableCell>
+                );
+              })}
               {!isLocked && (
                 <TableCell className="p-1">
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(ri)}>

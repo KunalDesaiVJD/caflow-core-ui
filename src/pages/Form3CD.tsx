@@ -101,8 +101,10 @@ export default function Form3CD() {
     setLoading(true);
     const { data: eng } = await supabase
       .from("audit_engagements")
-      .select("*, clients(*)")
+      .select("*, clients!inner(*)")
       .eq("id", engagementId!)
+      .eq("clients.is_draft" as any, false)
+      .is("clients.deleted_at" as any, null)
       .single();
 
     if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }

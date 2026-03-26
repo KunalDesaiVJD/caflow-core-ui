@@ -167,8 +167,9 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         dependsOn: '12', dependsOnValue: 'yes',
         annexureColumns: [
           { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'PRESUMPTIVE_SECTIONS', minWidth: 200 },
-          { key: 'description', label: 'Description / Other Section', type: 'text', minWidth: 180 },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'other_section', label: 'Other Section (specify)', type: 'text', minWidth: 180,
+            conditionalOn: 'section', conditionalOnValue: 'Any other relevant section' },
+          { key: 'amount', label: 'Amount (Rs.)', type: 'numeric', width: 140 },
         ],
       },
     ],
