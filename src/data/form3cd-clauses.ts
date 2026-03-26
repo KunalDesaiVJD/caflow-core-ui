@@ -193,13 +193,13 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     defaultValue: 'No change in method',
     subClauses: [
       {
-        key: 'cl_13c', heading: 'Details of such change and effect on profit or loss',
-        control: 'not_applicable_annexure',
+        key: 'cl_13c', heading: '13(c) — Details of such change and effect on profit or loss',
+        control: 'structured_table',
         dependsOn: '13b', dependsOnValue: true,
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 200 },
-          { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
-          { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
+          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 220 },
+          { key: 'increase', label: 'Increase in Profit (Rs.)', type: 'numeric', width: 160 },
+          { key: 'decrease', label: 'Decrease in Profit (Rs.)', type: 'numeric', width: 160 },
         ],
       },
     ],
