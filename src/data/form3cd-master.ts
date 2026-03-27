@@ -52,6 +52,7 @@ export interface SubClause {
   placeholder?: string;
   fieldType?: 'text' | 'number' | 'textarea';
   structuredRows?: { label: string; key: string }[];  // fixed rows for yes_no_structured
+  notes?: string;               // implementation notes
 }
 
 export interface ClauseDefinition {
