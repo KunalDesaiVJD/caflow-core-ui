@@ -333,22 +333,23 @@ export function MasterConfigPanel() {
 
   async function saveNoteTemplates() {
     setSaving(true);
-    for (const t of noteTemplates) {
-      if (t.id) {
-        await supabase.from("note_templates" as any).update({
-          note_number: t.note_number,
-          note_title: t.note_title,
-          template_content: t.template_content,
-        } as any).eq("id", t.id);
-      } else {
-        await supabase.from("note_templates" as any).insert({
-          note_number: t.note_number,
-          note_title: t.note_title,
-          template_content: t.template_content || "",
-        } as any);
+    try {
+      // Delete all existing and reinsert for clean sync (same approach as CARO)
+      await supabase.from("note_templates" as any).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const inserts = noteTemplates.map(t => ({
+        note_number: t.note_number,
+        note_title: t.note_title,
+        template_content: t.template_content || {},
+        is_mandatory: t.is_mandatory ?? false,
+      }));
+      if (inserts.length > 0) {
+        const { error } = await supabase.from("note_templates" as any).insert(inserts as any);
+        if (error) { toast.error("Save failed: " + error.message); setSaving(false); return; }
       }
+      toast.success("Note templates saved (global)");
+    } catch (e: any) {
+      toast.error("Save failed: " + (e?.message || "Unknown error"));
     }
-    toast.success("Note templates saved (global)");
     setSaving(false);
     loadAll();
   }
