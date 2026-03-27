@@ -319,7 +319,7 @@ const NewInvoice = () => {
   // Fetch clients
   useEffect(() => {
     (async () => {
-      let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type").eq("is_draft", false).is("deleted_at", null).order("name");
+      let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
