@@ -4526,6 +4526,285 @@ export type Database = {
         }
         Relationships: []
       }
+      tds_challans: {
+        Row: {
+          bank_name: string | null
+          bsr_code: string | null
+          challan_remarks: string | null
+          challan_serial_no: string | null
+          cheque_dd_no: string | null
+          client_id: string
+          created_at: string | null
+          deposit_date: string | null
+          education_cess_deposited: number | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id: string
+          interest_deposited: number | null
+          is_book_entry: boolean | null
+          minor_head_of_challan: string | null
+          others_deposited: number | null
+          quarter: string
+          section_code: string | null
+          surcharge_deposited: number | null
+          total_challan_amount: number | null
+          total_tax_deposited: number | null
+          transfer_voucher_no: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          bank_name?: string | null
+          bsr_code?: string | null
+          challan_remarks?: string | null
+          challan_serial_no?: string | null
+          cheque_dd_no?: string | null
+          client_id: string
+          created_at?: string | null
+          deposit_date?: string | null
+          education_cess_deposited?: number | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id?: string
+          interest_deposited?: number | null
+          is_book_entry?: boolean | null
+          minor_head_of_challan?: string | null
+          others_deposited?: number | null
+          quarter: string
+          section_code?: string | null
+          surcharge_deposited?: number | null
+          total_challan_amount?: number | null
+          total_tax_deposited?: number | null
+          transfer_voucher_no?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          bank_name?: string | null
+          bsr_code?: string | null
+          challan_remarks?: string | null
+          challan_serial_no?: string | null
+          cheque_dd_no?: string | null
+          client_id?: string
+          created_at?: string | null
+          deposit_date?: string | null
+          education_cess_deposited?: number | null
+          filing_id?: string
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          id?: string
+          interest_deposited?: number | null
+          is_book_entry?: boolean | null
+          minor_head_of_challan?: string | null
+          others_deposited?: number | null
+          quarter?: string
+          section_code?: string | null
+          surcharge_deposited?: number | null
+          total_challan_amount?: number | null
+          total_tax_deposited?: number | null
+          transfer_voucher_no?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_challans_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_challans_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_challans_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_deductees: {
+        Row: {
+          amount_paid_credited: number | null
+          cess_amount: number | null
+          cess_rate: number | null
+          challan_id: string
+          client_id: string
+          contact_no: string | null
+          country_of_residence: string | null
+          created_at: string | null
+          date_of_deduction: string | null
+          date_of_payment: string | null
+          deductee_name: string
+          deductee_pan: string | null
+          deductee_ref_no: string | null
+          deductee_type: string | null
+          designation: string | null
+          email_id: string | null
+          entertainment_allowance: number | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          gross_salary: number | null
+          id: string
+          income_from_house_property: number | null
+          income_from_other_sources: number | null
+          lower_deduction_certificate_no: string | null
+          lower_deduction_rate: number | null
+          nature_of_payment: string | null
+          net_taxable_salary: number | null
+          pan_not_available: boolean | null
+          professional_tax: number | null
+          quarter: string
+          rate_of_tds: number | null
+          reason_for_lower_or_nil_deduction: string | null
+          remarks: string | null
+          section_code: string
+          standard_deduction_allowed: number | null
+          surcharge_amount: number | null
+          surcharge_rate: number | null
+          tds_amount: number | null
+          tds_by_previous_employer: number | null
+          total_tax_deducted: number | null
+          trc_available: boolean | null
+          treaty_section: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          amount_paid_credited?: number | null
+          cess_amount?: number | null
+          cess_rate?: number | null
+          challan_id: string
+          client_id: string
+          contact_no?: string | null
+          country_of_residence?: string | null
+          created_at?: string | null
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name: string
+          deductee_pan?: string | null
+          deductee_ref_no?: string | null
+          deductee_type?: string | null
+          designation?: string | null
+          email_id?: string | null
+          entertainment_allowance?: number | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          gross_salary?: number | null
+          id?: string
+          income_from_house_property?: number | null
+          income_from_other_sources?: number | null
+          lower_deduction_certificate_no?: string | null
+          lower_deduction_rate?: number | null
+          nature_of_payment?: string | null
+          net_taxable_salary?: number | null
+          pan_not_available?: boolean | null
+          professional_tax?: number | null
+          quarter: string
+          rate_of_tds?: number | null
+          reason_for_lower_or_nil_deduction?: string | null
+          remarks?: string | null
+          section_code: string
+          standard_deduction_allowed?: number | null
+          surcharge_amount?: number | null
+          surcharge_rate?: number | null
+          tds_amount?: number | null
+          tds_by_previous_employer?: number | null
+          total_tax_deducted?: number | null
+          trc_available?: boolean | null
+          treaty_section?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          amount_paid_credited?: number | null
+          cess_amount?: number | null
+          cess_rate?: number | null
+          challan_id?: string
+          client_id?: string
+          contact_no?: string | null
+          country_of_residence?: string | null
+          created_at?: string | null
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name?: string
+          deductee_pan?: string | null
+          deductee_ref_no?: string | null
+          deductee_type?: string | null
+          designation?: string | null
+          email_id?: string | null
+          entertainment_allowance?: number | null
+          filing_id?: string
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          gross_salary?: number | null
+          id?: string
+          income_from_house_property?: number | null
+          income_from_other_sources?: number | null
+          lower_deduction_certificate_no?: string | null
+          lower_deduction_rate?: number | null
+          nature_of_payment?: string | null
+          net_taxable_salary?: number | null
+          pan_not_available?: boolean | null
+          professional_tax?: number | null
+          quarter?: string
+          rate_of_tds?: number | null
+          reason_for_lower_or_nil_deduction?: string | null
+          remarks?: string | null
+          section_code?: string
+          standard_deduction_allowed?: number | null
+          surcharge_amount?: number | null
+          surcharge_rate?: number | null
+          tds_amount?: number | null
+          tds_by_previous_employer?: number | null
+          total_tax_deducted?: number | null
+          trc_available?: boolean | null
+          treaty_section?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_deductees_challan_id_fkey"
+            columns: ["challan_id"]
+            isOneToOne: false
+            referencedRelation: "tds_challans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_deductees_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_deductees_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_deductees_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tds_entries: {
         Row: {
           amount: number | null
@@ -4689,16 +4968,24 @@ export type Database = {
           created_by: string | null
           date_data_received: string | null
           date_of_filing: string | null
+          deductor_pan: string | null
+          deductor_type: string | null
+          finalized_at: string | null
+          finalized_by: string | null
           financial_year: string
           firm_id: string
           id: string
+          is_regular_return: boolean | null
           last_updated_at: string | null
           last_updated_by: string | null
           pdf_url: string | null
           preparer_id: string | null
+          previous_filing_token: string | null
           prn_no: string | null
           quarter: string
           remarks: string | null
+          responsible_person_name: string | null
+          responsible_person_pan: string | null
           tan: string | null
           tds_forms: string[] | null
           work_status: string
@@ -4713,16 +5000,24 @@ export type Database = {
           created_by?: string | null
           date_data_received?: string | null
           date_of_filing?: string | null
+          deductor_pan?: string | null
+          deductor_type?: string | null
+          finalized_at?: string | null
+          finalized_by?: string | null
           financial_year: string
           firm_id: string
           id?: string
+          is_regular_return?: boolean | null
           last_updated_at?: string | null
           last_updated_by?: string | null
           pdf_url?: string | null
           preparer_id?: string | null
+          previous_filing_token?: string | null
           prn_no?: string | null
           quarter: string
           remarks?: string | null
+          responsible_person_name?: string | null
+          responsible_person_pan?: string | null
           tan?: string | null
           tds_forms?: string[] | null
           work_status?: string
@@ -4737,16 +5032,24 @@ export type Database = {
           created_by?: string | null
           date_data_received?: string | null
           date_of_filing?: string | null
+          deductor_pan?: string | null
+          deductor_type?: string | null
+          finalized_at?: string | null
+          finalized_by?: string | null
           financial_year?: string
           firm_id?: string
           id?: string
+          is_regular_return?: boolean | null
           last_updated_at?: string | null
           last_updated_by?: string | null
           pdf_url?: string | null
           preparer_id?: string | null
+          previous_filing_token?: string | null
           prn_no?: string | null
           quarter?: string
           remarks?: string | null
+          responsible_person_name?: string | null
+          responsible_person_pan?: string | null
           tan?: string | null
           tds_forms?: string[] | null
           work_status?: string
@@ -4792,6 +5095,83 @@ export type Database = {
             columns: ["preparer_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_rate_master: {
+        Row: {
+          assessment_year: string
+          cess_applicable: boolean | null
+          created_at: string | null
+          effective_from: string | null
+          effective_to: string | null
+          financial_year: string
+          firm_id: string | null
+          form_type: string
+          id: string
+          is_active: boolean | null
+          nature_of_payment: string | null
+          notes: string | null
+          rate_company: number | null
+          rate_individual: number | null
+          rate_no_pan: number | null
+          section_code: string
+          section_description: string | null
+          surcharge_applicable: boolean | null
+          threshold_company: number | null
+          threshold_individual: number | null
+        }
+        Insert: {
+          assessment_year: string
+          cess_applicable?: boolean | null
+          created_at?: string | null
+          effective_from?: string | null
+          effective_to?: string | null
+          financial_year: string
+          firm_id?: string | null
+          form_type: string
+          id?: string
+          is_active?: boolean | null
+          nature_of_payment?: string | null
+          notes?: string | null
+          rate_company?: number | null
+          rate_individual?: number | null
+          rate_no_pan?: number | null
+          section_code: string
+          section_description?: string | null
+          surcharge_applicable?: boolean | null
+          threshold_company?: number | null
+          threshold_individual?: number | null
+        }
+        Update: {
+          assessment_year?: string
+          cess_applicable?: boolean | null
+          created_at?: string | null
+          effective_from?: string | null
+          effective_to?: string | null
+          financial_year?: string
+          firm_id?: string | null
+          form_type?: string
+          id?: string
+          is_active?: boolean | null
+          nature_of_payment?: string | null
+          notes?: string | null
+          rate_company?: number | null
+          rate_individual?: number | null
+          rate_no_pan?: number | null
+          section_code?: string
+          section_description?: string | null
+          surcharge_applicable?: boolean | null
+          threshold_company?: number | null
+          threshold_individual?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_rate_master_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
             referencedColumns: ["id"]
           },
         ]
