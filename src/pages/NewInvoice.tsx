@@ -411,6 +411,11 @@ const NewInvoice = () => {
     if (client) {
       setToName(client.name || "");
       setToGstin(client.gstin?.[0] || "");
+      // Auto-fetch address from client management
+      const addrParts = [client.address, client.registered_office].filter(Boolean);
+      if (addrParts.length > 0) {
+        setToAddress(addrParts.join(", "));
+      }
     }
     // Check audit classification
     (async () => {
