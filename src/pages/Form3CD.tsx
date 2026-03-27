@@ -345,6 +345,35 @@ export default function Form3CD() {
               const displayNo = clause.clauseNo.replace('_', '-');
               const displayTitle = dbTitles.get(clause.clauseNo) || clause.title;
 
+              // Handle top-level dependsOn — check if parent clause value matches
+              if (clause.dependsOn) {
+                const parentKey = clauseStateKey(clause.dependsOn);
+                const parentData = clauseData[parentKey];
+                const parentValue = parentData?._value;
+                const requiredValue = clause.dependsOnValue ?? true;
+                if (parentValue !== requiredValue) {
+                  // Show as disabled/not applicable
+                  return (
+                    <div key={clause.clauseNo} ref={el => { sectionRefs.current[clause.clauseNo] = el; }}>
+                      <AccordionItem value={clause.clauseNo} className="border rounded-lg opacity-60">
+                        <AccordionTrigger className="px-4">
+                          <div className="flex items-center gap-3">
+                            <Badge variant="outline" className="font-mono text-xs">{displayNo}</Badge>
+                            <span className="font-medium">{displayTitle}</span>
+                            <Badge className="bg-muted text-muted-foreground text-[10px]">Not Applicable</Badge>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-4 pb-4">
+                          <p className="text-sm text-muted-foreground italic">
+                            This clause is not applicable because Clause {clause.dependsOn} is not answered "Yes".
+                          </p>
+                        </AccordionContent>
+                      </AccordionItem>
+                    </div>
+                  );
+                }
+              }
+
               return (
                 <div key={clause.clauseNo} ref={el => { sectionRefs.current[clause.clauseNo] = el; }}>
                   <AccordionItem value={clause.clauseNo} className="border rounded-lg">
