@@ -808,8 +808,8 @@ const NewInvoice = () => {
       </style></head><body>
       <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
-      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0">
-        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0">${heading}</h1>
+      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:4px 0;line-height:1.2">
+        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0">${heading}</h1>
       </div>
 
       <div style="display:flex;justify-content:space-between;margin-bottom:14px">
