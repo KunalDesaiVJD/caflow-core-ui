@@ -618,6 +618,33 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
           { key: 'cl_21b_viii', heading: '(viii) — Payment to PF/other fund etc. under sub-clause (iv)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
           // (ix) — Single field
           { key: 'cl_21b_ix', heading: '(ix) — Tax paid by employer for perquisites under sub-clause (v)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // Part A — Employee contribution deducted but not deposited in time
+          {
+            key: 'cl_21b_partA', heading: '21(b)(i)(A) — Employee contribution deducted but not deposited in time',
+            control: 'structured_table',
+            annexureColumns: [
+              { key: 'fund_name', label: 'Nature of Fund', type: 'text', minWidth: 180 },
+              { key: 'amount_deducted', label: 'Amount Deducted from Salary (Rs.)', type: 'numeric', width: 180 },
+              { key: 'due_date', label: 'Due Date for Deposit', type: 'date', width: 130 },
+              { key: 'actual_date', label: 'Date Actually Deposited', type: 'date', width: 140 },
+              { key: 'amount_late', label: 'Amount Deposited Late / Not Deposited (Rs.)', type: 'numeric', width: 200 },
+              { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
+            ],
+          },
+          // Part B — Employee contribution not deducted by employer
+          {
+            key: 'cl_21b_partB', heading: '21(b)(i)(B) — Employee contribution not deducted by employer',
+            control: 'structured_table',
+            annexureColumns: [
+              { key: 'fund_name', label: 'Nature of Fund', type: 'text', minWidth: 180 },
+              { key: 'amount_required', label: 'Amount Required to be Deducted (Rs.)', type: 'numeric', width: 190 },
+              { key: 'amount_deducted', label: 'Amount Actually Deducted (Rs.)', type: 'numeric', width: 170 },
+              { key: 'short_deduction', label: 'Short Deduction (Rs.)', type: 'auto_calc', width: 150, formula: 'amount_required - amount_deducted' },
+              { key: 'due_date', label: 'Due Date', type: 'date', width: 120 },
+              { key: 'deposit_date', label: 'Date of Deposit', type: 'date', width: 130 },
+              { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
+            ],
+          },
         ],
       },
 
@@ -819,6 +846,29 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
           { key: 'nature', label: 'Nature of Liability', type: 'text' },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
           { key: 'date_of_payment', label: 'Date of Payment', type: 'date', width: 130 },
+        ],
+      },
+      {
+        key: 'cl_26bi', heading: '26(b)(i) — Amounts inadmissible under Section 43B (amounts debited to P&L)',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_43B_PART_A', minWidth: 360 },
+          { key: 'amount_debited', label: 'Amount Debited to P&L (Rs.)', type: 'numeric', width: 170 },
+          { key: 'amount_paid', label: 'Amount Paid/Allowable (Rs.)', type: 'numeric', width: 170 },
+          { key: 'amount_disallowed', label: 'Amount Disallowed (Rs.)', type: 'numeric', width: 170 },
+          { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
+        ],
+      },
+      {
+        key: 'cl_26bii', heading: '26(b)(ii) — Amounts inadmissible under Section 43B (not paid before due date)',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_43B_PART_B', minWidth: 360 },
+          { key: 'amount_due', label: 'Amount Due (Rs.)', type: 'numeric', width: 150 },
+          { key: 'amount_paid_before', label: 'Amount Paid Before Due Date (Rs.)', type: 'numeric', width: 190 },
+          { key: 'amount_paid_after', label: 'Amount Paid After Due Date (Rs.)', type: 'numeric', width: 190 },
+          { key: 'amount_not_paid', label: 'Amount Not Paid (Rs.)', type: 'numeric', width: 160 },
+          { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
         ],
       },
       {
