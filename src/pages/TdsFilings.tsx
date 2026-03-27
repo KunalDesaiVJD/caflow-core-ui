@@ -276,9 +276,12 @@ const TdsFilings = () => {
     </div>
   );
 };
-
-
-
+interface TabProps {
+  clients: ClientOption[];
+  users: UserOption[];
+  isSuperadmin: boolean;
+  resolveFirmId: () => Promise<string | null>;
+}
 
 // ═══════════════════════════════════════
 // DATA ENTRY TAB (formerly Entries)
