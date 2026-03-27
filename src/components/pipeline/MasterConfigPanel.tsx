@@ -475,6 +475,22 @@ export function MasterConfigPanel() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, -1)} disabled={idx === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, 1)} disabled={idx === noteTemplates.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteNoteTemplate(idx)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <div className="flex-1" />
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr] gap-2 items-center">
+                    <Label className="text-xs">Number</Label>
+                    <Input type="number" value={t.note_number} onChange={e => updateNote(idx, "note_number", parseInt(e.target.value) || 0)} className="w-24 h-8 text-sm" />
+                  </div>
                   <div>
                     <Label className="text-xs">Note Title</Label>
                     <Input value={t.note_title || ""} onChange={e => updateNote(idx, "note_title", e.target.value)} className="mt-1 text-sm" />
