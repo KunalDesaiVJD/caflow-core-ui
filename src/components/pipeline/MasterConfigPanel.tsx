@@ -451,9 +451,14 @@ export function MasterConfigPanel() {
         {/* ═══ Notes Templates ═══ */}
         <TabsContent value="notes_master" className="mt-4 space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-xs text-muted-foreground">
-              Fixed set of 19 notes matching Notes to Accounts (Notes 1, 2, 29–45). Edit template content below.
-            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={addNoteTemplate} className="gap-1">
+                <Plus className="w-4 h-4" /> Add Note
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Default 19 notes matching Notes to Accounts (Notes 1, 2, 29–45). You may add or remove notes.
+              </p>
+            </div>
             <Button onClick={saveNoteTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Note Templates
