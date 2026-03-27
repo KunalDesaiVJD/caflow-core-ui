@@ -868,9 +868,9 @@ const NewInvoice = () => {
         <strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}
       </div>
 
-      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd">
+      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd;page-break-inside:avoid;overflow:hidden">
         <strong>Remarks / Terms & Conditions:</strong><br/>
-        <span style="white-space:pre-line">${remarksConditions}</span>
+        <span style="white-space:pre-line;word-wrap:break-word;overflow-wrap:break-word">${remarksConditions}</span>
       </div>` : ""}
 
       <div style="display:flex;justify-content:space-between;margin-top:16px">
