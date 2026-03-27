@@ -127,6 +127,8 @@ interface Client {
   pan: string | null;
   gstin: string[] | null;
   entity_type: string | null;
+  address: string | null;
+  registered_office: string | null;
 }
 
 interface Firm {

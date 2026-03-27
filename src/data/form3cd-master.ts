@@ -62,6 +62,8 @@ export interface ClauseDefinition {
   dropdownRef?: string;
   dropdownOptions?: DropdownOption[];
   defaultValue?: string;
+  dependsOn?: string;           // clauseNo of another top-level clause
+  dependsOnValue?: any;         // value that clause must have (default: true)
   showTotals?: boolean;
   totalColumns?: string[];
   notes?: string;               // implementation notes
