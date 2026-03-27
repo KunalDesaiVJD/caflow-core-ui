@@ -13,7 +13,10 @@ export type ControlType =
   | 'matrix'                    // Matrix/Annexure-6 style (Cl.34a)
   | 'note_reference'            // Note reference + optional annexure (Cl.9a)
   | 'composite'                 // Composite — uses subClauses with mixed controls
-  | 'same_as_checkbox';         // Same as X checkbox + free text (Cl.11b, 11c)
+  | 'same_as_checkbox'          // Same as X checkbox + free text (Cl.11b, 11c)
+  | 'heading_only'              // Section heading with no input fields
+  | 'yes_no_text'               // Yes/No radio + text input when Yes
+  | 'yes_no_structured';        // Yes/No radio + fixed structured rows when Yes
 
 export interface DropdownOption { value: string; label: string; }
 
