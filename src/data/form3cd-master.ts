@@ -51,6 +51,7 @@ export interface SubClause {
   totalColumns?: string[];      // which column keys to sum
   placeholder?: string;
   fieldType?: 'text' | 'number' | 'textarea';
+  structuredRows?: { label: string; key: string }[];  // fixed rows for yes_no_structured
 }
 
 export interface ClauseDefinition {
