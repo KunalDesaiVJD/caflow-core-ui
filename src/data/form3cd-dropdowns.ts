@@ -268,6 +268,32 @@ export const DROPDOWN_LIBRARY: Record<string, { value: string; label: string }[]
     'Motor Car', 'Telephone', 'Club', 'Travel', 'Medical',
     'Entertainment', 'Guest House', 'Festival', 'Other'
   ].map(v => ({ value: v, label: v })),
+
+  AY_YEARS: (() => {
+    const years: { value: string; label: string }[] = [];
+    for (let y = 2015; y <= 2030; y++) {
+      const v = `${y}-${String(y + 1).slice(2)}`;
+      years.push({ value: v, label: v });
+    }
+    return years;
+  })(),
+
+  CHEQUE_MODE: [
+    { value: 'Yes - ECS', label: 'Yes - ECS' },
+    { value: 'Yes - Cheque', label: 'Yes - Cheque' },
+    { value: 'No - Book Entry', label: 'No - Book Entry' },
+  ],
+
+  ACPAYEE_MODE: [
+    { value: 'A/c Payee', label: 'A/c Payee' },
+    { value: 'Not A/c Payee', label: 'Not A/c Payee' },
+    { value: 'Other Mode', label: 'Other Mode' },
+  ],
+
+  LOAN_DEPOSIT_YN: [
+    { value: 'Loan', label: 'Loan' },
+    { value: 'Deposit', label: 'Deposit' },
+  ],
 };
 
 export const BUSINESS_SECTORS: { value: string; label: string }[] = [
