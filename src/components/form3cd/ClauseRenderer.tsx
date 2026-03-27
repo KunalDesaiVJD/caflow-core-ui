@@ -358,7 +358,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
           <div className="flex items-center gap-4">
             {['Yes', 'No'].map(opt => (
               <label key={opt} className="flex items-center gap-2 cursor-pointer text-sm">
-                <input type="radio" name={`${definition.key || ''}_yesno`} checked={data._value === (opt === 'Yes')}
+                <input type="radio" name={`${'key' in definition ? definition.key : definition.clauseNo}_yesno_s`} checked={data._value === (opt === 'Yes')}
                   onChange={() => update('_value', opt === 'Yes')} disabled={isLocked} />
                 {opt}
               </label>
