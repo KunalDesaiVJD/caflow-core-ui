@@ -200,7 +200,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         last_updated_at: new Date().toISOString(),
       };
 
-      const { data, error } = await supabase.from("tds_filings").insert(payload).select("id").single();
+      const { data, error } = await supabase.from("tds_filings").insert(payload as any).select("id").single();
       if (error) throw error;
       setLastCreatedId(data.id);
       toast({ title: "Filing created successfully" });

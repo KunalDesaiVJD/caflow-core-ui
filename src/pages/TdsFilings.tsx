@@ -30,6 +30,8 @@ import {
   ShieldCheck, BarChart3, Settings,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
+import { TdsDashboard } from "@/components/tds/TdsDashboard";
+import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
 
 // ─── Constants ───
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
