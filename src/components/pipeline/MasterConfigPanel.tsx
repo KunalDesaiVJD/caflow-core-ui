@@ -451,9 +451,14 @@ export function MasterConfigPanel() {
         {/* ═══ Notes Templates ═══ */}
         <TabsContent value="notes_master" className="mt-4 space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-xs text-muted-foreground">
-              Fixed set of 19 notes matching Notes to Accounts (Notes 1, 2, 29–45). Edit template content below.
-            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={addNoteTemplate} className="gap-1">
+                <Plus className="w-4 h-4" /> Add Note
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Default 19 notes matching Notes to Accounts (Notes 1, 2, 29–45). You may add or remove notes.
+              </p>
+            </div>
             <Button onClick={saveNoteTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Note Templates
@@ -470,6 +475,22 @@ export function MasterConfigPanel() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, -1)} disabled={idx === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, 1)} disabled={idx === noteTemplates.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteNoteTemplate(idx)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <div className="flex-1" />
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr] gap-2 items-center">
+                    <Label className="text-xs">Number</Label>
+                    <Input type="number" value={t.note_number} onChange={e => updateNote(idx, "note_number", parseInt(e.target.value) || 0)} className="w-24 h-8 text-sm" />
+                  </div>
                   <div>
                     <Label className="text-xs">Note Title</Label>
                     <Input value={t.note_title || ""} onChange={e => updateNote(idx, "note_title", e.target.value)} className="mt-1 text-sm" />

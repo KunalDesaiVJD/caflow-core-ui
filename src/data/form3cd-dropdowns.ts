@@ -258,6 +258,12 @@ export const DROPDOWN_LIBRARY: Record<string, { value: string; label: string }[]
     { value: 'Y', label: 'Yes' }, { value: 'N', label: 'No' },
   ],
 
+  REFUND_DESCRIPTION_16B: [
+    'Proforma Credits', 'Drawbacks', 'Refund of Duty of Customs', 'Refund of Duty of Excise',
+    'Refund of Service Tax', 'Refund of Sales Tax', 'Refund of Value Added Tax',
+    'Refund of GST', 'Others'
+  ].map(v => ({ value: v, label: v })),
+
   FRINGE_BENEFIT_CATEGORIES: [
     'Motor Car', 'Telephone', 'Club', 'Travel', 'Medical',
     'Entertainment', 'Guest House', 'Festival', 'Other'

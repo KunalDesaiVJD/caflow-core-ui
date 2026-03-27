@@ -274,72 +274,95 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     ],
   },
 
-  // ═══════ CLAUSES 15–16 ═══════
+  // ═══════ CLAUSE 15 — Capital Asset Converted to Stock-in-Trade ═══════
   {
-    clauseNo: '15_16', displayOrder: 15, isActive: true,
-    title: 'Amounts debited to P&L',
-    heading: 'Amounts debited to profit and loss account — capital expenditure, personal expenditure',
+    clauseNo: '15', displayOrder: 15, isActive: true,
+    title: 'Capital asset converted to stock-in-trade',
+    heading: 'Give the following particulars of the capital asset converted into stock-in-trade:',
+    control: 'not_applicable_annexure',
+    notes: 'Vertical per-asset format with Add Another Asset button',
+    annexureColumns: [
+      { key: 'description', label: '(a) Description of capital asset', type: 'text', minWidth: 200 },
+      { key: 'date_of_acquisition', label: '(b) Date of acquisition', type: 'date', width: 140 },
+      { key: 'cost_of_acquisition', label: '(c) Cost of acquisition (₹)', type: 'numeric', width: 160 },
+      { key: 'amount_converted', label: '(d) Amount at which converted into stock-in-trade (₹)', type: 'numeric', width: 180 },
+    ],
+  },
+
+  // ═══════ CLAUSE 16 — Amounts Not Credited to P&L ═══════
+  {
+    clauseNo: '16', displayOrder: 16, isActive: true,
+    title: 'Amounts not credited to P&L',
+    heading: 'Amounts not credited to the profit and loss account, being —',
     control: 'composite',
     subClauses: [
       {
-        key: 'cl_15', heading: '15 — Amounts debited to P&L not allowable u/s 36',
+        key: 'cl_16a', heading: '16(a) — Items falling within the scope of section 28.',
         control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'section', label: 'Section', type: 'text', width: 120 },
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
+          { key: 'description', label: 'Description', type: 'text', minWidth: 200 },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
         ],
       },
       {
-        key: 'cl_16', heading: '16 — Amounts debited to P&L not allowable u/s 37',
+        key: 'cl_16b', heading: '16(b) — The proforma credits, drawbacks, refund of duty of customs or excise or service tax or refunds of sales tax or value added tax or Goods & Services Tax, where such credits, drawbacks or refunds are admitted as due by the authorities concerned.',
         control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'description', label: 'Description', type: 'dropdown', dropdownRef: 'REFUND_DESCRIPTION_16B', minWidth: 200 },
+          { key: 'other_description', label: 'Other Description', type: 'text', minWidth: 160, conditionalOn: 'description', conditionalOnValue: 'Others' },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+      {
+        key: 'cl_16c', heading: '16(c) — Escalation claims accepted during the previous year.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
+          { key: 'description', label: 'Description', type: 'text', minWidth: 200 },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+      {
+        key: 'cl_16d', heading: '16(d) — Any other item of income.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
+          { key: 'description', label: 'Description', type: 'text', minWidth: 200 },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+      {
+        key: 'cl_16e', heading: '16(e) — Capital receipt, if any.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'sr_no', label: 'S.N.', type: 'readonly', width: 50 },
+          { key: 'description', label: 'Description', type: 'text', minWidth: 200 },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
         ],
       },
     ],
   },
 
-  // ═══════ CLAUSE 17 ═══════
+  // ═══════ CLAUSE 17 — Land/Building Transfer Below Stamp Duty Value ═══════
   {
     clauseNo: '17', displayOrder: 17, isActive: true,
-    title: 'Capital / personal / political expenditure debited to P&L',
-    heading: 'Amounts debited to P&L being capital, personal or political expenditure',
-    control: 'composite',
-    subClauses: [
-      {
-        key: 'cl_17a', heading: '17(a) — Capital expenditure debited to P&L',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_17b', heading: '17(b) — Personal expenditure debited to P&L',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_17c', heading: '17(c) — Expenditure by way of advertisement in political party souvenir/brochure',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'party', label: 'Name of Political Party', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
-        ],
-      },
+    title: 'Land/building transfer below stamp duty value',
+    heading: 'Where any land or building or both is transferred during the previous year for a consideration less than value adopted or assessed or assessable by any authority of a State Government referred to in section 43CA or 50C, please furnish:',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'consideration', label: 'Consideration received or accrued (₹)', type: 'numeric', width: 160 },
+      { key: 'stamp_duty_value', label: 'Value adopted/assessed/assessable (₹)', type: 'numeric', width: 180 },
+      { key: 'proviso_applicable', label: 'Whether provisions of second proviso to sec 43CA or fourth proviso to sec 56(2)(x) applicable', type: 'yes_no_dropdown', width: 200 },
+      { key: 'property_details', label: 'Details of property', type: 'text', minWidth: 200 },
     ],
   },
 
-  // ═══════ CLAUSE 18 ═══════
+  // ═══════ CLAUSE 18 — Depreciation Allowable — IT Act ═══════
   {
     clauseNo: '18', displayOrder: 18, isActive: true,
     title: 'Depreciation allowable',
-    heading: 'Particulars of depreciation allowable as per the Income-tax Act, 1961',
+    heading: 'Particulars of depreciation allowable as per the Income-tax Act, 1961 in respect of each asset or block of assets, as the case may be, in the following form.',
     control: 'not_applicable_annexure',
     annexureColumns: [
       { key: 'block', label: 'Block of Assets', type: 'text', minWidth: 160 },
@@ -356,134 +379,346 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     notes: 'Full rate on opening WDV + additions >180 days. Half rate on additions ≤180 days.',
   },
 
-  // ═══════ CLAUSE 19 ═══════
+  // ═══════ CLAUSE 19 — Amounts Admissible Under Specified Sections ═══════
   {
     clauseNo: '19', displayOrder: 19, isActive: true,
-    title: 'Amounts not deductible u/s 40(a)',
-    heading: 'Amounts inadmissible under section 40(a)',
+    title: 'Amounts admissible under specified sections',
+    heading: 'Amount admissible under sections:- (a)33AB (b)33ABA (c)35(1)(i) (d)35(1)(ii) (e)35(1)(iia) (f)35(1)(iii) (g)35(1)(iv) (h)35(2AA) (i)35(2AB) (j)35ABB (k)35ABA (l)35AD (m)35CCA (n)35CCC (s)35CCD (t)35D (u)35DD (v)35DDA (x)35E (y) any other relevant section',
     control: 'not_applicable_annexure',
     annexureColumns: [
-      { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_40A', width: 140 },
-      { key: 'nature', label: 'Nature of Payment', type: 'text' },
-      { key: 'expenditure', label: 'Amount of Expenditure (₹)', type: 'numeric', width: 140 },
-      { key: 'disallowed', label: 'Amount Disallowed (₹)', type: 'numeric', width: 140 },
-      { key: 'remarks', label: 'Remarks', type: 'text', width: 160 },
+      { key: 'sr_no', label: 'SN', type: 'readonly', width: 50 },
+      { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_19_ADMISSIBLE', minWidth: 200 },
+      { key: 'amount_debited', label: 'Amount debited to P&L (₹)', type: 'numeric', width: 150 },
+      { key: 'amount_admissible', label: 'Amounts admissible as per IT Act 1961 (₹)', type: 'numeric', width: 180 },
+      { key: 'other_section', label: 'Other Section', type: 'text', minWidth: 140, conditionalOn: 'section', conditionalOnValue: 'Any other relevant section' },
     ],
   },
 
-  // ═══════ CLAUSE 20 ═══════
+  // ═══════ CLAUSE 20(a) — Bonus/Commission u/s 36(1)(ii) ═══════
   {
-    clauseNo: '20', displayOrder: 20, isActive: true,
-    title: 'Amounts inadmissible u/s 40A',
-    heading: 'Amounts inadmissible under section 40A',
-    control: 'composite',
-    subClauses: [
-      {
-        key: 'cl_20a', heading: '20(a) — Amounts inadmissible u/s 40A',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount_paid', label: 'Amount Paid (₹)', type: 'numeric', width: 130 },
-          { key: 'amount_disallowable', label: 'Amount Disallowable (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_20b', heading: '20(b) — Payments to related parties u/s 40A(2)(a)',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'name', label: 'Name of Person', type: 'text' },
-          { key: 'relationship', label: 'Relationship', type: 'text', width: 120 },
-          { key: 'nature', label: 'Nature of Payment', type: 'text' },
-          { key: 'amount_paid', label: 'Amount Paid (₹)', type: 'numeric', width: 120 },
-          { key: 'market_value', label: 'Market Value (₹)', type: 'numeric', width: 120 },
-          { key: 'amount_disallowable', label: 'Amount Disallowable (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_20c', heading: '20(c) — Cash payments exceeding ₹10,000 u/s 40A(3)',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'name_address', label: 'Name & Address of Payee', type: 'text' },
-          { key: 'date', label: 'Date of Payment', type: 'date', width: 120 },
-          { key: 'nature', label: 'Nature of Payment', type: 'text' },
-          { key: 'amount', label: 'Amount Paid in Cash (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_20d', heading: '20(d) — Mark-to-market loss or other anticipated loss u/s 40A(13)',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars of Loss', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
-        ],
-      },
+    clauseNo: '20a', displayOrder: 20, isActive: true,
+    title: 'Bonus/commission u/s 36(1)(ii)',
+    heading: 'Any sum paid to an employee as bonus or commission for services rendered, where such sum was otherwise payable to him as profits or dividend. [Section 36(1)(ii)]',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'description', label: 'Description', type: 'text', minWidth: 250 },
+      { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
     ],
   },
 
-  // ═══════ CLAUSE 21 ═══════
+  // ═══════ CLAUSE 20(b) — Employee Fund Contributions u/s 36(1)(va) ═══════
+  {
+    clauseNo: '20b', displayOrder: 20.5, isActive: true,
+    title: 'Employee fund contributions u/s 36(1)(va)',
+    heading: 'Details of contributions received from employees for various funds as referred to in section 36(1)(va).',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'sr_no', label: 'SN', type: 'readonly', width: 50 },
+      { key: 'fund', label: 'Nature of Fund', type: 'dropdown', dropdownRef: 'NATURE_OF_FUND', minWidth: 180 },
+      { key: 'employee_deduction', label: 'Employees\' Deduction (₹)', type: 'numeric', width: 140 },
+      { key: 'employer_contribution', label: 'Employers\' Contribution (₹)', type: 'numeric', width: 150 },
+      { key: 'due_date', label: 'Due Date of Payment', type: 'date', width: 130 },
+      { key: 'actual_date', label: 'Actual Date of Payment', type: 'date', width: 140 },
+      { key: 'disallowance', label: 'Disallowance (₹)', type: 'auto_calc', width: 130, formula: 'actual_date > due_date ? employee_deduction : 0' },
+    ],
+    notes: 'Disallowance auto-calculates: if Actual Date > Due Date, equals Employee Deduction; otherwise 0.',
+  },
+
+  // ═══════ CLAUSE 21 — COMPLETE REBUILD (9 sub-clauses) ═══════
   {
     clauseNo: '21', displayOrder: 21, isActive: true,
-    title: 'Amounts allowable on payment basis',
-    heading: 'Amounts allowable on payment basis under various sections',
+    title: 'Amounts debited to P&L — various disallowances',
+    heading: 'Please furnish the details of amounts debited to the profit and loss account, being in the nature of capital, personal, advertisement expenditure etc.',
     control: 'composite',
     subClauses: [
+      // ── 21(a) — 10 Independent Expenditure Line Items ──
       {
-        key: 'cl_21_applicable', heading: 'Amounts allowable on payment basis',
-        control: 'not_applicable_annexure',
-      },
-      {
-        key: 'cl_21a', heading: '21(a) — Amounts allowable on actual payment u/s 43B',
-        control: 'composite', dependsOn: 'cl_21_applicable',
+        key: 'cl_21a', heading: '21(a) — Amounts debited to P&L being capital, personal, advertisement expenditure etc.',
+        control: 'composite',
         subClauses: [
-          ...(['tax_duty|Tax, duty, cess or fee',
-            'employer_pf|Employer contribution to PF/ESI/Gratuity/superannuation fund',
-            'bonus_comm|Bonus or commission to employees',
-            'bank_interest|Interest on loan from public financial institution / scheduled bank / NBFC',
-            'leave_salary|Leave encashment / leave salary',
-            'railway|Sum payable to Railways for use of railway assets',
-            'msme_43bh|Sum payable to MSME u/s 43B(h)'
-          ].map((item, i) => {
-            const [key, label] = item.split('|');
-            return {
-              key: `cl_21a_${key}`,
-              heading: `(${['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'][i]}) ${label}`,
-              control: 'structured_table' as const,
-              annexureColumns: [
-                { key: 'payee', label: 'Payee Name / Details', type: 'text' as const },
-                { key: 'amount_due', label: 'Amount Due (₹)', type: 'numeric' as const, width: 120 },
-                { key: 'amount_paid', label: 'Amount Paid (₹)', type: 'numeric' as const, width: 120 },
-                { key: 'date_payment', label: 'Date of Payment', type: 'date' as const, width: 120 },
-                { key: 'delayed', label: 'Delayed? (Y/N)', type: 'yes_no_dropdown' as const, width: 90 },
-              ],
-            };
+          ...[
+            'Capital expenditure',
+            'Personal expenditure',
+            'Advertisement expenditure in any souvenir, brochure, tract, pamphlet or the like published by a political party',
+            'Expenditure incurred at clubs being entrance fees and subscriptions',
+            'Expenditure incurred at clubs being cost for club services and facilities used',
+            'Expenditure for any purpose which is an offence or is prohibited by law or expenditure by way of penalty or fine for violation of any law (enacted in India or outside India)',
+            'Expenditure by way of other penalty or fine not covered above',
+            'Expenditure incurred to compound an offence under any law for the time being in force, in India or outside India',
+            'Expenditure incurred to provide any benefit or perquisite, in whatever form, to a person, whether or not carrying on a business or exercising a profession, and acceptance of such benefit or perquisite by such person is in violation of any law or rule or regulation or guideline, as the case may be, for the time being in force, governing the conduct of such person',
+            'Expenditure incurred to settle proceedings initiated in relation to contravention under such law as notified by the Central Government in the Official Gazette in this behalf',
+          ].map((label, i) => ({
+            key: `cl_21a_${i + 1}`,
+            heading: `(${i + 1}) ${label}`,
+            control: 'not_applicable_annexure' as const,
+            annexureColumns: [
+              { key: 'sr_no', label: 'S.N.', type: 'readonly' as const, width: 50 },
+              { key: 'particulars', label: 'Particulars', type: 'text' as const, minWidth: 200 },
+              { key: 'amount', label: 'Amount in Rs.', type: 'numeric' as const, width: 140 },
+            ],
           })),
         ],
       },
+
+      // ── 21(b) — Sec 40(a) Inadmissible Payments ──
       {
-        key: 'cl_21b', heading: '21(b) — Employee contribution to PF/ESI u/s 36(1)(va)',
-        control: 'structured_table',
-        annexureColumns: [
-          { key: 'fund', label: 'Fund Name', type: 'text' },
-          { key: 'amount_deducted', label: 'Amount Deducted from Salary (₹)', type: 'numeric', width: 160 },
-          { key: 'due_date', label: 'Due Date for Deposit', type: 'date', width: 120 },
-          { key: 'actual_date', label: 'Date Actually Deposited', type: 'date', width: 130 },
-          { key: 'delayed', label: 'Delayed? (Y/N)', type: 'yes_no_dropdown', width: 90 },
+        key: 'cl_21b', heading: '21(b) — Amounts inadmissible under section 40(a)',
+        control: 'composite',
+        subClauses: [
+          // (i)(A) — Non-resident tax NOT deducted
+          {
+            key: 'cl_21b_iA', heading: '(i)(A) — Details of payment to non-resident on which tax is NOT deducted',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+            ],
+          },
+          // (i)(B) — Non-resident tax deducted but NOT paid
+          {
+            key: 'cl_21b_iB', heading: '(i)(B) — Details of payment to non-resident — tax deducted but NOT paid u/s 200(1)',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+              { key: 'tax_deducted', label: 'Amount of Tax Deducted (₹)', type: 'numeric' as const, width: 140 },
+            ],
+          },
+          // (ii)(A)
+          {
+            key: 'cl_21b_iiA', heading: '(ii)(A) — Details of payment referred to in 40(a)(ia) — tax NOT deducted',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+            ],
+          },
+          // (ii)(B)
+          {
+            key: 'cl_21b_iiB', heading: '(ii)(B) — Details of payment referred to in 40(a)(ia) — tax deducted NOT paid before 139(1) due date',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+            ],
+          },
+          // (iii)(A)
+          {
+            key: 'cl_21b_iiiA', heading: '(iii)(A) — Details of payment referred to in 40(a)(ib) — levy NOT deducted',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+            ],
+          },
+          // (iii)(B)
+          {
+            key: 'cl_21b_iiiB', heading: '(iii)(B) — Details of payment referred to in 40(a)(ib) — levy deducted NOT paid',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+              { key: 'tax_deducted', label: 'Amount of Tax Deducted (₹)', type: 'numeric' as const, width: 140 },
+              { key: 'tax_deposited', label: 'Amount deposited, if any (₹)', type: 'numeric' as const, width: 140 },
+            ],
+          },
+          // (iv) — Single field
+          { key: 'cl_21b_iv', heading: '(iv) — Fringe benefit tax under sub-clause (ic)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (v) — Single field
+          { key: 'cl_21b_v', heading: '(v) — Wealth tax under sub-clause (iia)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (vi) — Single field
+          { key: 'cl_21b_vi', heading: '(vi) — Royalty, license fee, service fee etc. under sub-clause (iib)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (vii) — Salary payable
+          {
+            key: 'cl_21b_vii', heading: '(vii) — Salary payable outside India / to non-resident without TDS — sub-clause (iii)',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
+              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
+              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
+              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
+              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
+              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
+              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
+            ],
+          },
+          // (viii) — Single field
+          { key: 'cl_21b_viii', heading: '(viii) — Payment to PF/other fund etc. under sub-clause (iv)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (ix) — Single field
+          { key: 'cl_21b_ix', heading: '(ix) — Tax paid by employer for perquisites under sub-clause (v)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
         ],
       },
+
+      // ── 21(c) — Sec 40(b) Partner Remuneration ──
+      {
+        key: 'cl_21c', heading: '21(c) — Amount debited to profit and loss account being, interest, salary, bonus, commission or remuneration inadmissible under section 40(b)/40(ba) and computation thereof.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'sr_no', label: 'Sr. No.', type: 'readonly', width: 50 },
+          { key: 'partner_name', label: 'Name of Partner/Member', type: 'text', minWidth: 180 },
+          { key: 'interest', label: 'Interest (₹)', type: 'numeric', width: 120 },
+          { key: 'salary', label: 'Salary (₹)', type: 'numeric', width: 120 },
+          { key: 'total', label: 'Total (₹)', type: 'auto_calc', width: 120, formula: 'interest + salary' },
+        ],
+        showTotals: true,
+        totalColumns: ['interest', 'salary', 'total'],
+        noAnnexure: false,
+      },
+
+      // ── 21(d) — Sec 40A(3) Cash Payments ──
+      {
+        key: 'cl_21d', heading: '21(d) — Sec 40A(3) Cash Payments',
+        control: 'composite',
+        subClauses: [
+          {
+            key: 'cl_21d_A', heading: '21(d)(A) — Whether expenditure covered under section 40A(3) read with rule 6DD were made by account payee cheque or bank draft? If not, furnish details.',
+            control: 'yes_no',
+            subClauses: [{
+              key: 'cl_21d_A_details', heading: 'Details of cash payments',
+              control: 'structured_table', dependsOn: 'cl_21d_A', dependsOnValue: false,
+              annexureColumns: [
+                { key: 'date', label: 'Date of Payment', type: 'date' as const, width: 110 },
+                { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+                { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 120 },
+                { key: 'payee_name', label: 'Name of Payee', type: 'text' as const, minWidth: 130 },
+                { key: 'pan', label: 'PAN of payee (if available)', type: 'pan' as const, width: 120 },
+                { key: 'aadhaar', label: 'Aadhaar of payee (if available)', type: 'text' as const, width: 130 },
+              ],
+            }],
+          },
+          {
+            key: 'cl_21d_B', heading: '21(d)(B) — Whether expenditure covered under section 40A(3A) read with rule 6DD were made by account payee cheque or bank draft? If not, furnish details.',
+            control: 'yes_no',
+            subClauses: [{
+              key: 'cl_21d_B_details', heading: 'Details of deemed profits & gains',
+              control: 'structured_table', dependsOn: 'cl_21d_B', dependsOnValue: false,
+              annexureColumns: [
+                { key: 'date', label: 'Date of Payment', type: 'date' as const, width: 110 },
+                { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+                { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 120 },
+                { key: 'payee_name', label: 'Name of Payee', type: 'text' as const, minWidth: 130 },
+                { key: 'pan', label: 'PAN of payee (if available)', type: 'pan' as const, width: 120 },
+                { key: 'aadhaar', label: 'Aadhaar of payee (if available)', type: 'text' as const, width: 130 },
+              ],
+            }],
+          },
+        ],
+      },
+
+      // ── 21(e) — Gratuity provision ──
+      { key: 'cl_21e', heading: '21(e) — Provision for payment of gratuity not allowable under section 40A(7).', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+
+      // ── 21(f) — Employer payment u/s 40A(9) ──
+      { key: 'cl_21f', heading: '21(f) — Any sum paid by the assessee as an employer not allowable under section 40A(9).', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+
+      // ── 21(g) — Contingent liabilities ──
+      {
+        key: 'cl_21g', heading: '21(g) — Particulars of any liability of a contingent nature.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'nature', label: 'Nature of Liability', type: 'text', minWidth: 250 },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+
+      // ── 21(h) — Sec 14A inadmissible deduction ──
+      {
+        key: 'cl_21h', heading: '21(h) — Amount of deduction inadmissible in terms of section 14A in respect of expenditure incurred in relation to income which does not form part of total income.',
+        control: 'not_applicable_annexure',
+        annexureColumns: [
+          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 250 },
+          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        ],
+      },
+
+      // ── 21(i) — Sec 36(1)(iii) proviso ──
+      { key: 'cl_21i', heading: '21(i) — Amount inadmissible under the proviso to section 36(1)(iii).', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
     ],
   },
 
-  // ═══════ CLAUSE 22 ═══════
+  // ═══════ CLAUSE 22 — MSME Interest Inadmissibility ═══════
   {
     clauseNo: '22', displayOrder: 22, isActive: true,
-    title: 'Personal expenditure',
-    heading: 'Amounts debited to P&L being expenditure of personal nature',
-    control: 'structured_table',
-    showTotals: true, totalColumns: ['amount'],
-    annexureColumns: [
-      { key: 'sr_no', label: 'Sr No', type: 'text', width: 60 },
-      { key: 'particulars', label: 'Particulars of Personal Expenditure', type: 'text' },
-      { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+    title: 'MSME interest inadmissible u/s 23 MSMED Act',
+    heading: 'Amount of interest inadmissible under section 23 of the Micro, Small and Medium Enterprises Development Act, 2006.',
+    control: 'composite',
+    subClauses: [
+      { key: 'cl_22_i', heading: '(i) Amount of interest inadmissible under section 23 of the MSMED Act, 2006', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+      { key: 'cl_22_ii', heading: '(ii) Total amount required to be paid to a micro or small enterprise as referred to in section 15 of the MSMED Act, during the previous year', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+      { key: 'cl_22_iii_a', heading: '(iii)(a) Of amount in (ii) above — Paid up to time given under section 15 of the MSMED Act', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+      { key: 'cl_22_iii_b', heading: '(iii)(b) Of amount in (ii) above — Not paid up to time given under section 15 of the MSMED Act and inadmissible for the previous year', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
     ],
   },
 
