@@ -294,6 +294,25 @@ export const DROPDOWN_LIBRARY: Record<string, { value: string; label: string }[]
     { value: 'Loan', label: 'Loan' },
     { value: 'Deposit', label: 'Deposit' },
   ],
+
+  INCOME_EXPENDITURE_TYPE_27B: [
+    { value: 'Income Credited', label: 'Income Credited' },
+    { value: 'Expenditure Debited', label: 'Expenditure Debited' },
+  ],
+
+  FY_YEARS: (() => {
+    const years: { value: string; label: string }[] = [];
+    for (let y = 2013; y <= 2030; y++) {
+      const v = `${y}-${String(y + 1).slice(2)}`;
+      years.push({ value: v, label: v });
+    }
+    return years;
+  })(),
+
+  DEMAND_REFUND_TYPE: [
+    { value: 'Demand raised', label: 'Demand raised' },
+    { value: 'Refund received', label: 'Refund received' },
+  ],
 };
 
 export const BUSINESS_SECTORS: { value: string; label: string }[] = [
