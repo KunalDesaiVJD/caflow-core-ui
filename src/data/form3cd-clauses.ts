@@ -191,16 +191,20 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     heading: 'Whether there had been any change in the method of accounting employed vis-a-vis the method employed in the immediately preceding previous year.',
     control: 'yes_no',
     defaultValue: 'No change in method',
-    subClauses: [
-      {
-        key: 'cl_13c', heading: '13(c) — Details of such change and effect on profit or loss',
-        control: 'structured_table',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 220 },
-          { key: 'increase', label: 'Increase in Profit (Rs.)', type: 'numeric', width: 160 },
-          { key: 'decrease', label: 'Decrease in Profit (Rs.)', type: 'numeric', width: 160 },
-        ],
-      },
+  },
+
+  // ═══════ CLAUSE 13(c) — Details of change (separate, depends on 13b=Yes) ═══════
+  {
+    clauseNo: '13c', displayOrder: 13.6, isActive: true,
+    title: 'Details of such change and effect on profit or loss',
+    heading: '13(c) — Details of such change and effect on profit or loss',
+    control: 'structured_table',
+    dependsOn: '13b',
+    dependsOnValue: true,
+    annexureColumns: [
+      { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 220 },
+      { key: 'increase', label: 'Increase in Profit (Rs.)', type: 'numeric', width: 160 },
+      { key: 'decrease', label: 'Decrease in Profit (Rs.)', type: 'numeric', width: 160 },
     ],
   },
 
@@ -210,17 +214,21 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     title: 'ICDS adjustment required',
     heading: 'Whether any adjustment is required to be made to the profits or loss for complying with the provisions of income computation and disclosure standards (ICDS) notified under section 145(2).',
     control: 'yes_no',
-    subClauses: [
-      {
-        key: 'cl_13e', heading: 'Details of ICDS adjustments',
-        control: 'structured_table',
-        annexureColumns: [
-          { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
-          { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
-          { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
-          { key: 'net_effect', label: 'Net Effect (₹)', type: 'auto_calc', width: 130, formula: 'increase - decrease' },
-        ],
-      },
+  },
+
+  // ═══════ CLAUSE 13(e) — Details of ICDS adjustments (separate, depends on 13d=Yes) ═══════
+  {
+    clauseNo: '13e', displayOrder: 13.75, isActive: true,
+    title: 'Details of ICDS adjustments',
+    heading: 'Details of ICDS adjustments',
+    control: 'structured_table',
+    dependsOn: '13d',
+    dependsOnValue: true,
+    annexureColumns: [
+      { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
+      { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },
+      { key: 'decrease', label: 'Decrease in Profit (₹)', type: 'numeric', width: 140 },
+      { key: 'net_effect', label: 'Net Effect (₹)', type: 'auto_calc', width: 130, formula: 'increase - decrease' },
     ],
   },
 

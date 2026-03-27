@@ -127,6 +127,8 @@ interface Client {
   pan: string | null;
   gstin: string[] | null;
   entity_type: string | null;
+  address: string | null;
+  registered_office: string | null;
 }
 
 interface Firm {
@@ -317,7 +319,7 @@ const NewInvoice = () => {
   // Fetch clients
   useEffect(() => {
     (async () => {
-      let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type").eq("is_draft", false).is("deleted_at", null).order("name");
+      let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
@@ -411,6 +413,11 @@ const NewInvoice = () => {
     if (client) {
       setToName(client.name || "");
       setToGstin(client.gstin?.[0] || "");
+      // Auto-fetch address from client management
+      const addrParts = [client.address, client.registered_office].filter(Boolean);
+      if (addrParts.length > 0) {
+        setToAddress(addrParts.join(", "));
+      }
     }
     // Check audit classification
     (async () => {
@@ -863,9 +870,9 @@ const NewInvoice = () => {
         <strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}
       </div>
 
-      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd">
+      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd;page-break-inside:avoid;overflow:hidden">
         <strong>Remarks / Terms & Conditions:</strong><br/>
-        <span style="white-space:pre-line">${remarksConditions}</span>
+        <span style="white-space:pre-line;word-wrap:break-word;overflow-wrap:break-word">${remarksConditions}</span>
       </div>` : ""}
 
       <div style="display:flex;justify-content:space-between;margin-top:16px">

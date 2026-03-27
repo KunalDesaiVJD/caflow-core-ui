@@ -244,7 +244,11 @@ export const StepServiceBilling = ({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value={cat.frequency}>{cat.frequency}</SelectItem>
+                          {["monthly", "quarterly", "half_yearly", "annual", "event_based", "package"].map((f) => (
+                            <SelectItem key={f} value={f}>
+                              {f === "half_yearly" ? "Half Yearly" : f === "event_based" ? "Event Based" : f.charAt(0).toUpperCase() + f.slice(1)}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
