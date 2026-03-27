@@ -708,4 +708,52 @@ export const BUSINESS_SUBSECTORS: Record<string, { value: string; label: string 
     { value: "23013", label: "Other co-operative society u/s 80P(2)(f) deriving income from Interest on securities/House property" },
     { value: "23014", label: "Federal milk co-operative society" },
   ],
+
+  SEC_24_DEEMED: [
+    { value: '32AC', label: '32AC' },
+    { value: '32AD', label: '32AD' },
+    { value: '33AB', label: '33AB' },
+    { value: '33ABA', label: '33ABA' },
+    { value: '33AC', label: '33AC' },
+  ],
+
+  SEC_25: [
+    { value: '41(1)', label: '41(1)' },
+    { value: '41(2)', label: '41(2)' },
+    { value: '41(3)', label: '41(3)' },
+    { value: '41(4)', label: '41(4)' },
+    { value: '41(4A)', label: '41(4A)' },
+    { value: '41(5)', label: '41(5)' },
+    { value: 'other', label: 'Other' },
+  ],
+
+  SEC_43B_PART_A: [
+    { value: '43B(a)', label: '43B(a) — Tax, duty, cess or fee' },
+    { value: '43B(b)', label: '43B(b) — Employer contribution to PF/superannuation/gratuity' },
+    { value: '43B(c)', label: '43B(c) — Bonus or commission to employees' },
+    { value: '43B(d)', label: '43B(d) — Interest on loan from public financial institution/state financial corporation' },
+    { value: '43B(da)', label: '43B(da) — Interest on loan/advance from scheduled bank/co-operative bank (other than primary agricultural credit society)' },
+    { value: '43B(e)', label: '43B(e) — Leave encashment' },
+    { value: '43B(f)', label: '43B(f) — Indian Railways for use of assets' },
+    { value: '43B(g)', label: '43B(g) — Expenditure on CSR under section 135 of Companies Act 2013' },
+    { value: '43B(h)', label: '43B(h) — Sum payable to micro or small enterprise' },
+    { value: 'other', label: 'Other' },
+  ],
+
+  SEC_43B_PART_B: [
+    { value: '43B(a)', label: '43B(a) — Tax, duty, cess or fee' },
+    { value: '43B(b)', label: '43B(b) — Employer contribution to PF/superannuation/gratuity' },
+    { value: '43B(c)', label: '43B(c) — Bonus or commission to employees' },
+    { value: '43B(d)', label: '43B(d) — Interest on loan from public financial institution/state financial corporation' },
+    { value: '43B(da)', label: '43B(da) — Interest on loan/advance from scheduled bank/co-operative bank' },
+    { value: '43B(e)', label: '43B(e) — Leave encashment' },
+    { value: '43B(f)', label: '43B(f) — Indian Railways for use of assets' },
+    { value: '43B(g)', label: '43B(g) — Expenditure on CSR under section 135 of Companies Act 2013' },
+    { value: 'other', label: 'Other' },
+  ],
+
+  INCOME_EXPENDITURE_TYPE_27B: [
+    { value: 'income_credited', label: 'Income Credited' },
+    { value: 'expenditure_debited', label: 'Expenditure Debited' },
+  ],
 };

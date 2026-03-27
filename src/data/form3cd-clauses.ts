@@ -729,73 +729,101 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     heading: 'Particulars of payments made to persons specified under section 40A(2)(b)',
     control: 'not_applicable_annexure',
     annexureColumns: [
-      { key: 'name', label: 'Name', type: 'text' },
-      { key: 'pan', label: 'PAN', type: 'pan', width: 120 },
+      { key: 'name', label: 'Name of Payee/s', type: 'text' },
       { key: 'relationship', label: 'Relationship', type: 'text', width: 120 },
-      { key: 'nature', label: 'Nature of Payment', type: 'text' },
-      { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 130 },
+      { key: 'nature', label: 'Nature of Payments', type: 'text' },
+      { key: 'amount', label: 'Amount in Rs.', type: 'numeric', width: 130 },
     ],
   },
 
-  // ═══════ CLAUSES 24–25 ═══════
+  // ═══════ CLAUSE 24 ═══════
   {
-    clauseNo: '24_25', displayOrder: 24, isActive: true,
-    title: 'Deemed profits / chargeable amounts',
-    heading: 'Amounts deemed as profits / Any amount chargeable to tax',
-    control: 'composite',
-    subClauses: [
-      {
-        key: 'cl_24', heading: 'Clause 24 — Amounts deemed as profits u/s 33AB/33ABA/33AC',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'section', label: 'Section', type: 'text', width: 120 },
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
-        ],
-      },
-      {
-        key: 'cl_25', heading: 'Clause 25 — Any amount of profit chargeable to tax under the Act',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'section', label: 'Section', type: 'dropdown', width: 140,
-            options: ['41', '32AC', '32AD', '33AB', '33ABA', '35ABB', '40A(3A)', '43CA', '43D', 'Other'].map(v => ({ value: v, label: v })) },
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount', label: 'Amount Chargeable to Tax (₹)', type: 'numeric', width: 160 },
-        ],
-      },
+    clauseNo: '24', displayOrder: 24, isActive: true,
+    title: 'Deemed profits u/s 32AC/32AD/33AB/33AC/33ABA',
+    heading: 'Amounts deemed to be profits and gains under section 32AC or 32AD or 33AB or 33AC or 33ABA.',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'section', label: 'Section', type: 'dropdown', width: 140, dropdownRef: 'SEC_24_DEEMED' },
+      { key: 'description', label: 'Description', type: 'text' },
+      { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+    ],
+  },
+
+  // ═══════ CLAUSE 25 ═══════
+  {
+    clauseNo: '25', displayOrder: 25, isActive: true,
+    title: 'Profits chargeable u/s 41',
+    heading: 'Any amounts of profits chargeable to tax under section 41 and computation thereof.',
+    control: 'not_applicable_annexure',
+    annexureColumns: [
+      { key: 'name', label: 'Name of Person', type: 'text' },
+      { key: 'amount_credited', label: '(a) Amount of Income credited to P&L', type: 'numeric', width: 160 },
+      { key: 'amount_not_credited', label: '(b) Amount of Income not credited to P&L', type: 'numeric', width: 160 },
+      { key: 'total_income', label: '(c) Total Amount of Income', type: 'auto_calc', width: 150, formula: 'amount_credited + amount_not_credited' },
+      { key: 'section', label: 'Section', type: 'dropdown', width: 140, dropdownRef: 'SEC_25' },
+      { key: 'description', label: 'Description of Transaction', type: 'text' },
+      { key: 'computation', label: 'Computation, if any', type: 'text' },
     ],
   },
 
   // ═══════ CLAUSE 26 ═══════
   {
     clauseNo: '26', displayOrder: 26, isActive: true,
-    title: 'Loss/expenditure disallowable',
-    heading: 'Any amount of loss or expenditure inadmissible',
+    title: 'Amounts referred to in section 43B',
+    heading: 'In respect of any sum referred to in section 43B, the liability for which:-',
     control: 'composite',
     subClauses: [
-      { key: 'cl_26ai', heading: '26(a)(i) — Penalty / Fine for violation of law', control: 'not_applicable_annexure',
+      {
+        key: 'cl_26_partA_heading', heading: 'PART A — Pre-existed on the first day of the previous year but was not allowable in the assessment of any preceding previous year and was:-',
+        control: 'heading_only',
+      },
+      {
+        key: 'cl_26iAa', heading: '26(A)(a) — Paid during the previous year',
+        control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'section', label: 'Section', type: 'dropdown', width: 200, dropdownRef: 'SEC_43B_PART_A' },
+          { key: 'nature', label: 'Nature of Liability', type: 'text' },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'date_of_payment', label: 'Date of Payment', type: 'date', width: 130 },
         ],
       },
-      { key: 'cl_26aii', heading: '26(a)(ii) — Penalty / Fine for violation of any enactment', control: 'not_applicable_annexure',
+      {
+        key: 'cl_26iAb', heading: '26(A)(b) — Not paid during the previous year',
+        control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'section', label: 'Section', type: 'dropdown', width: 200, dropdownRef: 'SEC_43B_PART_A' },
+          { key: 'nature', label: 'Nature of Liability', type: 'text' },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'date_of_payment', label: 'Date of Payment', type: 'date', width: 130 },
         ],
       },
-      { key: 'cl_26aiii', heading: '26(a)(iii) — Amount disallowed u/s 37(1)', control: 'not_applicable_annexure',
+      {
+        key: 'cl_26_partB_heading', heading: 'PART B — Was incurred in the previous year and for clauses other than clause (h) of section 43B was:-',
+        control: 'heading_only',
+      },
+      {
+        key: 'cl_26iBa', heading: '26(B)(a) — Paid on or before the due date for furnishing the return of income u/s 139(1)',
+        control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'section', label: 'Section', type: 'dropdown', width: 200, dropdownRef: 'SEC_43B_PART_B' },
+          { key: 'nature', label: 'Nature of Liability', type: 'text' },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'date_of_payment', label: 'Date of Payment', type: 'date', width: 130 },
         ],
       },
-      { key: 'cl_26aiv', heading: '26(a)(iv) — Any expenditure by way of contribution to political party', control: 'not_applicable_annexure',
+      {
+        key: 'cl_26iBb', heading: '26(B)(b) — Not paid on or before the aforesaid date',
+        control: 'not_applicable_annexure',
         annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
+          { key: 'section', label: 'Section', type: 'dropdown', width: 200, dropdownRef: 'SEC_43B_PART_B' },
+          { key: 'nature', label: 'Nature of Liability', type: 'text' },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'date_of_payment', label: 'Date of Payment', type: 'date', width: 130 },
         ],
+      },
+      {
+        key: 'cl_26_footer', heading: '* State whether sales tax, goods & services tax, customs duty, excise duty or any other indirect tax, levy, cess, impost etc. is passed through the profit and loss account.',
+        control: 'yes_no_text',
       },
     ],
   },
@@ -803,25 +831,28 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
   // ═══════ CLAUSE 27 ═══════
   {
     clauseNo: '27', displayOrder: 27, isActive: true,
-    title: 'Deemed income / prior period items',
-    heading: 'Amounts received or deemed income / Prior period items / Unexplained cash credits',
+    title: 'CENVAT/ITC / Prior period items',
+    heading: 'CENVAT/ITC details / Prior period items',
     control: 'composite',
     subClauses: [
       {
-        key: 'cl_27a', heading: '27(a) — Amounts not credited to P&L but assessable',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+        key: 'cl_27a', heading: '27(a) — Amount of Central Value Added Tax Credits / Input Tax Credit (ITC) availed of or utilised during the previous year and its treatment in profit and loss account and treatment of outstanding Central Value Added Tax Credits / Input Tax Credit (ITC) in accounts.',
+        control: 'yes_no_structured',
+        structuredRows: [
+          { label: 'Opening Balance', key: 'opening_balance' },
+          { label: 'Credit Availed', key: 'credit_availed' },
+          { label: 'Credit Utilized', key: 'credit_utilized' },
+          { label: 'Closing/Outstanding Balance', key: 'closing_balance' },
         ],
       },
       {
-        key: 'cl_27b', heading: '27(b) — Prior period items credited to P&L',
+        key: 'cl_27b', heading: '27(b) — Particulars of income or expenditure of prior period credited or debited to the profit and loss account.',
         control: 'not_applicable_annexure',
         annexureColumns: [
+          { key: 'type', label: 'Type', type: 'dropdown', width: 160, dropdownRef: 'INCOME_EXPENDITURE_TYPE_27B' },
           { key: 'particulars', label: 'Particulars', type: 'text' },
-          { key: 'year', label: 'Year to which it relates', type: 'text', width: 120 },
           { key: 'amount', label: 'Amount (₹)', type: 'numeric', width: 140 },
+          { key: 'year', label: 'Year (yyyy-yy)', type: 'text', width: 120 },
         ],
       },
     ],
