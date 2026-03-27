@@ -166,24 +166,20 @@ export function MasterConfigPanel() {
     caroMerged.sort((a, b) => a.clause_number - b.clause_number);
     setCaroTemplates(caroMerged);
 
-    // Notes templates — merge with defaults
+    // Notes templates — merge with NOTES_DEFAULTS (only the 19 valid notes)
     const notesSaved = (notesRes.data || []) as any[];
-    if (notesSaved.length > 0) {
-      setNoteTemplates(notesSaved.map((t: any) => ({
-        id: t.id,
-        note_number: t.note_number,
-        note_title: t.note_title,
-        template_content: t.template_content || "",
-        is_mandatory: t.is_mandatory,
-      })));
-    } else {
-      // Seed from defaults
-      setNoteTemplates(NOTES_DEFAULTS.map(d => ({
+    const validNoteNums = new Set(NOTES_DEFAULTS.map(d => d.num));
+    const notesMerged = NOTES_DEFAULTS.map(d => {
+      const existing = notesSaved.find((s: any) => s.note_number === d.num);
+      return {
+        id: existing?.id,
         note_number: d.num,
-        note_title: d.title,
-        template_content: "",
-      })));
-    }
+        note_title: existing?.note_title || d.title,
+        template_content: existing?.template_content || "",
+        is_mandatory: existing?.is_mandatory,
+      };
+    });
+    setNoteTemplates(notesMerged);
 
     // Merge 3CD defaults with saved
     const threecdSaved = (threecdRes.data || []) as any[];

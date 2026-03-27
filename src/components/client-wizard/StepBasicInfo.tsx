@@ -47,6 +47,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
   const [groups, setGroups] = useState<GroupOption[]>([]);
 
   useEffect(() => {
+    // Fetch all groups globally (firm_id is nullable for global groups)
     supabase.from("client_groups").select("id, name, color").order("name").then(({ data: g }) => {
       setGroups((g as GroupOption[]) || []);
     });

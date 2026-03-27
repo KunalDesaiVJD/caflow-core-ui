@@ -163,6 +163,7 @@ Deno.serve(async (req) => {
         if (name !== undefined && name !== oldUser.name) changedFields.push("name");
         if (phone !== undefined && phone !== oldUser.phone) changedFields.push("phone");
         if (role !== undefined && role !== oldUser.role) changedFields.push("role");
+        if (firm_id !== undefined && firm_id !== oldUser.firm_id) changedFields.push("firm_id");
 
         if (changedFields.length > 0) {
           await adminClient.from("version_history").insert({
