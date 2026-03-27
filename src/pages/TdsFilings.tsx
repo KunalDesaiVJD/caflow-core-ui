@@ -242,10 +242,22 @@ const TdsFilings = () => {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-[1400px] mx-auto">
           {activeSection === "dashboard" && (
-            <TdsDashboard clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+            <TdsDashboard
+              clients={clients}
+              users={users}
+              isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId}
+              onNavigate={(section, filters) => setActiveSection(section as NavKey)}
+            />
           )}
           {activeSection === "filings" && (
-            <TdsFilingsTab clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+            <TdsFilingsManager
+              clients={clients}
+              users={users}
+              isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId}
+              onNavigateDataEntry={() => setActiveSection("data-entry")}
+            />
           )}
           {activeSection === "data-entry" && (
             <TdsEntriesTab clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
