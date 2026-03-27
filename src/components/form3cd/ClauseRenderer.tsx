@@ -323,6 +323,84 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
+    case 'heading_only':
+      return (
+        <div className={`${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          <p className="text-sm font-semibold text-foreground">{definition.heading}</p>
+        </div>
+      );
+
+    case 'yes_no_text':
+      return (
+        <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          <div className="flex items-center gap-4">
+            {['Yes', 'No'].map(opt => (
+              <label key={opt} className="flex items-center gap-2 cursor-pointer text-sm">
+                <input type="radio" name={`${definition.key || ''}_yesno`} checked={data._value === (opt === 'Yes')}
+                  onChange={() => update('_value', opt === 'Yes')} disabled={isLocked} />
+                {opt}
+              </label>
+            ))}
+          </div>
+          {data._value === true && (
+            <Textarea value={data._text || ''} onChange={e => update('_text', e.target.value)}
+              placeholder="Enter details..." disabled={isLocked} className="text-sm" rows={3} />
+          )}
+        </div>
+      );
+
+    case 'yes_no_structured': {
+      const rows = ('structuredRows' in definition ? (definition as any).structuredRows : []) as { label: string; key: string }[];
+      return (
+        <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          <div className="flex items-center gap-4">
+            {['Yes', 'No'].map(opt => (
+              <label key={opt} className="flex items-center gap-2 cursor-pointer text-sm">
+                <input type="radio" name={`${definition.key || ''}_yesno`} checked={data._value === (opt === 'Yes')}
+                  onChange={() => update('_value', opt === 'Yes')} disabled={isLocked} />
+                {opt}
+              </label>
+            ))}
+          </div>
+          {data._value === true && rows.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[250px]">CENVAT/ITC</TableHead>
+                  <TableHead>Amount (₹)</TableHead>
+                  <TableHead>Treatment in Profit & Loss / Accounts</TableHead>
+                  <TableHead className="w-10"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map(r => (
+                  <TableRow key={r.key}>
+                    <TableCell className="font-medium text-sm">{r.label}</TableCell>
+                    <TableCell>
+                      <Input type="number" className="h-8 text-xs" value={data[`${r.key}_amount`] || ''}
+                        onChange={e => update(`${r.key}_amount`, e.target.value)} disabled={isLocked} />
+                    </TableCell>
+                    <TableCell>
+                      <Input className="h-8 text-xs" value={data[`${r.key}_treatment`] || ''}
+                        onChange={e => update(`${r.key}_treatment`, e.target.value)} disabled={isLocked} />
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" disabled={isLocked}
+                        onClick={() => { update(`${r.key}_amount`, ''); update(`${r.key}_treatment`, ''); }}>
+                        <RotateCcw className="h-3 w-3" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      );
+    }
+
     case 'note_reference':
       return (
         <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
