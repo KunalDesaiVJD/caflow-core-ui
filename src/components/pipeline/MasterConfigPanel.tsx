@@ -333,22 +333,23 @@ export function MasterConfigPanel() {
 
   async function saveNoteTemplates() {
     setSaving(true);
-    for (const t of noteTemplates) {
-      if (t.id) {
-        await supabase.from("note_templates" as any).update({
-          note_number: t.note_number,
-          note_title: t.note_title,
-          template_content: t.template_content,
-        } as any).eq("id", t.id);
-      } else {
-        await supabase.from("note_templates" as any).insert({
-          note_number: t.note_number,
-          note_title: t.note_title,
-          template_content: t.template_content || "",
-        } as any);
+    try {
+      // Delete all existing and reinsert for clean sync (same approach as CARO)
+      await supabase.from("note_templates" as any).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const inserts = noteTemplates.map(t => ({
+        note_number: t.note_number,
+        note_title: t.note_title,
+        template_content: t.template_content || {},
+        is_mandatory: t.is_mandatory ?? false,
+      }));
+      if (inserts.length > 0) {
+        const { error } = await supabase.from("note_templates" as any).insert(inserts as any);
+        if (error) { toast.error("Save failed: " + error.message); setSaving(false); return; }
       }
+      toast.success("Note templates saved (global)");
+    } catch (e: any) {
+      toast.error("Save failed: " + (e?.message || "Unknown error"));
     }
-    toast.success("Note templates saved (global)");
     setSaving(false);
     loadAll();
   }
@@ -450,17 +451,14 @@ export function MasterConfigPanel() {
         {/* ═══ Notes Templates ═══ */}
         <TabsContent value="notes_master" className="mt-4 space-y-4">
           <div className="flex justify-between items-center">
-            <Button variant="outline" size="sm" onClick={addNoteTemplate} className="gap-1">
-              <Plus className="w-4 h-4" /> Add Note
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              Fixed set of 19 notes matching Notes to Accounts (Notes 1, 2, 29–45). Edit template content below.
+            </p>
             <Button onClick={saveNoteTemplates} disabled={saving} className="gap-1">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Note Templates
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
-            Note numbers and titles here directly control what appears in Notes to Accounts. Reorder or rename to match your statutory structure.
-          </p>
           <Accordion type="multiple" className="space-y-2">
             {noteTemplates.map((t, idx) => (
               <AccordionItem key={`note-${idx}`} value={`note-${idx}`} className="border rounded-lg">
@@ -472,23 +470,6 @@ export function MasterConfigPanel() {
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, -1)} disabled={idx === 0}>
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveNoteTemplate(idx, 1)} disabled={idx === noteTemplates.length - 1}>
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </Button>
-                    {!t.is_mandatory && (
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteNoteTemplate(idx)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
-                    <Label className="text-xs">Note Number</Label>
-                    <Input type="number" value={t.note_number} onChange={e => updateNote(idx, "note_number", parseInt(e.target.value) || 0)} className="w-24 h-8 text-sm" />
-                  </div>
                   <div>
                     <Label className="text-xs">Note Title</Label>
                     <Input value={t.note_title || ""} onChange={e => updateNote(idx, "note_title", e.target.value)} className="mt-1 text-sm" />
