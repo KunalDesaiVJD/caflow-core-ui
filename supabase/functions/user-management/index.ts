@@ -128,7 +128,7 @@ Deno.serve(async (req) => {
     // UPDATE USER
     if (req.method === "POST" && action === "update") {
       const body = await req.json();
-      const { user_id, name, phone, role } = body;
+      const { user_id, name, phone, role, firm_id } = body;
 
       if (role) {
         if ((ROLE_HIERARCHY[role] ?? 0) >= (ROLE_HIERARCHY[requestingUser.role] ?? 0)) {
@@ -148,6 +148,7 @@ Deno.serve(async (req) => {
       if (name !== undefined) updateData.name = name;
       if (phone !== undefined) updateData.phone = phone;
       if (role !== undefined) updateData.role = role;
+      if (firm_id !== undefined && requestingUser.role === "superadmin") updateData.firm_id = firm_id;
 
       const { data, error } = await adminClient.from("users")
         .update(updateData)
@@ -162,6 +163,7 @@ Deno.serve(async (req) => {
         if (name !== undefined && name !== oldUser.name) changedFields.push("name");
         if (phone !== undefined && phone !== oldUser.phone) changedFields.push("phone");
         if (role !== undefined && role !== oldUser.role) changedFields.push("role");
+        if (firm_id !== undefined && firm_id !== oldUser.firm_id) changedFields.push("firm_id");
 
         if (changedFields.length > 0) {
           await adminClient.from("version_history").insert({

@@ -195,7 +195,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13c', heading: '13(c) — Details of such change and effect on profit or loss',
         control: 'structured_table',
-        dependsOn: '13b', dependsOnValue: true,
         annexureColumns: [
           { key: 'particulars', label: 'Particulars', type: 'text', minWidth: 220 },
           { key: 'increase', label: 'Increase in Profit (Rs.)', type: 'numeric', width: 160 },
@@ -215,7 +214,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       {
         key: 'cl_13e', heading: 'Details of ICDS adjustments',
         control: 'structured_table',
-        dependsOn: '13d', dependsOnValue: true,
         annexureColumns: [
           { key: 'icds', label: 'ICDS', type: 'dropdown', dropdownRef: 'ICDS', minWidth: 220 },
           { key: 'increase', label: 'Increase in Profit (₹)', type: 'numeric', width: 140 },

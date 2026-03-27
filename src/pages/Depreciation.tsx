@@ -1927,7 +1927,7 @@ return (
                     </SelectTrigger>
                     <SelectContent>
                       {(cats||[]).map((c:any) => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        <SelectItem key={c.id} value={c.id}>{c.name} — {c.depreciation_method||'WDV'} {fmtPct(c.depreciation_method==='SLM'?c.slm_rate:c.wdv_rate)} ({c.useful_life_years}yr)</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
