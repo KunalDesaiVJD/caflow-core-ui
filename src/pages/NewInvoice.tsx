@@ -1114,10 +1114,13 @@ const NewInvoice = () => {
           {docType === "credit_note" && clientId && (
             <div>
               <Label className="text-xs">Against Invoice (optional)</Label>
-              <Select value={sourceDocumentId} onValueChange={setSourceDocumentId} disabled={isLocked}>
+              <Select value={sourceDocumentId || "standalone"} onValueChange={v => setSourceDocumentId(v === "standalone" ? "" : v)} disabled={isLocked}>
                 <SelectTrigger><SelectValue placeholder="Standalone credit note" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Standalone (no linked invoice)</SelectItem>
+                  <SelectItem value="standalone">Standalone (no linked invoice)</SelectItem>
+                  {clientInvoices.length === 0 && (
+                    <SelectItem value="no-invoices" disabled>No invoices found for this client</SelectItem>
+                  )}
                   {clientInvoices.map(inv => (
                     <SelectItem key={inv.id} value={inv.id}>
                       {inv.invoice_no} — {inv.invoice_date ? format(new Date(inv.invoice_date), "dd MMM yyyy") : ""} — ₹{(inv.total_amount || 0).toLocaleString("en-IN")}
