@@ -41,17 +41,17 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const fmtDate = (d: string | null) => { if (!d) return "—"; try { return format(new Date(d), "dd/MM/yyyy"); } catch { return d; } };
 
-type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "form-wise" | "annual-summary" | "non-filer" | "lower-cert" | "genius-export" | null;
+type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | null;
 
 const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; color: string }[] = [
   { key: "filing-status", label: "Filing Status Report", desc: "All clients, all forms, any period", icon: ClipboardList, color: "text-blue-600" },
   { key: "deductee-wise", label: "Deductee-wise Report", desc: "One deductee across all quarters", icon: Users, color: "text-emerald-600" },
   { key: "challan-register", label: "Challan Register", desc: "All challans for a client", icon: Receipt, color: "text-purple-600" },
   { key: "section-summary", label: "Section-wise Summary", desc: "TDS by section code", icon: BarChart3, color: "text-amber-600" },
-  { key: "form-wise", label: "Form-wise Report", desc: "All entries for one form type", icon: FileText, color: "text-blue-500" },
   { key: "annual-summary", label: "Annual TDS Summary", desc: "Full year summary per client", icon: CalendarCheck, color: "text-emerald-500" },
-  { key: "non-filer", label: "Non-Filer Alert Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
+  { key: "non-filer", label: "No-PAN Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
   { key: "lower-cert", label: "Lower Deduction Certificate", desc: "Register of lower deduction certs", icon: Shield, color: "text-purple-500" },
+  { key: "cross-quarter", label: "Cross-Quarter Report", desc: "Same deductee across quarters", icon: FileText, color: "text-blue-500" },
   { key: "genius-export", label: "Genius Export", desc: "Generate XLS for Genius software", icon: FileSpreadsheet, color: "text-emerald-700" },
 ];
 
@@ -603,18 +603,16 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     );
   };
 
-  const renderFormWise = () => renderDeducteeWise(); // Same structure, filtered by form
-
   const renderReport = () => {
     switch (selectedReport) {
       case "filing-status": return renderFilingStatusReport();
       case "deductee-wise": return renderDeducteeWise();
       case "challan-register": return renderChallanRegister();
       case "section-summary": return renderSectionSummary();
-      case "form-wise": return renderFormWise();
       case "annual-summary": return renderAnnualSummary();
       case "non-filer": return renderNonFilerAlert();
       case "lower-cert": return renderLowerCert();
+      case "cross-quarter": return renderCrossQuarter();
       case "genius-export": return renderGeniusExport();
       default: return null;
     }
@@ -689,7 +687,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             ))}
           </div>
         </div>
-        {(selectedReport === "genius-export" || selectedReport === "form-wise") && (
+    {(selectedReport === "genius-export" || selectedReport === "cross-quarter") && (
           <div className="space-y-1">
             <Label className="text-xs">Form</Label>
             <Select value={selForm} onValueChange={setSelForm}>
