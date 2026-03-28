@@ -21,7 +21,7 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
-import { Plus, Upload, Copy, Pencil, Trash2, Search } from "lucide-react";
+import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle } from "lucide-react";
 
 const AY_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;
