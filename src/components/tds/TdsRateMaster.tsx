@@ -275,8 +275,113 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const fmt = (v: number | null) => v != null ? v.toLocaleString("en-IN") : "—";
   const fmtRate = (v: number | null) => v != null ? `${v}%` : "—";
 
+  // ─── Fetch templates ───
+  const fetchTemplates = useCallback(async () => {
+    const forms = ["26Q", "24Q", "27Q", "27EQ"];
+    const result: Record<string, any> = {};
+    for (const form of forms) {
+      const { data } = await supabase.storage.from("tds-templates").list("", { search: `${form}.xls` });
+      if (data && data.length > 0) {
+        const file = data.find(f => f.name.startsWith(form));
+        if (file) {
+          result[form] = { name: file.name, updated: file.updated_at || file.created_at || "", uploadedBy: "" };
+        } else {
+          result[form] = null;
+        }
+      } else {
+        result[form] = null;
+      }
+    }
+    setTemplates(result);
+  }, []);
+
+  useEffect(() => { if (activeTab === "templates") fetchTemplates(); }, [activeTab, fetchTemplates]);
+
+  const uploadTemplate = async (formType: string, file: File) => {
+    setUploadingTemplate(formType);
+    const path = `${formType}.xls`;
+    const { error } = await supabase.storage.from("tds-templates").upload(path, file, { upsert: true });
+    if (error) toast({ title: "Upload error", description: error.message, variant: "destructive" });
+    else { toast({ title: `${formType} template uploaded` }); fetchTemplates(); }
+    setUploadingTemplate(null);
+  };
+
+  // ─── Effective date alerts ───
+  const effectiveDateAlerts = useMemo(() => {
+    return rates.filter(r => r.effective_from && r.effective_from !== "2025-04-01");
+  }, [rates]);
+
   return (
     <div className="space-y-4">
+      <Tabs value={activeTab} onValueChange={v => setActiveTab(v as any)}>
+        <TabsList>
+          <TabsTrigger value="rates">Rate Master</TabsTrigger>
+          <TabsTrigger value="templates">XLS Templates</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="templates" className="space-y-4 mt-4">
+          <div>
+            <h2 className="text-xl font-bold text-foreground">XLS Templates</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Upload the blank Genius Software template files here (26Q.xls, 24Q.xls, 27Q.xls, 27EQ.xls).
+              These templates are used to generate the export files for import into Genius Software.
+              When you receive updated templates from Genius, upload them here to replace the old ones.
+              The system writes your data into these templates exactly matching the Genius import format.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(["26Q", "24Q", "27Q", "27EQ"] as const).map(form => (
+              <Card key={form}>
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <FileUp size={16} className="text-primary" />
+                    Form {form} Template
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0 space-y-2">
+                  {templates[form] ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        File: <span className="font-mono">{templates[form]!.name}</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Last updated: {templates[form]!.updated ? new Date(templates[form]!.updated).toLocaleDateString() : "—"}
+                      </p>
+                      <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                        Uploaded ✓
+                      </Badge>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">No template uploaded yet</p>
+                  )}
+                  <div className="pt-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1 text-xs"
+                      disabled={uploadingTemplate === form}
+                      onClick={() => {
+                        const input = document.createElement("input");
+                        input.type = "file";
+                        input.accept = ".xls,.xlsx";
+                        input.onchange = (ev: any) => {
+                          const f = ev.target.files?.[0];
+                          if (f) uploadTemplate(form, f);
+                        };
+                        input.click();
+                      }}
+                    >
+                      <Upload size={12} />
+                      {uploadingTemplate === form ? "Uploading..." : templates[form] ? "Replace Template" : "Upload Template"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="rates" className="space-y-4 mt-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
           <Label className="text-xs">Assessment Year</Label>
