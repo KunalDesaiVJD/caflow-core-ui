@@ -209,25 +209,82 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     else fetchFilings();
   };
 
-  const handleCopyFiling = async (f: TdsFiling) => {
+  const openCopyDialog = (f: TdsFiling) => {
+    setCopySource(f);
     const nextQ = f.quarter === "Q1" ? "Q2" : f.quarter === "Q2" ? "Q3" : f.quarter === "Q3" ? "Q4" : "Q1";
-    const nextFy = f.quarter === "Q4" ? (() => {
-      const s = parseInt(f.financial_year.split("-")[0]) + 1;
-      return `${s}-${String(s + 1).slice(2)}`;
-    })() : f.financial_year;
+    const nextFy = f.quarter === "Q4" ? (() => { const s = parseInt(f.financial_year.split("-")[0]) + 1; return `${s}-${String(s + 1).slice(2)}`; })() : f.financial_year;
+    setCopyQuarter(nextQ);
+    setCopyFy(nextFy);
+    setCopyDialogOpen(true);
+  };
+
+  const confirmCopyFiling = async () => {
+    if (!copySource) return;
+    setCopying(true);
     const { error } = await supabase.from("tds_filings").insert({
-      client_id: f.client_id,
-      firm_id: f.firm_id,
-      financial_year: nextFy,
-      quarter: nextQ,
-      tds_forms: f.tds_forms,
+      client_id: copySource.client_id,
+      firm_id: copySource.firm_id,
+      financial_year: copyFy,
+      quarter: copyQuarter,
+      tds_forms: copySource.tds_forms,
       work_status: "Not Started",
-      tan: f.tan,
+      tan: copySource.tan,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     } as any);
+    setCopying(false);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: `Filing copied to ${nextQ} ${nextFy}` }); fetchFilings(); }
+    else { toast({ title: `Filing copied to ${copyQuarter} ${copyFy}` }); setCopyDialogOpen(false); fetchFilings(); }
+  };
+
+  // Migration logic
+  const runMigration = async () => {
+    setMigrating(true);
+    setMigrationResult(null);
+    try {
+      const firmId = await resolveFirmId();
+      let q = supabase.from("tds_entries").select("*").eq("migrated", false).limit(1000);
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data: entries, error: fetchErr } = await q;
+      if (fetchErr) throw fetchErr;
+      if (!entries || entries.length === 0) {
+        toast({ title: "No unmigrated entries found" });
+        setMigrating(false);
+        return;
+      }
+      const challanGroups = new Map<string, any[]>();
+      for (const e of entries) {
+        const key = `${e.client_id}|${e.form_type}|${e.challan_bsr_code || ""}|${e.challan_serial_no || ""}|${e.challan_date || ""}`;
+        if (!challanGroups.has(key)) challanGroups.set(key, []);
+        challanGroups.get(key)!.push(e);
+      }
+      let challanCount = 0, deducteeCount = 0;
+      for (const [, group] of challanGroups) {
+        const first = group[0];
+        const { data: existingFilings } = await supabase.from("tds_filings").select("id").eq("client_id", first.client_id).eq("financial_year", first.financial_year || "2025-26").limit(1);
+        let filingId: string;
+        if (existingFilings && existingFilings.length > 0) { filingId = existingFilings[0].id; }
+        else {
+          const { data: newFiling, error: fErr } = await supabase.from("tds_filings").insert({ client_id: first.client_id, firm_id: first.firm_id || firmId, financial_year: first.financial_year || "2025-26", quarter: "Q1", tds_forms: [first.form_type || "26Q"], work_status: "Data Received", tan: first.tan || null, last_updated_by: user?.id, last_updated_at: new Date().toISOString() } as any).select("id").single();
+          if (fErr) continue;
+          filingId = newFiling.id;
+        }
+        const totalChallanAmount = first.challan_amount || group.reduce((s: number, e: any) => s + (e.tds_amount || 0), 0);
+        const { data: challan, error: cErr } = await supabase.from("tds_challans").insert({ filing_id: filingId, client_id: first.client_id, firm_id: first.firm_id || firmId, form_type: first.form_type || "26Q", financial_year: first.financial_year || "2025-26", quarter: "Q1", bsr_code: first.challan_bsr_code || null, challan_serial_no: first.challan_serial_no || null, deposit_date: first.challan_date || null, total_challan_amount: totalChallanAmount, total_tax_deposited: totalChallanAmount } as any).select("id").single();
+        if (cErr) continue;
+        challanCount++;
+        for (const e of group) {
+          await supabase.from("tds_deductees").insert({ challan_id: challan.id, filing_id: filingId, client_id: e.client_id, firm_id: e.firm_id || firmId, form_type: e.form_type || "26Q", financial_year: e.financial_year || "2025-26", quarter: "Q1", deductee_name: e.party_name || "", deductee_pan: e.deductee_pan || e.pan || null, section_code: e.section_code || e.section || "", amount_paid_credited: e.amount || null, date_of_payment: e.date || null, rate_of_tds: e.tds_rate || null, tds_amount: e.tds_amount || null, total_tax_deducted: e.tds_amount || null, pan_not_available: false } as any);
+          deducteeCount++;
+          await supabase.from("tds_entries").update({ migrated: true, migrated_at: new Date().toISOString() } as any).eq("id", e.id);
+        }
+      }
+      setMigrationResult({ challans: challanCount, deductees: deducteeCount, entries: entries.length });
+      toast({ title: `Migration complete: ${entries.length} entries → ${challanCount} challans + ${deducteeCount} deductees` });
+    } catch (err: any) {
+      toast({ title: "Migration error", description: err.message, variant: "destructive" });
+    }
+    setMigrating(false);
   };
 
   const toggleSelect = (id: string) => {
