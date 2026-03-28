@@ -32,7 +32,7 @@ type NavKey = typeof NAV_ITEMS[number]["key"];
 
 const TdsFilings = () => {
   const { user } = useAuth();
-  const { toast } = useToast();
+  
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   /* DEPRECATED - migration moved to Filings section Options dropdown */
