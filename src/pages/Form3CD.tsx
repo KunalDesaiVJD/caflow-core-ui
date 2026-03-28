@@ -542,13 +542,12 @@ export default function Form3CD() {
 
       {/* PRINT VIEW MODAL */}
       {showPrintView && (
-        <Form3CDPrintView
+        <Form3CDReport
           client={client}
           engagement={engagement}
           fy={fy}
           ay={ay}
           clauseData={clauseData}
-          activeClauses={activeClauses}
           onClose={() => setShowPrintView(false)}
         />
       )}
