@@ -832,7 +832,7 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
 }
 
 // ─── Cell Input ───
-function CellInput({ column, value, onChange, disabled, row }: {
+function CellInput({ column, value, onChange, onRowChange, disabled, row }: {
   column: AnnexureColumn;
   value: any;
   onChange: (val: string) => void;
