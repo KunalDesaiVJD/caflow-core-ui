@@ -260,7 +260,7 @@ const TdsFilings = () => {
             />
           )}
           {activeSection === "data-entry" && (
-            <TdsEntriesTab clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+            <TdsDataEntry clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
           )}
           {activeSection === "validate" && (
             <TdsValidateSection clients={clients} resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />
