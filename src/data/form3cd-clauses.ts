@@ -785,7 +785,32 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
   // ═══════ CLAUSE 30 ═══════
   {
     clauseNo: '30', displayOrder: 30, isActive: true,
-    title: 'Transfer pricing / Interest limitation / GAAR',
+    title: 'Hundi borrowings u/s 69D',
+    heading: 'Hundi: Whether any amount is borrowed on hundi from any person or repaid to any person on hundi otherwise than through an account payee cheque?',
+    control: 'yes_no',
+    subClauses: [
+      {
+        key: 'cl_30_details',
+        heading: 'Details of hundi borrowings / repayments',
+        control: 'structured_table',
+        annexureColumns: [
+          { key: 'sr_no', label: 'S.No', type: 'readonly', width: 60 },
+          { key: 'person_name', label: 'Name of the person', type: 'text', minWidth: 200 },
+          { key: 'pan', label: 'PAN', type: 'text', width: 130 },
+          { key: 'amount_borrowed', label: 'Amount borrowed', type: 'numeric', width: 150 },
+          { key: 'date_of_borrowing', label: 'Date of borrowing', type: 'text', width: 150 },
+          { key: 'amount_due_including_interest', label: 'Amount due including interest', type: 'numeric', width: 190 },
+          { key: 'amount_repaid', label: 'Amount repaid', type: 'numeric', width: 150 },
+          { key: 'date_of_repayment', label: 'Date of repayment', type: 'text', width: 150 },
+        ],
+      },
+    ],
+  },
+
+  // ═══════ CLAUSE 30A ═══════
+  {
+    clauseNo: '30A', displayOrder: 30.1, isActive: true,
+    title: 'Primary adjustment / 94B / GAAR',
     heading: 'Transfer pricing adjustments, Interest limitation u/s 94B, GAAR u/s 96',
     control: 'composite',
     subClauses: [
@@ -845,7 +870,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
           { key: 'amount', label: 'Amount of loan or deposit taken or accepted (Rs.)', type: 'numeric', width: 180 },
           { key: 'squared_up', label: 'Whether loan/deposit was squared up during the year', type: 'yes_no_dropdown', width: 160 },
           { key: 'max_outstanding', label: 'Maximum amount outstanding at any time during the year (Rs.)', type: 'numeric', width: 200 },
-          { key: 'loan_or_deposit', label: 'Whether loan or deposit', type: 'dropdown', dropdownRef: 'LOAN_DEPOSIT_YN', width: 130 },
           { key: 'code_a_to_l', label: 'Code of nature of such amount', type: 'dropdown', dropdownRef: 'CODE_A_TO_L', width: 180 },
           { key: 'cheque_mode', label: 'Whether taken/accepted otherwise than by A/c payee cheque/draft', type: 'dropdown', dropdownRef: 'CHEQUE_MODE', width: 200 },
           { key: 'acpayee', label: 'Whether account payee cheque or bank draft', type: 'dropdown', dropdownRef: 'ACPAYEE_MODE', width: 160 },
