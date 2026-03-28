@@ -102,6 +102,7 @@ const ClientDetail = () => {
     caro_applicable: false,
     internal_audit_applicable: false,
     stock_audit_applicable: false,
+    audit_turnover: "" as string,
   });
   const [auditSaving, setAuditSaving] = useState(false);
 
