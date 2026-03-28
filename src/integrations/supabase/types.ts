@@ -1756,6 +1756,11 @@ export type Database = {
           notes: string | null
           reminder_date: number | null
           service_category_id: string
+          tds_deactivated_from_fy: string | null
+          tds_deactivated_from_q: string | null
+          tds_effective_from_fy: string | null
+          tds_effective_from_q: string | null
+          tds_forms_applicable: string[] | null
         }
         Insert: {
           activated_at?: string | null
@@ -1773,6 +1778,11 @@ export type Database = {
           notes?: string | null
           reminder_date?: number | null
           service_category_id: string
+          tds_deactivated_from_fy?: string | null
+          tds_deactivated_from_q?: string | null
+          tds_effective_from_fy?: string | null
+          tds_effective_from_q?: string | null
+          tds_forms_applicable?: string[] | null
         }
         Update: {
           activated_at?: string | null
@@ -1790,6 +1800,11 @@ export type Database = {
           notes?: string | null
           reminder_date?: number | null
           service_category_id?: string
+          tds_deactivated_from_fy?: string | null
+          tds_deactivated_from_q?: string | null
+          tds_effective_from_fy?: string | null
+          tds_effective_from_q?: string | null
+          tds_forms_applicable?: string[] | null
         }
         Relationships: [
           {
