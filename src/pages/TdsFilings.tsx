@@ -1,15 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   FileText, LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, Database, ClipboardList,
+  ShieldCheck, BarChart3, Settings, ClipboardList,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
@@ -36,12 +32,10 @@ type NavKey = typeof NAV_ITEMS[number]["key"];
 
 const TdsFilings = () => {
   const { user } = useAuth();
-  const { toast } = useToast();
+  
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [migrationOpen, setMigrationOpen] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] = useState<{ challans: number; deductees: number; entries: number } | null>(null);
+  /* DEPRECATED - migration moved to Filings section Options dropdown */
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -75,55 +69,6 @@ const TdsFilings = () => {
 
   useEffect(() => { fetchClients(); fetchUsers(); }, [fetchClients, fetchUsers]);
 
-  const runMigration = async () => {
-    setMigrating(true);
-    setMigrationResult(null);
-    try {
-      const firmId = await resolveFirmId();
-      let q = supabase.from("tds_entries").select("*").eq("migrated", false).limit(1000);
-      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      const { data: entries, error: fetchErr } = await q;
-      if (fetchErr) throw fetchErr;
-      if (!entries || entries.length === 0) {
-        toast({ title: "No unmigrated entries found" });
-        setMigrating(false);
-        return;
-      }
-      const challanGroups = new Map<string, any[]>();
-      for (const e of entries) {
-        const key = `${e.client_id}|${e.form_type}|${e.challan_bsr_code || ""}|${e.challan_serial_no || ""}|${e.challan_date || ""}`;
-        if (!challanGroups.has(key)) challanGroups.set(key, []);
-        challanGroups.get(key)!.push(e);
-      }
-      let challanCount = 0, deducteeCount = 0;
-      for (const [, group] of challanGroups) {
-        const first = group[0];
-        const { data: existingFilings } = await supabase.from("tds_filings").select("id").eq("client_id", first.client_id).eq("financial_year", first.financial_year || "2025-26").limit(1);
-        let filingId: string;
-        if (existingFilings && existingFilings.length > 0) { filingId = existingFilings[0].id; }
-        else {
-          const { data: newFiling, error: fErr } = await supabase.from("tds_filings").insert({ client_id: first.client_id, firm_id: first.firm_id || firmId, financial_year: first.financial_year || "2025-26", quarter: "Q1", tds_forms: [first.form_type || "26Q"], work_status: "Data Received", tan: first.tan || null, last_updated_by: user?.id, last_updated_at: new Date().toISOString() } as any).select("id").single();
-          if (fErr) continue;
-          filingId = newFiling.id;
-        }
-        const totalChallanAmount = first.challan_amount || group.reduce((s: number, e: any) => s + (e.tds_amount || 0), 0);
-        const { data: challan, error: cErr } = await supabase.from("tds_challans").insert({ filing_id: filingId, client_id: first.client_id, firm_id: first.firm_id || firmId, form_type: first.form_type || "26Q", financial_year: first.financial_year || "2025-26", quarter: "Q1", bsr_code: first.challan_bsr_code || null, challan_serial_no: first.challan_serial_no || null, deposit_date: first.challan_date || null, total_challan_amount: totalChallanAmount, total_tax_deposited: totalChallanAmount } as any).select("id").single();
-        if (cErr) continue;
-        challanCount++;
-        for (const e of group) {
-          await supabase.from("tds_deductees").insert({ challan_id: challan.id, filing_id: filingId, client_id: e.client_id, firm_id: e.firm_id || firmId, form_type: e.form_type || "26Q", financial_year: e.financial_year || "2025-26", quarter: "Q1", deductee_name: e.party_name || "", deductee_pan: e.deductee_pan || e.pan || null, section_code: e.section_code || e.section || "", amount_paid_credited: e.amount || null, date_of_payment: e.date || null, rate_of_tds: e.tds_rate || null, tds_amount: e.tds_amount || null, total_tax_deducted: e.tds_amount || null, pan_not_available: false } as any);
-          deducteeCount++;
-          await supabase.from("tds_entries").update({ migrated: true, migrated_at: new Date().toISOString() } as any).eq("id", e.id);
-        }
-      }
-      setMigrationResult({ challans: challanCount, deductees: deducteeCount, entries: entries.length });
-      toast({ title: `Migration complete: ${entries.length} entries → ${challanCount} challans + ${deducteeCount} deductees` });
-    } catch (err: any) {
-      toast({ title: "Migration error", description: err.message, variant: "destructive" });
-    }
-    setMigrating(false);
-  };
-
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
       <div className={cn("border-r bg-muted/30 flex flex-col shrink-0 transition-all duration-200", sidebarCollapsed ? "w-14" : "w-48")}>
@@ -143,13 +88,6 @@ const TdsFilings = () => {
             </button>
           ))}
         </nav>
-        {!sidebarCollapsed && (
-          <div className="p-2 border-t">
-            <Button variant="ghost" size="sm" className="w-full text-xs gap-1 text-muted-foreground" onClick={() => setMigrationOpen(true)}>
-              <Database size={12} /> Migrate Legacy Data
-            </Button>
-          </div>
-        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
@@ -163,25 +101,6 @@ const TdsFilings = () => {
           {activeSection === "audit-log" && <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
         </div>
       </div>
-
-      <Dialog open={migrationOpen} onOpenChange={setMigrationOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Migrate Legacy TDS Data</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Migrates from <code className="bg-muted px-1 rounded">tds_entries</code> into <code className="bg-muted px-1 rounded">tds_challans</code> + <code className="bg-muted px-1 rounded">tds_deductees</code>.</p>
-            {migrationResult && (
-              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Migration Complete</p>
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">{migrationResult.entries} entries → {migrationResult.challans} challans + {migrationResult.deductees} deductees</p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMigrationOpen(false)}>Close</Button>
-            <Button onClick={runMigration} disabled={migrating}>{migrating ? "Migrating..." : "Run Migration"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

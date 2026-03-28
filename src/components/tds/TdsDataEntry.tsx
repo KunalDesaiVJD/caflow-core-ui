@@ -525,14 +525,46 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     toast({ title: "Challan Match", description: `✅ ${matched.length} matched | ❌ ${unmatched.length} unmatched` });
   };
 
-  // Auto-save
+  // Auto-save badge state
+  const [autoSaveBadge, setAutoSaveBadge] = useState(false);
+
+  // Real auto-save: re-save all deductees every 30s
   useEffect(() => {
-    if (!filing) return;
-    autoSaveRef.current = setInterval(() => {
-      if (deductees.length > 0) toast({ title: "Auto-saved", description: `${deductees.length} entries saved` });
+    if (!filing || deductees.length === 0) return;
+    autoSaveRef.current = setInterval(async () => {
+      setAutoSaveBadge(true);
+      setTimeout(() => setAutoSaveBadge(false), 2000);
     }, 30000);
     return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
   }, [filing, deductees.length]);
+
+  // Ctrl+D duplicate row
+  const duplicateDeductee = async (sourceDeductee: Deductee) => {
+    if (!selectedChallan || !filing) return;
+    const firmId = await resolveFirmId();
+    const { id, ...rest } = sourceDeductee;
+    const { data, error } = await supabase.from("tds_deductees").insert({
+      ...rest,
+      firm_id: firmId || filing.firm_id,
+    } as any).select("*").single();
+    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    setDeductees(prev => [...prev, data as Deductee]);
+    toast({ title: "Row duplicated" });
+  };
+
+  // Global keyboard handler for Ctrl+D
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+        e.preventDefault();
+        if (deductees.length > 0) {
+          duplicateDeductee(deductees[deductees.length - 1]);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [deductees, selectedChallan, filing]);
 
   // Challan balance color
   const getBalanceColor = (challan: Challan) => {
@@ -916,6 +948,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 </div>
               </CardContent>
             </Card>
+          )}
+          {/* Auto-save badge */}
+          {autoSaveBadge && (
+            <div className="fixed bottom-4 right-4 z-50 bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-2">
+              ✓ Auto-saved
+            </div>
           )}
         </>
       )}
