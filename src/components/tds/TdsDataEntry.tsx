@@ -949,6 +949,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 </Badge>
               )}
               <div className="flex-1" />
+              <Button size="sm" variant="outline" className="gap-1" onClick={autoMatchChallans}>
+                <RefreshCw size={14} /> Auto-match Challans
+              </Button>
               <Button size="sm" disabled={summaryStats.unmatchedChallans > 0} className="gap-1">
                 <ArrowRight size={14} /> Proceed to Validate
               </Button>
