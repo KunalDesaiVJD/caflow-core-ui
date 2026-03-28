@@ -19,12 +19,37 @@ interface ClauseRendererProps {
   value: any;
   onChange: (value: any) => void;
   isLocked?: boolean;
+  client?: any;
   parentValues?: Record<string, any>; // for dependsOn checks
   depth?: number;
 }
 
 const fmt = (n: number) =>
   n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const TDS_SECTION_NATURE_MAP: Record<string, string> = {
+  '192': 'Salary',
+  '192A': 'Premature PF Withdrawal',
+  '193': 'Interest on Securities',
+  '194': 'Dividend',
+  '194A': 'Interest other than Securities',
+  '194B': 'Lottery / Crossword Winnings',
+  '194C': 'Contractor / Sub-contractor',
+  '194D': 'Insurance Commission',
+  '194G': 'Commission on Lottery Tickets',
+  '194H': 'Commission / Brokerage',
+  '194-I(a)': 'Rent on Plant & Machinery',
+  '194-I(b)': 'Rent on Land, Building, Furniture',
+  '194IA': 'Transfer of Immovable Property',
+  '194IB': 'Rent by Individual/HUF',
+  '194J': 'Professional/Technical Services',
+  '194LA': 'Compensation on Acquisition',
+  '194Q': 'Purchase of Goods',
+  '194R': 'Benefits/Perquisites to Business',
+  '194S': 'Virtual Digital Asset',
+  '194T': 'Payment to Partners',
+  '206C': 'TCS on Sale of Specified Goods',
+};
 
 function resolveDropdownOptions(def: ClauseDefinition | SubClause | AnnexureColumn): { value: string; label: string }[] {
   if ('dropdownRef' in def && def.dropdownRef && DROPDOWN_LIBRARY[def.dropdownRef]) {
@@ -64,7 +89,7 @@ function evaluateFormula(formula: string, row: Record<string, any>): number | st
   }
 }
 
-export default function ClauseRenderer({ definition, value, onChange, isLocked = false, parentValues, depth = 0 }: ClauseRendererProps) {
+export default function ClauseRenderer({ definition, value, onChange, isLocked = false, client, parentValues, depth = 0 }: ClauseRendererProps) {
   const data = value || {};
   const control = definition.control;
 
@@ -82,6 +107,83 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
   const headingEl = depth > 0 ? (
     <Label className={`font-medium text-sm ${depth > 1 ? 'text-xs' : ''}`}>{definition.heading}</Label>
   ) : null;
+
+  const renderClause21cPart2 = () => {
+    const cl21cRows: any[] = data?.cl_21c?._rows || [];
+    const totalSalary = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.salary) || 0), 0);
+    const totalInterest = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.interest) || 0), 0);
+    const netProfit = parseFloat(data?._21c_net_profit || '0') || 0;
+    const interestIncome = parseFloat(data?._21c_interest_income || '0') || 0;
+    const bookProfit = totalInterest + netProfit - interestIncome;
+    const step1 = Math.min(Math.max(bookProfit, 0), 600000) * 0.9;
+    const step2 = bookProfit > 600000 ? (bookProfit - 600000) * 0.6 : 0;
+    const totalAllowable = step1 + step2;
+    const inadmissible = totalSalary - totalAllowable;
+    const fmtINR = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    return (
+      <div className="mt-4 rounded-lg border bg-muted/30 p-4 space-y-3">
+        <h4 className="text-sm font-semibold">Part 2 — Calculation of Amount Inadmissible u/s 40(b)</h4>
+        <Table>
+          <TableBody>
+            <TableRow>
+              <TableCell className="font-medium text-muted-foreground">[A] Remuneration paid to partners</TableCell>
+              <TableCell className="w-[220px] text-right font-mono font-medium">₹ {fmtINR(totalSalary)}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell className="font-medium text-muted-foreground">Add: Net Profit as per P. &amp; L. A/c.</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  className="h-8 text-right"
+                  value={data?._21c_net_profit || ''}
+                  onChange={e => update('_21c_net_profit', e.target.value)}
+                  disabled={isLocked}
+                  placeholder="0"
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell className="font-medium text-muted-foreground">Add/(Less): Interest Income</TableCell>
+              <TableCell>
+                <Input
+                  type="number"
+                  className="h-8 text-right"
+                  value={data?._21c_interest_income || ''}
+                  onChange={e => update('_21c_interest_income', e.target.value)}
+                  disabled={isLocked}
+                  placeholder="0"
+                />
+              </TableCell>
+            </TableRow>
+            <TableRow className="bg-accent/30">
+              <TableCell>
+                <div className="font-semibold">Row D: Book Profit</div>
+                <div className="text-xs text-muted-foreground">Interest paid to partners + Net P&amp;L - Interest Income</div>
+              </TableCell>
+              <TableCell className="text-right font-mono font-semibold">₹ {fmtINR(bookProfit)}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell className="font-medium text-muted-foreground">Row E: Allowable Salary — Step 1: First Rs. 6,00,000 @ 90%</TableCell>
+              <TableCell className="text-right font-mono">₹ {fmtINR(step1)}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell className="font-medium text-muted-foreground">Row F: Allowable Salary — Step 2: Balance of Book Profit @ 60%</TableCell>
+              <TableCell className="text-right font-mono">₹ {fmtINR(step2)}</TableCell>
+            </TableRow>
+            <TableRow className="bg-accent/30">
+              <TableCell className="font-semibold">Row G: [B] Total Allowable Salary</TableCell>
+              <TableCell className="text-right font-mono font-semibold">₹ {fmtINR(totalAllowable)}</TableCell>
+            </TableRow>
+            <TableRow className="bg-destructive/10">
+              <TableCell className="font-semibold">Row H: Salary paid to partners inadmissible ([A] - [B])</TableCell>
+              <TableCell className="text-right font-mono font-semibold">{inadmissible <= 0 ? 'Nil' : `₹ ${fmtINR(inadmissible)}`}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    );
+  };
 
   switch (control) {
     case 'yes_no':
@@ -307,6 +409,23 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
       return (
         <div className={`space-y-4 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
+          {'clauseNo' in definition && definition.clauseNo === '34' && (
+            <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
+              <span className="font-medium">TAN:</span>{' '}
+              {client?.tan_number || client?.tan ? (
+                <span className="font-mono">{client?.tan_number || client?.tan}</span>
+              ) : (
+                <>
+                  <span className="text-muted-foreground">Not set (update in Client Module)</span>{' '}
+                  {client?.id && (
+                    <a href={`/clients/${client.id}`} className="text-primary underline underline-offset-2">
+                      Open client
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {definition.subClauses?.map((sub, i) => (
             <div key={sub.key}>
               {i > 0 && <Separator className="my-2" />}
@@ -315,9 +434,11 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
                 value={data[sub.key] || {}}
                 onChange={v => update(sub.key, v)}
                 isLocked={isLocked}
+                client={client}
                 parentValues={data}
                 depth={depth + 1}
               />
+              {'clauseNo' in definition && definition.clauseNo === '21' && sub.key === 'cl_21c' && renderClause21cPart2()}
             </div>
           ))}
         </div>
@@ -583,14 +704,10 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
         next.code = val;
       }
 
-      // Auto-fill TDS nature from section
-      const col = columns.find(c => c.key === key);
-      if (col?.type === 'dropdown' && col.dropdownRef === 'TDS_SECTIONS') {
-        const natureCol = columns.find(c => c.type === 'readonly' && c.key === 'nature');
-        if (natureCol) {
-          const opt = DROPDOWN_LIBRARY.TDS_SECTIONS?.find(o => o.value === val);
-          next.nature = opt ? opt.label.split(' - ')[1] || opt.label : '';
-        }
+      // Auto-fill Clause 34(a) Nature of Payment from selected section
+      if (key === 'section' && columns.some(c => c.key === 'nature_of_payment')) {
+        next.nature_of_payment = TDS_SECTION_NATURE_MAP[val] || '';
+        next._nature_of_payment_editable = false;
       }
 
       // Recalculate auto_calc columns
@@ -601,6 +718,10 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
       return next;
     });
     onChange(newRows);
+  }
+
+  function patchRow(ri: number, patch: Record<string, any>) {
+    onChange(rows.map((r, idx) => idx === ri ? { ...r, ...patch } : r));
   }
 
   // Compute totals
@@ -665,6 +786,7 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
                         column={col}
                         value={row[col.key] ?? ''}
                         onChange={val => updateCell(ri, col.key, val)}
+                        onRowChange={patch => patchRow(ri, patch)}
                         disabled={isLocked}
                         row={row}
                       />
@@ -714,9 +836,36 @@ function CellInput({ column, value, onChange, disabled, row }: {
   column: AnnexureColumn;
   value: any;
   onChange: (val: string) => void;
+  onRowChange?: (patch: Record<string, any>) => void;
   disabled?: boolean;
   row?: Record<string, any>;
 }) {
+  if (column.key === 'nature_of_payment') {
+    const editable = row?._nature_of_payment_editable === true;
+    return (
+      <div className="flex items-center gap-1">
+        <Input
+          value={value || ''}
+          onChange={e => onChange(e.target.value)}
+          disabled={disabled}
+          readOnly={!editable}
+          className="h-8 text-xs"
+        />
+        {!disabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-[11px]"
+            onClick={() => onRowChange?.({ _nature_of_payment_editable: !editable })}
+          >
+            {editable ? 'Lock' : 'Edit'}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   switch (column.type) {
     case 'text':
       return <Input value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-8 text-xs" />;
