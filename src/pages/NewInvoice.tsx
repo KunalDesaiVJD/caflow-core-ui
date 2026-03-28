@@ -578,7 +578,9 @@ const NewInvoice = () => {
   const handleSave = async (newStatus?: string) => {
     if (!selectedFirmId) { setFirmError(true); toast({ title: "Please select a firm", variant: "destructive" }); return; }
     if (!clientId) { toast({ title: "Select a client", variant: "destructive" }); return; }
+    if (!invoiceNo.trim()) { toast({ title: "Document number cannot be blank", variant: "destructive" }); return; }
     if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
+    if (duplicateWarning) { toast({ title: "Document number already exists. Please change it.", variant: "destructive" }); return; }
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
@@ -587,7 +589,7 @@ const NewInvoice = () => {
       const fy = getFYFromDate(invoiceDate);
 
       const payload: any = {
-        invoice_no: invoiceNo,
+        invoice_no: invoiceNo.trim(),
         client_id: clientId,
         firm_id: selectedFirmId,
         invoice_date: invoiceDate,
@@ -606,7 +608,7 @@ const NewInvoice = () => {
         status: effectiveStatus,
         document_type: docType,
         document_series: series,
-        seq_number: seqNumber,
+        seq_number: docNoManual ? null : seqNumber,
         financial_year: fy,
         remarks_conditions: remarksConditions || null,
         base_turnover: baseTurnover ? Number(baseTurnover) : null,
@@ -651,6 +653,13 @@ const NewInvoice = () => {
         if (error) throw error;
         savedId = inserted?.id;
         toast({ title: `${DOC_TYPE_LABELS[docType]} created` });
+
+        // Mark source document as converted (for quotation/proforma → invoice conversion)
+        if (sourceDocumentId && docType === "invoice") {
+          await supabase.from("invoices")
+            .update({ status: "converted", converted_to_id: savedId, conversion_date: new Date().toISOString() })
+            .eq("id", sourceDocumentId);
+        }
       }
 
       // Auto-insert ledger entry when finalizing
