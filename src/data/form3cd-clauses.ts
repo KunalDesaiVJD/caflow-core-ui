@@ -540,8 +540,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
           { key: 'cl_21b_ix', heading: '(ix) — Tax paid by employer for perquisites under sub-clause (v)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
         ],
       },
-        ],
-      },
 
       // ── 21(c) — Sec 40(b) Partner Remuneration ──
       {
