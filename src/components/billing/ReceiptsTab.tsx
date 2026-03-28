@@ -257,7 +257,7 @@ export default function ReceiptsTab() {
 
       // Step 3: Ledger entry for payment
       await supabase.from("client_ledger_entries").insert({
-        firm_id: firmId,
+        firm_id: resolvedFirmId,
         client_id: formClientId,
         entry_date: dateStr,
         entry_type: "receipt",
