@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -26,7 +26,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, Receipt, AlertTriangle, CheckCircle2,
-  ArrowRight, CreditCard, FileText,
+  ArrowRight, CreditCard, FileText, RefreshCw, Copy,
 } from "lucide-react";
 
 // ─── Types ───
