@@ -286,7 +286,7 @@ export default function ReceiptsTab() {
       // Step 5: GST TDS ledger entry
       if (gstTds > 0) {
         await supabase.from("client_ledger_entries").insert({
-          firm_id: firmId,
+          firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
           entry_type: "adjustment",
