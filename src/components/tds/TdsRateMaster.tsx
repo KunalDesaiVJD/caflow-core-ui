@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -21,7 +21,7 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
-import { Plus, Upload, Copy, Pencil, Trash2, Search } from "lucide-react";
+import { Plus, Upload, Copy, Pencil, Trash2, Search, FileUp, AlertCircle } from "lucide-react";
 
 const AY_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;
@@ -125,6 +125,11 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState<Record<string, any>>({});
+  const [activeTab, setActiveTab] = useState<"rates" | "templates">("rates");
+  const [templates, setTemplates] = useState<Record<string, { name: string; updated: string; uploadedBy: string } | null>>({
+    "26Q": null, "24Q": null, "27Q": null, "27EQ": null,
+  });
+  const [uploadingTemplate, setUploadingTemplate] = useState<string | null>(null);
 
   const fetchRates = useCallback(async () => {
     setLoading(true);
@@ -270,8 +275,113 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const fmt = (v: number | null) => v != null ? v.toLocaleString("en-IN") : "—";
   const fmtRate = (v: number | null) => v != null ? `${v}%` : "—";
 
+  // ─── Fetch templates ───
+  const fetchTemplates = useCallback(async () => {
+    const forms = ["26Q", "24Q", "27Q", "27EQ"];
+    const result: Record<string, any> = {};
+    for (const form of forms) {
+      const { data } = await supabase.storage.from("tds-templates").list("", { search: `${form}.xls` });
+      if (data && data.length > 0) {
+        const file = data.find(f => f.name.startsWith(form));
+        if (file) {
+          result[form] = { name: file.name, updated: file.updated_at || file.created_at || "", uploadedBy: "" };
+        } else {
+          result[form] = null;
+        }
+      } else {
+        result[form] = null;
+      }
+    }
+    setTemplates(result);
+  }, []);
+
+  useEffect(() => { if (activeTab === "templates") fetchTemplates(); }, [activeTab, fetchTemplates]);
+
+  const uploadTemplate = async (formType: string, file: File) => {
+    setUploadingTemplate(formType);
+    const path = `${formType}.xls`;
+    const { error } = await supabase.storage.from("tds-templates").upload(path, file, { upsert: true });
+    if (error) toast({ title: "Upload error", description: error.message, variant: "destructive" });
+    else { toast({ title: `${formType} template uploaded` }); fetchTemplates(); }
+    setUploadingTemplate(null);
+  };
+
+  // ─── Effective date alerts ───
+  const effectiveDateAlerts = useMemo(() => {
+    return rates.filter(r => r.effective_from && r.effective_from !== "2025-04-01");
+  }, [rates]);
+
   return (
     <div className="space-y-4">
+      <Tabs value={activeTab} onValueChange={v => setActiveTab(v as any)}>
+        <TabsList>
+          <TabsTrigger value="rates">Rate Master</TabsTrigger>
+          <TabsTrigger value="templates">XLS Templates</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="templates" className="space-y-4 mt-4">
+          <div>
+            <h2 className="text-xl font-bold text-foreground">XLS Templates</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Upload the blank Genius Software template files here (26Q.xls, 24Q.xls, 27Q.xls, 27EQ.xls).
+              These templates are used to generate the export files for import into Genius Software.
+              When you receive updated templates from Genius, upload them here to replace the old ones.
+              The system writes your data into these templates exactly matching the Genius import format.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(["26Q", "24Q", "27Q", "27EQ"] as const).map(form => (
+              <Card key={form}>
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <FileUp size={16} className="text-primary" />
+                    Form {form} Template
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0 space-y-2">
+                  {templates[form] ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        File: <span className="font-mono">{templates[form]!.name}</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Last updated: {templates[form]!.updated ? new Date(templates[form]!.updated).toLocaleDateString() : "—"}
+                      </p>
+                      <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                        Uploaded ✓
+                      </Badge>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">No template uploaded yet</p>
+                  )}
+                  <div className="pt-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1 text-xs"
+                      disabled={uploadingTemplate === form}
+                      onClick={() => {
+                        const input = document.createElement("input");
+                        input.type = "file";
+                        input.accept = ".xls,.xlsx";
+                        input.onchange = (ev: any) => {
+                          const f = ev.target.files?.[0];
+                          if (f) uploadTemplate(form, f);
+                        };
+                        input.click();
+                      }}
+                    >
+                      <Upload size={12} />
+                      {uploadingTemplate === form ? "Uploading..." : templates[form] ? "Replace Template" : "Upload Template"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="rates" className="space-y-4 mt-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
           <Label className="text-xs">Assessment Year</Label>
@@ -434,6 +544,27 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Effective Date Alerts */}
+      {activeTab === "rates" && effectiveDateAlerts.length > 0 && (
+        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertCircle size={14} className="text-amber-600" />
+              <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">Mid-Year Rate Changes Detected</span>
+            </div>
+            <div className="space-y-1">
+              {effectiveDateAlerts.map(r => (
+                <p key={r.id} className="text-xs text-muted-foreground">
+                  Section <strong>{r.section_code}</strong> — effective from <strong>{r.effective_from}</strong>
+                  {r.notes && ` (${r.notes})`}
+                </p>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      </TabsContent>
+      </Tabs>
     </div>
   );
 }

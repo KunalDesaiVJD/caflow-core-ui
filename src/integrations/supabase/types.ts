@@ -4826,6 +4826,8 @@ export type Database = {
           id: string
           lower_cert_no: string | null
           lower_cert_rate: number | null
+          migrated: boolean | null
+          migrated_at: string | null
           nature_of_payment: string | null
           nil_deduction_reason: string | null
           pan: string | null
@@ -4866,6 +4868,8 @@ export type Database = {
           id?: string
           lower_cert_no?: string | null
           lower_cert_rate?: number | null
+          migrated?: boolean | null
+          migrated_at?: string | null
           nature_of_payment?: string | null
           nil_deduction_reason?: string | null
           pan?: string | null
@@ -4906,6 +4910,8 @@ export type Database = {
           id?: string
           lower_cert_no?: string | null
           lower_cert_rate?: number | null
+          migrated?: boolean | null
+          migrated_at?: string | null
           nature_of_payment?: string | null
           nil_deduction_reason?: string | null
           pan?: string | null

@@ -10,10 +10,11 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Users, Clock, AlertTriangle, CheckCircle2, FileText, Inbox,
+  Users, Clock, AlertTriangle, CheckCircle2, FileText, Inbox, Printer,
 } from "lucide-react";
 
 interface ClientOption { id: string; name: string | null; pan: string | null; }
@@ -195,11 +196,44 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     return f?.work_status || "Not Started";
   };
 
+  // ─── Generate Filing Checklist ───
+  const generateChecklist = () => {
+    const forms = ["24Q", "26Q", "27Q", "27EQ"];
+    const quarters = ["Q1", "Q2", "Q3", "Q4"];
+    const rows = clients.map(client => {
+      const clientFilings = filings.filter(f => f.client_id === client.id && f.financial_year === fyFilter);
+      const qCells = quarters.map(q => {
+        const qf = clientFilings.filter(f => f.quarter === q);
+        const formStatuses = forms.map(form => {
+          const found = qf.find(f => f.tds_forms?.includes(form));
+          return found ? `${form}: ${found.work_status}` : `${form}: Not Created`;
+        }).join("<br/>");
+        return `<td style="border:1px solid #ccc;padding:6px;font-size:11px;vertical-align:top">${formStatuses}</td>`;
+      }).join("");
+      return `<tr><td style="border:1px solid #ccc;padding:6px;font-weight:bold;font-size:12px">${client.name || "—"}</td>${qCells}</tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html><html><head><title>TDS Filing Checklist — FY ${fyFilter}</title>
+      <style>body{font-family:system-ui;margin:20px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;font-size:11px;border:1px solid #ccc;padding:6px}@media print{@page{size:landscape}}</style></head><body>
+      <h2>TDS Filing Checklist — FY ${fyFilter}</h2>
+      <p style="font-size:12px;color:#666">Generated on ${format(new Date(), "dd MMM yyyy, hh:mm a")}</p>
+      <table><thead><tr><th>Client</th>${quarters.map(q => `<th>${q}<br/><span style="font-weight:normal;font-size:10px">Due: ${format(getDueDate(fyFilter, q), "dd MMM yyyy")}</span></th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody></table></body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const w = window.open(URL.createObjectURL(blob), "_blank");
+    if (w) setTimeout(() => w.print(), 500);
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">TDS Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Overview of TDS/TCS filings and compliance status</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">TDS Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Overview of TDS/TCS filings and compliance status</p>
+        </div>
+        <Button variant="outline" size="sm" className="gap-1" onClick={generateChecklist}>
+          <Printer size={14} /> Filing Checklist
+        </Button>
       </div>
 
       {/* Filter Bar */}
