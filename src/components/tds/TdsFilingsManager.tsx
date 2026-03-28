@@ -22,7 +22,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Trash2, Download, ArrowRight, Users2, RefreshCw,
+  Plus, Trash2, Download, ArrowRight, Users2, RefreshCw, Copy,
 } from "lucide-react";
 
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
