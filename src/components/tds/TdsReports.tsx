@@ -629,7 +629,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {REPORT_CARDS.map(r => (
-            <Card key={r.key} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setSelectedReport(r.key)}>
+            <Card key={r.key} className={cn("cursor-pointer hover:border-primary/50 transition-colors", r.key === "genius-export" && "border-amber-400 dark:border-amber-600 ring-1 ring-amber-400/30")} onClick={() => setSelectedReport(r.key)}>
               <CardContent className="p-5">
                 <div className="flex items-start gap-3">
                   <div className={cn("p-2 rounded-lg bg-muted", r.color)}>

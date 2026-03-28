@@ -358,15 +358,15 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     if (!filing) return;
     setFinalising(true);
     const { error } = await supabase.from("tds_filings").update({
-      work_status: "Return Prepared",
+      work_status: "Filed",
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Return marked as Ready to File" });
-      setFiling({ ...filing, work_status: "Return Prepared" });
+      toast({ title: "Return marked as Filed" });
+      setFiling({ ...filing, work_status: "Filed" });
     }
     setFinalising(false);
     setConfirmOpen(false);
@@ -556,10 +556,10 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
                   </div>
                 </div>
 
-                {filing?.work_status === "Return Prepared" ? (
+                {filing?.work_status === "Filed" ? (
                   <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
                     <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                      ✓ Return is ready. Generate Genius XLS Export from the Reports section.
+                      ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
                     </p>
                   </div>
                 ) : (
