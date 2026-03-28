@@ -81,7 +81,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (selClient !== "all") q = q.eq("client_id", selClient);
       const { data } = await q;
       setReportData(data || []);
-    } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "form-wise" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "genius-export") {
+    } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
       // Get filings first
       let fq = supabase.from("tds_filings").select("id, client_id, financial_year, quarter, tds_forms, tan, work_status")
         .eq("financial_year", selFy);
@@ -616,6 +616,72 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       case "genius-export": return renderGeniusExport();
       default: return null;
     }
+  };
+
+  const renderCrossQuarter = () => {
+    if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
+    const { deductees, challans } = reportData[0];
+    // Group by PAN across quarters
+    const panMap = new Map<string, { name: string; pan: string; quarters: Record<string, { amount: number; tds: number; count: number }> }>();
+    for (const d of deductees) {
+      const pan = d.deductee_pan || "NO-PAN";
+      const ex = panMap.get(pan) || { name: d.deductee_name || "—", pan, quarters: {} };
+      const q = d.quarter || "?";
+      if (!ex.quarters[q]) ex.quarters[q] = { amount: 0, tds: 0, count: 0 };
+      ex.quarters[q].amount += d.amount_paid_credited || 0;
+      ex.quarters[q].tds += d.total_tax_deducted || d.tds_amount || 0;
+      ex.quarters[q].count++;
+      if (!ex.name || ex.name === "—") ex.name = d.deductee_name || "—";
+      panMap.set(pan, ex);
+    }
+    // Only show deductees appearing in 2+ quarters
+    const multiQ = Array.from(panMap.values()).filter(v => Object.keys(v.quarters).length >= 2);
+    const rows = multiQ.map(v => ({
+      "Name": v.name,
+      "PAN": v.pan,
+      "Q1 Amt": v.quarters.Q1?.amount || 0,
+      "Q1 TDS": v.quarters.Q1?.tds || 0,
+      "Q2 Amt": v.quarters.Q2?.amount || 0,
+      "Q2 TDS": v.quarters.Q2?.tds || 0,
+      "Q3 Amt": v.quarters.Q3?.amount || 0,
+      "Q3 TDS": v.quarters.Q3?.tds || 0,
+      "Q4 Amt": v.quarters.Q4?.amount || 0,
+      "Q4 TDS": v.quarters.Q4?.tds || 0,
+      "Total": Object.values(v.quarters).reduce((s, q) => s + q.tds, 0),
+    }));
+    return (
+      <>
+        <div className="flex justify-end gap-2 mb-3">
+          <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Cross_Quarter", rows)}><Download size={14} /> Export Excel</Button>
+        </div>
+        <Card><CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead><TableHead>PAN</TableHead>
+                {["Q1 Amt", "Q1 TDS", "Q2 Amt", "Q2 TDS", "Q3 Amt", "Q3 TDS", "Q4 Amt", "Q4 TDS", "Total"].map(k =>
+                  <TableHead key={k} className="text-right text-xs">{k}</TableHead>
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No deductees found in multiple quarters</TableCell></TableRow>
+              ) : rows.map((r, i) => (
+                <TableRow key={i}>
+                  <TableCell className="text-sm font-medium">{r.Name}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.PAN}</TableCell>
+                  {["Q1 Amt", "Q1 TDS", "Q2 Amt", "Q2 TDS", "Q3 Amt", "Q3 TDS", "Q4 Amt", "Q4 TDS", "Total"].map(k => (
+                    <TableCell key={k} className="text-right text-sm">{formatINR((r as any)[k])}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      </>
+    );
   };
 
   if (!selectedReport) {
