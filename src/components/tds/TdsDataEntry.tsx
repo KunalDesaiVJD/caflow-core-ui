@@ -949,6 +949,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
               </CardContent>
             </Card>
           )}
+          {/* Auto-save badge */}
+          {autoSaveBadge && (
+            <div className="fixed bottom-4 right-4 z-50 bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-2">
+              ✓ Auto-saved
+            </div>
+          )}
         </>
       )}
 

@@ -583,7 +583,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
                             <Clock size={14} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy to next quarter" onClick={() => handleCopyFiling(f)}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy Filing" onClick={() => openCopyDialog(f)}>
                             <Copy size={14} />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
