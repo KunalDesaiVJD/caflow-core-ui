@@ -440,14 +440,20 @@ const NewInvoice = () => {
   useEffect(() => {
     if (docType !== "credit_note" || !clientId || !selectedFirmId) { setClientInvoices([]); return; }
     (async () => {
-      const { data } = await supabase.from("invoices")
-        .select("id, invoice_no, invoice_date, total_amount")
-        .eq("client_id", clientId)
-        .eq("firm_id", selectedFirmId)
-        .eq("document_type", "invoice")
-        .in("status", ["finalized", "sent", "paid"])
-        .order("invoice_date", { ascending: false });
-      setClientInvoices(data || []);
+      try {
+        const { data, error } = await supabase.from("invoices")
+          .select("id, invoice_no, invoice_date, total_amount")
+          .eq("client_id", clientId)
+          .eq("firm_id", selectedFirmId)
+          .eq("document_type", "invoice")
+          .in("status", ["finalized", "sent", "paid"])
+          .order("invoice_date", { ascending: false });
+        if (error) { console.error("Error fetching client invoices:", error); }
+        setClientInvoices(data || []);
+      } catch (e) {
+        console.error("Error fetching client invoices:", e);
+        setClientInvoices([]);
+      }
     })();
   }, [docType, clientId, selectedFirmId]);
 
