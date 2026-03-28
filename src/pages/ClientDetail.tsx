@@ -616,6 +616,25 @@ const ClientDetail = () => {
                   </div>
                   <Switch checked={auditForm.stock_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, stock_audit_applicable: v }))} />
                 </div>
+
+                <div className="border border-border rounded-lg p-4 space-y-2">
+                  <div>
+                    <p className="text-sm font-medium">Base Turnover / Gross Receipts</p>
+                    <p className="text-xs text-muted-foreground">For billing reference only — not printed on invoices</p>
+                  </div>
+                  <Input
+                    type="number"
+                    value={auditForm.audit_turnover}
+                    onChange={e => setAuditForm(p => ({ ...p, audit_turnover: e.target.value }))}
+                    placeholder="₹ Enter turnover amount"
+                    className="max-w-xs"
+                  />
+                  {auditForm.audit_turnover && Number(auditForm.audit_turnover) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      ₹{Number(auditForm.audit_turnover).toLocaleString("en-IN")}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <Button onClick={saveAuditSetup} disabled={auditSaving} className="gap-2">
