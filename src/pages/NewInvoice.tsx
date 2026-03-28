@@ -256,6 +256,9 @@ const NewInvoice = () => {
   const [toGstin, setToGstin] = useState("");
   const [toAddress, setToAddress] = useState("");
 
+  // Source document info (for converted docs)
+  const [sourceDocInfo, setSourceDocInfo] = useState<{ invoice_no: string; document_type: string; invoice_date: string; total_amount: number } | null>(null);
+
   // Credit note specific
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
 
