@@ -544,6 +544,27 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Effective Date Alerts */}
+      {activeTab === "rates" && effectiveDateAlerts.length > 0 && (
+        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertCircle size={14} className="text-amber-600" />
+              <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">Mid-Year Rate Changes Detected</span>
+            </div>
+            <div className="space-y-1">
+              {effectiveDateAlerts.map(r => (
+                <p key={r.id} className="text-xs text-muted-foreground">
+                  Section <strong>{r.section_code}</strong> — effective from <strong>{r.effective_from}</strong>
+                  {r.notes && ` (${r.notes})`}
+                </p>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      </TabsContent>
+      </Tabs>
     </div>
   );
 }
