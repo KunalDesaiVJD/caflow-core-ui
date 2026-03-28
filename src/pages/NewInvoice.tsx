@@ -35,7 +35,7 @@ import { format, addDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
-  FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw,
+  FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
 } from "lucide-react";
 
 // ─── GSTIN State Code Map ───
@@ -246,10 +246,18 @@ const NewInvoice = () => {
   const [baseTurnover, setBaseTurnover] = useState("");
   const [sourceDocumentId, setSourceDocumentId] = useState("");
 
+  // Editable doc number
+  const [docNoEditable, setDocNoEditable] = useState(false);
+  const [docNoManual, setDocNoManual] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+
   // Client fields
   const [toName, setToName] = useState("");
   const [toGstin, setToGstin] = useState("");
   const [toAddress, setToAddress] = useState("");
+
+  // Source document info (for converted docs)
+  const [sourceDocInfo, setSourceDocInfo] = useState<{ invoice_no: string; document_type: string; invoice_date: string; total_amount: number } | null>(null);
 
   // Credit note specific
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
@@ -328,7 +336,7 @@ const NewInvoice = () => {
 
   // Generate document number via get_next_invoice_seq
   const generateDocNumber = useCallback(async () => {
-    if (!selectedFirmId || isEdit) return;
+    if (!selectedFirmId || isEdit || docNoManual) return;
     const series = getDocSeries(docType);
     const fy = getFYFromDate(invoiceDate);
 
@@ -359,7 +367,7 @@ const NewInvoice = () => {
     } catch (e: any) {
       console.error("Error generating doc number:", e);
     }
-  }, [selectedFirmId, docType, invoiceDate, isEdit]);
+  }, [selectedFirmId, docType, invoiceDate, isEdit, docNoManual]);
 
   useEffect(() => { generateDocNumber(); }, [generateDocNumber]);
 
@@ -401,6 +409,14 @@ const NewInvoice = () => {
             showDetails: false,
           })));
         }
+        // Load source document info for linkage display
+        const srcId = (inv as any).source_document_id;
+        if (srcId) {
+          const { data: srcDoc } = await supabase.from("invoices")
+            .select("invoice_no, document_type, invoice_date, total_amount")
+            .eq("id", srcId).maybeSingle();
+          if (srcDoc) setSourceDocInfo(srcDoc as any);
+        }
       }
       setLoading(false);
     })();
@@ -435,14 +451,20 @@ const NewInvoice = () => {
   useEffect(() => {
     if (docType !== "credit_note" || !clientId || !selectedFirmId) { setClientInvoices([]); return; }
     (async () => {
-      const { data } = await supabase.from("invoices")
-        .select("id, invoice_no, invoice_date, total_amount")
-        .eq("client_id", clientId)
-        .eq("firm_id", selectedFirmId)
-        .eq("document_type", "invoice")
-        .in("status", ["finalized", "sent", "paid"])
-        .order("invoice_date", { ascending: false });
-      setClientInvoices(data || []);
+      try {
+        const { data, error } = await supabase.from("invoices")
+          .select("id, invoice_no, invoice_date, total_amount")
+          .eq("client_id", clientId)
+          .eq("firm_id", selectedFirmId)
+          .eq("document_type", "invoice")
+          .in("status", ["finalized", "sent", "paid"])
+          .order("invoice_date", { ascending: false });
+        if (error) { console.error("Error fetching client invoices:", error); }
+        setClientInvoices(data || []);
+      } catch (e) {
+        console.error("Error fetching client invoices:", e);
+        setClientInvoices([]);
+      }
     })();
   }, [docType, clientId, selectedFirmId]);
 
@@ -567,7 +589,9 @@ const NewInvoice = () => {
   const handleSave = async (newStatus?: string) => {
     if (!selectedFirmId) { setFirmError(true); toast({ title: "Please select a firm", variant: "destructive" }); return; }
     if (!clientId) { toast({ title: "Select a client", variant: "destructive" }); return; }
+    if (!invoiceNo.trim()) { toast({ title: "Document number cannot be blank", variant: "destructive" }); return; }
     if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
+    if (duplicateWarning) { toast({ title: "Document number already exists. Please change it.", variant: "destructive" }); return; }
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
@@ -576,7 +600,7 @@ const NewInvoice = () => {
       const fy = getFYFromDate(invoiceDate);
 
       const payload: any = {
-        invoice_no: invoiceNo,
+        invoice_no: invoiceNo.trim(),
         client_id: clientId,
         firm_id: selectedFirmId,
         invoice_date: invoiceDate,
@@ -595,7 +619,7 @@ const NewInvoice = () => {
         status: effectiveStatus,
         document_type: docType,
         document_series: series,
-        seq_number: seqNumber,
+        seq_number: docNoManual ? null : seqNumber,
         financial_year: fy,
         remarks_conditions: remarksConditions || null,
         base_turnover: baseTurnover ? Number(baseTurnover) : null,
@@ -640,6 +664,13 @@ const NewInvoice = () => {
         if (error) throw error;
         savedId = inserted?.id;
         toast({ title: `${DOC_TYPE_LABELS[docType]} created` });
+
+        // Mark source document as converted (for quotation/proforma → invoice conversion)
+        if (sourceDocumentId && docType === "invoice") {
+          await supabase.from("invoices")
+            .update({ status: "converted", converted_to_id: savedId, conversion_date: new Date().toISOString() })
+            .eq("id", sourceDocumentId);
+        }
       }
 
       // Auto-insert ledger entry when finalizing
@@ -1045,7 +1076,44 @@ const NewInvoice = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs">Document No</Label>
-                <Input value={invoiceNo} readOnly className="font-mono bg-muted" />
+                <div className="relative">
+                  <Input
+                    value={invoiceNo}
+                    readOnly={!docNoEditable}
+                    className={cn("font-mono pr-8", !docNoEditable && "bg-muted")}
+                    onChange={e => {
+                      setInvoiceNo(e.target.value);
+                      setDocNoManual(true);
+                      setDuplicateWarning("");
+                    }}
+                    onBlur={async () => {
+                      if (!docNoManual || !invoiceNo.trim() || !selectedFirmId) return;
+                      const { data } = await supabase.from("invoices")
+                        .select("id")
+                        .eq("invoice_no", invoiceNo.trim())
+                        .eq("firm_id", selectedFirmId)
+                        .neq("id", invoiceId || "00000000-0000-0000-0000-000000000000")
+                        .limit(1);
+                      if (data && data.length > 0) setDuplicateWarning("This number already exists!");
+                      else setDuplicateWarning("");
+                    }}
+                  />
+                  {!isLocked && !docNoEditable && (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      onClick={() => setDocNoEditable(true)}
+                      title="Edit document number"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
+                </div>
+                {duplicateWarning && (
+                  <p className="text-xs text-destructive mt-1 flex items-center gap-1">
+                    <AlertTriangle size={12} /> {duplicateWarning}
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Document Date</Label>
@@ -1062,14 +1130,36 @@ const NewInvoice = () => {
             </div>
           </div>
 
-          {/* Credit Note: Against Invoice */}
+          {/* Document History — Converted from link */}
+          {isEdit && sourceDocInfo && (
+            <div className="border border-border rounded-md p-3 bg-muted/30">
+              <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Converted from</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium capitalize">{sourceDocInfo.document_type === "quotation" ? "Quotation" : sourceDocInfo.document_type === "proforma" ? "Proforma Invoice" : sourceDocInfo.document_type}</span>
+                  <span className="text-sm font-mono ml-2">{sourceDocInfo.invoice_no}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {sourceDocInfo.invoice_date ? format(new Date(sourceDocInfo.invoice_date), "dd/MM/yyyy") : ""} · ₹{(sourceDocInfo.total_amount || 0).toLocaleString("en-IN")}
+                </div>
+              </div>
+              <Button variant="link" size="sm" className="p-0 h-auto text-xs mt-1" onClick={() => navigate(`/billing/edit/${sourceDocumentId}`)}>
+                View source document →
+              </Button>
+            </div>
+          )}
+
+
           {docType === "credit_note" && clientId && (
             <div>
               <Label className="text-xs">Against Invoice (optional)</Label>
-              <Select value={sourceDocumentId} onValueChange={setSourceDocumentId} disabled={isLocked}>
+              <Select value={sourceDocumentId || "standalone"} onValueChange={v => setSourceDocumentId(v === "standalone" ? "" : v)} disabled={isLocked}>
                 <SelectTrigger><SelectValue placeholder="Standalone credit note" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Standalone (no linked invoice)</SelectItem>
+                  <SelectItem value="standalone">Standalone (no linked invoice)</SelectItem>
+                  {clientInvoices.length === 0 && (
+                    <SelectItem value="no-invoices" disabled>No invoices found for this client</SelectItem>
+                  )}
                   {clientInvoices.map(inv => (
                     <SelectItem key={inv.id} value={inv.id}>
                       {inv.invoice_no} — {inv.invoice_date ? format(new Date(inv.invoice_date), "dd MMM yyyy") : ""} — ₹{(inv.total_amount || 0).toLocaleString("en-IN")}

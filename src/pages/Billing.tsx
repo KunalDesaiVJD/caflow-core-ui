@@ -42,7 +42,7 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, User,
+  Archive, ChevronDown, User, RefreshCw,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -659,6 +659,20 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
                           <Eye size={14} />
                         </Button>
+                        {/* Convert to Invoice — for finalized quotations/proformas */}
+                        {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
+                          <Button
+                            variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice"
+                            onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}
+                          >
+                            <RefreshCw size={14} className="text-primary" />
+                          </Button>
+                        )}
+                        {documentType === "quotation_proforma" && inv.effectiveStatus === "converted" && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" title="Already converted" disabled>
+                            <RefreshCw size={14} />
+                          </Button>
+                        )}
                         {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
