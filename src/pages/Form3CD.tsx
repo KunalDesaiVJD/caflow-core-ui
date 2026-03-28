@@ -168,6 +168,8 @@ export default function Form3CD() {
         }
       });
       setClauseData(loaded);
+      // Load clauses 1-7 editable data
+      if (e.cl_1_7 && typeof e.cl_1_7 === 'object') setCl17(e.cl_1_7);
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
