@@ -107,14 +107,25 @@ export async function generateGeniusExport(
   challans: Challan[],
   deductees: Deductee[],
 ): Promise<void> {
+  // Try Supabase storage (user-uploaded template) first, then bundled default
   let wb: XLSX.WorkBook;
   try {
-    const resp = await fetch(`/tds-templates/${formType}.xls`);
-    if (!resp.ok) throw new Error("Template not found");
-    const buf = await resp.arrayBuffer();
-    wb = XLSX.read(buf, { type: "array" });
+    const { data: storageData } = await supabase.storage.from("tds-templates").download(`${formType}.xls`);
+    if (storageData) {
+      const buf = await storageData.arrayBuffer();
+      wb = XLSX.read(buf, { type: "array" });
+    } else {
+      throw new Error("No storage template");
+    }
   } catch {
-    wb = XLSX.utils.book_new();
+    try {
+      const resp = await fetch(`/tds-templates/${formType}.xls`);
+      if (!resp.ok) throw new Error("Not found");
+      const buf = await resp.arrayBuffer();
+      wb = XLSX.read(buf, { type: "array" });
+    } catch {
+      wb = XLSX.utils.book_new();
+    }
   }
 
   const ay = fyToAY(filing.financial_year || "2025-26");
