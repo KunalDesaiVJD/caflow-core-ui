@@ -193,13 +193,28 @@ export default function ReceiptsTab() {
     setClientInvoices([]);
   };
 
+  const resolveFirmId = async (): Promise<string | null> => {
+    if (firmId) return firmId;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const metaFirm = session?.user?.user_metadata?.firm_id;
+      if (metaFirm) return metaFirm;
+      if (session?.user?.id) {
+        const { data: profile } = await supabase.from("users").select("firm_id").eq("id", session.user.id).maybeSingle();
+        if (profile?.firm_id) return profile.firm_id;
+      }
+    } catch {}
+    return null;
+  };
+
   const handleSave = async () => {
     if (!formClientId || !receiptDate || !amountReceived || Number(amountReceived) <= 0 || !paymentMode) {
       toast({ title: "Please fill all mandatory fields", variant: "destructive" });
       return;
     }
-    if (!firmId) {
-      toast({ title: "Firm not found", variant: "destructive" });
+    const resolvedFirmId = await resolveFirmId();
+    if (!resolvedFirmId) {
+      toast({ title: "Unable to resolve firm. Please refresh and try again.", variant: "destructive" });
       return;
     }
 
