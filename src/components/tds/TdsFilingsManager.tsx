@@ -119,6 +119,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("");
 
+  // Copy filing dialog
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [copySource, setCopySource] = useState<TdsFiling | null>(null);
+  const [copyQuarter, setCopyQuarter] = useState("Q1");
+  const [copyFy, setCopyFy] = useState(DEFAULT_FY);
+  const [copying, setCopying] = useState(false);
+
+  // Migration
+  const [migrationOpen, setMigrationOpen] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<{ challans: number; deductees: number; entries: number } | null>(null);
+
   // History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyFiling, setHistoryFiling] = useState<TdsFiling | null>(null);
