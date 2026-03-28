@@ -1130,7 +1130,26 @@ const NewInvoice = () => {
             </div>
           </div>
 
-          {/* Credit Note: Against Invoice */}
+          {/* Document History — Converted from link */}
+          {isEdit && sourceDocInfo && (
+            <div className="border border-border rounded-md p-3 bg-muted/30">
+              <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Converted from</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium capitalize">{sourceDocInfo.document_type === "quotation" ? "Quotation" : sourceDocInfo.document_type === "proforma" ? "Proforma Invoice" : sourceDocInfo.document_type}</span>
+                  <span className="text-sm font-mono ml-2">{sourceDocInfo.invoice_no}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {sourceDocInfo.invoice_date ? format(new Date(sourceDocInfo.invoice_date), "dd/MM/yyyy") : ""} · ₹{(sourceDocInfo.total_amount || 0).toLocaleString("en-IN")}
+                </div>
+              </div>
+              <Button variant="link" size="sm" className="p-0 h-auto text-xs mt-1" onClick={() => navigate(`/billing/edit/${sourceDocumentId}`)}>
+                View source document →
+              </Button>
+            </div>
+          )}
+
+
           {docType === "credit_note" && clientId && (
             <div>
               <Label className="text-xs">Against Invoice (optional)</Label>
