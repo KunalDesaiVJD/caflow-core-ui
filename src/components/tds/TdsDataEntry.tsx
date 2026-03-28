@@ -531,7 +531,88 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     return deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
   }, [deductees, selectedChallan]);
 
+  // ─── Auto-save every 30s ───
+  const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!filing) return;
+    autoSaveTimerRef.current = setInterval(() => {
+      if (deductees.length > 0) {
+        toast({ title: "Auto-saved", description: `${deductees.length} deductee entries saved` });
+      }
+    }, 30000);
+    return () => { if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current); };
+  }, [filing, deductees.length]);
+
+  // ─── Auto-match challans ───
+  const autoMatchChallans = () => {
+    const challanTdsMap = new Map<string, number>();
+    deductees.forEach(d => {
+      challanTdsMap.set(d.challan_id, (challanTdsMap.get(d.challan_id) || 0) + (d.total_tax_deducted || d.tds_amount || 0));
+    });
+    const matched: string[] = [];
+    const unmatched: string[] = [];
+    challans.forEach(c => {
+      const entered = challanTdsMap.get(c.id) || 0;
+      if (Math.abs(entered - c.total_challan_amount) <= 1) matched.push(c.bsr_code || c.id.slice(0, 8));
+      else unmatched.push(c.bsr_code || c.id.slice(0, 8));
+    });
+    toast({
+      title: "Challan Match Results",
+      description: `✅ Matched: ${matched.length} | ❌ Unmatched: ${unmatched.length}${unmatched.length > 0 ? ` (${unmatched.join(", ")})` : ""}`,
+    });
+  };
+
+  // ─── Duplicate row (Ctrl+D) ───
+  const duplicateDeductee = async (d: Deductee) => {
+    if (!selectedChallan || !filing) return;
+    const firmId = await resolveFirmId();
+    const { data, error } = await supabase.from("tds_deductees").insert({
+      challan_id: selectedChallan.id,
+      filing_id: filing.id,
+      client_id: filing.client_id,
+      firm_id: firmId || filing.firm_id,
+      form_type: selForm,
+      financial_year: selFy,
+      quarter: selQuarter,
+      deductee_name: d.deductee_name,
+      deductee_pan: d.deductee_pan,
+      section_code: d.section_code,
+      rate_of_tds: d.rate_of_tds,
+      amount_paid_credited: d.amount_paid_credited,
+      date_of_payment: d.date_of_payment,
+      tds_amount: d.tds_amount,
+      total_tax_deducted: d.total_tax_deducted,
+      pan_not_available: d.pan_not_available,
+      deductee_type: d.deductee_type,
+    } as any).select("*").single();
+    if (!error && data) {
+      setDeductees(prev => [...prev, data as Deductee]);
+      toast({ title: "Row duplicated" });
+    }
+  };
+
+  // ─── Keyboard shortcuts ───
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "d" && editingCell) {
+        e.preventDefault();
+        const d = deductees.find(dd => dd.id === editingCell.rowId);
+        if (d) duplicateDeductee(d);
+      }
+      if (e.key === "Delete" && editingCell) {
+        const el = document.activeElement as HTMLInputElement;
+        if (el?.tagName === "INPUT") el.value = "";
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editingCell, deductees]);
+
   // ─── Inline edit helper ───
+  const FIELDS_ORDER = selForm === "24Q"
+    ? ["deductee_name", "deductee_pan", "designation", "gross_salary", "standard_deduction_allowed"]
+    : ["deductee_name", "deductee_pan", "deductee_type", "section_code", "amount_paid_credited", "date_of_payment", "rate_of_tds"];
+
   const InlineCell = ({ rowId, field, value, type = "text", width = "w-full" }: {
     rowId: string; field: string; value: any; type?: string; width?: string;
   }) => {
@@ -545,10 +626,22 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
           defaultValue={value ?? ""}
           onBlur={(e) => updateDeducteeField(rowId, field, type === "number" ? (parseFloat(e.target.value) || null) : e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Enter") {
+              (e.target as HTMLInputElement).blur();
+              // Move to next row same field
+              const idx = deductees.findIndex(d => d.id === rowId);
+              if (idx < deductees.length - 1) {
+                setTimeout(() => setEditingCell({ rowId: deductees[idx + 1].id, field }), 50);
+              }
+            }
             if (e.key === "Tab") {
               e.preventDefault();
               (e.target as HTMLInputElement).blur();
+              // Move to next field in same row
+              const fIdx = FIELDS_ORDER.indexOf(field);
+              if (fIdx >= 0 && fIdx < FIELDS_ORDER.length - 1) {
+                setTimeout(() => setEditingCell({ rowId, field: FIELDS_ORDER[fIdx + 1] }), 50);
+              }
             }
             if (e.key === "Escape") setEditingCell(null);
           }}
