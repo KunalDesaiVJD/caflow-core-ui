@@ -475,7 +475,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
                           <TableCell className="font-medium text-sm sticky left-0 bg-background z-10">
                             <div className="flex items-center gap-1">
                               {tanMissing && (
-                                <AlertCircle size={12} className="text-destructive shrink-0" title="TAN missing" />
+                                <span title="TAN missing"><AlertCircle size={12} className="text-destructive shrink-0" /></span>
                               )}
                               <span className="truncate max-w-[140px]">{client?.name || "—"}</span>
                             </div>
