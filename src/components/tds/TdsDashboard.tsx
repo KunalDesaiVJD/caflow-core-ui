@@ -40,10 +40,10 @@ interface TdsFiling {
 }
 
 interface AuditLogEntry {
-  id: string; client_id: string | null; form_type: string | null;
-  quarter: string | null; financial_year: string | null;
-  old_status: string | null; new_status: string | null;
-  changed_by: string | null; changed_at: string | null;
+  id: string; filing_id: string | null; firm_id: string | null;
+  action_type: string; old_value: string | null; new_value: string | null;
+  changed_by: string | null; changed_by_name: string | null;
+  changed_at: string | null; remark: string | null;
 }
 
 interface RateRecord {
