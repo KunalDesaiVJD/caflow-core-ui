@@ -1154,6 +1154,13 @@ const NewInvoice = () => {
             </div>
           )}
 
+          {/* Audit Client Turnover Info Bar — internal view only, not in PDF */}
+          {isAuditClient && baseTurnover && Number(baseTurnover) > 0 && isEdit && (
+            <div className="rounded-md border border-border bg-muted/50 px-4 py-2 flex items-center gap-2">
+              <Badge variant="outline" className="text-[10px]">Audit Client</Badge>
+              <span className="text-xs text-muted-foreground">Turnover: ₹{Number(baseTurnover).toLocaleString("en-IN")}</span>
+            </div>
+          )}
 
           {docType === "credit_note" && clientId && (
             <div>
