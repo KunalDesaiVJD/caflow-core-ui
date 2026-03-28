@@ -789,6 +789,16 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           firms={firms} groups={groups} responsiblePersons={responsiblePersons}
           statusOptions={statusOptions}
         />
+        <Select value={viewBy} onValueChange={(v: any) => setViewBy(v)}>
+          <SelectTrigger className="w-[160px]"><SelectValue placeholder="View By" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All (Default)</SelectItem>
+            <SelectItem value="responsible">Responsible Person</SelectItem>
+            <SelectItem value="group">Group Wise</SelectItem>
+            <SelectItem value="firm">Firm Wise</SelectItem>
+            <SelectItem value="multifirm">Multi-Firm</SelectItem>
+          </SelectContent>
+        </Select>
         <div className="flex-1" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
