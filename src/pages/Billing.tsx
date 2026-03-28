@@ -691,6 +691,75 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       ? ["draft", "finalized", "sent", "converted"]
       : ["draft", "finalized", "sent", "paid"];
 
+  const colCount = documentType === "quotation_proforma" ? 10 : 9;
+
+  const renderInvoiceRow = (inv: Invoice & { effectiveStatus: string }) => {
+    const clientName = clientMap[inv.client_id || ""]?.name || "—";
+    const firmName = firmMap[inv.firm_id || ""] || "—";
+    const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
+    return (
+      <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
+        <TableCell>
+          <Checkbox checked={selectedIds.has(inv.id)} onCheckedChange={() => toggleSelect(inv.id)} />
+        </TableCell>
+        <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
+        {documentType === "quotation_proforma" && (
+          <TableCell><Badge variant="outline" className="text-xs capitalize">{inv.document_type}</Badge></TableCell>
+        )}
+        <TableCell className="font-medium">{clientName}</TableCell>
+        <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
+        <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
+        <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
+        <TableCell>
+          <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
+        </TableCell>
+        <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
+        <TableCell>
+          <div className="flex gap-0.5">
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
+              <Eye size={14} />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => openShareDialog(inv)}>
+              <Share2 size={14} />
+            </Button>
+            {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice" onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}>
+                <RefreshCw size={14} className="text-primary" />
+              </Button>
+            )}
+            {documentType === "quotation_proforma" && inv.effectiveStatus === "converted" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" title="Already converted" disabled>
+                <RefreshCw size={14} />
+              </Button>
+            )}
+            {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
+                    <Send size={14} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
+                    <Mail size={14} /> Send to Client
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
+                    <User size={14} /> Notify Responsible Person
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
+                <Trash2 size={14} className="text-destructive" />
+              </Button>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
   return (
     <div className="space-y-4">
       {/* Billing Reminders (invoices tab only) */}
