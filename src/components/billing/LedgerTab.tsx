@@ -364,27 +364,17 @@ function GroupLedgerView() {
   const loadData = useCallback(async () => {
     if (!groupId || firmIds.length === 0) return;
     setLoading(true);
-    // Get clients in group
     const { data: memberships } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupId);
     const clientIds = (memberships || []).map(m => m.client_id);
     if (clientIds.length === 0) { setData([]); setLoading(false); return; }
 
-    // Get client names
     const { data: clients } = await supabase.from("clients").select("id, name").in("id", clientIds);
     const clientMap: Record<string, string> = {};
     (clients || []).forEach(c => { clientMap[c.id] = c.name || "Unknown"; });
 
-    // Get entries
-    const { data: entries } = await supabase
-      .from("client_ledger_entries")
-      .select("*")
-      .in("client_id", clientIds)
-      .in("firm_id", firmIds)
-      .eq("financial_year", fy)
-      .order("entry_date", { ascending: true });
+    const entries = await buildLedgerEntries({ clientIds, firmIds, fy });
 
-    // Get invoice numbers
-    const docIds = (entries || []).filter(e => e.document_id).map(e => e.document_id);
+    const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
     if (docIds.length > 0) {
       const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
       const map: Record<string, string> = {};
@@ -392,9 +382,8 @@ function GroupLedgerView() {
       setInvoiceMap(map);
     }
 
-    // Group by client
     const grouped: Record<string, any[]> = {};
-    (entries || []).forEach(e => {
+    entries.forEach(e => {
       const cid = e.client_id;
       if (!grouped[cid]) grouped[cid] = [];
       grouped[cid].push(e);
