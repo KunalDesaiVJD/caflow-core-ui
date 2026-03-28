@@ -185,7 +185,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
 
       // W010: Interest on late deposit
       // Only flag if deposit is late and interest is 0
-      if (c.deposit_date && new Date(c.deposit_date) > qEnd15 && (c.interest_deposited || 0) === 0) {
+      const qEndPlus15 = new Date(qDates.end);
+      qEndPlus15.setDate(qEndPlus15.getDate() + 15);
+      if (c.deposit_date && new Date(c.deposit_date) > qEndPlus15 && (c.interest_deposited || 0) === 0) {
         items.push({ code: "W010", severity: "warning", description: "Interest on late deposit not included in challan", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
     }
