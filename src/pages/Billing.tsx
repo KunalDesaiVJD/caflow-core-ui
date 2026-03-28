@@ -463,30 +463,89 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     fetchData();
   };
 
-  // Bulk download ZIP
-  const handleBulkDownloadZip = async () => {
-    const selected = filtered.filter(inv => selectedIds.has(inv.id));
-    if (selected.length === 0) return;
-    toast({ title: "Generating ZIP..." });
+  // Month-wise download state
+  const [monthDownloadOpen, setMonthDownloadOpen] = useState(false);
+  const [dlMonth, setDlMonth] = useState(String(new Date().getMonth() + 1));
+  const [dlYear, setDlYear] = useState(String(new Date().getFullYear()));
+  const [dlFirm, setDlFirm] = useState("all");
+  const [bulkZipProgress, setBulkZipProgress] = useState({ current: 0, total: 0, active: false });
+
+  // Generate ZIP from an array of full invoice records
+  const generateZipFromInvoices = async (invoiceIds: string[], zipName: string) => {
+    setBulkZipProgress({ current: 0, total: invoiceIds.length, active: true });
+    toast({ title: `Generating PDFs... 0 of ${invoiceIds.length}` });
+
+    // Fetch full invoice records with all fields needed for PDF
+    const { data: fullInvoices } = await supabase.from("invoices").select("*").in("id", invoiceIds);
+    if (!fullInvoices || fullInvoices.length === 0) {
+      setBulkZipProgress({ current: 0, total: 0, active: false });
+      toast({ title: "No invoices found", variant: "destructive" });
+      return;
+    }
 
     const zip = new JSZip();
-    for (const inv of selected) {
-      const clientName = clientMap[inv.client_id || ""]?.name || "Unknown";
-      const safeNo = (inv.invoice_no || "doc").replace(/\//g, "-");
-      const safeName = clientName.replace(/[^a-zA-Z0-9]/g, "_");
-      // Generate a simple HTML receipt as PDF placeholder
-      const content = `Invoice: ${inv.invoice_no}\nClient: ${clientName}\nAmount: ${inv.total_amount || inv.amount || 0}\nDate: ${inv.invoice_date || ""}`;
-      zip.file(`${safeNo}_${safeName}.txt`, content);
+    for (let i = 0; i < fullInvoices.length; i++) {
+      const inv = fullInvoices[i];
+      const clientName = clientMap[inv.client_id || ""]?.name || inv.to_name || "Unknown";
+      setBulkZipProgress({ current: i + 1, total: fullInvoices.length, active: true });
+      toast({ title: `Generating PDF ${i + 1} of ${fullInvoices.length}...` });
+
+      try {
+        const pdfBlob = await generateInvoicePdfBlob(inv as any);
+        const filename = invoicePdfFilename(inv.invoice_no, clientName);
+        zip.file(filename, pdfBlob);
+      } catch (err) {
+        console.error("PDF generation failed for", inv.invoice_no, err);
+        // Skip failed ones
+      }
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `documents_${format(new Date(), "yyyyMMdd")}.zip`;
+    a.download = zipName;
     a.click();
     URL.revokeObjectURL(url);
-    toast({ title: `Downloaded ${selected.length} documents` });
+    setBulkZipProgress({ current: 0, total: 0, active: false });
+    toast({ title: `Downloaded ${fullInvoices.length} invoices as PDF` });
+  };
+
+  // Bulk download ZIP (selected invoices)
+  const handleBulkDownloadZip = async () => {
+    const selected = filtered.filter(inv => selectedIds.has(inv.id));
+    if (selected.length === 0) return;
+    await generateZipFromInvoices(selected.map(s => s.id), `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
+  };
+
+  // Month-wise download
+  const handleMonthDownload = async () => {
+    const month = parseInt(dlMonth);
+    const year = parseInt(dlYear);
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endDay = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${String(month).padStart(2, "0")}-${endDay}`;
+
+    let q = supabase.from("invoices").select("id, invoice_no, client_id, to_name")
+      .in("document_type", docTypeFilter)
+      .gte("invoice_date", startDate)
+      .lte("invoice_date", endDate);
+    if (dlFirm !== "all") q = q.eq("firm_id", dlFirm);
+    else if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+
+    const { data } = await q;
+    if (!data || data.length === 0) {
+      toast({ title: "No invoices found for selected month", variant: "destructive" });
+      return;
+    }
+
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const firmLabel = dlFirm !== "all" ? (firmMap[dlFirm] || "Firm").replace(/[^a-zA-Z0-9]/g, "_") : "AllFirms";
+    const zipName = `Invoices_${monthNames[month - 1]}_${year}_${firmLabel}.zip`;
+
+    setMonthDownloadOpen(false);
+    await generateZipFromInvoices(data.map(d => d.id), zipName);
+    toast({ title: `Downloaded ${data.length} invoices for ${monthNames[month - 1]} ${year}` });
   };
 
   const toggleSelect = (id: string) => {
