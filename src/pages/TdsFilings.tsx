@@ -117,7 +117,7 @@ interface TdsFiling {
   remarks: string | null; created_at: string | null;
 }
 
-interface ClientOption { id: string; name: string | null; pan: string | null; }
+interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
 interface UserOption { id: string; name: string | null; }
 
 // ─── Helpers ───
