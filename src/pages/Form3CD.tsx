@@ -35,6 +35,18 @@ function computeAY(fy: string | null): string {
   return `${startYear + 1}-${String(startYear + 2).slice(2)}`;
 }
 
+function computeFYDates(fy: string | null): { from: string; to: string } {
+  if (!fy) return { from: "", to: "" };
+  const match = fy.match(/(\d{4})/);
+  if (!match) return { from: "", to: "" };
+  const start = parseInt(match[1]);
+  return { from: `01/04/${start}`, to: `31/03/${start + 1}` };
+}
+
+const ENTITY_STATUS_OPTIONS = [
+  'Individual', 'HUF', 'Firm', 'AOP/BOI', 'Company', 'Trust', 'Others'
+];
+
 function isClauseFilled(data: ClauseData | undefined): boolean {
   if (!data || Object.keys(data).length === 0) return false;
   return Object.values(data).some(v => {
