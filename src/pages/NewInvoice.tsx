@@ -435,7 +435,7 @@ const NewInvoice = () => {
         setToAddress(addrParts.join(", "));
       }
     }
-    // Check audit classification
+    // Check audit classification & fetch turnover
     (async () => {
       const fy = getFYFromDate(invoiceDate);
       const { data } = await supabase.from("client_fy_classifications")
@@ -443,7 +443,12 @@ const NewInvoice = () => {
         .eq("client_id", clientId)
         .eq("financial_year", fy)
         .maybeSingle();
-      setIsAuditClient(data?.classification === "Audit");
+      const isAudit = data?.classification === "Audit";
+      setIsAuditClient(isAudit);
+      if (isAudit && !baseTurnover) {
+        const { data: cl } = await supabase.from("clients").select("audit_turnover").eq("id", clientId).maybeSingle();
+        if ((cl as any)?.audit_turnover) setBaseTurnover(String((cl as any).audit_turnover));
+      }
     })();
   }, [clientId, clients, invoiceDate]);
 
