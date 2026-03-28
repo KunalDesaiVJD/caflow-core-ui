@@ -36,6 +36,121 @@ function getFYOptions(): string[] {
   return fys;
 }
 
+function fyToDateRange(fy: string): { start: string; end: string } {
+  const [startYearStr] = fy.split("-");
+  const startYear = parseInt(startYearStr, 10);
+  return { start: `${startYear}-04-01`, end: `${startYear + 1}-03-31` };
+}
+
+interface LedgerEntry {
+  id: string;
+  entry_date: string;
+  entry_type: string;
+  document_id: string | null;
+  debit_amount: number;
+  credit_amount: number;
+  narration: string;
+  client_id: string;
+}
+
+async function buildLedgerEntries(
+  filters: { clientIds: string[]; firmIds: string[]; fy: string }
+): Promise<LedgerEntry[]> {
+  const { start, end } = fyToDateRange(filters.fy);
+  const entries: LedgerEntry[] = [];
+
+  // 1. First try client_ledger_entries
+  let leQuery = supabase.from("client_ledger_entries").select("*")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .gte("entry_date", start).lte("entry_date", end)
+    .order("entry_date", { ascending: true });
+  const { data: leData } = await leQuery;
+
+  if (leData && leData.length > 0) {
+    return leData.map(e => ({
+      id: e.id,
+      entry_date: e.entry_date,
+      entry_type: e.entry_type,
+      document_id: e.document_id,
+      debit_amount: Number(e.debit_amount) || 0,
+      credit_amount: Number(e.credit_amount) || 0,
+      narration: e.narration || "",
+      client_id: e.client_id,
+    }));
+  }
+
+  // 2. Fallback: build from invoices + receipts directly
+  const { data: invoices } = await supabase.from("invoices")
+    .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .in("status", ["finalized", "sent", "overdue", "paid"])
+    .gte("invoice_date", start).lte("invoice_date", end)
+    .order("invoice_date", { ascending: true });
+
+  (invoices || []).forEach(inv => {
+    const isCredit = inv.document_type === "credit_note";
+    entries.push({
+      id: `inv-${inv.id}`,
+      entry_date: inv.invoice_date,
+      entry_type: isCredit ? "credit_note" : "invoice",
+      document_id: inv.id,
+      debit_amount: isCredit ? 0 : Number(inv.total_amount) || 0,
+      credit_amount: isCredit ? Number(inv.total_amount) || 0 : 0,
+      narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
+      client_id: inv.client_id || "",
+    });
+  });
+
+  const { data: receipts } = await supabase.from("billing_receipts")
+    .select("id, client_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .gte("receipt_date", start).lte("receipt_date", end)
+    .order("receipt_date", { ascending: true });
+
+  (receipts || []).forEach(r => {
+    entries.push({
+      id: `rct-${r.id}`,
+      entry_date: r.receipt_date,
+      entry_type: "receipt",
+      document_id: r.id,
+      debit_amount: 0,
+      credit_amount: Number(r.amount_received) || 0,
+      narration: `Payment received — ${r.payment_mode}`,
+      client_id: r.client_id,
+    });
+    if (Number(r.tds_amount) > 0) {
+      entries.push({
+        id: `tds-${r.id}`,
+        entry_date: r.receipt_date,
+        entry_type: "adjustment",
+        document_id: r.id,
+        debit_amount: 0,
+        credit_amount: Number(r.tds_amount),
+        narration: "TDS deducted",
+        client_id: r.client_id,
+      });
+    }
+    if (Number(r.gst_tds_amount) > 0) {
+      entries.push({
+        id: `gsttds-${r.id}`,
+        entry_date: r.receipt_date,
+        entry_type: "adjustment",
+        document_id: r.id,
+        debit_amount: 0,
+        credit_amount: Number(r.gst_tds_amount),
+        narration: "GST TDS deducted",
+        client_id: r.client_id,
+      });
+    }
+  });
+
+  entries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+  return entries;
+}
+
 // ═══════════════════════════════════════
 // CLIENT LEDGER VIEW
 // ═══════════════════════════════════════
