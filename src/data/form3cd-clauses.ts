@@ -474,15 +474,70 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
               { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
               { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
               { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
-              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
-              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
-              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
-              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
-              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
-              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
-              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
             ],
           },
+          // (ii)(B)
+          {
+            key: 'cl_21b_iiB', heading: '(ii)(B) — Details of payment referred to in 40(a)(ia) — tax deducted NOT paid before 139(1) due date',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (iii)(A)
+          {
+            key: 'cl_21b_iiiA', heading: '(iii)(A) — Details of payment referred to in 40(a)(ib) — levy NOT deducted',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (iii)(B)
+          {
+            key: 'cl_21b_iiiB', heading: '(iii)(B) — Details of payment referred to in 40(a)(ib) — levy deducted NOT paid',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (iv) — Single field
+          { key: 'cl_21b_iv', heading: '(iv) — Fringe benefit tax under sub-clause (ic)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (v) — Single field
+          { key: 'cl_21b_v', heading: '(v) — Wealth tax under sub-clause (iia)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (vi) — Single field
+          { key: 'cl_21b_vi', heading: '(vi) — Royalty, license fee, service fee etc. under sub-clause (iib)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (vii) — Salary payable
+          {
+            key: 'cl_21b_vii', heading: '(vii) — Salary payable outside India / to non-resident without TDS — sub-clause (iii)',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (viii) — Single field
+          { key: 'cl_21b_viii', heading: '(viii) — Payment to PF/other fund etc. under sub-clause (iv)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (ix) — Single field
+          { key: 'cl_21b_ix', heading: '(ix) — Tax paid by employer for perquisites under sub-clause (v)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
           // (ii)(B)
           {
             key: 'cl_21b_iiB', heading: '(ii)(B) — Details of payment referred to in 40(a)(ia) — tax deducted NOT paid before 139(1) due date',
