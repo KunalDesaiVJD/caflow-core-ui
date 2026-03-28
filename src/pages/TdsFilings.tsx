@@ -185,17 +185,16 @@ const TdsFilings = () => {
   }, [user?.firm_id]);
 
   const fetchClients = useCallback(async () => {
-    const firmId = await resolveFirmId();
     const { data: svcData } = await supabase.from("client_services").select("client_id, service_category_id, is_active").eq("is_active", true);
     const { data: categories } = await supabase.from("service_categories").select("id, linked_module").eq("linked_module", "tds");
     const tdsCatIds = new Set((categories || []).map(c => c.id));
     const tdsClientIds = (svcData || []).filter(s => tdsCatIds.has(s.service_category_id)).map(s => s.client_id);
     if (tdsClientIds.length === 0) { setClients([]); return; }
-    let q = supabase.from("clients").select("id, name, pan").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
-    if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+    // RLS handles firm-based access control, no need for code-level firm_id filter
+    const q = supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
     const { data } = await q;
     setClients((data as ClientOption[]) || []);
-  }, [isSuperadmin, resolveFirmId]);
+  }, [resolveFirmId]);
 
   const fetchUsers = useCallback(async () => {
     const firmId = await resolveFirmId();
