@@ -228,6 +228,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [groupFilter, setGroupFilter] = useState("all");
   const [responsibleFilter, setResponsibleFilter] = useState("all");
   const [multiFirmFilter, setMultiFirmFilter] = useState<string[]>([]);
+  const [viewBy, setViewBy] = useState<"all" | "responsible" | "group" | "firm" | "multifirm">("all");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // For filter dropdowns
