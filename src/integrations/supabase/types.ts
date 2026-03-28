@@ -4981,6 +4981,80 @@ export type Database = {
           },
         ]
       }
+      tds_filing_audit_log: {
+        Row: {
+          changed_at: string | null
+          changed_by: string | null
+          client_id: string | null
+          filing_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          form_type: string | null
+          id: string
+          new_status: string | null
+          notes: string | null
+          old_status: string | null
+          quarter: string | null
+        }
+        Insert: {
+          changed_at?: string | null
+          changed_by?: string | null
+          client_id?: string | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          form_type?: string | null
+          id?: string
+          new_status?: string | null
+          notes?: string | null
+          old_status?: string | null
+          quarter?: string | null
+        }
+        Update: {
+          changed_at?: string | null
+          changed_by?: string | null
+          client_id?: string | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          form_type?: string | null
+          id?: string
+          new_status?: string | null
+          notes?: string | null
+          old_status?: string | null
+          quarter?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_filing_audit_log_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filing_audit_log_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filing_audit_log_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_filing_audit_log_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tds_filings: {
         Row: {
           acknowledgment_number: string | null
