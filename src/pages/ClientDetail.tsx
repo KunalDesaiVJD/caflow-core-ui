@@ -336,6 +336,7 @@ const ClientDetail = () => {
         caro_applicable: auditForm.caro_applicable,
         internal_audit_applicable: auditForm.internal_audit_applicable,
         stock_audit_applicable: auditForm.stock_audit_applicable,
+        audit_turnover: auditForm.audit_turnover ? Number(auditForm.audit_turnover) : null,
       } as any).eq("id", clientId);
       toast({ title: "Audit setup saved" });
     } catch (e: any) {

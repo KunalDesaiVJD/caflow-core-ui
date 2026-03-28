@@ -1812,6 +1812,7 @@ export type Database = {
         Row: {
           address: string | null
           audit_config: Json | null
+          audit_turnover: number | null
           business_activity: string | null
           caro_applicable: boolean | null
           cin: string | null
@@ -1845,6 +1846,7 @@ export type Database = {
         Insert: {
           address?: string | null
           audit_config?: Json | null
+          audit_turnover?: number | null
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
@@ -1878,6 +1880,7 @@ export type Database = {
         Update: {
           address?: string | null
           audit_config?: Json | null
+          audit_turnover?: number | null
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
