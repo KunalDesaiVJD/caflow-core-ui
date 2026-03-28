@@ -1175,11 +1175,45 @@ const NewInvoice = () => {
             </div>
           )}
 
-          {/* Base Turnover (Audit clients only) */}
+          {/* Audit Billing — Turnover Reference Panel */}
           {isAuditClient && (
-            <div>
-              <Label className="text-xs">Base Turnover (Reference Only — Not Printed)</Label>
-              <Input type="number" value={baseTurnover} onChange={e => setBaseTurnover(e.target.value)} placeholder="₹" disabled={isLocked} />
+            <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-xs">Audit Billing</Badge>
+                <span className="text-xs text-muted-foreground">Turnover Reference</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Base Turnover (Reference Only — Not Printed on Invoice)</Label>
+                <Input type="number" value={baseTurnover} onChange={e => setBaseTurnover(e.target.value)} placeholder="₹ Enter turnover" disabled={isLocked} className="max-w-xs" />
+                {baseTurnover && Number(baseTurnover) > 0 && (
+                  <p className="text-xs text-muted-foreground font-medium">₹{Number(baseTurnover).toLocaleString("en-IN")}</p>
+                )}
+              </div>
+              {baseTurnover && Number(baseTurnover) > 0 && (
+                <div className="rounded border border-border bg-background p-3 space-y-1">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Suggested Fee Scale (Reference Only)</p>
+                  {(() => {
+                    const t = Number(baseTurnover);
+                    const scales = [
+                      { max: 10000000, label: "Up to ₹1 Cr", range: "₹25,000 – ₹50,000" },
+                      { max: 50000000, label: "₹1 Cr – ₹5 Cr", range: "₹50,000 – ₹1,00,000" },
+                      { max: 250000000, label: "₹5 Cr – ₹25 Cr", range: "₹1,00,000 – ₹2,50,000" },
+                      { max: Infinity, label: "Above ₹25 Cr", range: "₹2,50,000 and above" },
+                    ];
+                    return scales.map((s, i) => {
+                      const isActive = i === 0 ? t <= s.max : t <= s.max && t > (scales[i - 1]?.max || 0);
+                      return (
+                        <div key={i} className={`flex justify-between text-xs px-2 py-1 rounded ${isActive ? "bg-primary/10 text-primary font-semibold" : "text-muted-foreground"}`}>
+                          <span>{s.label}</span>
+                          <span>{s.range}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                  <p className="text-[10px] text-muted-foreground mt-1 italic">These ranges are indicative only. The actual billing amount is fully editable below.</p>
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground">Manual Override — final amount to be billed in line items below</p>
             </div>
           )}
 
