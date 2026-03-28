@@ -1056,7 +1056,44 @@ const NewInvoice = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs">Document No</Label>
-                <Input value={invoiceNo} readOnly className="font-mono bg-muted" />
+                <div className="relative">
+                  <Input
+                    value={invoiceNo}
+                    readOnly={!docNoEditable}
+                    className={cn("font-mono pr-8", !docNoEditable && "bg-muted")}
+                    onChange={e => {
+                      setInvoiceNo(e.target.value);
+                      setDocNoManual(true);
+                      setDuplicateWarning("");
+                    }}
+                    onBlur={async () => {
+                      if (!docNoManual || !invoiceNo.trim() || !selectedFirmId) return;
+                      const { data } = await supabase.from("invoices")
+                        .select("id")
+                        .eq("invoice_no", invoiceNo.trim())
+                        .eq("firm_id", selectedFirmId)
+                        .neq("id", invoiceId || "00000000-0000-0000-0000-000000000000")
+                        .limit(1);
+                      if (data && data.length > 0) setDuplicateWarning("This number already exists!");
+                      else setDuplicateWarning("");
+                    }}
+                  />
+                  {!isLocked && !docNoEditable && (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      onClick={() => setDocNoEditable(true)}
+                      title="Edit document number"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
+                </div>
+                {duplicateWarning && (
+                  <p className="text-xs text-destructive mt-1 flex items-center gap-1">
+                    <AlertTriangle size={12} /> {duplicateWarning}
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Document Date</Label>
