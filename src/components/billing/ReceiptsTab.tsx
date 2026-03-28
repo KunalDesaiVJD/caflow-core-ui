@@ -229,7 +229,7 @@ export default function ReceiptsTab() {
     try {
       // Step 1: Insert receipt
       const { data: newReceipt, error: rErr } = await supabase.from("billing_receipts").insert({
-        firm_id: firmId,
+        firm_id: resolvedFirmId,
         client_id: formClientId,
         invoice_id: invoiceId,
         receipt_type: receiptType,
