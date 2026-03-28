@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,11 +22,14 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Trash2, Pencil, Receipt, AlertTriangle, CheckCircle2,
-  ArrowRight, CreditCard, FileText, RefreshCw, Copy,
+  Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
+  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw,
 } from "lucide-react";
 
 // ─── Types ───
@@ -70,6 +73,13 @@ interface Deductee {
   remarks: string | null;
 }
 
+interface RateEntry {
+  section_code: string; nature_of_payment: string | null;
+  rate_individual: number | null; rate_company: number | null;
+  rate_no_pan: number | null; threshold_individual: number | null;
+  threshold_company: number | null;
+}
+
 interface Props {
   clients: ClientOption[];
   users: UserOption[];
@@ -84,12 +94,15 @@ const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; ret
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const DEDUCTEE_TYPES = ["Company", "Individual", "HUF", "Firm", "AOP", "BOI", "Trust", "AJP"];
-const NIL_REASONS = [
-  { code: "A", label: "A — Lower/No deduction certificate u/s 197" },
-  { code: "B", label: "B — Declaration u/s 197A" },
-  { code: "C", label: "C — Payment to Govt" },
-  { code: "Y", label: "Y — Other reason" },
-  { code: "Z", label: "Z — Not applicable" },
+
+const REASON_CODES = [
+  { code: "A", label: "A — Below threshold (no deduction required)" },
+  { code: "B", label: "B — Lower rate certificate u/s 197" },
+  { code: "C", label: "C — No deduction u/s 197A (Form 15G/15H)" },
+  { code: "D", label: "D — Payment to Government" },
+  { code: "E", label: "E — Notification/rules exemption" },
+  { code: "Y", label: "Y — Any other reason" },
+  { code: "Z", label: "Z — Higher rate u/s 206AA (PAN not available)" },
 ];
 
 const getCurrentQuarter = (): string => {
@@ -100,7 +113,7 @@ const getCurrentQuarter = (): string => {
   return "Q4";
 };
 
-// New Regime AY 2026-27
+// 24Q tax computation
 const NEW_REGIME_SLABS = [
   { from: 0, to: 400000, rate: 0 },
   { from: 400001, to: 800000, rate: 5 },
@@ -117,23 +130,6 @@ const OLD_REGIME_SLABS = [
   { from: 1000001, to: Infinity, rate: 30 },
 ];
 
-const calcTax = (income: number, regime: "new" | "old"): number => {
-  const slabs = regime === "new" ? NEW_REGIME_SLABS : OLD_REGIME_SLABS;
-  let tax = 0;
-  for (const slab of slabs) {
-    if (income <= 0) break;
-    const taxable = Math.min(income, slab.to - slab.from + 1);
-    tax += taxable * slab.rate / 100;
-    income -= taxable;
-  }
-  // Rebate
-  if (regime === "new") {
-    const totalIncome = slabs.reduce((s, sl) => s, 0); // re-calc
-    // Rebate u/s 87A: income up to 12L = full rebate
-  }
-  return Math.round(tax);
-};
-
 const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number => {
   let tax = 0;
   const slabs = regime === "new" ? NEW_REGIME_SLABS : OLD_REGIME_SLABS;
@@ -145,23 +141,25 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
     tax += taxable * slab.rate / 100;
     remaining -= taxable;
   }
-  // Rebate u/s 87A
   if (regime === "new" && totalIncome <= 1200000) tax = 0;
   if (regime === "old" && totalIncome <= 500000) tax = Math.max(0, tax - 12500);
-  // Cess 4%
   const cess = Math.round(tax * 0.04);
   return Math.round(tax + cess);
 };
 
+// ═══════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════
 export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // Filter state
+  // Filing selector state
   const [selClient, setSelClient] = useState("");
   const [selFy, setSelFy] = useState(DEFAULT_FY);
   const [selQuarter, setSelQuarter] = useState(getCurrentQuarter());
   const [selForm, setSelForm] = useState("26Q");
+  const [filingLoaded, setFilingLoaded] = useState(false);
 
   // Data state
   const [filing, setFiling] = useState<TdsFiling | null>(null);
@@ -169,16 +167,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [deductees, setDeductees] = useState<Deductee[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
-  const [rateMaster, setRateMaster] = useState<any[]>([]);
+  const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
 
   // Challan dialog
   const [challanDialogOpen, setChallanDialogOpen] = useState(false);
   const [editingChallan, setEditingChallan] = useState<Challan | null>(null);
   const [challanForm, setChallanForm] = useState<Record<string, any>>({});
-
-  // Deductee inline editing
-  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
-  const [editValue, setEditValue] = useState("");
 
   // 24Q salary drawer
   const [salaryDrawerOpen, setSalaryDrawerOpen] = useState(false);
@@ -186,59 +180,59 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [salaryForm, setSalaryForm] = useState<Record<string, any>>({});
   const [taxRegime, setTaxRegime] = useState<"new" | "old">("new");
 
-  // Fetch rate master for auto-fill
+  // Auto-save ref
+  const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ─── Rate Master fetch ───
   useEffect(() => {
     const fetchRates = async () => {
-      const firmId = await resolveFirmId();
       const ay = selFy.split("-");
       const assessmentYear = `${parseInt(ay[0]) + 1}-${String(parseInt(ay[0]) + 2).slice(2)}`;
-      let q = supabase.from("tds_rate_master").select("*")
-        .eq("form_type", selForm)
-        .eq("is_active", true);
-      const { data } = await q;
-      setRateMaster(data || []);
+      const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
+        .eq("form_type", selForm).eq("is_active", true);
+      setRateMaster((data || []) as RateEntry[]);
     };
     fetchRates();
-  }, [selForm, selFy, resolveFirmId]);
+  }, [selForm, selFy]);
 
-  // Fetch filing for selected combo
-  const fetchFiling = useCallback(async () => {
-    if (!selClient) { setFiling(null); setChallans([]); setDeductees([]); return; }
+  // ─── Load Filing ───
+  const loadFiling = useCallback(async () => {
+    if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
     setLoading(true);
+    setFilingLoaded(false);
     const { data } = await supabase.from("tds_filings").select("*")
-      .eq("client_id", selClient)
-      .eq("financial_year", selFy)
-      .eq("quarter", selQuarter)
-      .limit(10);
-    
+      .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
     const match = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
     setFiling(match as TdsFiling || null);
-    
     if (match) {
-      await fetchChallans(match.id);
+      await fetchChallans((match as TdsFiling).id);
     } else {
       setChallans([]);
       setDeductees([]);
       setSelectedChallan(null);
     }
+    setFilingLoaded(true);
     setLoading(false);
   }, [selClient, selFy, selQuarter, selForm]);
 
-  useEffect(() => { fetchFiling(); }, [fetchFiling]);
+  const resetFiling = () => {
+    setFiling(null);
+    setChallans([]);
+    setDeductees([]);
+    setSelectedChallan(null);
+    setFilingLoaded(false);
+  };
 
   const fetchChallans = async (filingId: string) => {
     const { data } = await supabase.from("tds_challans").select("*")
       .eq("filing_id", filingId).order("deposit_date", { ascending: true });
     const list = (data || []) as Challan[];
     setChallans(list);
-    if (list.length > 0 && !selectedChallan) {
+    if (list.length > 0) {
       setSelectedChallan(list[0]);
       fetchDeductees(list[0].id);
-    } else if (selectedChallan) {
-      const stillExists = list.find(c => c.id === selectedChallan.id);
-      if (stillExists) fetchDeductees(stillExists.id);
-      else { setSelectedChallan(list[0] || null); if (list[0]) fetchDeductees(list[0].id); else setDeductees([]); }
     } else {
+      setSelectedChallan(null);
       setDeductees([]);
     }
   };
@@ -254,27 +248,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     fetchDeductees(c.id);
   };
 
-  // ─── Create Filing ───
-  const createFiling = async () => {
-    if (!selClient) return;
-    const firmId = await resolveFirmId();
-    const client = clients.find(c => c.id === selClient);
-    const { data, error } = await supabase.from("tds_filings").insert({
-      client_id: selClient,
-      firm_id: firmId,
-      financial_year: selFy,
-      quarter: selQuarter,
-      tds_forms: [selForm],
-      work_status: "Not Started",
-      tan: (client as any)?.tan_number || null,
-      last_updated_by: user?.id,
-      last_updated_at: new Date().toISOString(),
-    } as any).select("*").single();
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    toast({ title: "Filing created" });
-    setFiling(data as TdsFiling);
-    setChallans([]);
-    setDeductees([]);
+  // ─── Rate lookup helpers ───
+  const getRateForSection = (sectionCode: string, deducteeType?: string | null): { rate: number | null; noPanRate: number | null; nature: string | null; threshold: number | null } => {
+    const match = rateMaster.find(r => r.section_code === sectionCode);
+    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null };
+    const isCompany = deducteeType === "Company";
+    return {
+      rate: isCompany ? match.rate_company : match.rate_individual,
+      noPanRate: match.rate_no_pan,
+      nature: match.nature_of_payment,
+      threshold: isCompany ? match.threshold_company : match.threshold_individual,
+    };
   };
 
   // ─── Challan CRUD ───
@@ -284,8 +268,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       bsr_code: "", challan_serial_no: "", deposit_date: "",
       minor_head: "200", total_tax: "", surcharge: "", education_cess: "",
       interest: "", others: "", is_book_entry: false,
-      transfer_voucher_no: "", cheque_dd_no: "", bank_name: "",
-      section_code: "", remarks: "",
+      transfer_voucher_no: "", bank_name: "", section_code: "", remarks: "",
     });
     setChallanDialogOpen(true);
   };
@@ -302,7 +285,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       others: String(c.others_deposited || ""),
       is_book_entry: c.is_book_entry,
       transfer_voucher_no: c.transfer_voucher_no || "",
-      cheque_dd_no: c.cheque_dd_no || "",
       bank_name: c.bank_name || "",
       section_code: c.section_code || "",
       remarks: c.challan_remarks || "",
@@ -320,16 +302,18 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   const saveChallan = async () => {
     if (!filing) return;
+    if (!challanForm.bsr_code || challanForm.bsr_code.length !== 7) {
+      toast({ title: "BSR Code must be 7 digits", variant: "destructive" }); return;
+    }
+    if (!challanForm.challan_serial_no || challanForm.challan_serial_no.length !== 5) {
+      toast({ title: "Serial No must be 5 digits", variant: "destructive" }); return;
+    }
     const firmId = await resolveFirmId();
     const payload: any = {
-      filing_id: filing.id,
-      client_id: filing.client_id,
-      firm_id: firmId || filing.firm_id,
-      form_type: selForm,
-      financial_year: selFy,
-      quarter: selQuarter,
-      bsr_code: challanForm.bsr_code || null,
-      challan_serial_no: challanForm.challan_serial_no || null,
+      filing_id: filing.id, client_id: filing.client_id,
+      firm_id: firmId || filing.firm_id, form_type: selForm,
+      financial_year: selFy, quarter: selQuarter,
+      bsr_code: challanForm.bsr_code, challan_serial_no: challanForm.challan_serial_no,
       deposit_date: challanForm.deposit_date || null,
       total_tax_deposited: parseFloat(challanForm.total_tax) || 0,
       surcharge_deposited: parseFloat(challanForm.surcharge) || 0,
@@ -340,7 +324,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       minor_head_of_challan: challanForm.minor_head || "200",
       is_book_entry: challanForm.is_book_entry || false,
       transfer_voucher_no: challanForm.is_book_entry ? challanForm.transfer_voucher_no || null : null,
-      cheque_dd_no: !challanForm.is_book_entry ? challanForm.cheque_dd_no || null : null,
       bank_name: challanForm.bank_name || null,
       section_code: challanForm.section_code || null,
       challan_remarks: challanForm.remarks || null,
@@ -356,10 +339,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
     await fetchChallans(filing.id);
-    // Update filing status
-    if (filing.work_status === "Not Started") {
-      await supabase.from("tds_filings").update({ work_status: "Data Entry in Progress", last_updated_by: user?.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
-    }
   };
 
   const deleteChallan = async (id: string) => {
@@ -374,40 +353,38 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (!selectedChallan || !filing) return;
     const firmId = await resolveFirmId();
     const defaultSection = selectedChallan.section_code || "";
-    const rate = getRateForSection(defaultSection);
+    const { rate } = getRateForSection(defaultSection);
     const { data, error } = await supabase.from("tds_deductees").insert({
-      challan_id: selectedChallan.id,
-      filing_id: filing.id,
-      client_id: filing.client_id,
-      firm_id: firmId || filing.firm_id,
-      form_type: selForm,
-      financial_year: selFy,
-      quarter: selQuarter,
-      deductee_name: "",
-      section_code: defaultSection,
-      rate_of_tds: rate,
-      pan_not_available: false,
+      challan_id: selectedChallan.id, filing_id: filing.id,
+      client_id: filing.client_id, firm_id: firmId || filing.firm_id,
+      form_type: selForm, financial_year: selFy, quarter: selQuarter,
+      deductee_name: "", section_code: defaultSection,
+      rate_of_tds: rate, pan_not_available: false,
     } as any).select("*").single();
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     setDeductees(prev => [...prev, data as Deductee]);
   };
 
-  const getRateForSection = (sectionCode: string): number | null => {
-    const match = rateMaster.find((r: any) => r.section_code === sectionCode);
-    if (match) return match.rate_individual;
-    return null;
-  };
-
   const updateDeducteeField = async (deducteeId: string, field: string, value: any) => {
     const deductee = deductees.find(d => d.id === deducteeId);
     if (!deductee) return;
-
     const updates: Record<string, any> = { [field]: value };
 
-    // Smart defaults
     if (field === "section_code") {
-      const rate = getRateForSection(value);
+      const { rate, nature } = getRateForSection(value, deductee.deductee_type);
       if (rate !== null) {
+        updates.rate_of_tds = deductee.pan_not_available ? (getRateForSection(value).noPanRate || 20) : rate;
+        if (deductee.amount_paid_credited) {
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
+          updates.total_tax_deducted = updates.tds_amount;
+        }
+        updates.nature_of_payment = nature;
+      }
+    }
+
+    if (field === "deductee_type") {
+      const { rate } = getRateForSection(deductee.section_code, value);
+      if (rate !== null && !deductee.pan_not_available) {
         updates.rate_of_tds = rate;
         if (deductee.amount_paid_credited) {
           updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
@@ -415,39 +392,55 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         }
       }
     }
+
     if (field === "amount_paid_credited") {
       const amt = parseFloat(value) || 0;
       const rate = deductee.rate_of_tds || 0;
       updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
       updates.total_tax_deducted = updates.tds_amount;
+      // Auto-suggest reason A if below threshold
+      const { threshold } = getRateForSection(deductee.section_code, deductee.deductee_type);
+      if (threshold && amt < threshold && updates.tds_amount === 0) {
+        updates.reason_for_lower_or_nil_deduction = "A";
+      }
     }
+
     if (field === "rate_of_tds") {
       const rate = parseFloat(value) || 0;
       const amt = deductee.amount_paid_credited || 0;
       updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
       updates.total_tax_deducted = updates.tds_amount;
     }
-    if (field === "deductee_pan" && !value) {
-      updates.pan_not_available = true;
-      // Higher rate for no PAN
-      const match = rateMaster.find((r: any) => r.section_code === deductee.section_code);
-      if (match?.rate_no_pan) {
-        updates.rate_of_tds = match.rate_no_pan;
+
+    if (field === "deductee_pan") {
+      if (!value || value.trim() === "") {
+        updates.pan_not_available = true;
+        const { noPanRate } = getRateForSection(deductee.section_code);
+        updates.rate_of_tds = noPanRate || 20;
+        updates.reason_for_lower_or_nil_deduction = "Z";
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * match.rate_no_pan / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
           updates.total_tax_deducted = updates.tds_amount;
         }
+      } else {
+        updates.pan_not_available = false;
+        const { rate } = getRateForSection(deductee.section_code, deductee.deductee_type);
+        if (rate !== null) {
+          updates.rate_of_tds = rate;
+          if (deductee.amount_paid_credited) {
+            updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
+            updates.total_tax_deducted = updates.tds_amount;
+          }
+        }
+        if (deductee.reason_for_lower_or_nil_deduction === "Z") {
+          updates.reason_for_lower_or_nil_deduction = null;
+        }
       }
-    }
-    if (field === "deductee_pan" && value) {
-      updates.pan_not_available = false;
     }
 
     const { error } = await supabase.from("tds_deductees").update(updates).eq("id", deducteeId);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    
     setDeductees(prev => prev.map(d => d.id === deducteeId ? { ...d, ...updates } : d));
-    setEditingCell(null);
   };
 
   const deleteDeductee = async (id: string) => {
@@ -463,12 +456,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setSalaryForm({
       gross_salary: d.gross_salary || 0,
       standard_deduction: d.standard_deduction_allowed || stdDeduction,
-      professional_tax: 0,
-      entertainment_allowance: 0,
+      professional_tax: 0, entertainment_allowance: 0,
       chapter_via_80c: 0, chapter_via_80d: 0, chapter_via_80g: 0, chapter_via_other: 0,
-      income_other_sources: 0,
-      income_house_property: 0,
-      tds_previous_employer: 0,
+      income_other_sources: 0, income_house_property: 0, tds_previous_employer: 0,
       designation: d.designation || "",
     });
     setSalaryDrawerOpen(true);
@@ -480,12 +470,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const pt = parseFloat(salaryForm.professional_tax) || 0;
     const ea = parseFloat(salaryForm.entertainment_allowance) || 0;
     const netSalary = gross - sd - pt - ea;
-    const via = (parseFloat(salaryForm.chapter_via_80c) || 0) +
-      (parseFloat(salaryForm.chapter_via_80d) || 0) +
-      (parseFloat(salaryForm.chapter_via_80g) || 0) +
-      (parseFloat(salaryForm.chapter_via_other) || 0);
-    const otherIncome = (parseFloat(salaryForm.income_other_sources) || 0) +
-      (parseFloat(salaryForm.income_house_property) || 0);
+    const via = (parseFloat(salaryForm.chapter_via_80c) || 0) + (parseFloat(salaryForm.chapter_via_80d) || 0) +
+      (parseFloat(salaryForm.chapter_via_80g) || 0) + (parseFloat(salaryForm.chapter_via_other) || 0);
+    const otherIncome = (parseFloat(salaryForm.income_other_sources) || 0) + (parseFloat(salaryForm.income_house_property) || 0);
     const totalIncome = Math.max(0, netSalary - (taxRegime === "old" ? via : 0) + otherIncome);
     const tax = calcTaxWithRebate(totalIncome, taxRegime);
     const prevTds = parseFloat(salaryForm.tds_previous_employer) || 0;
@@ -510,454 +497,427 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   // ─── Summary stats ───
-  const summaryStats = useMemo(() => {
-    const totalChallans = challans.length;
-    const totalDeductees = deductees.length;
-    const totalPayment = deductees.reduce((s, d) => s + (d.amount_paid_credited || 0), 0);
-    const totalTds = deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-    const challanTdsMap = new Map<string, number>();
-    deductees.forEach(d => {
-      challanTdsMap.set(d.challan_id, (challanTdsMap.get(d.challan_id) || 0) + (d.total_tax_deducted || d.tds_amount || 0));
-    });
-    const unmatchedChallans = challans.filter(c => {
-      const entered = challanTdsMap.get(c.id) || 0;
-      return Math.abs(entered - c.total_challan_amount) > 1;
-    }).length;
-    return { totalChallans, totalDeductees, totalPayment, totalTds, unmatchedChallans };
-  }, [challans, deductees]);
-
   const challanDeducteeTds = useMemo(() => {
     if (!selectedChallan) return 0;
     return deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
   }, [deductees, selectedChallan]);
 
-  // ─── Auto-save every 30s ───
-  const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => {
-    if (!filing) return;
-    autoSaveTimerRef.current = setInterval(() => {
-      if (deductees.length > 0) {
-        toast({ title: "Auto-saved", description: `${deductees.length} deductee entries saved` });
-      }
-    }, 30000);
-    return () => { if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current); };
-  }, [filing, deductees.length]);
+  const summaryStats = useMemo(() => {
+    const totalChallans = challans.length;
+    const totalDeductees = deductees.length;
+    const totalPayment = deductees.reduce((s, d) => s + (d.amount_paid_credited || 0), 0);
+    const totalTds = deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
+    return { totalChallans, totalDeductees, totalPayment, totalTds };
+  }, [challans, deductees]);
 
-  // ─── Auto-match challans ───
+  // Auto-match challans
   const autoMatchChallans = () => {
     const challanTdsMap = new Map<string, number>();
     deductees.forEach(d => {
       challanTdsMap.set(d.challan_id, (challanTdsMap.get(d.challan_id) || 0) + (d.total_tax_deducted || d.tds_amount || 0));
     });
-    const matched: string[] = [];
-    const unmatched: string[] = [];
+    const matched: string[] = [], unmatched: string[] = [];
     challans.forEach(c => {
       const entered = challanTdsMap.get(c.id) || 0;
       if (Math.abs(entered - c.total_challan_amount) <= 1) matched.push(c.bsr_code || c.id.slice(0, 8));
       else unmatched.push(c.bsr_code || c.id.slice(0, 8));
     });
-    toast({
-      title: "Challan Match Results",
-      description: `✅ Matched: ${matched.length} | ❌ Unmatched: ${unmatched.length}${unmatched.length > 0 ? ` (${unmatched.join(", ")})` : ""}`,
-    });
+    toast({ title: "Challan Match", description: `✅ ${matched.length} matched | ❌ ${unmatched.length} unmatched` });
   };
 
-  // ─── Duplicate row (Ctrl+D) ───
-  const duplicateDeductee = async (d: Deductee) => {
-    if (!selectedChallan || !filing) return;
-    const firmId = await resolveFirmId();
-    const { data, error } = await supabase.from("tds_deductees").insert({
-      challan_id: selectedChallan.id,
-      filing_id: filing.id,
-      client_id: filing.client_id,
-      firm_id: firmId || filing.firm_id,
-      form_type: selForm,
-      financial_year: selFy,
-      quarter: selQuarter,
-      deductee_name: d.deductee_name,
-      deductee_pan: d.deductee_pan,
-      section_code: d.section_code,
-      rate_of_tds: d.rate_of_tds,
-      amount_paid_credited: d.amount_paid_credited,
-      date_of_payment: d.date_of_payment,
-      tds_amount: d.tds_amount,
-      total_tax_deducted: d.total_tax_deducted,
-      pan_not_available: d.pan_not_available,
-      deductee_type: d.deductee_type,
-    } as any).select("*").single();
-    if (!error && data) {
-      setDeductees(prev => [...prev, data as Deductee]);
-      toast({ title: "Row duplicated" });
-    }
-  };
-
-  // ─── Keyboard shortcuts ───
+  // Auto-save
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "d" && editingCell) {
-        e.preventDefault();
-        const d = deductees.find(dd => dd.id === editingCell.rowId);
-        if (d) duplicateDeductee(d);
-      }
-      if (e.key === "Delete" && editingCell) {
-        const el = document.activeElement as HTMLInputElement;
-        if (el?.tagName === "INPUT") el.value = "";
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [editingCell, deductees]);
+    if (!filing) return;
+    autoSaveRef.current = setInterval(() => {
+      if (deductees.length > 0) toast({ title: "Auto-saved", description: `${deductees.length} entries saved` });
+    }, 30000);
+    return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
+  }, [filing, deductees.length]);
 
-  // ─── Inline edit helper ───
-  const FIELDS_ORDER = selForm === "24Q"
-    ? ["deductee_name", "deductee_pan", "designation", "gross_salary", "standard_deduction_allowed"]
-    : ["deductee_name", "deductee_pan", "deductee_type", "section_code", "amount_paid_credited", "date_of_payment", "rate_of_tds"];
-
-  const InlineCell = ({ rowId, field, value, type = "text", width = "w-full" }: {
-    rowId: string; field: string; value: any; type?: string; width?: string;
-  }) => {
-    const isEditing = editingCell?.rowId === rowId && editingCell?.field === field;
-    if (isEditing) {
-      return (
-        <Input
-          className={cn("h-7 text-xs", width)}
-          type={type}
-          autoFocus
-          defaultValue={value ?? ""}
-          onBlur={(e) => updateDeducteeField(rowId, field, type === "number" ? (parseFloat(e.target.value) || null) : e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              (e.target as HTMLInputElement).blur();
-              // Move to next row same field
-              const idx = deductees.findIndex(d => d.id === rowId);
-              if (idx < deductees.length - 1) {
-                setTimeout(() => setEditingCell({ rowId: deductees[idx + 1].id, field }), 50);
-              }
-            }
-            if (e.key === "Tab") {
-              e.preventDefault();
-              (e.target as HTMLInputElement).blur();
-              // Move to next field in same row
-              const fIdx = FIELDS_ORDER.indexOf(field);
-              if (fIdx >= 0 && fIdx < FIELDS_ORDER.length - 1) {
-                setTimeout(() => setEditingCell({ rowId, field: FIELDS_ORDER[fIdx + 1] }), 50);
-              }
-            }
-            if (e.key === "Escape") setEditingCell(null);
-          }}
-        />
-      );
-    }
-    return (
-      <span
-        className="cursor-pointer hover:bg-muted/50 px-1 py-0.5 rounded text-xs min-h-[24px] inline-block min-w-[40px]"
-        onClick={() => setEditingCell({ rowId, field })}
-      >
-        {value ?? <span className="text-muted-foreground italic">—</span>}
-      </span>
-    );
+  // Challan balance color
+  const getBalanceColor = (challan: Challan) => {
+    const entered = challan.id === selectedChallan?.id
+      ? challanDeducteeTds
+      : 0; // We only know deductees for selected challan
+    const diff = Math.abs(entered - (challan.total_challan_amount || 0));
+    if (diff <= 1) return "bg-emerald-500";
+    if (entered < (challan.total_challan_amount || 0)) return "bg-amber-500";
+    return "bg-destructive";
   };
+
+  const client = clients.find(c => c.id === selClient);
+
+  // Section dropdown options
+  const sectionOptions = useMemo(() => {
+    return rateMaster.map(r => ({
+      value: r.section_code,
+      label: `${r.section_code} — ${r.nature_of_payment || ""}`,
+    }));
+  }, [rateMaster]);
 
   // ─── Render ───
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Data Entry</h2>
-        <p className="text-sm text-muted-foreground">Challan-based TDS/TCS data entry</p>
+      {/* Filing Selector Bar */}
+      <div className="rounded-lg bg-foreground/5 border p-4">
+        {!filingLoaded ? (
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="space-y-1">
+                <Label className="text-xs">Client</Label>
+                <Select value={selClient} onValueChange={setSelClient}>
+                  <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
+                  <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">FY</Label>
+                <Select value={selFy} onValueChange={setSelFy}>
+                  <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Quarter</Label>
+                <Select value={selQuarter} onValueChange={setSelQuarter}>
+                  <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Form</Label>
+                <Select value={selForm} onValueChange={setSelForm}>
+                  <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <Button size="sm" onClick={loadFiling} disabled={loading}>
+                {loading ? "Loading..." : "Load Filing"}
+              </Button>
+            </div>
+          </div>
+        ) : filing ? (
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Client</p>
+              <p className="text-sm font-semibold">{client?.name || "—"}</p>
+            </div>
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">TAN</p>
+              <p className="text-sm font-mono">{client?.tan_number || filing.tan || "—"}</p>
+            </div>
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Form</p>
+              <p className="text-sm font-semibold">{selForm}</p>
+            </div>
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Quarter</p>
+              <p className="text-sm font-semibold">{selQuarter} — FY {selFy}</p>
+            </div>
+            <Badge className={cn("text-xs", {
+              "bg-muted text-muted-foreground": filing.work_status === "Not Started",
+              "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
+              "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
+              "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
+            })}>{filing.work_status}</Badge>
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" className="gap-1" onClick={resetFiling}>
+              <RotateCcw size={14} /> Change Filing
+            </Button>
+          </div>
+        ) : (
+          <div className="text-center py-4">
+            <p className="text-sm text-muted-foreground mb-2">No filing found for this combination.</p>
+            <p className="text-xs text-muted-foreground">Activate TDS in Client Module first.</p>
+            <Button size="sm" variant="outline" className="mt-3 gap-1" onClick={resetFiling}>
+              <RotateCcw size={14} /> Change Filing
+            </Button>
+          </div>
+        )}
       </div>
 
-      {/* Filter Bar */}
-      <Card>
-        <CardContent className="p-3">
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="space-y-1">
-              <Label className="text-xs">Client</Label>
-              <Select value={selClient} onValueChange={setSelClient}>
-                <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">FY</Label>
-              <Select value={selFy} onValueChange={setSelFy}>
-                <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-                <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Quarter</Label>
-              <Select value={selQuarter} onValueChange={setSelQuarter}>
-                <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
-                <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Form</Label>
-              <Select value={selForm} onValueChange={setSelForm}>
-                <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-                <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1" />
-            {selClient && !filing && !loading && (
-              <Button size="sm" onClick={createFiling} className="gap-1">
-                <Plus size={14} /> Create Filing & Enter Data
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Main Content */}
-      {loading ? (
-        <div className="grid grid-cols-[30%_70%] gap-4">
-          <Skeleton className="h-96" />
-          <Skeleton className="h-96" />
-        </div>
-      ) : !selClient ? (
-        <Card><CardContent className="py-16 text-center text-muted-foreground">
-          <FileText size={48} className="mx-auto mb-4 opacity-30" />
-          <p className="font-semibold">Select a client to begin data entry</p>
-        </CardContent></Card>
-      ) : !filing ? (
-        <Card><CardContent className="py-16 text-center text-muted-foreground">
-          <Receipt size={48} className="mx-auto mb-4 opacity-30" />
-          <p className="font-semibold mb-2">No filing exists for this combination</p>
-          <p className="text-sm mb-4">Client: {clients.find(c => c.id === selClient)?.name} • {selForm} • {selQuarter} • FY {selFy}</p>
-          <Button onClick={createFiling} className="gap-1"><Plus size={14} /> Create Filing</Button>
-        </CardContent></Card>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[30%_1fr] gap-4">
-          {/* LEFT PANEL — Challan List */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Challans</h3>
-              <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
-                <Plus size={12} /> Add Challan
-              </Button>
-            </div>
-            {challans.length === 0 ? (
-              <Card className="border-dashed">
-                <CardContent className="py-8 text-center text-muted-foreground text-sm">
-                  No challans yet. Add your first challan.
-                </CardContent>
-              </Card>
-            ) : challans.map(c => {
-              const deducteeCount = c.id === selectedChallan?.id ? deductees.length : 0;
-              return (
-                <Card
-                  key={c.id}
-                  className={cn(
-                    "cursor-pointer transition-all hover:shadow-sm",
-                    selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : ""
-                  )}
-                  onClick={() => selectChallan(c)}
-                >
-                  <CardContent className="p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <CreditCard size={14} className="text-primary" />
-                          <span className="text-xs font-semibold font-mono">{c.bsr_code || "No BSR"}</span>
-                          {c.section_code && (
-                            <Badge variant="outline" className="text-[10px]">{c.section_code}</Badge>
-                          )}
+      {/* Main two-panel layout */}
+      {filing && (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-[30%_1fr] gap-4">
+            {/* LEFT PANEL — Challan Cards */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-foreground">Challans</h3>
+                <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
+                  <Plus size={12} /> Add Challan
+                </Button>
+              </div>
+              {challans.length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="py-8 text-center text-muted-foreground text-sm">
+                    No challans yet. Add your first challan.
+                  </CardContent>
+                </Card>
+              ) : challans.map(c => {
+                const deducteeCount = c.id === selectedChallan?.id ? deductees.length : 0;
+                return (
+                  <Card key={c.id}
+                    className={cn("cursor-pointer transition-all hover:shadow-sm",
+                      selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : "")}
+                    onClick={() => selectChallan(c)}>
+                    <CardContent className="p-3">
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1 flex-1">
+                          <div className="flex items-center gap-2">
+                            <CreditCard size={14} className="text-primary" />
+                            <span className="text-xs font-semibold font-mono">{c.bsr_code || "No BSR"}</span>
+                            {c.section_code && <Badge variant="outline" className="text-[10px]">{c.section_code}</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
+                            {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
+                          </p>
+                          <p className="text-sm font-bold text-foreground">
+                            ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}
+                            <span className="text-xs font-normal text-muted-foreground ml-2">
+                              {deducteeCount > 0 ? `${deducteeCount} deductees` : ""}
+                            </span>
+                          </p>
+                          {/* Balance bar */}
+                          <div className="w-full h-1.5 rounded-full bg-muted mt-1 overflow-hidden">
+                            <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
+                              style={{ width: c.total_challan_amount > 0 && c.id === selectedChallan?.id
+                                ? `${Math.min(100, (challanDeducteeTds / c.total_challan_amount) * 100)}%` : "0%" }} />
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
-                          {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
-                        </p>
-                        <p className="text-sm font-bold text-foreground">
-                          ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}
-                        </p>
+                        <div className="flex gap-1 ml-2">
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
+                            <Pencil size={12} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
+                            <Trash2 size={12} className="text-destructive" />
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); openEditChallan(c); }}>
-                          <Pencil size={12} />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); deleteChallan(c.id); }}>
-                          <Trash2 size={12} className="text-destructive" />
-                        </Button>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* RIGHT PANEL — Deductee Table */}
+            <div className="space-y-3">
+              {selectedChallan ? (
+                <>
+                  {/* Challan Summary Bar */}
+                  <Card className="bg-muted/30">
+                    <CardContent className="p-3">
+                      <div className="flex flex-wrap gap-4 items-center text-xs">
+                        <span><strong>BSR:</strong> {selectedChallan.bsr_code || "—"}</span>
+                        <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
+                        <span><strong>Total:</strong> ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                        <span><strong>Deductees:</strong> {deductees.length}</span>
+                        <div className="flex-1" />
+                        <span className={cn("font-semibold",
+                          Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1
+                            ? "text-emerald-600" : challanDeducteeTds < (selectedChallan.total_challan_amount || 0)
+                            ? "text-amber-600" : "text-destructive")}>
+                          TDS: ₹{challanDeducteeTds.toLocaleString("en-IN")} / ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}
+                          {Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1
+                            ? <CheckCircle2 size={14} className="inline ml-1" />
+                            : <AlertTriangle size={14} className="inline ml-1" />}
+                        </span>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+                    </CardContent>
+                  </Card>
 
-          {/* RIGHT PANEL — Deductee Table */}
-          <div className="space-y-3">
-            {selectedChallan ? (
-              <>
-                {/* Challan Summary Bar */}
-                <Card className="bg-muted/30">
-                  <CardContent className="p-3">
-                    <div className="flex flex-wrap gap-4 items-center text-xs">
-                      <span><strong>BSR:</strong> {selectedChallan.bsr_code || "—"}</span>
-                      <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
-                      <span><strong>Total:</strong> ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}</span>
-                      <span><strong>Section:</strong> {selectedChallan.section_code || "—"}</span>
-                      <span><strong>Deductees:</strong> {deductees.length}</span>
-                      <div className="flex-1" />
-                      <span className={cn(
-                        "font-semibold",
-                        Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1
-                          ? "text-emerald-600"
-                          : "text-destructive"
-                      )}>
-                        TDS Entered: ₹{challanDeducteeTds.toLocaleString("en-IN")} / ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}
-                        {Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1 ? (
-                          <CheckCircle2 size={14} className="inline ml-1" />
-                        ) : (
-                          <AlertTriangle size={14} className="inline ml-1" />
-                        )}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Deductee Table */}
-                <Card>
-                  <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-8 text-xs">Sr.</TableHead>
-                            {selForm === "24Q" ? (
-                              <>
-                                <TableHead className="text-xs min-w-[140px]">Employee Name</TableHead>
-                                <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
-                                <TableHead className="text-xs">Designation</TableHead>
-                                <TableHead className="text-xs text-right">Gross Salary</TableHead>
-                                <TableHead className="text-xs text-right">Std Deduction</TableHead>
-                                <TableHead className="text-xs text-right">Taxable</TableHead>
-                                <TableHead className="text-xs text-right">Tax Deducted</TableHead>
-                              </>
-                            ) : selForm === "27EQ" ? (
-                              <>
-                                <TableHead className="text-xs min-w-[140px]">Collectee Name</TableHead>
-                                <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
-                                <TableHead className="text-xs">Type</TableHead>
-                                <TableHead className="text-xs">Section</TableHead>
-                                <TableHead className="text-xs text-right">Amount</TableHead>
-                                <TableHead className="text-xs">Date</TableHead>
-                                <TableHead className="text-xs text-right">Rate%</TableHead>
-                                <TableHead className="text-xs text-right">TCS Amt</TableHead>
-                                <TableHead className="text-xs">Reason</TableHead>
-                              </>
-                            ) : (
-                              <>
-                                <TableHead className="text-xs min-w-[140px]">Deductee Name</TableHead>
-                                <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
-                                <TableHead className="text-xs">Type</TableHead>
-                                <TableHead className="text-xs">Section</TableHead>
-                                <TableHead className="text-xs text-right">Amount Paid</TableHead>
-                                <TableHead className="text-xs">Date</TableHead>
-                                <TableHead className="text-xs text-right">Rate%</TableHead>
-                                <TableHead className="text-xs text-right">TDS Amt</TableHead>
-                                <TableHead className="text-xs">Reason</TableHead>
-                              </>
-                            )}
-                            <TableHead className="w-16 text-xs">Action</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {deductees.map((d, idx) => (
-                            <TableRow key={d.id}>
-                              <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                  {/* Deductee Table — all inline editable */}
+                  <Card>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-8 text-xs">#</TableHead>
                               {selForm === "24Q" ? (
                                 <>
-                                  <TableCell><InlineCell rowId={d.id} field="deductee_name" value={d.deductee_name} /></TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="deductee_pan" value={d.deductee_pan} /></TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="designation" value={d.designation} /></TableCell>
-                                  <TableCell className="text-right"><InlineCell rowId={d.id} field="gross_salary" value={d.gross_salary} type="number" /></TableCell>
-                                  <TableCell className="text-right"><InlineCell rowId={d.id} field="standard_deduction_allowed" value={d.standard_deduction_allowed} type="number" /></TableCell>
-                                  <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
-                                  <TableCell className="text-right text-xs font-semibold">{d.total_tax_deducted?.toLocaleString("en-IN") || "—"}</TableCell>
+                                  <TableHead className="text-xs min-w-[140px]">Employee Name</TableHead>
+                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs">Designation</TableHead>
+                                  <TableHead className="text-xs text-right">Gross</TableHead>
+                                  <TableHead className="text-xs text-right">Std Ded</TableHead>
+                                  <TableHead className="text-xs text-right">Taxable</TableHead>
+                                  <TableHead className="text-xs text-right">TDS</TableHead>
+                                  <TableHead className="text-xs">Details</TableHead>
+                                </>
+                              ) : selForm === "27EQ" ? (
+                                <>
+                                  <TableHead className="text-xs min-w-[140px]">Collectee</TableHead>
+                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs">Type</TableHead>
+                                  <TableHead className="text-xs min-w-[140px]">Section</TableHead>
+                                  <TableHead className="text-xs text-right">Amount</TableHead>
+                                  <TableHead className="text-xs">Date</TableHead>
+                                  <TableHead className="text-xs text-right">Rate%</TableHead>
+                                  <TableHead className="text-xs text-right">TCS</TableHead>
+                                  <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               ) : (
                                 <>
-                                  <TableCell><InlineCell rowId={d.id} field="deductee_name" value={d.deductee_name} /></TableCell>
-                                  <TableCell>
-                                    <InlineCell rowId={d.id} field="deductee_pan" value={d.deductee_pan || (d.pan_not_available ? "PAN N/A" : null)} />
-                                  </TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="deductee_type" value={d.deductee_type} /></TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="section_code" value={d.section_code} /></TableCell>
-                                  <TableCell className="text-right"><InlineCell rowId={d.id} field="amount_paid_credited" value={d.amount_paid_credited} type="number" /></TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="date_of_payment" value={d.date_of_payment} type="date" /></TableCell>
-                                  <TableCell className="text-right"><InlineCell rowId={d.id} field="rate_of_tds" value={d.rate_of_tds} type="number" /></TableCell>
-                                  <TableCell className="text-right text-xs font-semibold">
-                                    {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
-                                  </TableCell>
-                                  <TableCell><InlineCell rowId={d.id} field="reason_for_lower_or_nil_deduction" value={d.reason_for_lower_or_nil_deduction} /></TableCell>
+                                  <TableHead className="text-xs min-w-[140px]">Name</TableHead>
+                                  <TableHead className="text-xs min-w-[100px]">PAN</TableHead>
+                                  <TableHead className="text-xs">Type</TableHead>
+                                  <TableHead className="text-xs min-w-[140px]">Section</TableHead>
+                                  <TableHead className="text-xs text-right">Amount</TableHead>
+                                  <TableHead className="text-xs">Date</TableHead>
+                                  <TableHead className="text-xs text-right">Rate%</TableHead>
+                                  <TableHead className="text-xs text-right">TDS</TableHead>
+                                  <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               )}
-                              <TableCell>
-                                <div className="flex gap-0.5">
-                                  {selForm === "24Q" && (
-                                    <Button variant="ghost" size="icon" className="h-6 w-6" title="Full Salary Details" onClick={() => openSalaryDrawer(d)}>
-                                      <FileText size={12} />
-                                    </Button>
-                                  )}
+                              <TableHead className="w-10 text-xs">Del</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {deductees.map((d, idx) => (
+                              <TableRow key={d.id}>
+                                <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                                {selForm === "24Q" ? (
+                                  <>
+                                    <TableCell>
+                                      <Input className="h-7 text-xs" defaultValue={d.deductee_name}
+                                        onBlur={e => { if (e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
+                                        onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); addDeducteeRow(); } if (e.key === "Escape") (e.target as HTMLInputElement).blur(); }} />
+                                    </TableCell>
+                                    <TableCell>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Input className={cn("h-7 text-xs font-mono", d.pan_not_available && "border-destructive text-destructive")}
+                                              defaultValue={d.deductee_pan || ""}
+                                              onBlur={e => updateDeducteeField(d.id, "deductee_pan", e.target.value || null)} />
+                                          </TooltipTrigger>
+                                          {d.pan_not_available && <TooltipContent>No PAN — higher TDS rate u/s 206AA applies</TooltipContent>}
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    </TableCell>
+                                    <TableCell><Input className="h-7 text-xs w-20" defaultValue={d.designation || ""} onBlur={e => updateDeducteeField(d.id, "designation", e.target.value)} /></TableCell>
+                                    <TableCell className="text-right"><Input type="number" className="h-7 text-xs w-24 text-right" defaultValue={d.gross_salary || ""} onBlur={e => updateDeducteeField(d.id, "gross_salary", parseFloat(e.target.value) || null)} /></TableCell>
+                                    <TableCell className="text-right"><Input type="number" className="h-7 text-xs w-20 text-right" defaultValue={d.standard_deduction_allowed || ""} onBlur={e => updateDeducteeField(d.id, "standard_deduction_allowed", parseFloat(e.target.value) || null)} /></TableCell>
+                                    <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
+                                    <TableCell className="text-right text-xs font-semibold">{d.total_tax_deducted?.toLocaleString("en-IN") || "—"}</TableCell>
+                                    <TableCell>
+                                      <Button variant="ghost" size="icon" className="h-6 w-6" title="Full Salary Details" onClick={() => openSalaryDrawer(d)}>
+                                        <FileText size={12} />
+                                      </Button>
+                                    </TableCell>
+                                  </>
+                                ) : (
+                                  <>
+                                    <TableCell>
+                                      <Input className="h-7 text-xs" defaultValue={d.deductee_name}
+                                        onBlur={e => { if (e.target.value !== d.deductee_name) updateDeducteeField(d.id, "deductee_name", e.target.value); }}
+                                        onKeyDown={e => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); addDeducteeRow(); } if (e.key === "Escape") (e.target as HTMLInputElement).blur(); }} />
+                                    </TableCell>
+                                    <TableCell>
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Input className={cn("h-7 text-xs font-mono w-24", d.pan_not_available && "border-destructive text-destructive")}
+                                              defaultValue={d.deductee_pan || ""}
+                                              onBlur={e => updateDeducteeField(d.id, "deductee_pan", e.target.value || null)} />
+                                          </TooltipTrigger>
+                                          {d.pan_not_available && <TooltipContent>No PAN — higher TDS rate u/s 206AA applies</TooltipContent>}
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Select value={d.deductee_type || ""} onValueChange={v => updateDeducteeField(d.id, "deductee_type", v)}>
+                                        <SelectTrigger className="h-7 text-xs w-24"><SelectValue placeholder="—" /></SelectTrigger>
+                                        <SelectContent>{DEDUCTEE_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
+                                        <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                                        <SelectContent>
+                                          {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                                        </SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className="h-7 text-xs w-24 text-right" defaultValue={d.amount_paid_credited || ""}
+                                        onBlur={e => updateDeducteeField(d.id, "amount_paid_credited", parseFloat(e.target.value) || null)} />
+                                    </TableCell>
+                                    <TableCell>
+                                      <Input type="date" className="h-7 text-xs w-28" defaultValue={d.date_of_payment || ""}
+                                        onBlur={e => updateDeducteeField(d.id, "date_of_payment", e.target.value || null)} />
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className={cn("h-7 text-xs w-16 text-right", d.pan_not_available && "text-destructive")}
+                                        defaultValue={d.rate_of_tds ?? ""}
+                                        onBlur={e => updateDeducteeField(d.id, "rate_of_tds", parseFloat(e.target.value) || null)} />
+                                    </TableCell>
+                                    <TableCell className="text-right text-xs font-semibold">
+                                      {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
+                                    </TableCell>
+                                    <TableCell>
+                                      {(d.tds_amount === 0 || d.tds_amount === null) ? (
+                                        <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
+                                          <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
+                                          <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
+                                        </Select>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">—</span>
+                                      )}
+                                    </TableCell>
+                                  </>
+                                )}
+                                <TableCell>
                                   <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteDeductee(d.id)}>
                                     <Trash2 size={12} className="text-destructive" />
                                   </Button>
-                                </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {/* Always-visible blank row trigger */}
+                            <TableRow className="bg-muted/20">
+                              <TableCell colSpan={selForm === "24Q" ? 10 : 11} className="text-center py-2">
+                                <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow}>
+                                  <Plus size={12} /> Add Row
+                                </Button>
                               </TableCell>
                             </TableRow>
-                          ))}
-                          {/* Blank entry row */}
-                          <TableRow className="bg-muted/20">
-                            <TableCell colSpan={selForm === "24Q" ? 9 : 11} className="text-center py-2">
-                              <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow}>
-                                <Plus size={12} /> Add Row
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </CardContent>
-                </Card>
-              </>
-            ) : (
-              <Card><CardContent className="py-12 text-center text-muted-foreground">
-                <CreditCard size={40} className="mx-auto mb-3 opacity-30" />
-                <p className="font-semibold text-sm">Select or add a challan to enter deductee details</p>
-              </CardContent></Card>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Summary Bar */}
-      {filing && challans.length > 0 && (
-        <Card className="bg-muted/30">
-          <CardContent className="p-3">
-            <div className="flex flex-wrap gap-6 items-center text-sm">
-              <span>Total Challans: <strong>{summaryStats.totalChallans}</strong></span>
-              <span>Total Deductees: <strong>{summaryStats.totalDeductees}</strong></span>
-              <span>Total Payment: <strong>₹{summaryStats.totalPayment.toLocaleString("en-IN")}</strong></span>
-              <span>Total TDS: <strong>₹{summaryStats.totalTds.toLocaleString("en-IN")}</strong></span>
-              {summaryStats.unmatchedChallans > 0 && (
-                <Badge variant="destructive" className="text-xs">
-                  {summaryStats.unmatchedChallans} Unmatched Challan(s)
-                </Badge>
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </>
+              ) : (
+                <Card><CardContent className="py-12 text-center text-muted-foreground">
+                  <CreditCard size={40} className="mx-auto mb-3 opacity-30" />
+                  <p className="font-semibold text-sm">Select or add a challan to enter deductee details</p>
+                </CardContent></Card>
               )}
-              <div className="flex-1" />
-              <Button size="sm" variant="outline" className="gap-1" onClick={autoMatchChallans}>
-                <RefreshCw size={14} /> Auto-match Challans
-              </Button>
-              <Button size="sm" disabled={summaryStats.unmatchedChallans > 0} className="gap-1">
-                <ArrowRight size={14} /> Proceed to Validate
-              </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+
+          {/* Summary Bar */}
+          {challans.length > 0 && (
+            <Card className="bg-muted/30">
+              <CardContent className="p-3">
+                <div className="flex flex-wrap gap-6 items-center text-sm">
+                  <span>Challans: <strong>{summaryStats.totalChallans}</strong></span>
+                  <span>Deductees: <strong>{summaryStats.totalDeductees}</strong></span>
+                  <span>Payment: <strong>₹{summaryStats.totalPayment.toLocaleString("en-IN")}</strong></span>
+                  <span>TDS: <strong>₹{summaryStats.totalTds.toLocaleString("en-IN")}</strong></span>
+                  <div className="flex-1" />
+                  <Button size="sm" variant="outline" className="gap-1" onClick={autoMatchChallans}>
+                    <RefreshCw size={14} /> Auto-match
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       {/* Challan Dialog */}
@@ -969,17 +929,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">BSR Code (7 digits)</Label>
-                <Input value={challanForm.bsr_code || ""} onChange={e => setChallanForm(p => ({ ...p, bsr_code: e.target.value }))} maxLength={7} placeholder="0000000" />
+                <Label className="text-xs">BSR Code (7 digits) *</Label>
+                <Input value={challanForm.bsr_code || ""} onChange={e => setChallanForm(p => ({ ...p, bsr_code: e.target.value.replace(/\D/g, "") }))} maxLength={7} placeholder="0000000" />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Serial No (5 digits)</Label>
-                <Input value={challanForm.challan_serial_no || ""} onChange={e => setChallanForm(p => ({ ...p, challan_serial_no: e.target.value }))} maxLength={5} placeholder="00000" />
+                <Label className="text-xs">Serial No (5 digits) *</Label>
+                <Input value={challanForm.challan_serial_no || ""} onChange={e => setChallanForm(p => ({ ...p, challan_serial_no: e.target.value.replace(/\D/g, "") }))} maxLength={5} placeholder="00000" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">Date of Tax Deposit</Label>
+                <Label className="text-xs">Date of Deposit</Label>
                 <Input type="date" value={challanForm.deposit_date || ""} onChange={e => setChallanForm(p => ({ ...p, deposit_date: e.target.value }))} />
               </div>
               <div className="space-y-1">
@@ -988,54 +948,47 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="200">200 — TDS Payable</SelectItem>
-                    <SelectItem value="400">400 — Regular Assessment Demand</SelectItem>
+                    <SelectItem value="400">400 — Demand</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">Tax Amount</Label>
+                <Label className="text-xs">Tax</Label>
                 <Input type="number" value={challanForm.total_tax || ""} onChange={e => setChallanForm(p => ({ ...p, total_tax: e.target.value }))} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Surcharge Amount</Label>
+                <Label className="text-xs">Surcharge</Label>
                 <Input type="number" value={challanForm.surcharge || ""} onChange={e => setChallanForm(p => ({ ...p, surcharge: e.target.value }))} />
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">Education Cess</Label>
+                <Label className="text-xs">Cess</Label>
                 <Input type="number" value={challanForm.education_cess || ""} onChange={e => setChallanForm(p => ({ ...p, education_cess: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Interest</Label>
+                <Input type="number" value={challanForm.interest || ""} onChange={e => setChallanForm(p => ({ ...p, interest: e.target.value }))} />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Others</Label>
                 <Input type="number" value={challanForm.others || ""} onChange={e => setChallanForm(p => ({ ...p, others: e.target.value }))} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Interest Amount</Label>
-                <Input type="number" value={challanForm.interest || ""} onChange={e => setChallanForm(p => ({ ...p, interest: e.target.value }))} />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Total (auto)</Label>
                 <Input readOnly className="bg-muted font-semibold" value={`₹${challanTotal.toLocaleString("en-IN")}`} />
               </div>
             </div>
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center gap-3 pt-1">
               <Switch checked={challanForm.is_book_entry || false} onCheckedChange={v => setChallanForm(p => ({ ...p, is_book_entry: v }))} />
               <Label className="text-xs">Book Entry (Govt Payment)</Label>
             </div>
-            {challanForm.is_book_entry ? (
+            {challanForm.is_book_entry && (
               <div className="space-y-1">
                 <Label className="text-xs">Transfer Voucher No</Label>
                 <Input value={challanForm.transfer_voucher_no || ""} onChange={e => setChallanForm(p => ({ ...p, transfer_voucher_no: e.target.value }))} />
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <Label className="text-xs">Cheque/DD No</Label>
-                <Input value={challanForm.cheque_dd_no || ""} onChange={e => setChallanForm(p => ({ ...p, cheque_dd_no: e.target.value }))} />
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
@@ -1044,8 +997,14 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 <Input value={challanForm.bank_name || ""} onChange={e => setChallanForm(p => ({ ...p, bank_name: e.target.value }))} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Section Code</Label>
-                <Input value={challanForm.section_code || ""} onChange={e => setChallanForm(p => ({ ...p, section_code: e.target.value }))} placeholder="e.g. 194C" />
+                <Label className="text-xs">Section</Label>
+                <Select value={challanForm.section_code || "none"} onValueChange={v => setChallanForm(p => ({ ...p, section_code: v === "none" ? "" : v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— None —</SelectItem>
+                    {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="space-y-1">
@@ -1080,7 +1039,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase">Income Details</p>
               <div className="grid grid-cols-2 gap-3">
@@ -1103,65 +1061,36 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <Input type="number" value={salaryForm.professional_tax || ""} onChange={e => setSalaryForm(p => ({ ...p, professional_tax: e.target.value }))} />
                 </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Entertainment Allowance</Label>
-                <Input type="number" value={salaryForm.entertainment_allowance || ""} onChange={e => setSalaryForm(p => ({ ...p, entertainment_allowance: e.target.value }))} />
-              </div>
             </div>
-
             {taxRegime === "old" && (
               <div className="space-y-3 border-t pt-3">
                 <p className="text-xs font-semibold text-muted-foreground uppercase">Chapter VI-A Deductions</p>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">80C (max ₹1.5L)</Label>
-                    <Input type="number" value={salaryForm.chapter_via_80c || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80c: e.target.value }))} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">80D (Medical Insurance)</Label>
-                    <Input type="number" value={salaryForm.chapter_via_80d || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80d: e.target.value }))} />
-                  </div>
+                  <div className="space-y-1"><Label className="text-xs">80C (max ₹1.5L)</Label><Input type="number" value={salaryForm.chapter_via_80c || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80c: e.target.value }))} /></div>
+                  <div className="space-y-1"><Label className="text-xs">80D</Label><Input type="number" value={salaryForm.chapter_via_80d || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80d: e.target.value }))} /></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">80G (Donations)</Label>
-                    <Input type="number" value={salaryForm.chapter_via_80g || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80g: e.target.value }))} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Other Deductions</Label>
-                    <Input type="number" value={salaryForm.chapter_via_other || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_other: e.target.value }))} />
-                  </div>
+                  <div className="space-y-1"><Label className="text-xs">80G</Label><Input type="number" value={salaryForm.chapter_via_80g || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_80g: e.target.value }))} /></div>
+                  <div className="space-y-1"><Label className="text-xs">Other</Label><Input type="number" value={salaryForm.chapter_via_other || ""} onChange={e => setSalaryForm(p => ({ ...p, chapter_via_other: e.target.value }))} /></div>
                 </div>
               </div>
             )}
-
             <div className="space-y-3 border-t pt-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase">Other Income</p>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Income from Other Sources</Label>
-                  <Input type="number" value={salaryForm.income_other_sources || ""} onChange={e => setSalaryForm(p => ({ ...p, income_other_sources: e.target.value }))} />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Income from House Property</Label>
-                  <Input type="number" value={salaryForm.income_house_property || ""} onChange={e => setSalaryForm(p => ({ ...p, income_house_property: e.target.value }))} />
-                </div>
+                <div className="space-y-1"><Label className="text-xs">Other Sources</Label><Input type="number" value={salaryForm.income_other_sources || ""} onChange={e => setSalaryForm(p => ({ ...p, income_other_sources: e.target.value }))} /></div>
+                <div className="space-y-1"><Label className="text-xs">House Property</Label><Input type="number" value={salaryForm.income_house_property || ""} onChange={e => setSalaryForm(p => ({ ...p, income_house_property: e.target.value }))} /></div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">TDS by Previous Employer</Label>
-                <Input type="number" value={salaryForm.tds_previous_employer || ""} onChange={e => setSalaryForm(p => ({ ...p, tds_previous_employer: e.target.value }))} />
-              </div>
+              <div className="space-y-1"><Label className="text-xs">TDS by Previous Employer</Label><Input type="number" value={salaryForm.tds_previous_employer || ""} onChange={e => setSalaryForm(p => ({ ...p, tds_previous_employer: e.target.value }))} /></div>
             </div>
-
-            {/* Computation Summary */}
             <div className="border-t pt-3 space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase">Tax Computation</p>
               <div className="bg-muted/50 rounded-md p-3 space-y-1 text-sm">
-                <div className="flex justify-between"><span>Net Salary After Deductions</span><span className="font-mono">₹{computedSalaryTax.netSalary.toLocaleString("en-IN")}</span></div>
+                <div className="flex justify-between"><span>Net Salary</span><span className="font-mono">₹{computedSalaryTax.netSalary.toLocaleString("en-IN")}</span></div>
                 <div className="flex justify-between"><span>Total Taxable Income</span><span className="font-mono font-semibold">₹{computedSalaryTax.totalIncome.toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between border-t pt-1 mt-1"><span>Total Tax Payable (incl. 4% cess)</span><span className="font-mono font-bold text-primary">₹{computedSalaryTax.tax.toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between"><span>Less: TDS by Previous Employer</span><span className="font-mono">₹{(parseFloat(salaryForm.tds_previous_employer) || 0).toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between border-t pt-1 mt-1"><span className="font-semibold">Balance Tax Payable</span><span className="font-mono font-bold">₹{computedSalaryTax.balanceTax.toLocaleString("en-IN")}</span></div>
+                <div className="flex justify-between border-t pt-1 mt-1"><span>Tax Payable (incl. 4% cess)</span><span className="font-mono font-bold text-primary">₹{computedSalaryTax.tax.toLocaleString("en-IN")}</span></div>
+                <div className="flex justify-between"><span>Less: Previous TDS</span><span className="font-mono">₹{(parseFloat(salaryForm.tds_previous_employer) || 0).toLocaleString("en-IN")}</span></div>
+                <div className="flex justify-between border-t pt-1 mt-1"><span className="font-semibold">Balance Tax</span><span className="font-mono font-bold">₹{computedSalaryTax.balanceTax.toLocaleString("en-IN")}</span></div>
               </div>
             </div>
           </div>
