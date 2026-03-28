@@ -1,3 +1,24 @@
+/*
+ * FORM 3CD MASTER AMENDMENT GUIDE
+ * ===================================
+ * To REMOVE a clause: set isActive = false. No other changes needed.
+ *   The form UI and the report both exclude it automatically.
+ *
+ * To RESEQUENCE clauses: update displayOrder values.
+ *   Example: To make Cl.30A appear before Cl.30, set Cl.30A.displayOrder < Cl.30.displayOrder
+ *
+ * To CHANGE clause content: update heading, annexureColumns, or control type.
+ *   The form UI and the report both update automatically.
+ *
+ * To ADD a new clause: push a new ClauseDefinition to FORM_3CD_CLAUSES[]
+ *   with a new clauseNo and appropriate displayOrder.
+ *
+ * To ADD a new dropdown: add to DROPDOWN_LIBRARY in form3cd-dropdowns.ts
+ *   Reference it from annexureColumns[n].options or sectionDropdown.
+ *
+ * ZERO JSX CHANGES required for any of the above operations.
+ */
+
 // Form 3CD — Clause Definition Types
 // This file defines the schema for data-driven clause rendering.
 // To add/remove/reorder clauses, modify the FORM_3CD_CLAUSES array in form3cd-clauses.ts.

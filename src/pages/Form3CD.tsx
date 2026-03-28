@@ -22,6 +22,7 @@ import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import { FORM_3CD_CLAUSES } from "@/data/form3cd-clauses";
 import type { ClauseDefinition } from "@/data/form3cd-master";
 import ClauseRenderer from "@/components/form3cd/ClauseRenderer";
+import Form3CDReport from "@/components/form3cd/Form3CDReport";
 
 /* ──────── types ──────── */
 interface ClauseData { [key: string]: any; }
@@ -541,178 +542,15 @@ export default function Form3CD() {
 
       {/* PRINT VIEW MODAL */}
       {showPrintView && (
-        <Form3CDPrintView
+        <Form3CDReport
           client={client}
           engagement={engagement}
           fy={fy}
           ay={ay}
           clauseData={clauseData}
-          activeClauses={activeClauses}
           onClose={() => setShowPrintView(false)}
         />
       )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════
-   PRINT VIEW
-   ══════════════════════════════════════════════════════ */
-function Form3CDPrintView({ client, engagement, fy, ay, clauseData, activeClauses, onClose }: {
-  client: any; engagement: any; fy: string; ay: string;
-  clauseData: Record<string, ClauseData>;
-  activeClauses: ClauseDefinition[];
-  onClose: () => void;
-}) {
-  const printRef = useRef<HTMLDivElement>(null);
-
-  function renderClauseValue(key: string, data: ClauseData): React.ReactNode {
-    if (!data || Object.keys(data).length === 0) return <p className="print-nil">NIL</p>;
-
-    const entries = Object.entries(data);
-    const hasContent = entries.some(([, v]) => {
-      if (typeof v === "string") return v.trim().length > 0;
-      if (Array.isArray(v)) return v.length > 0;
-      if (typeof v === "boolean") return true;
-      return v !== null && v !== undefined;
-    });
-
-    if (!hasContent) return <p className="print-nil">NIL</p>;
-
-    return (
-      <div className="print-clause-content">
-        {entries.map(([k, v]) => {
-          if (v === undefined || v === null || v === "" || k.startsWith('_')) {
-            // Render _value, _rows etc
-            if (k === '_value' && v) return <p key={k} className="print-field"><strong>Answer:</strong> {typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v)}</p>;
-            if (k === '_notApplicable' && v === true) return <p key={k} className="print-field text-muted-foreground italic">Not Applicable</p>;
-            if (k === '_rows' && Array.isArray(v) && v.length > 0) {
-              const cols = Object.keys(v[0]);
-              return (
-                <div key={k} className="print-table-wrapper">
-                  <table className="print-table">
-                    <thead><tr>{cols.map(c => <th key={c}>{c.replace(/_/g, ' ')}</th>)}</tr></thead>
-                    <tbody>
-                      {v.map((row: any, ri: number) => (
-                        <tr key={ri} className={ri % 2 === 1 ? "print-row-alt" : ""}>
-                          {cols.map(c => <td key={c}>{String(row[c] ?? "")}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            }
-            return null;
-          }
-          if (typeof v === "boolean") return <p key={k} className="print-field"><strong>{k.replace(/_/g, ' ')}:</strong> {v ? "Yes" : "No"}</p>;
-          if (typeof v === "string") return <p key={k} className="print-field"><strong>{k.replace(/_/g, ' ')}:</strong> {v}</p>;
-          if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-            return <div key={k} className="ml-4">{renderClauseValue(k, v)}</div>;
-          }
-          return null;
-        })}
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed inset-0 z-[100] bg-background overflow-auto print:static print:overflow-visible">
-      <div className="sticky top-0 z-10 bg-background border-b px-6 py-3 flex items-center justify-between print:hidden">
-        <h2 className="text-lg font-bold">Form 3CD — Print Preview</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => window.print()}>
-            <Printer className="h-4 w-4 mr-1" /> Print
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => {
-            if (printRef.current) exportToPdf(printRef.current, `Form-3CD_${client?.name || 'report'}_${fy}.pdf`);
-          }}>
-            <Download className="h-4 w-4 mr-1" /> Export PDF
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
-        </div>
-      </div>
-
-      <div ref={printRef} className="print-view max-w-4xl mx-auto p-8 print:p-0 print:max-w-none">
-        <style>{`
-          @media print {
-            body * { visibility: hidden; }
-            .print-view, .print-view * { visibility: visible; }
-            .print-view { position: absolute; left: 0; top: 0; width: 100%; }
-            @page { size: A4 portrait; margin: 2cm; }
-            .print-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 8px 0; }
-            .print-table th, .print-table td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
-            .print-table th { background: #f0f0f0; font-weight: 600; }
-            .print-row-alt { background: #f9f9f9; }
-            .print-clause { margin-bottom: 16px; page-break-inside: avoid; }
-            .print-nil { color: #888; font-style: italic; }
-            .print-field { margin: 4px 0; font-size: 10pt; }
-            .print-declaration { page-break-before: always; margin-top: 40px; }
-          }
-          .print-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0; }
-          .print-table th, .print-table td { border: 1px solid hsl(var(--border)); padding: 4px 8px; text-align: left; }
-          .print-table th { background: hsl(var(--muted)); font-weight: 600; }
-          .print-row-alt { background: hsl(var(--muted) / 0.3); }
-          .print-clause { margin-bottom: 20px; border-bottom: 1px solid hsl(var(--border)); padding-bottom: 16px; }
-          .print-nil { color: hsl(var(--muted-foreground)); font-style: italic; }
-          .print-field { margin: 4px 0; font-size: 12px; }
-        `}</style>
-
-        {/* HEADER */}
-        <div className="text-center mb-6">
-          <h1 className="text-lg font-bold">FORM NO. 3CD</h1>
-          <p className="text-sm text-muted-foreground">[See rule 6G(2)]</p>
-          <p className="text-sm mt-1">Statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961</p>
-          <Separator className="my-4" />
-          <div className="grid grid-cols-2 gap-2 text-sm text-left">
-            <p><strong>Name:</strong> {client?.name || "—"}</p>
-            <p><strong>PAN:</strong> {client?.pan || "—"}</p>
-            <p><strong>GSTIN:</strong> {(client?.gstin || []).join(", ") || "—"}</p>
-            <p><strong>Status:</strong> {client?.entity_type || engagement?.entity_type || "—"}</p>
-            <p><strong>Previous Year:</strong> {fy}</p>
-            <p><strong>Assessment Year:</strong> {ay}</p>
-          </div>
-          <Separator className="my-4" />
-        </div>
-
-        {/* ALL CLAUSES */}
-        {activeClauses.map(c => {
-          const key = clauseStateKey(c.clauseNo);
-          const data = clauseData[key] || {};
-          const filled = isClauseFilled(data);
-          return (
-            <div key={c.clauseNo} className="print-clause">
-              <h3 className="font-bold text-sm mb-2">
-                Clause {c.clauseNo.replace('_', '-')} — {c.title}
-              </h3>
-              <p className="text-xs text-muted-foreground mb-2">{c.heading}</p>
-              {filled ? renderClauseValue(key, data) : <p className="print-nil">NIL / Not Applicable</p>}
-            </div>
-          );
-        })}
-
-        {/* DECLARATION */}
-        <div className="print-declaration mt-12 pt-8 border-t-2">
-          <h3 className="font-bold text-center mb-6">DECLARATION</h3>
-          <p className="text-sm mb-8">
-            I/We have examined the accounts and records of <strong>{client?.name || "________"}</strong> (PAN: {client?.pan || "________"})
-            for the previous year {fy || "________"} relevant to the Assessment Year {ay || "________"},
-            and certify that the information given above is true and correct to the best of my/our knowledge and belief.
-          </p>
-          <div className="grid grid-cols-2 gap-8 text-sm mt-12">
-            <div className="space-y-6">
-              <div className="border-b border-dashed pb-1"><strong>Name of the Chartered Accountant:</strong> ___________________________</div>
-              <div className="border-b border-dashed pb-1"><strong>Membership Number:</strong> ___________________________</div>
-              <div className="border-b border-dashed pb-1"><strong>FRN:</strong> ___________________________</div>
-            </div>
-            <div className="space-y-6">
-              <div className="border-b border-dashed pb-1"><strong>Date:</strong> ___________________________</div>
-              <div className="border-b border-dashed pb-1"><strong>Place:</strong> ___________________________</div>
-              <div className="border-b border-dashed pb-1"><strong>UDIN:</strong> ___________________________</div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
