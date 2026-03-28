@@ -516,78 +516,8 @@ export default function Form3CD() {
                         value={clauseData[key] || {}}
                         onChange={value => updateClauseData(clause.clauseNo, value)}
                         isLocked={formStatus === 'locked'}
+                        client={client}
                       />
-                      {/* Clause 21(c) Part 2 — Computation of amount inadmissible u/s 40(b) */}
-                      {clause.clauseNo === '21' && (() => {
-                        const cl21Data = clauseData[key] || {};
-                        const cl21cRows: any[] = cl21Data?.cl_21c?.annexure || [];
-                        const totalSalary = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.salary) || 0), 0);
-                        const totalInterest = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.interest) || 0), 0);
-                        const netProfit = parseFloat(cl21Data?._21c_net_profit || '0') || 0;
-                        const interestIncome = parseFloat(cl21Data?._21c_interest_income || '0') || 0;
-                        const bookProfit = totalInterest + netProfit - interestIncome;
-                        const step1 = Math.min(bookProfit > 0 ? bookProfit : 0, 600000) * 0.90;
-                        const step2 = bookProfit > 600000 ? (bookProfit - 600000) * 0.60 : 0;
-                        const totalAllowable = step1 + step2;
-                        const inadmissible = totalSalary - totalAllowable;
-                        const fmtINR = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-                        return (
-                          <div className="mt-4 border rounded-lg p-4 bg-muted/30 space-y-3">
-                            <h4 className="font-semibold text-sm">Part 2 — Calculation of Amount Inadmissible u/s 40(b)</h4>
-                            <div className="space-y-2 text-sm">
-                              <div className="flex justify-between items-center py-1.5 border-b">
-                                <span className="text-muted-foreground">[A] Remuneration paid to partners</span>
-                                <span className="font-mono font-medium">₹ {fmtINR(totalSalary)}</span>
-                              </div>
-                              <div className="flex justify-between items-center py-1.5 border-b">
-                                <span className="text-muted-foreground">Add: Net Profit as per P. & L. A/c.</span>
-                                <Input
-                                  type="number"
-                                  className="w-40 text-right h-8"
-                                  value={cl21Data?._21c_net_profit || ''}
-                                  onChange={e => updateClauseData('21', { ...cl21Data, _21c_net_profit: e.target.value })}
-                                  disabled={formStatus === 'locked'}
-                                  placeholder="0"
-                                />
-                              </div>
-                              <div className="flex justify-between items-center py-1.5 border-b">
-                                <span className="text-muted-foreground">Add/(Less): Interest Income</span>
-                                <Input
-                                  type="number"
-                                  className="w-40 text-right h-8"
-                                  value={cl21Data?._21c_interest_income || ''}
-                                  onChange={e => updateClauseData('21', { ...cl21Data, _21c_interest_income: e.target.value })}
-                                  disabled={formStatus === 'locked'}
-                                  placeholder="0"
-                                />
-                              </div>
-                              <div className="flex justify-between items-center py-1.5 border-b bg-accent/30 px-2 rounded">
-                                <span className="font-medium">Book Profit</span>
-                                <span className="font-mono font-semibold">₹ {fmtINR(bookProfit)}</span>
-                              </div>
-                              <p className="text-[11px] text-muted-foreground italic pl-2">Formula: Interest paid to partners + Net P&L − Interest Income</p>
-                              <div className="flex justify-between items-center py-1.5 border-b">
-                                <span className="text-muted-foreground">Allowable Salary — Step 1: First ₹6,00,000 @ 90%</span>
-                                <span className="font-mono">₹ {fmtINR(step1)}</span>
-                              </div>
-                              <div className="flex justify-between items-center py-1.5 border-b">
-                                <span className="text-muted-foreground">Allowable Salary — Step 2: Balance of Book Profit @ 60%</span>
-                                <span className="font-mono">₹ {fmtINR(step2)}</span>
-                              </div>
-                              <div className="flex justify-between items-center py-1.5 border-b bg-accent/30 px-2 rounded">
-                                <span className="font-medium">[B] Total Allowable Salary</span>
-                                <span className="font-mono font-semibold">₹ {fmtINR(totalAllowable)}</span>
-                              </div>
-                              <div className="flex justify-between items-center py-2 px-2 rounded bg-destructive/10">
-                                <span className="font-semibold">Salary paid to partners inadmissible ([A] − [B])</span>
-                                <span className="font-mono font-bold text-destructive">
-                                  {inadmissible <= 0 ? 'Nil' : `₹ ${fmtINR(inadmissible)}`}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
                       {/* Remarks field */}
                       <div className="pt-2 border-t border-border/50">
                         <Label className="text-xs text-muted-foreground">Remarks</Label>
