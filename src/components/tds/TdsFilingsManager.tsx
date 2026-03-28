@@ -511,9 +511,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         />
                       </TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(f.id)}>
-                          <Trash2 size={14} className="text-destructive" />
-                        </Button>
+                        <div className="flex gap-0.5">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy to next quarter" onClick={() => handleCopyFiling(f)}>
+                            <Copy size={14} />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(f.id)}>
+                            <Trash2 size={14} className="text-destructive" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
