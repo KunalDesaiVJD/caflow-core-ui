@@ -227,6 +227,33 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     else { toast({ title: "Deleted" }); fetchFilings(); }
   };
 
+  const handleCopyFiling = async (f: TdsFiling) => {
+    const nextQ = f.quarter === "Q1" ? "Q2" : f.quarter === "Q2" ? "Q3" : f.quarter === "Q3" ? "Q4" : "Q1";
+    const nextFy = f.quarter === "Q4" ? (() => {
+      const s = parseInt(f.financial_year.split("-")[0]) + 1;
+      return `${s}-${String(s + 1).slice(2)}`;
+    })() : f.financial_year;
+    const { error } = await supabase.from("tds_filings").insert({
+      client_id: f.client_id,
+      firm_id: f.firm_id,
+      financial_year: nextFy,
+      quarter: nextQ,
+      tds_forms: f.tds_forms,
+      work_status: "Not Started",
+      tan: f.tan,
+      assigned_staff: f.assigned_staff,
+      deductor_type: f.deductor_type,
+      deductor_pan: f.deductor_pan,
+      responsible_person_pan: f.responsible_person_pan,
+      responsible_person_name: f.responsible_person_name,
+      is_regular_return: true,
+      last_updated_by: user?.id,
+      last_updated_at: new Date().toISOString(),
+    } as any);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else { toast({ title: `Filing copied to ${nextQ} ${nextFy}` }); fetchFilings(); }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
