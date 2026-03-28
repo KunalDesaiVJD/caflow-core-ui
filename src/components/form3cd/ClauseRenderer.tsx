@@ -1,7 +1,7 @@
 // ClauseRenderer.tsx — renders ANY clause from its ClauseDefinition
 // All clauses use this renderer — no clause-specific JSX blocks.
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, Trash2, RotateCcw } from "lucide-react";
+import { Plus, Trash2, RotateCcw, CalendarIcon } from "lucide-react";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import type { ClauseDefinition, SubClause, AnnexureColumn, ControlType } from "@/data/form3cd-master";
 import { DROPDOWN_LIBRARY, BUSINESS_SECTORS, BUSINESS_SUBSECTORS } from "@/data/form3cd-dropdowns";
 
@@ -270,6 +274,33 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
             onChange={v => update('_value', v)}
             disabled={isLocked}
           />
+          {data._value === 'notdue' && (
+            <div className="space-y-2 max-w-sm">
+              <Label className="text-sm text-muted-foreground">Expected date of furnishing the report</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !data._expected_date && "text-muted-foreground")} disabled={isLocked}>
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {data._expected_date ? format(new Date(data._expected_date), "PPP") : "Pick a date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={data._expected_date ? new Date(data._expected_date) : undefined} onSelect={d => update('_expected_date', d ? d.toISOString() : '')} initialFocus className={cn("p-3 pointer-events-auto")} />
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
+          {data._value === 'yes' && definition.subClauses?.map(sub => (
+            <ClauseRenderer
+              key={sub.key}
+              definition={sub}
+              value={data[sub.key] || {}}
+              onChange={v => update(sub.key, v)}
+              isLocked={isLocked}
+              parentValues={{ ...parentValues, [('key' in definition ? definition.key : ('clauseNo' in definition ? (definition as any).clauseNo : ''))]: data._value }}
+              depth={depth + 1}
+            />
+          ))}
         </div>
       );
 
@@ -450,6 +481,65 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
           <p className="text-sm font-semibold text-foreground">{definition.heading}</p>
         </div>
       );
+
+    case 'fixed_vertical_table' as any: {
+      const CL40_ROWS = [
+        { key: 'r1', label: 'Total turnover of the assessee', suffix: '₹', inputType: 'number' },
+        { key: 'r2', label: 'Gross profit/turnover', suffix: '%', inputType: 'number' },
+        { key: 'r3', label: 'Net profit/turnover', suffix: '%', inputType: 'number' },
+        { key: 'r4', label: 'Stock-in-trade/turnover', suffix: 'Times', inputType: 'number' },
+        { key: 'r5', label: 'Material consumed/finished goods produced', suffix: '%', inputType: 'number' },
+      ];
+      return (
+        <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted">
+                <TableHead className="w-12 font-semibold text-xs">Sr.</TableHead>
+                <TableHead className="font-semibold text-xs">Particulars</TableHead>
+                <TableHead className="w-[200px] font-semibold text-xs">Previous Year</TableHead>
+                <TableHead className="w-[200px] font-semibold text-xs">Preceding Previous Year</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {CL40_ROWS.map((r, i) => (
+                <TableRow key={r.key} className={i % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
+                  <TableCell className="text-xs font-mono text-muted-foreground">{i + 1}</TableCell>
+                  <TableCell className="text-sm">{r.label}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        className="h-8 text-xs text-right"
+                        value={data[`${r.key}_prev`] || ''}
+                        onChange={e => update(`${r.key}_prev`, e.target.value)}
+                        disabled={isLocked}
+                        placeholder="0"
+                      />
+                      <span className="text-[11px] text-muted-foreground shrink-0 w-8">{r.suffix}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        className="h-8 text-xs text-right"
+                        value={data[`${r.key}_prec`] || ''}
+                        onChange={e => update(`${r.key}_prec`, e.target.value)}
+                        disabled={isLocked}
+                        placeholder="0"
+                      />
+                      <span className="text-[11px] text-muted-foreground shrink-0 w-8">{r.suffix}</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      );
+    }
 
     case 'yes_no_text':
       return (
