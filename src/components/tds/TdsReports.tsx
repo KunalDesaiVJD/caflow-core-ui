@@ -118,8 +118,8 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     exportToExcel([{ sheetName: sheetName.slice(0, 31), rows }], `TDS_${sheetName}_${selFy}.xlsx`);
   };
 
-  // Genius XLS export
-  const generateGeniusXls = () => {
+  // Genius XLS export using template-based approach
+  const generateGeniusXls = async () => {
     if (!reportData[0]) return;
     const { filings, challans, deductees } = reportData[0];
 
@@ -131,111 +131,12 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const challanIds = new Set(filingChallans.map((c: any) => c.id));
     const filingDeductees = deductees.filter((d: any) => challanIds.has(d.challan_id));
 
-    const wb = XLSX.utils.book_new();
-
-    // Sheet 1: DeductorDetails
-    const deductorRows = [
-      ["TDS Return - Deductor Details"],
-      [],
-      ["TAN", filing.tan || ""],
-      ["PAN of Deductor", client?.pan || ""],
-      ["Name", client?.name || ""],
-      ["Branch", ""],
-      ["State", ""],
-      ["PIN", ""],
-      ["Email", ""],
-      ["Phone", ""],
-      ["Status Type", ""],
-    ];
-    const wsDeductor = XLSX.utils.aoa_to_sheet(deductorRows);
-    XLSX.utils.book_append_sheet(wb, wsDeductor, "DeductorDetails");
-
-    // Sheet 2: ChallanDetails
-    const challanHeader = [
-      "Sr No", "Total Tax Deposited", "Cheque/DD No", "BSR Code",
-      "Date of Deposit", "Challan Serial No", "Book Entry (Y/N)",
-      "Minor Head", "Section Code"
-    ];
-    const challanRows = filingChallans.map((c: any, i: number) => [
-      i + 1,
-      c.total_tax_deposited || 0,
-      c.cheque_dd_no || "",
-      c.bsr_code || "",
-      fmtDate(c.deposit_date),
-      c.challan_serial_no || "",
-      c.is_book_entry ? "Y" : "N",
-      c.minor_head_of_challan || "200",
-      c.section_code || "",
-    ]);
-    const challanAoa = [
-      [`Challan Details - Form ${selForm}`],
-      [], [], [], [], [], [], [],
-      challanHeader,
-      ...challanRows,
-    ];
-    const wsChallan = XLSX.utils.aoa_to_sheet(challanAoa);
-    XLSX.utils.book_append_sheet(wb, wsChallan, "ChallanDetails");
-
-    // Sheet 3: Annex-I Deductee Details
-    const deducteeHeader = [
-      "Challan Sr No", "Deductee Code", "PAN", "Name",
-      "Address1", "Address2", "Address3", "Address4", "Address5",
-      "State", "PIN", "Amount of Payment",
-      "Date of Payment", "TDS Rate %", "Surcharge Rate %",
-      "TDS Amount", "Surcharge Amount", "Date of Deduction",
-      "Reason Code", "Section Code", "Deductee Ref No",
-      "Interest", "Others"
-    ];
-
-    if (selForm === "24Q") {
-      deducteeHeader.push("Gross Salary", "Standard Deduction", "Net Taxable Salary", "Designation");
+    try {
+      await generateGeniusExport(selForm, filing, client || { id: "", name: "Unknown" }, filingChallans, filingDeductees);
+      toast({ title: "Genius XLS exported successfully" });
+    } catch (err: any) {
+      toast({ title: "Export error", description: err.message, variant: "destructive" });
     }
-    if (selForm === "27Q") {
-      deducteeHeader.push("Country of Residence");
-    }
-
-    const deducteeRows = filingDeductees.map((d: any) => {
-      const challan = filingChallans.find((c: any) => c.id === d.challan_id);
-      const challanIdx = filingChallans.indexOf(challan) + 1;
-      const row: any[] = [
-        challanIdx,
-        d.deductee_type === "Company" ? "01" : "02",
-        d.deductee_pan || "",
-        d.deductee_name || "",
-        "", "", "", "", "", // Address1-5
-        "", "", // State, PIN
-        d.amount_paid_credited || 0,
-        fmtDate(d.date_of_payment),
-        d.rate_of_tds || 0,
-        0, // Surcharge rate
-        d.tds_amount || d.total_tax_deducted || 0,
-        d.surcharge_amount || 0,
-        fmtDate(d.date_of_deduction),
-        d.reason_for_lower_or_nil_deduction || "",
-        d.section_code || "",
-        d.deductee_ref_no || "",
-        0, 0, // Interest, Others
-      ];
-      if (selForm === "24Q") {
-        row.push(d.gross_salary || 0, d.standard_deduction_allowed || 0, d.net_taxable_salary || 0, d.designation || "");
-      }
-      if (selForm === "27Q") {
-        row.push(d.country_of_residence || "");
-      }
-      return row;
-    });
-
-    const deducteeAoa = [
-      [`Annex-I Deductee Details - Form ${selForm}`],
-      [], [], [], [], [], [], [],
-      deducteeHeader,
-      ...deducteeRows,
-    ];
-    const wsDeductee = XLSX.utils.aoa_to_sheet(deducteeAoa);
-    XLSX.utils.book_append_sheet(wb, wsDeductee, "Annex-I_DeducteeDetails");
-
-    XLSX.writeFile(wb, `Genius_${selForm}_${client?.name || "Client"}_${selFy}_${selQuarters[0] || "All"}.xls`);
-    toast({ title: "Genius XLS exported successfully" });
   };
 
   // Report renderers
