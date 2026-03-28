@@ -181,25 +181,23 @@ function ClientLedgerView() {
   const loadEntries = useCallback(async () => {
     if (!clientId || !firmId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("client_ledger_entries")
-      .select("*")
-      .eq("client_id", clientId)
-      .eq("firm_id", firmId)
-      .eq("financial_year", fy)
-      .order("entry_date", { ascending: true });
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); }
-    setEntries(data || []);
+    try {
+      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: [firmId], fy });
 
-    // Load invoice numbers for document_ids
-    const docIds = (data || []).filter(e => e.document_id).map(e => e.document_id);
-    if (docIds.length > 0) {
-      const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
-      const map: Record<string, string> = {};
-      (invs || []).forEach(i => { if (i.invoice_no) map[i.id] = i.invoice_no; });
-      setInvoiceMap(map);
-    } else {
-      setInvoiceMap({});
+      // Load invoice numbers for document_ids
+      const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
+      if (docIds.length > 0) {
+        const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
+        const map: Record<string, string> = {};
+        (invs || []).forEach(i => { if (i.invoice_no) map[i.id] = i.invoice_no; });
+        setInvoiceMap(map);
+      } else {
+        setInvoiceMap({});
+      }
+
+      setEntries(entries);
+    } catch (err: any) {
+      toast({ title: "Error loading ledger", description: err.message, variant: "destructive" });
     }
     setLoading(false);
   }, [clientId, firmId, fy, toast]);
