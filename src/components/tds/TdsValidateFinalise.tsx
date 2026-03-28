@@ -133,14 +133,14 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     const qDates = getQuarterDates(selFy, selQuarter);
     const today = new Date();
 
-    // E008: No challans
+  // E006: No challans entered
     if (cList.length === 0) {
-      items.push({ code: "E008", severity: "error", description: "No challans entered for this filing", affectedEntity: "Filing" });
+    items.push({ code: "E006", severity: "error", description: "No challans entered for this filing", affectedEntity: "Filing" });
     }
 
-    // E013: TAN missing
+    // E009: TAN missing
     if (!match.tan) {
-      items.push({ code: "E013", severity: "error", description: "TAN of deductor not present in filing record", affectedEntity: "Filing" });
+      items.push({ code: "E009", severity: "error", description: "TAN of deductor not present in filing record", affectedEntity: "Filing" });
     }
 
     // Challan-level checks
@@ -161,23 +161,16 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       if (c.deposit_date && new Date(c.deposit_date) < qDates.start) {
         items.push({ code: "E005", severity: "error", description: "Date of deposit is before start of quarter", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
-      // E006: After quarter end + 15 days
-      const qEnd15 = new Date(qDates.end);
-      qEnd15.setDate(qEnd15.getDate() + 15);
-      if (c.deposit_date && new Date(c.deposit_date) > qEnd15) {
-        items.push({ code: "E006", severity: "error", description: "Date of deposit is after quarter end + 15 days (late payment)", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
-      }
-
-      // E011: Deductee TDS mismatch
+      // E014: Deductee TDS != challan amount (>Rs.5)
       const challanDeductees = dList.filter((d: any) => d.challan_id === c.id);
       const sumDeducteeTds = challanDeductees.reduce((s: number, d: any) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
       if (Math.abs(sumDeducteeTds - (c.total_tax_deposited || 0)) > 5) {
-        items.push({ code: "E011", severity: "error", description: `Total deductee TDS (₹${sumDeducteeTds.toFixed(0)}) doesn't match challan tax (₹${(c.total_tax_deposited || 0).toFixed(0)})`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
+        items.push({ code: "E014", severity: "error", description: `Total deductee TDS (₹${sumDeducteeTds.toFixed(0)}) doesn't match challan tax (₹${(c.total_tax_deposited || 0).toFixed(0)})`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
 
-      // E009: Zero challan TDS but deductees have TDS
+      // E016: Challans exist but TDS=0
       if ((c.total_tax_deposited || 0) === 0 && sumDeducteeTds > 0) {
-        items.push({ code: "E009", severity: "error", description: "Challan has zero TDS but deductees have TDS > 0", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
+        items.push({ code: "E016", severity: "error", description: "Challans exist but TDS deposited is zero while deductees have TDS > 0", affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
 
       // W005: Late deposit (>7 days after month end)
@@ -212,39 +205,42 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
         }
       }
 
-      // E007: TDS exceeds challan
+      // E007: Deductee TDS > challan amount (>Rs.5)
       if (challan && (d.total_tax_deducted || d.tds_amount || 0) > (challan.total_challan_amount || 0) + 5) {
         items.push({ code: "E007", severity: "error", description: "TDS amount in deductee exceeds challan amount", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
       }
 
-      // E010: TDS > 0 but no challan
-      if ((d.total_tax_deducted || d.tds_amount || 0) > 0 && !challan) {
-        items.push({ code: "E010", severity: "error", description: "Deductee has TDS > 0 but no challan linked", affectedEntity: dName, entityId: d.id });
-      }
-
-      // E012: Section code missing
+      // E008: Section code missing
       if (!d.section_code) {
-        items.push({ code: "E012", severity: "error", description: "Section code missing", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+        items.push({ code: "E008", severity: "error", description: "Section code missing", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
       }
 
-      // E014: Payment after deduction
+      // E013: Payment date after deduction date
       if (d.date_of_payment && d.date_of_deduction && new Date(d.date_of_payment) > new Date(d.date_of_deduction)) {
-        items.push({ code: "E014", severity: "error", description: "Date of payment is after date of deduction", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+        items.push({ code: "E013", severity: "error", description: "Payment date is after deduction date", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
       }
 
-      // E015: Amount zero but TDS non-zero
+      // E012: Amount=0 but TDS>0
       if ((d.amount_paid_credited || 0) === 0 && (d.total_tax_deducted || d.tds_amount || 0) > 0) {
-        items.push({ code: "E015", severity: "error", description: "Amount paid is zero but TDS amount is non-zero", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+        items.push({ code: "E012", severity: "error", description: "Amount paid/credited is zero but TDS amount is non-zero", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
       }
 
-      // E016: Name blank
+      // E010: Deductee name blank
       if (!d.deductee_name?.trim()) {
-        items.push({ code: "E016", severity: "error", description: "Deductee name is blank", affectedEntity: "Unnamed deductee", entityId: d.id, challanId: d.challan_id });
+        items.push({ code: "E010", severity: "error", description: "Deductee name is blank", affectedEntity: "Unnamed deductee", entityId: d.id, challanId: d.challan_id });
       }
 
-      // E017: PANNOTAVBL without reason
+      // E011: PAN=PANNOTAVBL no reason code
       if (d.deductee_pan?.toUpperCase().startsWith("PANNOTAVBL") && !d.reason_for_lower_or_nil_deduction) {
-        items.push({ code: "E017", severity: "error", description: "PAN not available but no reason code provided", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+        items.push({ code: "E011", severity: "error", description: "PAN marked as not available but no reason code provided", affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+      }
+
+      // E017: Section invalid for this form type
+      if (d.section_code) {
+        const validSections = (rates || []).map((r: any) => r.section_code);
+        if (validSections.length > 0 && !validSections.includes(d.section_code)) {
+          items.push({ code: "E017", severity: "error", description: `Section "${d.section_code}" is not valid for form ${selForm}`, affectedEntity: dName, entityId: d.id, challanId: d.challan_id });
+        }
       }
 
       // W001: PANNOTAVBL
@@ -328,6 +324,18 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
     // W006: No-PAN >30%
     if (dList.length > 0 && (noPanCount.total / dList.length) > 0.3) {
       items.push({ code: "W006", severity: "warning", description: `No PAN deductees exceed 30% of total (${noPanCount.total}/${dList.length}) — TDSCPC may query`, affectedEntity: "Filing" });
+    }
+
+    // E015: Duplicate challan serial
+    const serialSet = new Set<string>();
+    for (const c of cList) {
+      if (c.challan_serial_no) {
+        const key = `${c.bsr_code || ''}|${c.challan_serial_no}`;
+        if (serialSet.has(key)) {
+          items.push({ code: "E015", severity: "error", description: `Duplicate challan serial no "${c.challan_serial_no}" with BSR "${c.bsr_code || '?'}"`, affectedEntity: `Challan #${c.challan_serial_no}`, challanId: c.id });
+        }
+        serialSet.add(key);
+      }
     }
 
     setResults(items);
