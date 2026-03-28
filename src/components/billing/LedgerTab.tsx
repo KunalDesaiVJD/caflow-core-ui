@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
 import { format } from "date-fns";
-import { BookOpen, Download, Archive, Users, Building2 } from "lucide-react";
+import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone } from "lucide-react";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
