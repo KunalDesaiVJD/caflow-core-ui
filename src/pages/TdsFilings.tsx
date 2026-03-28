@@ -33,6 +33,8 @@ import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
 import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
 import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
+import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
+import { TdsReports } from "@/components/tds/TdsReports";
 
 // ─── Constants ───
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
