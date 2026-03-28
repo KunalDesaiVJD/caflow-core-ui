@@ -470,7 +470,7 @@ export default function Form3CD() {
               const key = clauseStateKey(clause.clauseNo);
               const filled = isClauseFilled(clauseData[key]);
               const displayNo = clause.clauseNo.replace('_', '-');
-              const displayHeading = dbTitles.get(clause.clauseNo) || clause.heading;
+              const displayHeading = clause.heading;
 
               // Handle top-level dependsOn — check if parent clause value matches
               if (clause.dependsOn) {
