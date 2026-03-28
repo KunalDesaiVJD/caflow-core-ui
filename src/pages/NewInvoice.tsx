@@ -246,6 +246,11 @@ const NewInvoice = () => {
   const [baseTurnover, setBaseTurnover] = useState("");
   const [sourceDocumentId, setSourceDocumentId] = useState("");
 
+  // Editable doc number
+  const [docNoEditable, setDocNoEditable] = useState(false);
+  const [docNoManual, setDocNoManual] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+
   // Client fields
   const [toName, setToName] = useState("");
   const [toGstin, setToGstin] = useState("");
