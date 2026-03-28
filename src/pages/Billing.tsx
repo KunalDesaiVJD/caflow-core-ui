@@ -1043,6 +1043,57 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Share Invoice Dialog */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Share2 size={18} /> Share Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label>To (Email)</Label>
+              <Input value={shareEmail} onChange={e => setShareEmail(e.target.value)} placeholder="client@example.com" />
+            </div>
+            <div>
+              <Label>WhatsApp Number</Label>
+              <div className="flex gap-2 items-center">
+                <span className="text-sm text-muted-foreground">+91</span>
+                <Input value={sharePhone} onChange={e => setSharePhone(e.target.value)} placeholder="9876543210" />
+              </div>
+            </div>
+            <div>
+              <Label>Subject</Label>
+              <Input value={shareSubject} onChange={e => setShareSubject(e.target.value)} />
+            </div>
+            <div>
+              <Label>Message</Label>
+              <Textarea value={shareMessage} onChange={e => setShareMessage(e.target.value)} rows={4} />
+            </div>
+            <div>
+              <Label className="text-sm text-muted-foreground">Attachment</Label>
+              <p className="text-sm font-medium">{shareInvoice?.invoice_no || "Invoice"}.pdf (auto-generated)</p>
+            </div>
+            <div className="flex items-center gap-6">
+              <Label className="text-sm font-medium">Send via:</Label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={shareViaEmail} onCheckedChange={(v) => setShareViaEmail(!!v)} />
+                <Mail size={14} /> Email
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={shareViaWhatsApp} onCheckedChange={(v) => setShareViaWhatsApp(!!v)} />
+                <Phone size={14} /> WhatsApp
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShareOpen(false)} disabled={shareSending}>Cancel</Button>
+            <Button onClick={handleShareSend} disabled={shareSending || (!shareViaEmail && !shareViaWhatsApp)} className="gap-1">
+              <Send size={14} /> {shareSending ? "Sending..." : "Send"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
