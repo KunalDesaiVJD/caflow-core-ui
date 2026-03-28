@@ -224,6 +224,8 @@ export default function Form3CD() {
         dbGrouped[dbCol] = clauseData[stateKey] || {};
       }
     });
+    // Save clauses 1-7 editable data
+    dbGrouped['cl_1_7'] = cl17;
     Object.assign(updatePayload, dbGrouped);
 
     const { error } = await supabase
