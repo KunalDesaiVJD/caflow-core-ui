@@ -125,6 +125,11 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState<Record<string, any>>({});
+  const [activeTab, setActiveTab] = useState<"rates" | "templates">("rates");
+  const [templates, setTemplates] = useState<Record<string, { name: string; updated: string; uploadedBy: string } | null>>({
+    "26Q": null, "24Q": null, "27Q": null, "27EQ": null,
+  });
+  const [uploadingTemplate, setUploadingTemplate] = useState<string | null>(null);
 
   const fetchRates = useCallback(async () => {
     setLoading(true);
