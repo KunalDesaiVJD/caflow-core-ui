@@ -409,6 +409,14 @@ const NewInvoice = () => {
             showDetails: false,
           })));
         }
+        // Load source document info for linkage display
+        const srcId = (inv as any).source_document_id;
+        if (srcId) {
+          const { data: srcDoc } = await supabase.from("invoices")
+            .select("invoice_no, document_type, invoice_date, total_amount")
+            .eq("id", srcId).maybeSingle();
+          if (srcDoc) setSourceDocInfo(srcDoc as any);
+        }
       }
       setLoading(false);
     })();
