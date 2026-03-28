@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
 import { format } from "date-fns";
-import { BookOpen, Download, Archive, Users, Building2 } from "lucide-react";
+import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone } from "lucide-react";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -326,6 +326,19 @@ function ClientLedgerView() {
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Download PDF</Button>
               <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Download XLSX</Button>
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => {
+                const phone = prompt("Enter WhatsApp number (e.g. 9876543210):");
+                if (phone) {
+                  const cleanPhone = phone.replace(/\D/g, "");
+                  const fullPhone = cleanPhone.startsWith("91") ? cleanPhone : `91${cleanPhone}`;
+                  const msg = encodeURIComponent(`Dear Client,\n\nPlease find your ledger statement for FY ${fy}.\n\nRegards`);
+                  window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
+                  // Also trigger PDF download
+                  handleDownloadPdf();
+                }
+              }}>
+                <Share2 size={14} /> Send Ledger
+              </Button>
             </div>
           )}
         </>

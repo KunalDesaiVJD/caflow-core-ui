@@ -42,7 +42,7 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, User, RefreshCw,
+  Archive, ChevronDown, User, RefreshCw, Share2, Phone,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -228,6 +228,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [groupFilter, setGroupFilter] = useState("all");
   const [responsibleFilter, setResponsibleFilter] = useState("all");
   const [multiFirmFilter, setMultiFirmFilter] = useState<string[]>([]);
+  const [viewBy, setViewBy] = useState<"all" | "responsible" | "group" | "firm" | "multifirm">("all");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // For filter dropdowns
@@ -244,6 +245,20 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [bulkSendTarget, setBulkSendTarget] = useState<"client" | "responsible" | "both">("client");
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
+
+  // Share dialog state
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareInvoice, setShareInvoice] = useState<Invoice | null>(null);
+  const [shareEmail, setShareEmail] = useState("");
+  const [sharePhone, setSharePhone] = useState("");
+  const [shareSubject, setShareSubject] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
+  const [shareViaEmail, setShareViaEmail] = useState(true);
+  const [shareViaWhatsApp, setShareViaWhatsApp] = useState(false);
+  const [shareSending, setShareSending] = useState(false);
+
+  // Client details cache for email/phone
+  const [clientDetailsMap, setClientDetailsMap] = useState<Record<string, { email: string | null; mobile: string | null }>>({});
 
   // Billing reminders
   const [reminders, setReminders] = useState<any[]>([]);
@@ -271,7 +286,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type").eq("is_draft", false).is("deleted_at", null);
+    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
@@ -283,7 +298,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
-    (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
+    const cdMap: Record<string, { email: string | null; mobile: string | null; responsible_person_id: string | null }> = {};
+    (clientData || []).forEach((c: any) => {
+      cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type };
+      cdMap[c.id] = { email: c.email, mobile: c.mobile, responsible_person_id: c.responsible_person_id };
+    });
+    setClientDetailsMap(cdMap);
 
     const fMap: FirmMap = {};
     (firmData || []).forEach((f: any) => { fMap[f.id] = f.display_name || f.name || "Unknown"; });
@@ -371,6 +391,107 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     }
     return true;
   }), [enriched, statusFilter, search, clientMap, firmMap, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
+
+  // Grouped data for view modes
+  const groupedInvoices = useMemo(() => {
+    if (viewBy === "all") return null;
+    const result: { key: string; label: string; invoices: typeof filtered; subtotal: number }[] = [];
+    const map = new Map<string, typeof filtered>();
+
+    for (const inv of filtered) {
+      let key = "";
+      if (viewBy === "responsible") {
+        key = (clientDetailsMap[inv.client_id || ""] as any)?.responsible_person_id || "unassigned";
+      } else if (viewBy === "group") {
+        key = inv.client_id || "unknown";
+      } else if (viewBy === "firm" || viewBy === "multifirm") {
+        key = inv.firm_id || "unknown";
+      }
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(inv);
+    }
+
+    for (const [key, invs] of map) {
+      let label = key;
+      if (viewBy === "responsible") {
+        label = key === "unassigned" ? "Unassigned" : (responsiblePersons.find(p => p.id === key)?.name || "Unknown");
+      } else if (viewBy === "group") {
+        label = clientMap[key]?.name || "Unknown";
+      } else if (viewBy === "firm" || viewBy === "multifirm") {
+        label = firmMap[key] || "Unknown Firm";
+      }
+      const subtotal = invs.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
+      result.push({ key, label, invoices: invs, subtotal });
+    }
+    result.sort((a, b) => a.label.localeCompare(b.label));
+    return result;
+  }, [filtered, viewBy, clientDetailsMap, clientMap, firmMap, responsiblePersons]);
+
+  // Open share dialog for a single invoice
+  const openShareDialog = (inv: Invoice) => {
+    const clientName = clientMap[inv.client_id || ""]?.name || "";
+    const details = clientDetailsMap[inv.client_id || ""];
+    const fName = firmMap[inv.firm_id || ""] || "";
+    setShareInvoice(inv);
+    setShareEmail(details?.email || "");
+    setSharePhone(details?.mobile || "");
+    setShareSubject(`${inv.invoice_no || "Invoice"} from ${fName}`);
+    setShareMessage(`Dear ${clientName},\n\nPlease find attached ${inv.invoice_no || "Invoice"} for ₹${(inv.total_amount || inv.amount || 0).toLocaleString("en-IN")}.\n\nRegards,\n${fName}`);
+    setShareViaEmail(true);
+    setShareViaWhatsApp(false);
+    setShareOpen(true);
+  };
+
+  const handleShareSend = async () => {
+    if (!shareInvoice) return;
+    setShareSending(true);
+    try {
+      if (shareViaEmail && shareEmail) {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type: "invoice_generated",
+            firm_id: shareInvoice.firm_id,
+            client_id: shareInvoice.client_id,
+            send_to_client: true,
+            payload: {
+              invoice_no: shareInvoice.invoice_no,
+              amount: shareInvoice.total_amount || shareInvoice.amount || 0,
+              document_type: shareInvoice.document_type || "invoice",
+              client_name: clientMap[shareInvoice.client_id || ""]?.name || "",
+              custom_email: shareEmail,
+              custom_subject: shareSubject,
+              custom_message: shareMessage,
+            },
+          },
+        });
+        await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", shareInvoice.id);
+        toast({ title: "Email sent successfully" });
+      }
+      if (shareViaWhatsApp && sharePhone) {
+        const phone = sharePhone.replace(/\D/g, "");
+        const fullPhone = phone.startsWith("91") ? phone : `91${phone}`;
+        const msg = encodeURIComponent(shareMessage);
+        window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
+        toast({ title: "WhatsApp opened — attach the downloaded PDF to the message" });
+        const { generateInvoicePdfBlob } = await import("@/lib/invoicePdfGenerator");
+        const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", shareInvoice.id).single();
+        if (fullInv) {
+          const blob = await generateInvoicePdfBlob(fullInv as any);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${(shareInvoice.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      }
+    } catch {
+      toast({ title: "Failed to send", variant: "destructive" });
+    }
+    setShareSending(false);
+    setShareOpen(false);
+    fetchData();
+  };
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -570,6 +691,75 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       ? ["draft", "finalized", "sent", "converted"]
       : ["draft", "finalized", "sent", "paid"];
 
+  const colCount = documentType === "quotation_proforma" ? 10 : 9;
+
+  const renderInvoiceRow = (inv: Invoice & { effectiveStatus: string }) => {
+    const clientName = clientMap[inv.client_id || ""]?.name || "—";
+    const firmName = firmMap[inv.firm_id || ""] || "—";
+    const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
+    return (
+      <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
+        <TableCell>
+          <Checkbox checked={selectedIds.has(inv.id)} onCheckedChange={() => toggleSelect(inv.id)} />
+        </TableCell>
+        <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
+        {documentType === "quotation_proforma" && (
+          <TableCell><Badge variant="outline" className="text-xs capitalize">{inv.document_type}</Badge></TableCell>
+        )}
+        <TableCell className="font-medium">{clientName}</TableCell>
+        <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
+        <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
+        <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
+        <TableCell>
+          <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
+        </TableCell>
+        <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
+        <TableCell>
+          <div className="flex gap-0.5">
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
+              <Eye size={14} />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => openShareDialog(inv)}>
+              <Share2 size={14} />
+            </Button>
+            {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice" onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}>
+                <RefreshCw size={14} className="text-primary" />
+              </Button>
+            )}
+            {documentType === "quotation_proforma" && inv.effectiveStatus === "converted" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" title="Already converted" disabled>
+                <RefreshCw size={14} />
+              </Button>
+            )}
+            {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
+                    <Send size={14} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
+                    <Mail size={14} /> Send to Client
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
+                    <User size={14} /> Notify Responsible Person
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
+                <Trash2 size={14} className="text-destructive" />
+              </Button>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
   return (
     <div className="space-y-4">
       {/* Billing Reminders (invoices tab only) */}
@@ -668,6 +858,16 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           firms={firms} groups={groups} responsiblePersons={responsiblePersons}
           statusOptions={statusOptions}
         />
+        <Select value={viewBy} onValueChange={(v: any) => setViewBy(v)}>
+          <SelectTrigger className="w-[160px]"><SelectValue placeholder="View By" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All (Default)</SelectItem>
+            <SelectItem value="responsible">Responsible Person</SelectItem>
+            <SelectItem value="group">Group Wise</SelectItem>
+            <SelectItem value="firm">Firm Wise</SelectItem>
+            <SelectItem value="multifirm">Multi-Firm</SelectItem>
+          </SelectContent>
+        </Select>
         <div className="flex-1" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -772,80 +972,29 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={documentType === "quotation_proforma" ? 10 : 9} className="text-center text-muted-foreground py-8">No documents found.</TableCell></TableRow>
-              ) : filtered.map(inv => {
-                const clientName = clientMap[inv.client_id || ""]?.name || "—";
-                const firmName = firmMap[inv.firm_id || ""] || "—";
-                const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
-                return (
-                  <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedIds.has(inv.id)}
-                        onCheckedChange={() => toggleSelect(inv.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
-                    {documentType === "quotation_proforma" && (
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs capitalize">{inv.document_type}</Badge>
+              ) : viewBy !== "all" && groupedInvoices ? (
+                groupedInvoices.map(group => (
+                  <>
+                    <TableRow key={`hdr-${group.key}`} className="bg-muted/60">
+                      <TableCell colSpan={documentType === "quotation_proforma" ? 8 : 7} className="font-semibold text-foreground py-2">
+                        {group.label}
                       </TableCell>
-                    )}
-                    <TableCell className="font-medium">{clientName}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
-                    <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
-                    <TableCell>
-                      <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-0.5">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
-                          <Eye size={14} />
-                        </Button>
-                        {/* Convert to Invoice — for finalized quotations/proformas */}
-                        {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
-                          <Button
-                            variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice"
-                            onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}
-                          >
-                            <RefreshCw size={14} className="text-primary" />
-                          </Button>
-                        )}
-                        {documentType === "quotation_proforma" && inv.effectiveStatus === "converted" && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" title="Already converted" disabled>
-                            <RefreshCw size={14} />
-                          </Button>
-                        )}
-                        {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
-                                <Send size={14} />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
-                                <Mail size={14} /> Send to Client
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
-                                <User size={14} /> Notify Responsible Person
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                        {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
-                            <Trash2 size={14} className="text-destructive" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                      <TableCell colSpan={2} className="text-right font-semibold text-foreground py-2 tabular-nums">
+                        ₹{group.subtotal.toLocaleString("en-IN")}
+                      </TableCell>
+                    </TableRow>
+                    {group.invoices.map(inv => renderInvoiceRow(inv))}
+                  </>
+                ))
+              ) : filtered.map(inv => renderInvoiceRow(inv))}
             </TableBody>
           </Table>
+        )}
+        {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1 && (
+          <div className="px-4 py-3 border-t bg-muted/30 flex justify-between items-center">
+            <span className="text-sm font-semibold text-foreground">Grand Total ({groupedInvoices.length} groups)</span>
+            <span className="text-base font-bold tabular-nums text-foreground">₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}</span>
+          </div>
         )}
       </CardContent></Card>
 
@@ -890,6 +1039,57 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             <Button variant="outline" onClick={() => setBulkSendOpen(false)} disabled={bulkSending}>Cancel</Button>
             <Button onClick={handleBulkSend} disabled={bulkSending} className="gap-1">
               <Send size={14} /> {bulkSending ? "Sending..." : "Send"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Share Invoice Dialog */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Share2 size={18} /> Share Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label>To (Email)</Label>
+              <Input value={shareEmail} onChange={e => setShareEmail(e.target.value)} placeholder="client@example.com" />
+            </div>
+            <div>
+              <Label>WhatsApp Number</Label>
+              <div className="flex gap-2 items-center">
+                <span className="text-sm text-muted-foreground">+91</span>
+                <Input value={sharePhone} onChange={e => setSharePhone(e.target.value)} placeholder="9876543210" />
+              </div>
+            </div>
+            <div>
+              <Label>Subject</Label>
+              <Input value={shareSubject} onChange={e => setShareSubject(e.target.value)} />
+            </div>
+            <div>
+              <Label>Message</Label>
+              <Textarea value={shareMessage} onChange={e => setShareMessage(e.target.value)} rows={4} />
+            </div>
+            <div>
+              <Label className="text-sm text-muted-foreground">Attachment</Label>
+              <p className="text-sm font-medium">{shareInvoice?.invoice_no || "Invoice"}.pdf (auto-generated)</p>
+            </div>
+            <div className="flex items-center gap-6">
+              <Label className="text-sm font-medium">Send via:</Label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={shareViaEmail} onCheckedChange={(v) => setShareViaEmail(!!v)} />
+                <Mail size={14} /> Email
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={shareViaWhatsApp} onCheckedChange={(v) => setShareViaWhatsApp(!!v)} />
+                <Phone size={14} /> WhatsApp
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShareOpen(false)} disabled={shareSending}>Cancel</Button>
+            <Button onClick={handleShareSend} disabled={shareSending || (!shareViaEmail && !shareViaWhatsApp)} className="gap-1">
+              <Send size={14} /> {shareSending ? "Sending..." : "Send"}
             </Button>
           </DialogFooter>
         </DialogContent>
