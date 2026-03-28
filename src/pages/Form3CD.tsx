@@ -86,6 +86,9 @@ export default function Form3CD() {
   // Single state object for all clause data — keyed by cl_{clauseNo}
   const [clauseData, setClauseData] = useState<Record<string, ClauseData>>({});
 
+  // Clauses 1-7 editable state
+  const [cl17, setCl17] = useState<{ indirectTaxLiable?: boolean; indirectTaxDetails?: string; statusOverride?: string }>({});
+
   // Sorted active clauses
   const activeClauses = useMemo(() =>
     FORM_3CD_CLAUSES
