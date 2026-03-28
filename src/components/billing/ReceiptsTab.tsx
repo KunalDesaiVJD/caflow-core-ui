@@ -271,7 +271,7 @@ export default function ReceiptsTab() {
       // Step 4: TDS ledger entry
       if (tds > 0) {
         await supabase.from("client_ledger_entries").insert({
-          firm_id: firmId,
+          firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
           entry_type: "adjustment",
