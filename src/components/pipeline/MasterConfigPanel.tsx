@@ -96,7 +96,7 @@ const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
   { clause: "40", heading: "Whether assessee received any amount in cash exceeding limits" },
   { clause: "41", heading: "MSME Compliance — amounts due to micro/small enterprises" },
   { clause: "42", heading: "Whether assessee incurred expenditure for CSR u/s 135" },
-  { clause: "43", heading: "Details of cryptocurrency/virtual digital assets" },
+  { clause: "43", heading: "CbCR reporting u/s 286" },
   { clause: "44", heading: "Break-up of expenditure in Statement of P&L (GST breakup)" },
 ];
 

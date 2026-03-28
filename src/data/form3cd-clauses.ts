@@ -742,29 +742,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         ],
       },
       {
-        key: 'cl_26bi', heading: '26(b)(i) — Amounts inadmissible under Section 43B (amounts debited to P&L)',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_43B_PART_A', minWidth: 360 },
-          { key: 'amount_debited', label: 'Amount Debited to P&L (Rs.)', type: 'numeric', width: 170 },
-          { key: 'amount_paid', label: 'Amount Paid/Allowable (Rs.)', type: 'numeric', width: 170 },
-          { key: 'amount_disallowed', label: 'Amount Disallowed (Rs.)', type: 'numeric', width: 170 },
-          { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
-        ],
-      },
-      {
-        key: 'cl_26bii', heading: '26(b)(ii) — Amounts inadmissible under Section 43B (not paid before due date)',
-        control: 'not_applicable_annexure',
-        annexureColumns: [
-          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'SEC_43B_PART_B', minWidth: 360 },
-          { key: 'amount_due', label: 'Amount Due (Rs.)', type: 'numeric', width: 150 },
-          { key: 'amount_paid_before', label: 'Amount Paid Before Due Date (Rs.)', type: 'numeric', width: 190 },
-          { key: 'amount_paid_after', label: 'Amount Paid After Due Date (Rs.)', type: 'numeric', width: 190 },
-          { key: 'amount_not_paid', label: 'Amount Not Paid (Rs.)', type: 'numeric', width: 160 },
-          { key: 'remarks', label: 'Remarks', type: 'text', width: 150 },
-        ],
-      },
-      {
         key: 'cl_26_footer', heading: '* State whether sales tax, goods & services tax, customs duty, excise duty or any other indirect tax, levy, cess, impost etc. is passed through the profit and loss account.',
         control: 'yes_no_text',
       },
