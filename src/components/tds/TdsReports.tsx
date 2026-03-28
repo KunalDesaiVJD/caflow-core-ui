@@ -41,17 +41,17 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const fmtDate = (d: string | null) => { if (!d) return "—"; try { return format(new Date(d), "dd/MM/yyyy"); } catch { return d; } };
 
-type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "form-wise" | "annual-summary" | "non-filer" | "lower-cert" | "genius-export" | null;
+type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | null;
 
 const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; color: string }[] = [
   { key: "filing-status", label: "Filing Status Report", desc: "All clients, all forms, any period", icon: ClipboardList, color: "text-blue-600" },
   { key: "deductee-wise", label: "Deductee-wise Report", desc: "One deductee across all quarters", icon: Users, color: "text-emerald-600" },
   { key: "challan-register", label: "Challan Register", desc: "All challans for a client", icon: Receipt, color: "text-purple-600" },
   { key: "section-summary", label: "Section-wise Summary", desc: "TDS by section code", icon: BarChart3, color: "text-amber-600" },
-  { key: "form-wise", label: "Form-wise Report", desc: "All entries for one form type", icon: FileText, color: "text-blue-500" },
   { key: "annual-summary", label: "Annual TDS Summary", desc: "Full year summary per client", icon: CalendarCheck, color: "text-emerald-500" },
-  { key: "non-filer", label: "Non-Filer Alert Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
+  { key: "non-filer", label: "No-PAN Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
   { key: "lower-cert", label: "Lower Deduction Certificate", desc: "Register of lower deduction certs", icon: Shield, color: "text-purple-500" },
+  { key: "cross-quarter", label: "Cross-Quarter Report", desc: "Same deductee across quarters", icon: FileText, color: "text-blue-500" },
   { key: "genius-export", label: "Genius Export", desc: "Generate XLS for Genius software", icon: FileSpreadsheet, color: "text-emerald-700" },
 ];
 
@@ -81,7 +81,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (selClient !== "all") q = q.eq("client_id", selClient);
       const { data } = await q;
       setReportData(data || []);
-    } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "form-wise" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "genius-export") {
+    } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
       // Get filings first
       let fq = supabase.from("tds_filings").select("id, client_id, financial_year, quarter, tds_forms, tan, work_status")
         .eq("financial_year", selFy);
@@ -603,21 +603,85 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     );
   };
 
-  const renderFormWise = () => renderDeducteeWise(); // Same structure, filtered by form
-
   const renderReport = () => {
     switch (selectedReport) {
       case "filing-status": return renderFilingStatusReport();
       case "deductee-wise": return renderDeducteeWise();
       case "challan-register": return renderChallanRegister();
       case "section-summary": return renderSectionSummary();
-      case "form-wise": return renderFormWise();
       case "annual-summary": return renderAnnualSummary();
       case "non-filer": return renderNonFilerAlert();
       case "lower-cert": return renderLowerCert();
+      case "cross-quarter": return renderCrossQuarter();
       case "genius-export": return renderGeniusExport();
       default: return null;
     }
+  };
+
+  const renderCrossQuarter = () => {
+    if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
+    const { deductees, challans } = reportData[0];
+    // Group by PAN across quarters
+    const panMap = new Map<string, { name: string; pan: string; quarters: Record<string, { amount: number; tds: number; count: number }> }>();
+    for (const d of deductees) {
+      const pan = d.deductee_pan || "NO-PAN";
+      const ex = panMap.get(pan) || { name: d.deductee_name || "—", pan, quarters: {} };
+      const q = d.quarter || "?";
+      if (!ex.quarters[q]) ex.quarters[q] = { amount: 0, tds: 0, count: 0 };
+      ex.quarters[q].amount += d.amount_paid_credited || 0;
+      ex.quarters[q].tds += d.total_tax_deducted || d.tds_amount || 0;
+      ex.quarters[q].count++;
+      if (!ex.name || ex.name === "—") ex.name = d.deductee_name || "—";
+      panMap.set(pan, ex);
+    }
+    // Only show deductees appearing in 2+ quarters
+    const multiQ = Array.from(panMap.values()).filter(v => Object.keys(v.quarters).length >= 2);
+    const rows = multiQ.map(v => ({
+      "Name": v.name,
+      "PAN": v.pan,
+      "Q1 Amt": v.quarters.Q1?.amount || 0,
+      "Q1 TDS": v.quarters.Q1?.tds || 0,
+      "Q2 Amt": v.quarters.Q2?.amount || 0,
+      "Q2 TDS": v.quarters.Q2?.tds || 0,
+      "Q3 Amt": v.quarters.Q3?.amount || 0,
+      "Q3 TDS": v.quarters.Q3?.tds || 0,
+      "Q4 Amt": v.quarters.Q4?.amount || 0,
+      "Q4 TDS": v.quarters.Q4?.tds || 0,
+      "Total": Object.values(v.quarters).reduce((s, q) => s + q.tds, 0),
+    }));
+    return (
+      <>
+        <div className="flex justify-end gap-2 mb-3">
+          <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Cross_Quarter", rows)}><Download size={14} /> Export Excel</Button>
+        </div>
+        <Card><CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead><TableHead>PAN</TableHead>
+                {["Q1 Amt", "Q1 TDS", "Q2 Amt", "Q2 TDS", "Q3 Amt", "Q3 TDS", "Q4 Amt", "Q4 TDS", "Total"].map(k =>
+                  <TableHead key={k} className="text-right text-xs">{k}</TableHead>
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No deductees found in multiple quarters</TableCell></TableRow>
+              ) : rows.map((r, i) => (
+                <TableRow key={i}>
+                  <TableCell className="text-sm font-medium">{r.Name}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.PAN}</TableCell>
+                  {["Q1 Amt", "Q1 TDS", "Q2 Amt", "Q2 TDS", "Q3 Amt", "Q3 TDS", "Q4 Amt", "Q4 TDS", "Total"].map(k => (
+                    <TableCell key={k} className="text-right text-sm">{formatINR((r as any)[k])}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      </>
+    );
   };
 
   if (!selectedReport) {
@@ -629,7 +693,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {REPORT_CARDS.map(r => (
-            <Card key={r.key} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setSelectedReport(r.key)}>
+            <Card key={r.key} className={cn("cursor-pointer hover:border-primary/50 transition-colors", r.key === "genius-export" && "border-amber-400 dark:border-amber-600 ring-1 ring-amber-400/30")} onClick={() => setSelectedReport(r.key)}>
               <CardContent className="p-5">
                 <div className="flex items-start gap-3">
                   <div className={cn("p-2 rounded-lg bg-muted", r.color)}>
@@ -689,7 +753,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             ))}
           </div>
         </div>
-        {(selectedReport === "genius-export" || selectedReport === "form-wise") && (
+    {(selectedReport === "genius-export" || selectedReport === "cross-quarter") && (
           <div className="space-y-1">
             <Label className="text-xs">Form</Label>
             <Select value={selForm} onValueChange={setSelForm}>
