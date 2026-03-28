@@ -60,45 +60,13 @@ const CARO_DEFAULTS: { number: number; title: string }[] = [
   { number: 21, title: "Qualifications in Group Audit" },
 ];
 
-const THREECD_DEFAULTS: { clause: string; heading: string }[] = [
-  { clause: "8", heading: "Previous audit qualifications and their effect" },
-  { clause: "9", heading: "Firm registration number & date" },
-  { clause: "10", heading: "Books of account maintained" },
-  { clause: "11", heading: "Whether books examined" },
-  { clause: "12", heading: "Method of accounting employed" },
-  { clause: "13", heading: "Method of valuation of closing stock" },
-  { clause: "14", heading: "Capital & Revenue items" },
-  { clause: "15", heading: "Land or building transferred below stamp duty value" },
-  { clause: "16", heading: "Depreciation allowable" },
-  { clause: "17", heading: "Amounts admissible under sections" },
-  { clause: "18", heading: "Depreciation details u/s 32" },
-  { clause: "19", heading: "Amounts admissible u/s 33AB, 33ABA, 33AC" },
-  { clause: "20", heading: "Any sum paid to a research association" },
-  { clause: "21", heading: "Deduction u/s 35 & 35D" },
-  { clause: "22", heading: "Deduction u/s 36(1)(ii)" },
-  { clause: "23", heading: "Bad debts written off u/s 36(1)(vii)" },
-  { clause: "24", heading: "Amount of liability u/s 43B (Disallowances)" },
-  { clause: "25", heading: "Amount disallowable u/s 40(a)(i/ia/ii)" },
-  { clause: "26", heading: "Amount of interest inadmissible u/s 23(1)(d)" },
-  { clause: "27", heading: "Amount disallowable u/s 40A(3)" },
-  { clause: "28", heading: "Payment to relatives u/s 40A(2)(b)" },
-  { clause: "29", heading: "Amounts deemed as profits u/s 32AC, 33AB, 33ABA" },
-  { clause: "30", heading: "Primary adjustments to transfer pricing u/s 92CE" },
-  { clause: "31", heading: "TDS/TCS Compliance" },
-  { clause: "32", heading: "Whether assessee received any capital asset at below FMV u/s 56(2)" },
-  { clause: "33", heading: "Whether any income under head IFOS not offered" },
-  { clause: "34", heading: "TCS Compliance details" },
-  { clause: "35", heading: "Quantitative details of principal items (Inventory)" },
-  { clause: "36", heading: "Whether during previous year the assessee has received any property" },
-  { clause: "37", heading: "Whether demand raised under Section 201" },
-  { clause: "38", heading: "Whether assessee liable to pay interest u/s 234A/B/C" },
-  { clause: "39", heading: "Whether assessee converted into/received from LLP" },
-  { clause: "40", heading: "Whether assessee received any amount in cash exceeding limits" },
-  { clause: "41", heading: "MSME Compliance — amounts due to micro/small enterprises" },
-  { clause: "42", heading: "Whether assessee incurred expenditure for CSR u/s 135" },
-  { clause: "43", heading: "CbCR reporting u/s 286" },
-  { clause: "44", heading: "Break-up of expenditure in Statement of P&L (GST breakup)" },
-];
+import { FORM_3CD_CLAUSES } from "@/data/form3cd-clauses";
+
+// Derive 3CD defaults directly from the master so headings are always in sync
+const THREECD_DEFAULTS: { clause: string; heading: string }[] = FORM_3CD_CLAUSES
+  .filter(c => c.isActive)
+  .sort((a, b) => a.displayOrder - b.displayOrder)
+  .map(c => ({ clause: c.clauseNo, heading: c.heading }));
 
 // Notes templates matching NotesToAccounts structure exactly (19 notes: 1, 2, 29-45)
 const NOTES_DEFAULTS: { num: number; title: string }[] = [
