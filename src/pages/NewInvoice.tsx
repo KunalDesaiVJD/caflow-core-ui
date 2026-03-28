@@ -333,7 +333,7 @@ const NewInvoice = () => {
 
   // Generate document number via get_next_invoice_seq
   const generateDocNumber = useCallback(async () => {
-    if (!selectedFirmId || isEdit) return;
+    if (!selectedFirmId || isEdit || docNoManual) return;
     const series = getDocSeries(docType);
     const fy = getFYFromDate(invoiceDate);
 
@@ -364,7 +364,7 @@ const NewInvoice = () => {
     } catch (e: any) {
       console.error("Error generating doc number:", e);
     }
-  }, [selectedFirmId, docType, invoiceDate, isEdit]);
+  }, [selectedFirmId, docType, invoiceDate, isEdit, docNoManual]);
 
   useEffect(() => { generateDocNumber(); }, [generateDocNumber]);
 
