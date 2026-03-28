@@ -22,7 +22,7 @@ import {
   ClipboardList, CalendarCheck, Shield,
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
-import * as XLSX from "xlsx";
+import { generateGeniusExport } from "@/lib/genius-export";
 
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
 
