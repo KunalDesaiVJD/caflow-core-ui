@@ -638,9 +638,21 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           <Button size="sm" variant="outline" className="gap-1" onClick={() => { setBulkSendMode("whatsapp"); setBulkSendOpen(true); }}>
             <MessageSquare size={14} /> Send via WhatsApp
           </Button>
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleBulkDownloadZip}>
-            <Archive size={14} /> Download ZIP
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="gap-1" disabled={bulkZipProgress.active}>
+                <Archive size={14} /> {bulkZipProgress.active ? `PDF ${bulkZipProgress.current}/${bulkZipProgress.total}` : "Download ZIP"} <ChevronDown size={12} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleBulkDownloadZip}>
+                <Download size={14} className="mr-2" /> Download Selected ({selectedIds.size})
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setMonthDownloadOpen(true)}>
+                <Archive size={14} className="mr-2" /> Download by Month
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
 
