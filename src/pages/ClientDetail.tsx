@@ -180,6 +180,7 @@ const ClientDetail = () => {
           caro_applicable: c.caro_applicable || false,
           internal_audit_applicable: c.internal_audit_applicable || false,
           stock_audit_applicable: c.stock_audit_applicable || false,
+          audit_turnover: (c as any).audit_turnover ? String((c as any).audit_turnover) : "",
         });
       }
     } catch (e: any) {
