@@ -463,47 +463,6 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         key: 'cl_21b', heading: '21(b) — Amounts inadmissible under section 40(a)',
         control: 'composite',
         subClauses: [
-          // (i)(A) — Non-resident tax NOT deducted
-          {
-            key: 'cl_21b_iA', heading: '(i)(A) — Details of payment to non-resident on which tax is NOT deducted',
-            control: 'not_applicable_annexure',
-            annexureColumns: [
-              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
-              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
-              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
-              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
-              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
-              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
-              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
-              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
-              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
-              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
-              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
-              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
-              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
-            ],
-          },
-          // (i)(B) — Non-resident tax deducted but NOT paid
-          {
-            key: 'cl_21b_iB', heading: '(i)(B) — Details of payment to non-resident — tax deducted but NOT paid u/s 200(1)',
-            control: 'not_applicable_annexure',
-            annexureColumns: [
-              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
-              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
-              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
-              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
-              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
-              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
-              { key: 'aadhaar', label: 'Aadhaar', type: 'text' as const, width: 110 },
-              { key: 'country', label: 'Country', type: 'text' as const, width: 100 },
-              { key: 'address1', label: 'Address 1', type: 'text' as const, width: 120 },
-              { key: 'address2', label: 'Address 2', type: 'text' as const, width: 120 },
-              { key: 'pin_zip', label: 'Pin/Zip', type: 'text' as const, width: 80 },
-              { key: 'city', label: 'City/District', type: 'text' as const, width: 100 },
-              { key: 'state', label: 'State', type: 'text' as const, width: 100 },
-              { key: 'tax_deducted', label: 'Amount of Tax Deducted (₹)', type: 'numeric' as const, width: 140 },
-            ],
-          },
           // (ii)(A)
           {
             key: 'cl_21b_iiA', heading: '(ii)(A) — Details of payment referred to in 40(a)(ia) — tax NOT deducted',

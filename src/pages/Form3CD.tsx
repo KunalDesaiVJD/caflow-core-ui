@@ -184,7 +184,13 @@ export default function Form3CD() {
       });
       setClauseData(loaded);
       // Load clauses 1-7 editable data
-      if (e.cl_1_7 && typeof e.cl_1_7 === 'object') setCl17(e.cl_1_7);
+      // Load clauses 1-7 editable data (stored inside cl_8._cl17)
+      if (e.cl_8 && typeof e.cl_8 === 'object' && (e.cl_8 as any)._cl17) {
+        setCl17((e.cl_8 as any)._cl17);
+      } else if (e.cl_1_7 && typeof e.cl_1_7 === 'object') {
+        // Legacy fallback
+        setCl17(e.cl_1_7);
+      }
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
