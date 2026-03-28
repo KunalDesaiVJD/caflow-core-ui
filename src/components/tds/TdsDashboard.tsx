@@ -10,10 +10,11 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Users, Clock, AlertTriangle, CheckCircle2, FileText, Inbox,
+  Users, Clock, AlertTriangle, CheckCircle2, FileText, Inbox, Printer,
 } from "lucide-react";
 
 interface ClientOption { id: string; name: string | null; pan: string | null; }
