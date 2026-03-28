@@ -39,9 +39,7 @@ const TdsFilings = () => {
   const { toast } = useToast();
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [migrationOpen, setMigrationOpen] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResult, setMigrationResult] = useState<{ challans: number; deductees: number; entries: number } | null>(null);
+  /* DEPRECATED - migration moved to Filings section Options dropdown */
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);

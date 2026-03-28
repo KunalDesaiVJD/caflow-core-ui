@@ -657,6 +657,64 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Copy Filing Dialog */}
+      <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Copy Filing</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Copy <strong>{clients.find(c => c.id === copySource?.client_id)?.name}</strong> — {copySource?.tds_forms?.join(", ")} to a new quarter. Only deductor details are copied; no challan/deductee data.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Quarter</Label>
+                <Select value={copyQuarter} onValueChange={setCopyQuarter}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">FY</Label>
+                <Select value={copyFy} onValueChange={setCopyFy}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCopyDialogOpen(false)}>Cancel</Button>
+            <Button onClick={confirmCopyFiling} disabled={copying}>{copying ? "Copying..." : "Confirm"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Migration Dialog */}
+      <Dialog open={migrationOpen} onOpenChange={setMigrationOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Migrate Legacy TDS Data</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Migrates from <code className="bg-muted px-1 rounded">tds_entries</code> into <code className="bg-muted px-1 rounded">tds_challans</code> + <code className="bg-muted px-1 rounded">tds_deductees</code>.</p>
+            {migrationResult && (
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Migration Complete</p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">{migrationResult.entries} entries → {migrationResult.challans} challans + {migrationResult.deductees} deductees</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMigrationOpen(false)}>Close</Button>
+            <Button onClick={runMigration} disabled={migrating}>{migrating ? "Migrating..." : "Run Migration"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
