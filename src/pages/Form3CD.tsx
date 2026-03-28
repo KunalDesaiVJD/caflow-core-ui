@@ -284,7 +284,7 @@ export default function Form3CD() {
             {activeClauses.map(c => {
               const key = clauseStateKey(c.clauseNo);
               const filled = isClauseFilled(clauseData[key]);
-              const displayTitle = dbTitles.get(c.clauseNo) || c.title;
+              const displayTitle = c.title;
               return (
                 <button
                   key={c.clauseNo}
