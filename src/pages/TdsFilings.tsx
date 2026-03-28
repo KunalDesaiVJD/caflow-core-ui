@@ -1,15 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   FileText, LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, Database, ClipboardList,
+  ShieldCheck, BarChart3, Settings, ClipboardList,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
