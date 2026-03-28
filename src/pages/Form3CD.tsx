@@ -338,7 +338,7 @@ export default function Form3CD() {
         </div>
 
         <div className="p-6 max-w-5xl mx-auto space-y-8">
-          {/* HEADER BLOCK */}
+          {/* HEADER + CLAUSES 1-7 TABLE */}
           <Card>
             <CardContent className="p-6 space-y-4">
               <div className="text-center space-y-1">
@@ -347,24 +347,101 @@ export default function Form3CD() {
                 <p className="text-sm font-medium">Statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961</p>
               </div>
               <Separator />
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><span className="text-muted-foreground">Name of the Assessee:</span> <strong>{client?.name || "—"}</strong></div>
-                <div><span className="text-muted-foreground">PAN:</span> <strong>{client?.pan || "—"}</strong></div>
-                <div><span className="text-muted-foreground">GSTIN:</span> <strong>{(client?.gstin || []).join(", ") || "—"}</strong></div>
-                <div><span className="text-muted-foreground">Status (Entity Type):</span> <strong>{client?.entity_type || engagement?.entity_type || "—"}</strong></div>
-                <div><span className="text-muted-foreground">Previous Year:</span> <strong>{fy || "—"}</strong></div>
-                <div><span className="text-muted-foreground">Assessment Year:</span> <strong>{ay || "—"}</strong></div>
-              </div>
+              {/* Clauses 1-7 Vertical Table */}
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted">
+                    <TableHead className="w-16 font-semibold">Sr. No.</TableHead>
+                    <TableHead className="font-semibold">Particulars</TableHead>
+                    <TableHead className="w-[320px] font-semibold">Details</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow className="bg-background">
+                    <TableCell className="font-mono text-muted-foreground">1</TableCell>
+                    <TableCell>Name of the assessee</TableCell>
+                    <TableCell className="text-muted-foreground font-medium">{client?.name || "—"}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-muted/30">
+                    <TableCell className="font-mono text-muted-foreground">2</TableCell>
+                    <TableCell>Address</TableCell>
+                    <TableCell className="text-muted-foreground font-medium">{client?.address || client?.registered_office || "—"}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-background">
+                    <TableCell className="font-mono text-muted-foreground">3</TableCell>
+                    <TableCell>Permanent Account Number</TableCell>
+                    <TableCell className="text-muted-foreground font-medium font-mono tracking-wider">{client?.pan || "—"}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-muted/30">
+                    <TableCell className="font-mono text-muted-foreground">4</TableCell>
+                    <TableCell>Whether the assessee is liable to pay indirect tax (GST, Excise, etc.)?</TableCell>
+                    <TableCell>
+                      <div className="space-y-2">
+                        <RadioGroup
+                          value={cl17.indirectTaxLiable === true ? 'yes' : cl17.indirectTaxLiable === false ? 'no' : ''}
+                          onValueChange={v => setCl17(prev => ({ ...prev, indirectTaxLiable: v === 'yes', indirectTaxDetails: v === 'no' ? '' : prev.indirectTaxDetails }))}
+                          className="flex gap-4"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <RadioGroupItem value="yes" id="cl4-yes" />
+                            <Label htmlFor="cl4-yes" className="text-sm cursor-pointer">Yes</Label>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <RadioGroupItem value="no" id="cl4-no" />
+                            <Label htmlFor="cl4-no" className="text-sm cursor-pointer">No</Label>
+                          </div>
+                        </RadioGroup>
+                        {cl17.indirectTaxLiable === true && (
+                          <Input
+                            placeholder="Registration No. / Details"
+                            value={cl17.indirectTaxDetails || ''}
+                            onChange={e => setCl17(prev => ({ ...prev, indirectTaxDetails: e.target.value }))}
+                            className="h-8 text-sm"
+                          />
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow className="bg-background">
+                    <TableCell className="font-mono text-muted-foreground">5</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>
+                      {client?.entity_type ? (
+                        <span className="text-muted-foreground font-medium">{client.entity_type}</span>
+                      ) : (
+                        <Select value={cl17.statusOverride || ''} onValueChange={v => setCl17(prev => ({ ...prev, statusOverride: v }))}>
+                          <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Select status..." /></SelectTrigger>
+                          <SelectContent>
+                            {ENTITY_STATUS_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow className="bg-muted/30">
+                    <TableCell className="font-mono text-muted-foreground">6</TableCell>
+                    <TableCell>Previous year</TableCell>
+                    <TableCell className="text-muted-foreground font-medium">
+                      {computeFYDates(fy).from ? `From: ${computeFYDates(fy).from}  To: ${computeFYDates(fy).to}` : "—"}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow className="bg-background">
+                    <TableCell className="font-mono text-muted-foreground">7</TableCell>
+                    <TableCell>Assessment year</TableCell>
+                    <TableCell className="text-muted-foreground font-medium">{ay || "—"}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
 
-          {/* CLAUSES — Data-driven rendering */}
+          {/* CLAUSES 8+ — Data-driven rendering */}
           <Accordion type="multiple" defaultValue={[activeClauses[0]?.clauseNo || '']} className="space-y-4">
             {activeClauses.map(clause => {
               const key = clauseStateKey(clause.clauseNo);
               const filled = isClauseFilled(clauseData[key]);
               const displayNo = clause.clauseNo.replace('_', '-');
-              const displayTitle = dbTitles.get(clause.clauseNo) || clause.title;
+              const displayHeading = dbTitles.get(clause.clauseNo) || clause.heading;
 
               // Handle top-level dependsOn — check if parent clause value matches
               if (clause.dependsOn) {
@@ -373,15 +450,14 @@ export default function Form3CD() {
                 const parentValue = parentData?._value;
                 const requiredValue = clause.dependsOnValue ?? true;
                 if (parentValue !== requiredValue) {
-                  // Show as disabled/not applicable
                   return (
                     <div key={clause.clauseNo} ref={el => { sectionRefs.current[clause.clauseNo] = el; }}>
                       <AccordionItem value={clause.clauseNo} className="border rounded-lg opacity-60">
                         <AccordionTrigger className="px-4">
-                          <div className="flex items-center gap-3">
-                            <Badge variant="outline" className="font-mono text-xs">{displayNo}</Badge>
-                            <span className="font-medium">{displayTitle}</span>
-                            <Badge className="bg-muted text-muted-foreground text-[10px]">Not Applicable</Badge>
+                          <div className="flex items-center gap-3 text-left">
+                            <Badge variant="outline" className="font-mono text-xs shrink-0">{displayNo}</Badge>
+                            <span className="text-sm">{displayHeading}</span>
+                            <Badge className="bg-muted text-muted-foreground text-[10px] shrink-0">Not Applicable</Badge>
                           </div>
                         </AccordionTrigger>
                         <AccordionContent className="px-4 pb-4">
@@ -399,10 +475,10 @@ export default function Form3CD() {
                 <div key={clause.clauseNo} ref={el => { sectionRefs.current[clause.clauseNo] = el; }}>
                   <AccordionItem value={clause.clauseNo} className="border rounded-lg">
                     <AccordionTrigger className="px-4">
-                      <div className="flex items-center gap-3">
-                        <Badge variant="outline" className="font-mono text-xs">{displayNo}</Badge>
-                        <span className="font-medium">{displayTitle}</span>
-                        {filled && <Badge className="bg-green-100 text-green-800 text-[10px]">Filled</Badge>}
+                      <div className="flex items-center gap-3 text-left">
+                        <Badge variant="outline" className="font-mono text-xs shrink-0">{displayNo}</Badge>
+                        <span className="text-sm">{displayHeading}</span>
+                        {filled && <Badge className="bg-green-100 text-green-800 text-[10px] shrink-0">Filled</Badge>}
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="px-4 pb-4 space-y-4">
@@ -412,6 +488,18 @@ export default function Form3CD() {
                         onChange={value => updateClauseData(clause.clauseNo, value)}
                         isLocked={formStatus === 'locked'}
                       />
+                      {/* Remarks field */}
+                      <div className="pt-2 border-t border-border/50">
+                        <Label className="text-xs text-muted-foreground">Remarks</Label>
+                        <Textarea
+                          placeholder="Remarks (optional)..."
+                          value={(clauseData[key] || {}).remarks || ''}
+                          onChange={e => updateClauseData(clause.clauseNo, { ...(clauseData[key] || {}), remarks: e.target.value })}
+                          disabled={formStatus === 'locked'}
+                          className="mt-1 text-sm"
+                          rows={2}
+                        />
+                      </div>
                     </AccordionContent>
                   </AccordionItem>
                 </div>
