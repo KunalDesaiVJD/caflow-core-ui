@@ -669,8 +669,80 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           statusOptions={statusOptions}
         />
         <div className="flex-1" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="gap-1" disabled={bulkZipProgress.active}>
+              <Archive size={14} /> {bulkZipProgress.active ? `PDF ${bulkZipProgress.current}/${bulkZipProgress.total}` : "Bulk Download"} <ChevronDown size={12} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={async () => {
+              const allIds = filtered.map(inv => inv.id);
+              if (allIds.length === 0) return;
+              await generateZipFromInvoices(allIds, `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
+            }}>
+              <Download size={14} className="mr-2" /> Download All ({filtered.length})
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setMonthDownloadOpen(true)}>
+              <Archive size={14} className="mr-2" /> Download by Month
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button onClick={() => navigate(`/billing/new?type=${newDocType}`)} className="gap-1"><Plus size={14} /> New {tabLabel}</Button>
       </div>
+
+      {/* Month-wise Download Dialog */}
+      <Dialog open={monthDownloadOpen} onOpenChange={setMonthDownloadOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Download Invoices by Month</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Month</Label>
+                <Select value={dlMonth} onValueChange={setDlMonth}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => (
+                      <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Year</Label>
+                <Select value={dlYear} onValueChange={setDlYear}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map(y => (
+                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {firms.length > 1 && (
+              <div>
+                <Label>Firm</Label>
+                <Select value={dlFirm} onValueChange={setDlFirm}>
+                  <SelectTrigger><SelectValue placeholder="All Firms" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Firms</SelectItem>
+                    {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMonthDownloadOpen(false)}>Cancel</Button>
+            <Button onClick={handleMonthDownload} disabled={bulkZipProgress.active}>
+              {bulkZipProgress.active ? `Generating ${bulkZipProgress.current}/${bulkZipProgress.total}...` : "Generate & Download"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Table */}
       <Card><CardContent className="p-0">
