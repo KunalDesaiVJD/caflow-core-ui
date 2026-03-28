@@ -193,13 +193,28 @@ export default function ReceiptsTab() {
     setClientInvoices([]);
   };
 
+  const resolveFirmId = async (): Promise<string | null> => {
+    if (firmId) return firmId;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const metaFirm = session?.user?.user_metadata?.firm_id;
+      if (metaFirm) return metaFirm;
+      if (session?.user?.id) {
+        const { data: profile } = await supabase.from("users").select("firm_id").eq("id", session.user.id).maybeSingle();
+        if (profile?.firm_id) return profile.firm_id;
+      }
+    } catch {}
+    return null;
+  };
+
   const handleSave = async () => {
     if (!formClientId || !receiptDate || !amountReceived || Number(amountReceived) <= 0 || !paymentMode) {
       toast({ title: "Please fill all mandatory fields", variant: "destructive" });
       return;
     }
-    if (!firmId) {
-      toast({ title: "Firm not found", variant: "destructive" });
+    const resolvedFirmId = await resolveFirmId();
+    if (!resolvedFirmId) {
+      toast({ title: "Unable to resolve firm. Please refresh and try again.", variant: "destructive" });
       return;
     }
 
@@ -214,7 +229,7 @@ export default function ReceiptsTab() {
     try {
       // Step 1: Insert receipt
       const { data: newReceipt, error: rErr } = await supabase.from("billing_receipts").insert({
-        firm_id: firmId,
+        firm_id: resolvedFirmId,
         client_id: formClientId,
         invoice_id: invoiceId,
         receipt_type: receiptType,
@@ -242,7 +257,7 @@ export default function ReceiptsTab() {
 
       // Step 3: Ledger entry for payment
       await supabase.from("client_ledger_entries").insert({
-        firm_id: firmId,
+        firm_id: resolvedFirmId,
         client_id: formClientId,
         entry_date: dateStr,
         entry_type: "receipt",
@@ -256,7 +271,7 @@ export default function ReceiptsTab() {
       // Step 4: TDS ledger entry
       if (tds > 0) {
         await supabase.from("client_ledger_entries").insert({
-          firm_id: firmId,
+          firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
           entry_type: "adjustment",
@@ -271,7 +286,7 @@ export default function ReceiptsTab() {
       // Step 5: GST TDS ledger entry
       if (gstTds > 0) {
         await supabase.from("client_ledger_entries").insert({
-          firm_id: firmId,
+          firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
           entry_type: "adjustment",

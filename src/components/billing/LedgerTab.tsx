@@ -36,6 +36,121 @@ function getFYOptions(): string[] {
   return fys;
 }
 
+function fyToDateRange(fy: string): { start: string; end: string } {
+  const [startYearStr] = fy.split("-");
+  const startYear = parseInt(startYearStr, 10);
+  return { start: `${startYear}-04-01`, end: `${startYear + 1}-03-31` };
+}
+
+interface LedgerEntry {
+  id: string;
+  entry_date: string;
+  entry_type: string;
+  document_id: string | null;
+  debit_amount: number;
+  credit_amount: number;
+  narration: string;
+  client_id: string;
+}
+
+async function buildLedgerEntries(
+  filters: { clientIds: string[]; firmIds: string[]; fy: string }
+): Promise<LedgerEntry[]> {
+  const { start, end } = fyToDateRange(filters.fy);
+  const entries: LedgerEntry[] = [];
+
+  // 1. First try client_ledger_entries
+  let leQuery = supabase.from("client_ledger_entries").select("*")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .gte("entry_date", start).lte("entry_date", end)
+    .order("entry_date", { ascending: true });
+  const { data: leData } = await leQuery;
+
+  if (leData && leData.length > 0) {
+    return leData.map(e => ({
+      id: e.id,
+      entry_date: e.entry_date,
+      entry_type: e.entry_type,
+      document_id: e.document_id,
+      debit_amount: Number(e.debit_amount) || 0,
+      credit_amount: Number(e.credit_amount) || 0,
+      narration: e.narration || "",
+      client_id: e.client_id,
+    }));
+  }
+
+  // 2. Fallback: build from invoices + receipts directly
+  const { data: invoices } = await supabase.from("invoices")
+    .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .in("status", ["finalized", "sent", "overdue", "paid"])
+    .gte("invoice_date", start).lte("invoice_date", end)
+    .order("invoice_date", { ascending: true });
+
+  (invoices || []).forEach(inv => {
+    const isCredit = inv.document_type === "credit_note";
+    entries.push({
+      id: `inv-${inv.id}`,
+      entry_date: inv.invoice_date,
+      entry_type: isCredit ? "credit_note" : "invoice",
+      document_id: inv.id,
+      debit_amount: isCredit ? 0 : Number(inv.total_amount) || 0,
+      credit_amount: isCredit ? Number(inv.total_amount) || 0 : 0,
+      narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
+      client_id: inv.client_id || "",
+    });
+  });
+
+  const { data: receipts } = await supabase.from("billing_receipts")
+    .select("id, client_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
+    .in("client_id", filters.clientIds)
+    .in("firm_id", filters.firmIds)
+    .gte("receipt_date", start).lte("receipt_date", end)
+    .order("receipt_date", { ascending: true });
+
+  (receipts || []).forEach(r => {
+    entries.push({
+      id: `rct-${r.id}`,
+      entry_date: r.receipt_date,
+      entry_type: "receipt",
+      document_id: r.id,
+      debit_amount: 0,
+      credit_amount: Number(r.amount_received) || 0,
+      narration: `Payment received — ${r.payment_mode}`,
+      client_id: r.client_id,
+    });
+    if (Number(r.tds_amount) > 0) {
+      entries.push({
+        id: `tds-${r.id}`,
+        entry_date: r.receipt_date,
+        entry_type: "adjustment",
+        document_id: r.id,
+        debit_amount: 0,
+        credit_amount: Number(r.tds_amount),
+        narration: "TDS deducted",
+        client_id: r.client_id,
+      });
+    }
+    if (Number(r.gst_tds_amount) > 0) {
+      entries.push({
+        id: `gsttds-${r.id}`,
+        entry_date: r.receipt_date,
+        entry_type: "adjustment",
+        document_id: r.id,
+        debit_amount: 0,
+        credit_amount: Number(r.gst_tds_amount),
+        narration: "GST TDS deducted",
+        client_id: r.client_id,
+      });
+    }
+  });
+
+  entries.sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+  return entries;
+}
+
 // ═══════════════════════════════════════
 // CLIENT LEDGER VIEW
 // ═══════════════════════════════════════
@@ -66,25 +181,23 @@ function ClientLedgerView() {
   const loadEntries = useCallback(async () => {
     if (!clientId || !firmId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("client_ledger_entries")
-      .select("*")
-      .eq("client_id", clientId)
-      .eq("firm_id", firmId)
-      .eq("financial_year", fy)
-      .order("entry_date", { ascending: true });
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); }
-    setEntries(data || []);
+    try {
+      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: [firmId], fy });
 
-    // Load invoice numbers for document_ids
-    const docIds = (data || []).filter(e => e.document_id).map(e => e.document_id);
-    if (docIds.length > 0) {
-      const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
-      const map: Record<string, string> = {};
-      (invs || []).forEach(i => { if (i.invoice_no) map[i.id] = i.invoice_no; });
-      setInvoiceMap(map);
-    } else {
-      setInvoiceMap({});
+      // Load invoice numbers for document_ids
+      const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
+      if (docIds.length > 0) {
+        const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
+        const map: Record<string, string> = {};
+        (invs || []).forEach(i => { if (i.invoice_no) map[i.id] = i.invoice_no; });
+        setInvoiceMap(map);
+      } else {
+        setInvoiceMap({});
+      }
+
+      setEntries(entries);
+    } catch (err: any) {
+      toast({ title: "Error loading ledger", description: err.message, variant: "destructive" });
     }
     setLoading(false);
   }, [clientId, firmId, fy, toast]);
@@ -251,27 +364,17 @@ function GroupLedgerView() {
   const loadData = useCallback(async () => {
     if (!groupId || firmIds.length === 0) return;
     setLoading(true);
-    // Get clients in group
     const { data: memberships } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupId);
     const clientIds = (memberships || []).map(m => m.client_id);
     if (clientIds.length === 0) { setData([]); setLoading(false); return; }
 
-    // Get client names
     const { data: clients } = await supabase.from("clients").select("id, name").in("id", clientIds);
     const clientMap: Record<string, string> = {};
     (clients || []).forEach(c => { clientMap[c.id] = c.name || "Unknown"; });
 
-    // Get entries
-    const { data: entries } = await supabase
-      .from("client_ledger_entries")
-      .select("*")
-      .in("client_id", clientIds)
-      .in("firm_id", firmIds)
-      .eq("financial_year", fy)
-      .order("entry_date", { ascending: true });
+    const entries = await buildLedgerEntries({ clientIds, firmIds, fy });
 
-    // Get invoice numbers
-    const docIds = (entries || []).filter(e => e.document_id).map(e => e.document_id);
+    const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
     if (docIds.length > 0) {
       const { data: invs } = await supabase.from("invoices").select("id, invoice_no").in("id", docIds);
       const map: Record<string, string> = {};
@@ -279,9 +382,8 @@ function GroupLedgerView() {
       setInvoiceMap(map);
     }
 
-    // Group by client
     const grouped: Record<string, any[]> = {};
-    (entries || []).forEach(e => {
+    entries.forEach(e => {
       const cid = e.client_id;
       if (!grouped[cid]) grouped[cid] = [];
       grouped[cid].push(e);
@@ -472,26 +574,31 @@ function FirmRevenueLedgerView() {
   const loadData = useCallback(async () => {
     if (!firmId) return;
     setLoading(true);
-    let q = supabase.from("client_ledger_entries").select("*").eq("firm_id", firmId).eq("financial_year", fy).order("entry_date", { ascending: true });
-    if (docTypeFilter === "invoice") q = q.eq("entry_type", "invoice");
-    else if (docTypeFilter === "credit_note") q = q.eq("entry_type", "credit_note");
 
-    const { data } = await q;
-    setEntries(data || []);
-
-    const clientIds = [...new Set((data || []).map(e => e.client_id).filter(Boolean))];
-    const docIds = (data || []).filter(e => e.document_id).map(e => e.document_id);
-
-    const [{ data: cls }, { data: invs }] = await Promise.all([
-      clientIds.length > 0 ? supabase.from("clients").select("id, name").in("id", clientIds) : { data: [] },
-      docIds.length > 0 ? supabase.from("invoices").select("id, invoice_no, document_type").in("id", docIds) : { data: [] },
-    ]);
+    // Get all clients for the firm to pass to buildLedgerEntries
+    const { data: allClients } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
+    const allClientIds = (allClients || []).map(c => c.id);
     const cm: Record<string, string> = {};
-    (cls || []).forEach(c => { cm[c.id] = c.name || "Unknown"; });
+    (allClients || []).forEach(c => { cm[c.id] = c.name || "Unknown"; });
+
+    let allEntries = await buildLedgerEntries({ clientIds: allClientIds, firmIds: [firmId], fy });
+
+    // Apply docType filter
+    if (docTypeFilter === "invoice") allEntries = allEntries.filter(e => e.entry_type === "invoice");
+    else if (docTypeFilter === "credit_note") allEntries = allEntries.filter(e => e.entry_type === "credit_note");
+
+    setEntries(allEntries);
     setClientMap(cm);
-    const im: Record<string, { no: string; type: string }> = {};
-    (invs || []).forEach(i => { im[i.id] = { no: i.invoice_no || "", type: i.document_type || "" }; });
-    setInvoiceMap(im);
+
+    const docIds = allEntries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
+    if (docIds.length > 0) {
+      const { data: invs } = await supabase.from("invoices").select("id, invoice_no, document_type").in("id", docIds);
+      const im: Record<string, { no: string; type: string }> = {};
+      (invs || []).forEach(i => { im[i.id] = { no: i.invoice_no || "", type: i.document_type || "" }; });
+      setInvoiceMap(im);
+    } else {
+      setInvoiceMap({});
+    }
     setLoading(false);
   }, [firmId, fy, docTypeFilter]);
 
