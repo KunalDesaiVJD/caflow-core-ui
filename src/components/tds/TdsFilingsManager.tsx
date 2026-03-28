@@ -22,7 +22,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Trash2, Download, ArrowRight, Users2, RefreshCw, Copy,
+  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info,
 } from "lucide-react";
 
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
@@ -35,9 +35,13 @@ interface TdsFiling {
   prn_no: string | null; tan: string | null; assigned_staff: string | null;
   last_updated_by: string | null; last_updated_at: string | null;
   remarks: string | null; created_at: string | null;
-  deductor_type?: string | null; deductor_pan?: string | null;
-  responsible_person_pan?: string | null; responsible_person_name?: string | null;
-  is_regular_return?: boolean | null; previous_filing_token?: string | null;
+}
+
+interface AuditLogEntry {
+  id: string; filing_id: string | null; action_type: string;
+  old_value: string | null; new_value: string | null;
+  changed_by_name: string | null; changed_at: string | null;
+  remark: string | null;
 }
 
 interface Props {
@@ -45,7 +49,7 @@ interface Props {
   users: UserOption[];
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
-  onNavigateDataEntry?: (filingId: string) => void;
+  onNavigateDataEntry?: (filingId?: string) => void;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -55,23 +59,26 @@ const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
 const FILING_STATUSES = [
-  "Not Started", "Data Entry in Progress", "Entries Completed",
-  "Return Validated", "Return Prepared", "Submitted", "Accepted",
+  "Not Started",
+  "Not Applicable",
+  "NIL",
+  "Data Received",
+  "Under Process",
+  "Queries Sent to Client",
+  "Filed",
+  "Processed",
 ] as const;
 
 const FILING_STATUS_COLORS: Record<string, string> = {
   "Not Started": "bg-muted text-muted-foreground",
-  "Data Entry in Progress": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-  "Entries Completed": "bg-blue-200 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
-  "Return Validated": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  "Return Prepared": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
-  "Submitted": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-  "Accepted": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
+  "Not Applicable": "bg-muted/60 text-muted-foreground line-through",
+  "NIL": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
+  "Data Received": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  "Under Process": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
+  "Queries Sent to Client": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  "Filed": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+  "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
-
-const DEDUCTOR_TYPES = [
-  "Company", "Individual", "HUF", "Firm", "Trust", "AOP", "Government",
-];
 
 const getDueDate = (fy: string, quarter: string): Date => {
   const fyStart = parseInt(fy.split("-")[0]);
@@ -83,7 +90,7 @@ const getDueDate = (fy: string, quarter: string): Date => {
 };
 
 const getDueDateColor = (fy: string, quarter: string, status: string) => {
-  if (["Accepted", "Submitted"].includes(status)) return "text-emerald-600";
+  if (["Filed", "Processed", "Not Applicable", "NIL"].includes(status)) return "text-emerald-600";
   const due = getDueDate(fy, quarter);
   const days = differenceInDays(due, new Date());
   if (days < 0) return "text-destructive font-bold";
@@ -102,15 +109,17 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [formFilter, setFormFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Add/Edit drawer
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Record<string, any>>({});
-
   // Bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("");
+
+  // History drawer
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyFiling, setHistoryFiling] = useState<TdsFiling | null>(null);
+  const [historyLogs, setHistoryLogs] = useState<AuditLogEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [newNote, setNewNote] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
 
   const fetchFilings = useCallback(async () => {
     setLoading(true);
@@ -135,80 +144,41 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     });
   }, [filings, formFilter, statusFilter]);
 
-  const openAddDrawer = () => {
-    setLastCreatedId(null);
-    setFormData({
-      client_id: clientFilter !== "all" ? clientFilter : "",
-      tan: "",
-      financial_year: fyFilter !== "all" ? fyFilter : DEFAULT_FY,
-      quarter: quarterFilter !== "all" ? quarterFilter : "Q1",
-      forms: { "24Q": false, "26Q": true, "27Q": false, "27EQ": false },
-      return_type: "regular",
-      previous_token: "",
-      deductor_type: "Company",
-      deductor_pan: "",
-      responsible_person_pan: "",
-      responsible_person_name: "",
-      assigned_staff: "",
-      remarks: "",
-    });
-    setDrawerOpen(true);
+  const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
+    const firmId = await resolveFirmId();
+    await supabase.from("tds_filing_audit_log").insert({
+      filing_id: filingId,
+      firm_id: firmId,
+      action_type: actionType,
+      old_value: oldVal,
+      new_value: newVal,
+      changed_by: user?.id,
+      changed_by_name: user?.name || user?.email || "Unknown",
+      remark: remark || null,
+    } as any);
   };
 
-  const handleClientSelect = (clientId: string) => {
-    const client = clients.find(c => c.id === clientId) as any;
-    setFormData(prev => ({
-      ...prev,
-      client_id: clientId,
-      tan: client?.tan_number || prev.tan || "",
-      deductor_pan: client?.pan || prev.deductor_pan || "",
-    }));
-  };
+  const handleStatusChange = async (filing: TdsFiling, newStatus: string) => {
+    const oldStatus = filing.work_status;
+    if (oldStatus === newStatus) return;
 
-  const handleSaveFiling = async () => {
-    if (!formData.client_id) {
-      toast({ title: "Select a client", variant: "destructive" });
-      return;
-    }
-    const selectedForms = Object.entries(formData.forms as Record<string, boolean>)
-      .filter(([_, v]) => v).map(([k]) => k);
-    if (selectedForms.length === 0) {
-      toast({ title: "Select at least one form type", variant: "destructive" });
-      return;
+    // Soft warning for Processed without ack number
+    if (newStatus === "Processed" && !filing.acknowledgment_number) {
+      toast({ title: "Warning", description: "Acknowledgment number is missing for this filing.", variant: "default" });
     }
 
-    setSaving(true);
-    try {
-      const firmId = await resolveFirmId();
-      const payload: Record<string, any> = {
-        client_id: formData.client_id,
-        firm_id: firmId,
-        financial_year: formData.financial_year,
-        quarter: formData.quarter,
-        tds_forms: selectedForms,
-        work_status: "Not Started",
-        tan: formData.tan || null,
-        assigned_staff: formData.assigned_staff || null,
-        remarks: formData.remarks || null,
-        deductor_type: formData.deductor_type || null,
-        deductor_pan: formData.deductor_pan || null,
-        responsible_person_pan: formData.responsible_person_pan || null,
-        responsible_person_name: formData.responsible_person_name || null,
-        is_regular_return: formData.return_type === "regular",
-        previous_filing_token: formData.return_type === "correction" ? formData.previous_token || null : null,
-        last_updated_by: user?.id,
-        last_updated_at: new Date().toISOString(),
-      };
+    const { error } = await supabase.from("tds_filings").update({
+      work_status: newStatus,
+      last_updated_by: user?.id,
+      last_updated_at: new Date().toISOString(),
+    }).eq("id", filing.id);
 
-      const { data, error } = await supabase.from("tds_filings").insert(payload as any).select("id").single();
-      if (error) throw error;
-      setLastCreatedId(data.id);
-      toast({ title: "Filing created successfully" });
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } else {
+      await logAuditEntry(filing.id, "STATUS_CHANGE", oldStatus, newStatus);
       fetchFilings();
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
     }
-    setSaving(false);
   };
 
   const handleInlineUpdate = async (filing: TdsFiling, field: string, value: any) => {
@@ -219,12 +189,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else fetchFilings();
-  };
-
-  const handleDelete = async (id: string) => {
-    const { error } = await supabase.from("tds_filings").delete().eq("id", id);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Deleted" }); fetchFilings(); }
   };
 
   const handleCopyFiling = async (f: TdsFiling) => {
@@ -241,12 +205,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       tds_forms: f.tds_forms,
       work_status: "Not Started",
       tan: f.tan,
-      assigned_staff: f.assigned_staff,
-      deductor_type: f.deductor_type,
-      deductor_pan: f.deductor_pan,
-      responsible_person_pan: f.responsible_person_pan,
-      responsible_person_name: f.responsible_person_name,
-      is_regular_return: true,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     } as any);
@@ -270,32 +228,55 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const handleBulkAction = async () => {
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
-
     if (bulkAction.startsWith("status:")) {
       const newStatus = bulkAction.replace("status:", "");
       for (const id of ids) {
-        await supabase.from("tds_filings").update({
-          work_status: newStatus,
-          last_updated_by: user?.id,
-          last_updated_at: new Date().toISOString(),
-        }).eq("id", id);
+        const filing = filings.find(f => f.id === id);
+        if (filing) {
+          await supabase.from("tds_filings").update({
+            work_status: newStatus,
+            last_updated_by: user?.id,
+            last_updated_at: new Date().toISOString(),
+          }).eq("id", id);
+          await logAuditEntry(id, "STATUS_CHANGE", filing.work_status, newStatus);
+        }
       }
       toast({ title: `${ids.length} filings updated to ${newStatus}` });
-    } else if (bulkAction.startsWith("assign:")) {
-      const staffId = bulkAction.replace("assign:", "");
-      for (const id of ids) {
-        await supabase.from("tds_filings").update({
-          assigned_staff: staffId,
-          last_updated_by: user?.id,
-          last_updated_at: new Date().toISOString(),
-        }).eq("id", id);
-      }
-      const staffName = users.find(u => u.id === staffId)?.name || "staff";
-      toast({ title: `${ids.length} filings assigned to ${staffName}` });
     }
     setSelectedIds(new Set());
     setBulkAction("");
     fetchFilings();
+  };
+
+  // History drawer
+  const openHistory = async (filing: TdsFiling) => {
+    setHistoryFiling(filing);
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setNewNote("");
+    const { data } = await supabase.from("tds_filing_audit_log")
+      .select("*")
+      .eq("filing_id", filing.id)
+      .order("changed_at", { ascending: false })
+      .limit(100);
+    setHistoryLogs((data || []) as AuditLogEntry[]);
+    setHistoryLoading(false);
+  };
+
+  const addNote = async () => {
+    if (!historyFiling || !newNote.trim()) return;
+    setAddingNote(true);
+    await logAuditEntry(historyFiling.id, "NOTE_ADDED", null, null, newNote.trim());
+    setNewNote("");
+    // Refresh
+    const { data } = await supabase.from("tds_filing_audit_log")
+      .select("*")
+      .eq("filing_id", historyFiling.id)
+      .order("changed_at", { ascending: false })
+      .limit(100);
+    setHistoryLogs((data || []) as AuditLogEntry[]);
+    setAddingNote(false);
+    toast({ title: "Note added" });
   };
 
   const exportFilings = () => {
@@ -303,22 +284,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const c = clients.find(c => c.id === f.client_id);
       return `<tr>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${c?.name || "—"}</td>
-        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.tan || "—"}</td>
+        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${c?.tan_number || f.tan || "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.tds_forms?.join(", ") || "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.quarter}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.financial_year}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.work_status}</td>
+        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.date_of_filing ? format(new Date(f.date_of_filing), "dd/MM/yyyy") : "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.acknowledgment_number || "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.prn_no || "—"}</td>
-        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}</td>
-        <td style="border:1px solid #ccc;padding:6px;font-size:12px">${users.find(u => u.id === f.assigned_staff)?.name || "—"}</td>
         <td style="border:1px solid #ccc;padding:6px;font-size:12px">${f.remarks || "—"}</td>
       </tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><title>TDS Filing Sheet</title><style>body{font-family:system-ui;margin:20px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;font-size:11px;border:1px solid #ccc;padding:6px}@media print{@page{size:landscape}}</style></head><body>
       <h2>TDS Filing Sheet — FY: ${fyFilter} | Qtr: ${quarterFilter}</h2>
-      <table><thead><tr><th>Client</th><th>TAN</th><th>Form</th><th>Qtr</th><th>FY</th><th>Status</th><th>Filing Date</th><th>Ack No</th><th>PRN</th><th>Due Date</th><th>Assigned</th><th>Remarks</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
+      <table><thead><tr><th>Client</th><th>TAN</th><th>Form</th><th>Qtr</th><th>FY</th><th>Status</th><th>Due Date</th><th>Filing Date</th><th>Ack No</th><th>PRN</th><th>Remarks</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
     const blob = new Blob([html], { type: "text/html" });
     const w = window.open(URL.createObjectURL(blob), "_blank");
     if (w) setTimeout(() => w.print(), 500);
@@ -328,7 +308,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-bold text-foreground">Filings Management</h2>
-        <p className="text-sm text-muted-foreground">Create, track, and manage TDS/TCS return filings</p>
+        <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+          <Info size={14} />
+          Filings are created automatically when TDS service is activated in Client Module.
+        </p>
       </div>
 
       {/* Filter Bar */}
@@ -376,7 +359,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         <div className="space-y-1">
           <Label className="text-xs">Status</Label>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Status</SelectItem>
               {FILING_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
@@ -384,9 +367,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </Select>
         </div>
         <div className="flex-1" />
-        <Button size="sm" className="gap-1" onClick={openAddDrawer}>
-          <Plus size={14} /> Add Filing
-        </Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={exportFilings}>
           <Download size={14} /> Export
         </Button>
@@ -397,17 +377,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg border">
           <span className="text-sm font-medium">{selectedIds.size} selected</span>
           <Select value={bulkAction} onValueChange={setBulkAction}>
-            <SelectTrigger className="w-[200px] h-8">
+            <SelectTrigger className="w-[220px] h-8">
               <SelectValue placeholder="Bulk Action..." />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__header_status" disabled>── Update Status ──</SelectItem>
               {FILING_STATUSES.map(s => (
                 <SelectItem key={`status:${s}`} value={`status:${s}`}>{s}</SelectItem>
-              ))}
-              <SelectItem value="__header_assign" disabled>── Assign Staff ──</SelectItem>
-              {users.map(u => (
-                <SelectItem key={`assign:${u.id}`} value={`assign:${u.id}`}>{u.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -435,29 +411,30 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   <TableHead>Form</TableHead>
                   <TableHead>Quarter</TableHead>
                   <TableHead>FY</TableHead>
-                  <TableHead className="min-w-[150px]">Status</TableHead>
+                  <TableHead className="min-w-[180px]">Status</TableHead>
                   <TableHead>Due Date</TableHead>
                   <TableHead>Filing Date</TableHead>
                   <TableHead>Ack No</TableHead>
-                  <TableHead>PRN</TableHead>
-                  <TableHead>Assigned To</TableHead>
+                  <TableHead>PRN No</TableHead>
                   <TableHead>Remarks</TableHead>
-                  <TableHead className="w-[50px]"></TableHead>
+                  <TableHead className="w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 14 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
+                  <TableRow key={i}>{Array.from({ length: 13 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
                 )) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={14} className="text-center text-muted-foreground py-8">
-                      No filings found. Click "Add Filing" to create one.
+                    <TableCell colSpan={13} className="text-center text-muted-foreground py-8">
+                      No filings found. Filings are created when TDS service is activated for a client.
                     </TableCell>
                   </TableRow>
                 ) : filtered.map(f => {
                   const client = clients.find(c => c.id === f.client_id);
+                  const clientTan = client?.tan_number || f.tan;
+                  const isNA = f.work_status === "Not Applicable";
                   return (
-                    <TableRow key={f.id}>
+                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30")}>
                       <TableCell>
                         <Checkbox
                           checked={selectedIds.has(f.id)}
@@ -466,19 +443,29 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       </TableCell>
                       <TableCell className="font-medium sticky left-0 bg-background">{client?.name || "—"}</TableCell>
                       <TableCell>
-                        <Input className="h-7 w-24 text-xs" defaultValue={f.tan || ""}
-                          onBlur={e => { if (e.target.value !== (f.tan || "")) handleInlineUpdate(f, "tan", e.target.value); }}
-                        />
+                        {clientTan ? (
+                          <span className="font-mono text-xs">{clientTan}</span>
+                        ) : (
+                          <Badge variant="destructive" className="text-xs gap-1 cursor-pointer">
+                            <AlertTriangle size={10} /> TAN Missing
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell><Badge variant="outline" className="text-xs">{f.tds_forms?.join(", ")}</Badge></TableCell>
                       <TableCell>{f.quarter}</TableCell>
                       <TableCell>{f.financial_year}</TableCell>
                       <TableCell>
-                        <Select value={f.work_status} onValueChange={v => handleInlineUpdate(f, "work_status", v)}>
-                          <SelectTrigger className="h-7 text-xs w-[160px]">
-                            <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status])}>{f.work_status}</Badge>
+                        <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
+                          <SelectTrigger className="h-7 text-xs w-[180px]">
+                            <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
                           </SelectTrigger>
-                          <SelectContent>{FILING_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                          <SelectContent>
+                            {FILING_STATUSES.map(s => (
+                              <SelectItem key={s} value={s}>
+                                <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
                         </Select>
                       </TableCell>
                       <TableCell className={getDueDateColor(f.financial_year, f.quarter, f.work_status)}>
@@ -500,23 +487,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         />
                       </TableCell>
                       <TableCell>
-                        <Select value={f.assigned_staff || ""} onValueChange={v => handleInlineUpdate(f, "assigned_staff", v || null)}>
-                          <SelectTrigger className="h-7 text-xs w-[120px]"><SelectValue placeholder="—" /></SelectTrigger>
-                          <SelectContent>{users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
                         <Input className="h-7 w-28 text-xs" defaultValue={f.remarks || ""}
                           onBlur={e => { if (e.target.value !== (f.remarks || "")) handleInlineUpdate(f, "remarks", e.target.value || null); }}
                         />
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-0.5">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
+                            <Clock size={14} />
+                          </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy to next quarter" onClick={() => handleCopyFiling(f)}>
                             <Copy size={14} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(f.id)}>
-                            <Trash2 size={14} className="text-destructive" />
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
+                            <ArrowRight size={14} />
                           </Button>
                         </div>
                       </TableCell>
@@ -529,185 +513,61 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </CardContent>
       </Card>
 
-      {/* Add Filing Drawer */}
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+      {/* History Drawer */}
+      <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>{lastCreatedId ? "Filing Created" : "Add New Filing"}</SheetTitle>
+            <SheetTitle className="text-base">
+              History — {clients.find(c => c.id === historyFiling?.client_id)?.name} | {historyFiling?.tds_forms?.join(", ")} | {historyFiling?.quarter} | {historyFiling?.financial_year}
+            </SheetTitle>
           </SheetHeader>
 
-          {lastCreatedId ? (
-            <div className="py-6 space-y-4 text-center">
-              <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mx-auto">
-                <svg className="w-8 h-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+          <div className="py-4 space-y-4">
+            {historyLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
               </div>
-              <p className="text-lg font-semibold text-foreground">Filing record created!</p>
-              <p className="text-sm text-muted-foreground">
-                You can now proceed to enter data for this filing.
-              </p>
-              <div className="flex gap-3 justify-center pt-4">
-                <Button variant="outline" onClick={() => { setDrawerOpen(false); setLastCreatedId(null); }}>
-                  Close
-                </Button>
-                <Button className="gap-1" onClick={() => {
-                  setDrawerOpen(false);
-                  onNavigateDataEntry?.(lastCreatedId);
-                }}>
-                  Go to Data Entry <ArrowRight size={14} />
+            ) : historyLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">No history entries yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {historyLogs.map(log => (
+                  <div key={log.id} className="p-3 border rounded-lg space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-foreground">{log.changed_by_name || "System"}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {log.changed_at ? format(new Date(log.changed_at), "dd/MM/yyyy HH:mm") : "—"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      <Badge variant="outline" className="text-[10px] mr-1">{log.action_type}</Badge>
+                      {log.old_value && log.new_value && (
+                        <span>{log.old_value} → {log.new_value}</span>
+                      )}
+                    </div>
+                    {log.remark && <p className="text-xs text-foreground bg-muted/50 rounded p-1.5">{log.remark}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add note */}
+            <div className="border-t pt-3 space-y-2">
+              <Label className="text-xs">Add note</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={newNote}
+                  onChange={e => setNewNote(e.target.value)}
+                  placeholder="Type a note..."
+                  className="flex-1 h-8 text-sm"
+                  onKeyDown={e => { if (e.key === "Enter" && newNote.trim()) addNote(); }}
+                />
+                <Button size="sm" onClick={addNote} disabled={addingNote || !newNote.trim()}>
+                  {addingNote ? "..." : "Add"}
                 </Button>
               </div>
             </div>
-          ) : (
-            <>
-              <div className="py-4 space-y-4">
-                {/* Client */}
-                <div className="space-y-1">
-                  <Label>Client *</Label>
-                  <Select value={formData.client_id || ""} onValueChange={handleClientSelect}>
-                    <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                    <SelectContent>
-                      {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.pan})</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* TAN */}
-                <div className="space-y-1">
-                  <Label>TAN *</Label>
-                  <Input value={formData.tan || ""} onChange={e => setFormData(prev => ({ ...prev, tan: e.target.value.toUpperCase() }))}
-                    placeholder="ABCD12345E" maxLength={10} />
-                </div>
-
-                {/* FY and Quarter */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label>Financial Year *</Label>
-                    <Select value={formData.financial_year} onValueChange={v => setFormData(prev => ({ ...prev, financial_year: v }))}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Quarter *</Label>
-                    <Select value={formData.quarter} onValueChange={v => setFormData(prev => ({ ...prev, quarter: v }))}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Form Types */}
-                <div className="space-y-2">
-                  <Label>Form Type *</Label>
-                  <div className="flex gap-4">
-                    {TDS_FORMS.map(form => (
-                      <label key={form} className="flex items-center gap-1.5 text-sm">
-                        <Checkbox
-                          checked={formData.forms?.[form] || false}
-                          onCheckedChange={(checked) => setFormData(prev => ({
-                            ...prev,
-                            forms: { ...prev.forms, [form]: !!checked },
-                          }))}
-                        />
-                        {form}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Return Type */}
-                <div className="space-y-2">
-                  <Label>Type of Return</Label>
-                  <div className="flex gap-4">
-                    <label className="flex items-center gap-1.5 text-sm">
-                      <input type="radio" name="return_type" value="regular"
-                        checked={formData.return_type === "regular"}
-                        onChange={() => setFormData(prev => ({ ...prev, return_type: "regular" }))}
-                        className="accent-primary" />
-                      Regular Return
-                    </label>
-                    <label className="flex items-center gap-1.5 text-sm">
-                      <input type="radio" name="return_type" value="correction"
-                        checked={formData.return_type === "correction"}
-                        onChange={() => setFormData(prev => ({ ...prev, return_type: "correction" }))}
-                        className="accent-primary" />
-                      Correction Return
-                    </label>
-                  </div>
-                </div>
-
-                {formData.return_type === "correction" && (
-                  <div className="space-y-1">
-                    <Label>Previous Filing Token No</Label>
-                    <Input value={formData.previous_token || ""}
-                      onChange={e => setFormData(prev => ({ ...prev, previous_token: e.target.value }))}
-                      placeholder="Enter previous token number" />
-                  </div>
-                )}
-
-                {/* Deductor Details */}
-                <div className="border-t pt-3 space-y-3">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase">Deductor Details</p>
-                  <div className="space-y-1">
-                    <Label>Deductor Type</Label>
-                    <Select value={formData.deductor_type || "Company"}
-                      onValueChange={v => setFormData(prev => ({ ...prev, deductor_type: v }))}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{DEDUCTOR_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Deductor PAN</Label>
-                    <Input value={formData.deductor_pan || ""}
-                      onChange={e => setFormData(prev => ({ ...prev, deductor_pan: e.target.value.toUpperCase() }))}
-                      maxLength={10} placeholder="Auto-fills from client" />
-                  </div>
-                </div>
-
-                {/* Responsible Person */}
-                <div className="border-t pt-3 space-y-3">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase">Responsible Person</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <Label>PAN</Label>
-                      <Input value={formData.responsible_person_pan || ""}
-                        onChange={e => setFormData(prev => ({ ...prev, responsible_person_pan: e.target.value.toUpperCase() }))}
-                        maxLength={10} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Name</Label>
-                      <Input value={formData.responsible_person_name || ""}
-                        onChange={e => setFormData(prev => ({ ...prev, responsible_person_name: e.target.value }))} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Assigned Staff */}
-                <div className="space-y-1">
-                  <Label>Assigned Staff</Label>
-                  <Select value={formData.assigned_staff || ""} onValueChange={v => setFormData(prev => ({ ...prev, assigned_staff: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
-                    <SelectContent>{users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-
-                {/* Remarks */}
-                <div className="space-y-1">
-                  <Label>Remarks</Label>
-                  <Textarea value={formData.remarks || ""}
-                    onChange={e => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
-                    rows={2} />
-                </div>
-              </div>
-
-              <SheetFooter>
-                <Button variant="outline" onClick={() => setDrawerOpen(false)}>Cancel</Button>
-                <Button onClick={handleSaveFiling} disabled={saving}>
-                  {saving ? "Saving..." : "Create Filing"}
-                </Button>
-              </SheetFooter>
-            </>
-          )}
+          </div>
         </SheetContent>
       </Sheet>
     </div>

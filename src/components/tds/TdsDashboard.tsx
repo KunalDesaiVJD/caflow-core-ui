@@ -40,10 +40,10 @@ interface TdsFiling {
 }
 
 interface AuditLogEntry {
-  id: string; client_id: string | null; form_type: string | null;
-  quarter: string | null; financial_year: string | null;
-  old_status: string | null; new_status: string | null;
-  changed_by: string | null; changed_at: string | null;
+  id: string; filing_id: string | null; firm_id: string | null;
+  action_type: string; old_value: string | null; new_value: string | null;
+  changed_by: string | null; changed_by_name: string | null;
+  changed_at: string | null; remark: string | null;
 }
 
 interface RateRecord {
@@ -633,41 +633,35 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-[10px]">Client</TableHead>
-                  <TableHead className="text-[10px]">Form</TableHead>
-                  <TableHead className="text-[10px]">Quarter</TableHead>
-                  <TableHead className="text-[10px]">Status Change</TableHead>
+                  <TableHead className="text-[10px]">Action</TableHead>
+                  <TableHead className="text-[10px]">Change</TableHead>
                   <TableHead className="text-[10px]">User</TableHead>
                   <TableHead className="text-[10px]">Date & Time</TableHead>
+                  <TableHead className="text-[10px]">Remark</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {auditLogs.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground text-sm py-6">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground text-sm py-6">
                       No recent activity recorded
                     </TableCell>
                   </TableRow>
-                ) : auditLogs.map(log => {
-                  const client = clients.find(c => c.id === log.client_id);
-                  const changedByUser = users.find(u => u.id === log.changed_by);
-                  return (
+                ) : auditLogs.map(log => (
                     <TableRow key={log.id}>
-                      <TableCell className="text-sm font-medium">{client?.name || "—"}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-[10px]">{log.form_type || "—"}</Badge></TableCell>
-                      <TableCell className="text-sm">{log.quarter} {log.financial_year}</TableCell>
+                      <TableCell><Badge variant="secondary" className="text-[10px]">{log.action_type}</Badge></TableCell>
                       <TableCell className="text-sm">
-                        <span className="text-muted-foreground">{log.old_status || "—"}</span>
-                        <span className="mx-1">→</span>
-                        <span className="font-medium">{log.new_status || "—"}</span>
+                        {log.old_value || log.new_value ? (
+                          <><span className="text-muted-foreground">{log.old_value || "—"}</span><span className="mx-1">→</span><span className="font-medium">{log.new_value || "—"}</span></>
+                        ) : "—"}
                       </TableCell>
-                      <TableCell className="text-sm">{changedByUser?.name || "System"}</TableCell>
+                      <TableCell className="text-sm">{log.changed_by_name || "System"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {log.changed_at ? format(new Date(log.changed_at), "dd MMM yyyy, hh:mm a") : "—"}
                       </TableCell>
+                      <TableCell className="text-xs max-w-[150px] truncate">{log.remark || "—"}</TableCell>
                     </TableRow>
-                  );
-                })}
+                  ))}
               </TableBody>
             </Table>
           </div>
