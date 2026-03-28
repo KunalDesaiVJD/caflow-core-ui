@@ -4983,46 +4983,40 @@ export type Database = {
       }
       tds_filing_audit_log: {
         Row: {
+          action_type: string
           changed_at: string | null
           changed_by: string | null
-          client_id: string | null
+          changed_by_name: string | null
           filing_id: string | null
-          financial_year: string | null
           firm_id: string | null
-          form_type: string | null
           id: string
-          new_status: string | null
-          notes: string | null
-          old_status: string | null
-          quarter: string | null
+          new_value: string | null
+          old_value: string | null
+          remark: string | null
         }
         Insert: {
+          action_type?: string
           changed_at?: string | null
           changed_by?: string | null
-          client_id?: string | null
+          changed_by_name?: string | null
           filing_id?: string | null
-          financial_year?: string | null
           firm_id?: string | null
-          form_type?: string | null
           id?: string
-          new_status?: string | null
-          notes?: string | null
-          old_status?: string | null
-          quarter?: string | null
+          new_value?: string | null
+          old_value?: string | null
+          remark?: string | null
         }
         Update: {
+          action_type?: string
           changed_at?: string | null
           changed_by?: string | null
-          client_id?: string | null
+          changed_by_name?: string | null
           filing_id?: string | null
-          financial_year?: string | null
           firm_id?: string | null
-          form_type?: string | null
           id?: string
-          new_status?: string | null
-          notes?: string | null
-          old_status?: string | null
-          quarter?: string | null
+          new_value?: string | null
+          old_value?: string | null
+          remark?: string | null
         }
         Relationships: [
           {
@@ -5030,13 +5024,6 @@ export type Database = {
             columns: ["changed_by"]
             isOneToOne: false
             referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "tds_filing_audit_log_client_id_fkey"
-            columns: ["client_id"]
-            isOneToOne: false
-            referencedRelation: "clients"
             referencedColumns: ["id"]
           },
           {
