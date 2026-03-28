@@ -903,80 +903,29 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={documentType === "quotation_proforma" ? 10 : 9} className="text-center text-muted-foreground py-8">No documents found.</TableCell></TableRow>
-              ) : filtered.map(inv => {
-                const clientName = clientMap[inv.client_id || ""]?.name || "—";
-                const firmName = firmMap[inv.firm_id || ""] || "—";
-                const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
-                return (
-                  <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedIds.has(inv.id)}
-                        onCheckedChange={() => toggleSelect(inv.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{inv.invoice_no || "—"}</TableCell>
-                    {documentType === "quotation_proforma" && (
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs capitalize">{inv.document_type}</Badge>
+              ) : viewBy !== "all" && groupedInvoices ? (
+                groupedInvoices.map(group => (
+                  <>
+                    <TableRow key={`hdr-${group.key}`} className="bg-muted/60">
+                      <TableCell colSpan={documentType === "quotation_proforma" ? 8 : 7} className="font-semibold text-foreground py-2">
+                        {group.label}
                       </TableCell>
-                    )}
-                    <TableCell className="font-medium">{clientName}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
-                    <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
-                    <TableCell>
-                      <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-0.5">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
-                          <Eye size={14} />
-                        </Button>
-                        {/* Convert to Invoice — for finalized quotations/proformas */}
-                        {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
-                          <Button
-                            variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice"
-                            onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}
-                          >
-                            <RefreshCw size={14} className="text-primary" />
-                          </Button>
-                        )}
-                        {documentType === "quotation_proforma" && inv.effectiveStatus === "converted" && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" title="Already converted" disabled>
-                            <RefreshCw size={14} />
-                          </Button>
-                        )}
-                        {(inv.effectiveStatus === "draft" || inv.effectiveStatus === "finalized") && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Send">
-                                <Send size={14} />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleSend(inv, false)} className="gap-2">
-                                <Mail size={14} /> Send to Client
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleSend(inv, true)} className="gap-2">
-                                <User size={14} /> Notify Responsible Person
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                        {inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
-                            <Trash2 size={14} className="text-destructive" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                      <TableCell colSpan={2} className="text-right font-semibold text-foreground py-2 tabular-nums">
+                        ₹{group.subtotal.toLocaleString("en-IN")}
+                      </TableCell>
+                    </TableRow>
+                    {group.invoices.map(inv => renderInvoiceRow(inv))}
+                  </>
+                ))
+              ) : filtered.map(inv => renderInvoiceRow(inv))}
             </TableBody>
           </Table>
+        )}
+        {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1 && (
+          <div className="px-4 py-3 border-t bg-muted/30 flex justify-between items-center">
+            <span className="text-sm font-semibold text-foreground">Grand Total ({groupedInvoices.length} groups)</span>
+            <span className="text-base font-bold tabular-nums text-foreground">₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}</span>
+          </div>
         )}
       </CardContent></Card>
 
