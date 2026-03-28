@@ -47,6 +47,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
+import { generateInvoicePdfBlob, invoicePdfFilename } from "@/lib/invoicePdfGenerator";
 
 // ─── Types ───
 interface Invoice {
