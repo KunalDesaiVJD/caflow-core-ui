@@ -392,6 +392,107 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     return true;
   }), [enriched, statusFilter, search, clientMap, firmMap, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
 
+  // Grouped data for view modes
+  const groupedInvoices = useMemo(() => {
+    if (viewBy === "all") return null;
+    const result: { key: string; label: string; invoices: typeof filtered; subtotal: number }[] = [];
+    const map = new Map<string, typeof filtered>();
+
+    for (const inv of filtered) {
+      let key = "";
+      if (viewBy === "responsible") {
+        key = (clientDetailsMap[inv.client_id || ""] as any)?.responsible_person_id || "unassigned";
+      } else if (viewBy === "group") {
+        key = inv.client_id || "unknown";
+      } else if (viewBy === "firm" || viewBy === "multifirm") {
+        key = inv.firm_id || "unknown";
+      }
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(inv);
+    }
+
+    for (const [key, invs] of map) {
+      let label = key;
+      if (viewBy === "responsible") {
+        label = key === "unassigned" ? "Unassigned" : (responsiblePersons.find(p => p.id === key)?.name || "Unknown");
+      } else if (viewBy === "group") {
+        label = clientMap[key]?.name || "Unknown";
+      } else if (viewBy === "firm" || viewBy === "multifirm") {
+        label = firmMap[key] || "Unknown Firm";
+      }
+      const subtotal = invs.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
+      result.push({ key, label, invoices: invs, subtotal });
+    }
+    result.sort((a, b) => a.label.localeCompare(b.label));
+    return result;
+  }, [filtered, viewBy, clientDetailsMap, clientMap, firmMap, responsiblePersons]);
+
+  // Open share dialog for a single invoice
+  const openShareDialog = (inv: Invoice) => {
+    const clientName = clientMap[inv.client_id || ""]?.name || "";
+    const details = clientDetailsMap[inv.client_id || ""];
+    const fName = firmMap[inv.firm_id || ""] || "";
+    setShareInvoice(inv);
+    setShareEmail(details?.email || "");
+    setSharePhone(details?.mobile || "");
+    setShareSubject(`${inv.invoice_no || "Invoice"} from ${fName}`);
+    setShareMessage(`Dear ${clientName},\n\nPlease find attached ${inv.invoice_no || "Invoice"} for ₹${(inv.total_amount || inv.amount || 0).toLocaleString("en-IN")}.\n\nRegards,\n${fName}`);
+    setShareViaEmail(true);
+    setShareViaWhatsApp(false);
+    setShareOpen(true);
+  };
+
+  const handleShareSend = async () => {
+    if (!shareInvoice) return;
+    setShareSending(true);
+    try {
+      if (shareViaEmail && shareEmail) {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type: "invoice_generated",
+            firm_id: shareInvoice.firm_id,
+            client_id: shareInvoice.client_id,
+            send_to_client: true,
+            payload: {
+              invoice_no: shareInvoice.invoice_no,
+              amount: shareInvoice.total_amount || shareInvoice.amount || 0,
+              document_type: shareInvoice.document_type || "invoice",
+              client_name: clientMap[shareInvoice.client_id || ""]?.name || "",
+              custom_email: shareEmail,
+              custom_subject: shareSubject,
+              custom_message: shareMessage,
+            },
+          },
+        });
+        await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", shareInvoice.id);
+        toast({ title: "Email sent successfully" });
+      }
+      if (shareViaWhatsApp && sharePhone) {
+        const phone = sharePhone.replace(/\D/g, "");
+        const fullPhone = phone.startsWith("91") ? phone : `91${phone}`;
+        const msg = encodeURIComponent(shareMessage);
+        window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
+        toast({ title: "WhatsApp opened — attach the downloaded PDF to the message" });
+        const { generateInvoicePdfBlob } = await import("@/lib/invoicePdfGenerator");
+        const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", shareInvoice.id).single();
+        if (fullInv) {
+          const blob = await generateInvoicePdfBlob(fullInv as any);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${(shareInvoice.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      }
+    } catch {
+      toast({ title: "Failed to send", variant: "destructive" });
+    }
+    setShareSending(false);
+    setShareOpen(false);
+    fetchData();
+  };
+
   const handleDelete = async () => {
     if (!deleteId) return;
     const { error } = await supabase.from("invoices").delete().eq("id", deleteId);
