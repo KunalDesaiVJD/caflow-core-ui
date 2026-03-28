@@ -442,9 +442,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </Select>
         </div>
         <div className="flex-1" />
-        <Button variant="outline" size="sm" className="gap-1" onClick={exportFilings}>
-          <Download size={14} /> Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-1">
+              <Settings size={14} /> Options
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={exportFilings} className="gap-2">
+              <Download size={14} /> Export Filings
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setMigrationOpen(true)} className="gap-2">
+              <Database size={14} /> Migrate Legacy Data
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Bulk Actions */}
