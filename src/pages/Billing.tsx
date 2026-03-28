@@ -246,6 +246,20 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
 
+  // Share dialog state
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareInvoice, setShareInvoice] = useState<Invoice | null>(null);
+  const [shareEmail, setShareEmail] = useState("");
+  const [sharePhone, setSharePhone] = useState("");
+  const [shareSubject, setShareSubject] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
+  const [shareViaEmail, setShareViaEmail] = useState(true);
+  const [shareViaWhatsApp, setShareViaWhatsApp] = useState(false);
+  const [shareSending, setShareSending] = useState(false);
+
+  // Client details cache for email/phone
+  const [clientDetailsMap, setClientDetailsMap] = useState<Record<string, { email: string | null; mobile: string | null }>>({});
+
   // Billing reminders
   const [reminders, setReminders] = useState<any[]>([]);
   const [reminderClientMap, setReminderClientMap] = useState<Record<string, string>>({});
