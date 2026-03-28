@@ -265,10 +265,15 @@ const TdsFilings = () => {
             <TdsDataEntry clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
           )}
           {activeSection === "validate" && (
-            <TdsValidateSection clients={clients} resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />
+            <TdsValidateFinalise
+              clients={clients}
+              isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId}
+              onNavigateDataEntry={() => setActiveSection("data-entry")}
+            />
           )}
           {activeSection === "reports" && (
-            <TdsReportsTab clients={clients} resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />
+            <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
           )}
           {activeSection === "rate-master" && (
             <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />
