@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { supabase } from "@/integrations/supabase/client";
 
 /**
  * Genius XLS Export — writes data into the exact template format used by Genius Software.
