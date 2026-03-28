@@ -22,6 +22,7 @@ import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import { FORM_3CD_CLAUSES } from "@/data/form3cd-clauses";
 import type { ClauseDefinition } from "@/data/form3cd-master";
 import ClauseRenderer from "@/components/form3cd/ClauseRenderer";
+import Form3CDReport from "@/components/form3cd/Form3CDReport";
 
 /* ──────── types ──────── */
 interface ClauseData { [key: string]: any; }
