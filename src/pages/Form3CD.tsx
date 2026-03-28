@@ -63,10 +63,25 @@ function clauseStateKey(clauseNo: string): string {
   return `cl_${clauseNo}`;
 }
 
-// Maps clauseNo like "10a" to its DB column "cl_10"
+// Maps clauseNo to its actual DB column in form_3cd table
+// DB columns: cl_8, cl_9, cl_10, cl_11, cl_12, cl_13, cl_14, cl_15_16, cl_17, cl_18,
+// cl_19, cl_20, cl_21, cl_22, cl_23, cl_24_25, cl_26, cl_27, cl_29, cl_30, cl_31,
+// cl_32, cl_33, cl_34, cl_35, cl_36, cl_37_39, cl_40, cl_41, cl_42_43, cl_44
+const CLAUSE_DB_MAP: Record<string, string> = {
+  '15': 'cl_15_16', '16': 'cl_15_16',
+  '24': 'cl_24_25', '25': 'cl_24_25',
+  '28': 'cl_29', // no cl_28 column — store with cl_29
+  '37': 'cl_37_39', '38': 'cl_37_39', '39': 'cl_37_39',
+  '42': 'cl_42_43', '43': 'cl_42_43',
+};
 function clauseDbColumn(clauseNo: string): string {
-  const match = clauseNo.match(/^(\d+(?:_\d+)?)/);
-  return `cl_${match ? match[1] : clauseNo}`;
+  // Extract the base number (e.g. "10a" → "10", "13f" → "13")
+  const baseMatch = clauseNo.match(/^(\d+)/);
+  const baseNum = baseMatch ? baseMatch[1] : clauseNo;
+  // Check explicit map first
+  if (CLAUSE_DB_MAP[baseNum]) return CLAUSE_DB_MAP[baseNum];
+  // Default: cl_{baseNum}
+  return `cl_${baseNum}`;
 }
 
 /* ──────── main component ──────── */
@@ -169,7 +184,13 @@ export default function Form3CD() {
       });
       setClauseData(loaded);
       // Load clauses 1-7 editable data
-      if (e.cl_1_7 && typeof e.cl_1_7 === 'object') setCl17(e.cl_1_7);
+      // Load clauses 1-7 editable data (stored inside cl_8._cl17)
+      if (e.cl_8 && typeof e.cl_8 === 'object' && (e.cl_8 as any)._cl17) {
+        setCl17((e.cl_8 as any)._cl17);
+      } else if (e.cl_1_7 && typeof e.cl_1_7 === 'object') {
+        // Legacy fallback
+        setCl17(e.cl_1_7);
+      }
     } else {
       const fy = eng.financial_year || "";
       const ay = computeAY(fy);
@@ -226,8 +247,12 @@ export default function Form3CD() {
         dbGrouped[dbCol] = clauseData[stateKey] || {};
       }
     });
-    // Save clauses 1-7 editable data
-    dbGrouped['cl_1_7'] = cl17;
+    // Save clauses 1-7 editable data inside cl_8 (no separate cl_1_7 column exists)
+    if (dbGrouped['cl_8'] && typeof dbGrouped['cl_8'] === 'object') {
+      dbGrouped['cl_8']._cl17 = cl17;
+    } else {
+      dbGrouped['cl_8'] = { _cl17: cl17 };
+    }
     Object.assign(updatePayload, dbGrouped);
 
     const { error } = await supabase
