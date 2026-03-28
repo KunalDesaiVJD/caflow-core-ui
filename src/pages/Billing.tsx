@@ -286,7 +286,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
 
-    let cQuery = supabase.from("clients").select("id, name, entity_type").eq("is_draft", false).is("deleted_at", null);
+    let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, responsible_person_id").eq("is_draft", false).is("deleted_at", null);
     if (!isSuperadmin && firmId) cQuery = cQuery.eq("firm_id", firmId);
     const { data: clientData } = await cQuery;
 
@@ -298,7 +298,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const { data: usersData } = await usersQuery;
 
     const cMap: ClientMap = {};
-    (clientData || []).forEach(c => { cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type }; });
+    const cdMap: Record<string, { email: string | null; mobile: string | null; responsible_person_id: string | null }> = {};
+    (clientData || []).forEach((c: any) => {
+      cMap[c.id] = { name: c.name || "Unknown", entity_type: c.entity_type };
+      cdMap[c.id] = { email: c.email, mobile: c.mobile, responsible_person_id: c.responsible_person_id };
+    });
+    setClientDetailsMap(cdMap);
 
     const fMap: FirmMap = {};
     (firmData || []).forEach((f: any) => { fMap[f.id] = f.display_name || f.name || "Unknown"; });
