@@ -32,6 +32,7 @@ import {
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
 import { TdsFilingsManager } from "@/components/tds/TdsFilingsManager";
+import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 
 // ─── Constants ───
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -116,7 +117,7 @@ interface TdsFiling {
   remarks: string | null; created_at: string | null;
 }
 
-interface ClientOption { id: string; name: string | null; pan: string | null; }
+interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
 interface UserOption { id: string; name: string | null; }
 
 // ─── Helpers ───
@@ -184,17 +185,16 @@ const TdsFilings = () => {
   }, [user?.firm_id]);
 
   const fetchClients = useCallback(async () => {
-    const firmId = await resolveFirmId();
     const { data: svcData } = await supabase.from("client_services").select("client_id, service_category_id, is_active").eq("is_active", true);
     const { data: categories } = await supabase.from("service_categories").select("id, linked_module").eq("linked_module", "tds");
     const tdsCatIds = new Set((categories || []).map(c => c.id));
     const tdsClientIds = (svcData || []).filter(s => tdsCatIds.has(s.service_category_id)).map(s => s.client_id);
     if (tdsClientIds.length === 0) { setClients([]); return; }
-    let q = supabase.from("clients").select("id, name, pan").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
-    if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+    // RLS handles firm-based access control, no need for code-level firm_id filter
+    const q = supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
     const { data } = await q;
     setClients((data as ClientOption[]) || []);
-  }, [isSuperadmin, resolveFirmId]);
+  }, [resolveFirmId]);
 
   const fetchUsers = useCallback(async () => {
     const firmId = await resolveFirmId();
@@ -260,7 +260,7 @@ const TdsFilings = () => {
             />
           )}
           {activeSection === "data-entry" && (
-            <TdsEntriesTab clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+            <TdsDataEntry clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
           )}
           {activeSection === "validate" && (
             <TdsValidateSection clients={clients} resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />
