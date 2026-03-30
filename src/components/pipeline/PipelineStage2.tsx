@@ -343,6 +343,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const comparativeFileRef = useRef<HTMLInputElement>(null);
   const [deletingTb, setDeletingTb] = useState(false);
   const [tbStatusMsg, setTbStatusMsg] = useState('');
+  const [aiClassifying, setAiClassifying] = useState(false);
 
   // ─── Existing TB snapshot ───
   // Fetch existing TB snapshots — Tally import creates N rows (one per ledger),
