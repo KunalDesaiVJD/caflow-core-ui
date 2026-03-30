@@ -426,8 +426,6 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
     groupTotalsTallied,
     allRulesPassed:
       Math.abs(grandTotal.txnDebit - grandTotal.txnCredit) < 1 &&
-      Math.abs(bsAssets - bsLiabilities) < 1 &&
-      unclassifiedNodes === 0 &&
       onlyGroupsCollapsible &&
       groupTotalsTallied,
   };

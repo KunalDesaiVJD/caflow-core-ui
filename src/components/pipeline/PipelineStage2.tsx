@@ -1597,7 +1597,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
 
               {/* Hierarchy Tree View */}
-              {tbViewMode === "tree" && tbPresentation && tbPresentation.validation.allRulesPassed && (
+              {tbViewMode === "tree" && tbPresentation && (
                 <Card>
                   <CardHeader className='pb-2'>
                     <CardTitle className='text-sm flex items-center gap-2'>
