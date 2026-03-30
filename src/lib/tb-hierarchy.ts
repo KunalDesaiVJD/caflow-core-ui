@@ -76,7 +76,8 @@ const PL_INCOME_KEYWORDS = [
 const PL_EXPENSE_KEYWORDS = [
   "purchase", "expense", "expenses", "direct expense", "indirect expense", "employee", "salary", "wages",
   "manufacturing", "consumption", "finance cost", "financial expense", "depreciation", "rent", "freight",
-  "printing", "repairs", "travelling", "advertising", "professional fee", "electricity", "telephone"
+  "printing", "repairs", "travelling", "advertising", "professional fee", "electricity", "telephone",
+  "partner payout", "profit and loss", "profit   loss"
 ];
 
 const AGGREGATE_HINTS = [
