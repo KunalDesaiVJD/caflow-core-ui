@@ -77,6 +77,14 @@ function evaluateFormula(formula: string, row: Record<string, any>): number | st
     return diff > 0 ? `${diff} days` : 'On time';
   }
 
+  // Special: date-comparison conditional for disallowance (Clause 20b)
+  if (formula === 'actual_date > due_date ? employee_deduction : 0') {
+    const due = row.due_date ? new Date(row.due_date) : null;
+    const actual = row.actual_date ? new Date(row.actual_date) : null;
+    if (!due || !actual || isNaN(due.getTime()) || isNaN(actual.getTime())) return 0;
+    return actual.getTime() > due.getTime() ? (parseFloat(row.employee_deduction || '0') || 0) : 0;
+  }
+
   try {
     // Replace column references with values
     let expr = formula;
