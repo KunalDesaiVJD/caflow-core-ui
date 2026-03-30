@@ -126,7 +126,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
     const totalInterest = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.interest) || 0), 0);
     const netProfit = parseFloat(data?._21c_net_profit || '0') || 0;
     const interestIncome = parseFloat(data?._21c_interest_income || '0') || 0;
-    const bookProfit = totalInterest + netProfit - interestIncome;
+    const bookProfit = totalSalary + netProfit - interestIncome;
     const step1 = Math.min(Math.max(bookProfit, 0), 600000) * 0.9;
     const step2 = bookProfit > 600000 ? (bookProfit - 600000) * 0.6 : 0;
     const totalAllowable = step1 + step2;
