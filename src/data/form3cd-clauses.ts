@@ -463,9 +463,33 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         key: 'cl_21b', heading: '21(b) — Amounts inadmissible under section 40(a)',
         control: 'composite',
         subClauses: [
-          // (ii)(A)
+          // (i)(A)
           {
-            key: 'cl_21b_iiA', heading: '(ii)(A) — Details of payment referred to in 40(a)(ia) — tax NOT deducted',
+            key: 'cl_21b_iA', heading: '(i)(A) — Details of payment on which tax is not deducted — under section 40(a)(i)',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (i)(B)
+          {
+            key: 'cl_21b_iB', heading: '(i)(B) — Details of payment on which tax has been deducted but NOT paid — under section 40(a)(i)',
+            control: 'not_applicable_annexure',
+            annexureColumns: [
+              { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
+              { key: 'date', label: 'Date', type: 'date' as const, width: 100 },
+              { key: 'amount', label: 'Amount (₹)', type: 'numeric' as const, width: 110 },
+              { key: 'nature', label: 'Nature of Payment', type: 'text' as const, minWidth: 140 },
+              { key: 'payee_name', label: 'Payee Name', type: 'text' as const, minWidth: 120 },
+              { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
+            ],
+          },
+          // (ii)(A)
             control: 'not_applicable_annexure',
             annexureColumns: [
               { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
