@@ -839,12 +839,14 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
     }, 0);
   });
 
+  const hasSrNoCol = columns.some(c => c.key === 'sr_no');
+
   return (
     <div className="space-y-2 overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="text-xs bg-muted/50">
-            <TableHead className="w-8 text-xs">Sr</TableHead>
+            {!hasSrNoCol && <TableHead className="w-8 text-xs">Sr</TableHead>}
             {columns.map(col => (
               <TableHead
                 key={col.key}
@@ -863,14 +865,14 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
         <TableBody>
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={columns.length + 2} className="text-center text-muted-foreground text-sm py-4">
+              <TableCell colSpan={columns.length + (hasSrNoCol ? 0 : 1) + (isLocked ? 0 : 1)} className="text-center text-muted-foreground text-sm py-4">
                 No rows — click "+ Add Row" to begin
               </TableCell>
             </TableRow>
           )}
           {rows.map((row, ri) => (
             <TableRow key={ri}>
-              <TableCell className="p-1 text-xs text-center text-muted-foreground">{ri + 1}</TableCell>
+              {!hasSrNoCol && <TableCell className="p-1 text-xs text-center text-muted-foreground">{ri + 1}</TableCell>}
               {columns.map(col => {
                 // Conditional visibility: if conditionalOn is set, check if the driving column matches
                 const isConditionallyHidden = col.conditionalOn && col.conditionalOnValue !== undefined
