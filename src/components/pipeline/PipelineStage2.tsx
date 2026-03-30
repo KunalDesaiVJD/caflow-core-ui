@@ -1228,8 +1228,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     );
   };
 
-  // Check if stage 2 can be completed
-  const canComplete = !!tbPresentation?.validation.allRulesPassed;
+  // Check if stage 2 can be completed — allow with warnings (TB must exist)
+  const canComplete = !!tbPresentation;
 
   const handleCompleteStage2 = async () => {
     if (!engagement) return;
