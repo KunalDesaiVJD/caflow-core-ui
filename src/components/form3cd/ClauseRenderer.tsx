@@ -171,7 +171,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
             <TableRow className="bg-accent/30">
               <TableCell>
                 <div className="font-semibold">Row D: Book Profit</div>
-                <div className="text-xs text-muted-foreground">Interest paid to partners + Net P&amp;L - Interest Income</div>
+                <div className="text-xs text-muted-foreground">Remuneration paid to partners + Net P&amp;L - Interest Income</div>
               </TableCell>
               <TableCell className="text-right font-mono font-semibold">₹ {fmtINR(bookProfit)}</TableCell>
             </TableRow>
