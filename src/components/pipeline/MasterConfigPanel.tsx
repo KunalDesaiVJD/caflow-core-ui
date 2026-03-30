@@ -324,23 +324,24 @@ export function MasterConfigPanel() {
 
   async function saveThreeCDTemplates() {
     setSaving(true);
-    // Delete and reinsert for clean ordering
-    const existingIds = threeCDClauses.filter(t => t.id).map(t => t.id!);
-    if (existingIds.length > 0) {
-      await supabase.from("threecd_master_templates").delete().in("id", existingIds);
+    try {
+      // Delete ALL existing 3CD templates, then reinsert for clean sync
+      await supabase.from("threecd_master_templates").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const inserts = threeCDClauses.map(t => ({
+        clause_number: t.clause_number,
+        heading: t.heading,
+        template_content: t.template_content,
+        is_applicable_default: t.is_applicable_default,
+        updated_at: new Date().toISOString(),
+      }));
+      if (inserts.length > 0) {
+        const { error } = await supabase.from("threecd_master_templates").insert(inserts);
+        if (error) { toast.error("3CD save failed: " + error.message); setSaving(false); return; }
+      }
+      toast.success("3CD master templates saved successfully");
+    } catch (e: any) {
+      toast.error("3CD save failed: " + (e?.message || "Unknown error"));
     }
-    const inserts = threeCDClauses.map(t => ({
-      clause_number: t.clause_number,
-      heading: t.heading,
-      template_content: t.template_content,
-      is_applicable_default: t.is_applicable_default,
-      updated_at: new Date().toISOString(),
-    }));
-    if (inserts.length > 0) {
-      const { error } = await supabase.from("threecd_master_templates").insert(inserts);
-      if (error) { toast.error(error.message); setSaving(false); return; }
-    }
-    toast.success("3CD master templates saved (global)");
     setSaving(false);
     loadAll();
   }

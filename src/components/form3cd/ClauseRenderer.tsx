@@ -77,6 +77,14 @@ function evaluateFormula(formula: string, row: Record<string, any>): number | st
     return diff > 0 ? `${diff} days` : 'On time';
   }
 
+  // Special: date-comparison conditional for disallowance (Clause 20b)
+  if (formula === 'actual_date > due_date ? employee_deduction : 0') {
+    const due = row.due_date ? new Date(row.due_date) : null;
+    const actual = row.actual_date ? new Date(row.actual_date) : null;
+    if (!due || !actual || isNaN(due.getTime()) || isNaN(actual.getTime())) return 0;
+    return actual.getTime() > due.getTime() ? (parseFloat(row.employee_deduction || '0') || 0) : 0;
+  }
+
   try {
     // Replace column references with values
     let expr = formula;
@@ -118,7 +126,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
     const totalInterest = cl21cRows.reduce((s: number, r: any) => s + (parseFloat(r.interest) || 0), 0);
     const netProfit = parseFloat(data?._21c_net_profit || '0') || 0;
     const interestIncome = parseFloat(data?._21c_interest_income || '0') || 0;
-    const bookProfit = totalInterest + netProfit - interestIncome;
+    const bookProfit = totalSalary + netProfit - interestIncome;
     const step1 = Math.min(Math.max(bookProfit, 0), 600000) * 0.9;
     const step2 = bookProfit > 600000 ? (bookProfit - 600000) * 0.6 : 0;
     const totalAllowable = step1 + step2;
@@ -163,7 +171,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
             <TableRow className="bg-accent/30">
               <TableCell>
                 <div className="font-semibold">Row D: Book Profit</div>
-                <div className="text-xs text-muted-foreground">Interest paid to partners + Net P&amp;L - Interest Income</div>
+                <div className="text-xs text-muted-foreground">Remuneration paid to partners + Net P&amp;L - Interest Income</div>
               </TableCell>
               <TableCell className="text-right font-mono font-semibold">₹ {fmtINR(bookProfit)}</TableCell>
             </TableRow>
@@ -831,12 +839,14 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
     }, 0);
   });
 
+  const hasSrNoCol = columns.some(c => c.key === 'sr_no');
+
   return (
     <div className="space-y-2 overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="text-xs bg-muted/50">
-            <TableHead className="w-8 text-xs">Sr</TableHead>
+            {!hasSrNoCol && <TableHead className="w-8 text-xs">Sr</TableHead>}
             {columns.map(col => (
               <TableHead
                 key={col.key}
@@ -855,14 +865,14 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
         <TableBody>
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={columns.length + 2} className="text-center text-muted-foreground text-sm py-4">
+              <TableCell colSpan={columns.length + (hasSrNoCol ? 0 : 1) + (isLocked ? 0 : 1)} className="text-center text-muted-foreground text-sm py-4">
                 No rows — click "+ Add Row" to begin
               </TableCell>
             </TableRow>
           )}
           {rows.map((row, ri) => (
             <TableRow key={ri}>
-              <TableCell className="p-1 text-xs text-center text-muted-foreground">{ri + 1}</TableCell>
+              {!hasSrNoCol && <TableCell className="p-1 text-xs text-center text-muted-foreground">{ri + 1}</TableCell>}
               {columns.map(col => {
                 // Conditional visibility: if conditionalOn is set, check if the driving column matches
                 const isConditionallyHidden = col.conditionalOn && col.conditionalOnValue !== undefined
@@ -895,7 +905,7 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
           ))}
           {rows.length > 0 && (showTotals || columns.some(c => c.type === 'auto_calc')) && (
             <TableRow className="bg-muted/30 font-semibold text-xs">
-              <TableCell className="p-1 text-center">—</TableCell>
+              {!hasSrNoCol && <TableCell className="p-1 text-center">—</TableCell>}
               {columns.map(col => (
                 <TableCell key={col.key} className="p-1">
                   {(totalColumns?.includes(col.key) && totals[col.key] !== undefined) ? (
