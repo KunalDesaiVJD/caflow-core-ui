@@ -1465,11 +1465,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   </AlertDescription>
                 </Alert>
               ) : (
-                <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>Validation Failed</AlertTitle>
-                  <AlertDescription className="text-sm">
-                    Trial Balance preview is blocked until all validation rules pass, including BS Assets = BS Liabilities & Equity and zero unclassified groups.
+                <Alert className="border-amber-500/30 bg-amber-500/5">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <AlertTitle className="text-amber-700">Validation Warnings</AlertTitle>
+                  <AlertDescription className="text-sm text-amber-700">
+                    Some validation checks did not pass. You can still preview and work with the Trial Balance.
+                    Review the integrity checks below and use AI Auto-Classify to fix classification issues.
                     <div className="flex gap-2 mt-2">
                       <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
                         Re-upload
