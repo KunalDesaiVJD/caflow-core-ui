@@ -490,6 +490,8 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
             ],
           },
           // (ii)(A)
+          {
+            key: 'cl_21b_iiA', heading: '(ii)(A) — Details of payment referred to in 40(a)(ia) — tax NOT deducted',
             control: 'not_applicable_annexure',
             annexureColumns: [
               { key: 'sr_no', label: 'SN', type: 'readonly' as const, width: 40 },
