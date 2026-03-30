@@ -905,7 +905,7 @@ function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalCol
           ))}
           {rows.length > 0 && (showTotals || columns.some(c => c.type === 'auto_calc')) && (
             <TableRow className="bg-muted/30 font-semibold text-xs">
-              <TableCell className="p-1 text-center">—</TableCell>
+              {!hasSrNoCol && <TableCell className="p-1 text-center">—</TableCell>}
               {columns.map(col => (
                 <TableCell key={col.key} className="p-1">
                   {(totalColumns?.includes(col.key) && totals[col.key] !== undefined) ? (
