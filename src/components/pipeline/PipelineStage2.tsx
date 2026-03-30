@@ -891,6 +891,50 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     toast.success("Override applied — proceeding with difference noted");
   };
 
+  // ─── AI Auto-Classify TB Groups ───
+  const handleAiClassify = async () => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    const rootNodes = source.filter(n => !n.parentNodeId);
+    if (rootNodes.length === 0) { toast.error("No groups to classify"); return; }
+    setAiClassifying(true);
+    try {
+      const groupNames = rootNodes.map(n => n.name);
+      const { data, error } = await supabase.functions.invoke("claude-gateway", {
+        body: { request_type: "tb_classifier", user_message: `Classify these Trial Balance top-level groups into bs_asset, bs_liability, pl_income, or pl_expense:\n${JSON.stringify(groupNames)}` },
+      });
+      if (error) throw new Error(error.message || "AI classification failed");
+      const classification: Record<string, string> = data?.raw ? {} : (data || {});
+      if (Object.keys(classification).length === 0) { toast.error("AI returned no classification"); setAiClassifying(false); return; }
+
+      for (const root of rootNodes) {
+        const section = classification[root.name];
+        if (!section) continue;
+        const bsPlSide = section.startsWith("bs_") ? "BS" : "PL";
+        const normalBal = section === "bs_liability" || section === "pl_income" ? "Cr" : "Dr";
+        await supabase.from("tb_hierarchy_nodes")
+          .update({ bs_pl_side: bsPlSide, normal_balance: normalBal, primary_group: root.name } as any)
+          .eq("engagement_id", engagementId)
+          .eq("node_id", root.nodeId);
+        // Update descendants by matching primary_group
+        const descIds = source.filter(n => n.primaryGroup === root.name && n.nodeId !== root.nodeId).map(n => n.nodeId);
+        if (descIds.length > 0) {
+          for (const did of descIds) {
+            await supabase.from("tb_hierarchy_nodes")
+              .update({ bs_pl_side: bsPlSide, normal_balance: normalBal, primary_group: root.name } as any)
+              .eq("engagement_id", engagementId)
+              .eq("node_id", did);
+          }
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      toast.success(`AI classified ${Object.keys(classification).length} groups. Refreshing...`);
+    } catch (err: any) {
+      toast.error(err.message || "AI classification failed");
+    } finally {
+      setAiClassifying(false);
+    }
+  };
+
   const handleDeleteTb = async () => {
     if (!window.confirm(
       'Delete the imported Trial Balance? This will remove all ledger hierarchy data for this engagement. You can re-upload a new file.'
