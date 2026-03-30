@@ -30,6 +30,8 @@ const SYSTEM_PROMPTS: Record<string, string> = {
     "You are a CA suggesting audit procedures. Return: specific tests, red flags, and SA standard references.",
   notes_drafter:
     "You are a CA drafting Notes to Accounts in Ind AS or AS format. Return the structured note as JSON.",
+  tb_classifier:
+    'You are an Indian Chartered Accountant expert in Tally Trial Balance classification. Given a list of top-level account groups from a Tally Trial Balance, classify each into one of: bs_asset, bs_liability, pl_income, pl_expense. Consider Indian accounting standards. \"Capital Account\", \"Loans (Liability)\", \"Current Liabilities\" are bs_liability. \"Fixed Assets\", \"Current Assets\", \"Investments\" are bs_asset. \"Sales Accounts\", \"Direct Incomes\", \"Indirect Incomes\" are pl_income. \"Purchase Accounts\", \"Direct Expenses\", \"Indirect Expenses\", \"Partner Payout\" are pl_expense. \"Profit & Loss A/c\" is pl_expense. Return ONLY a JSON object mapping each group name to its classification. Example: {\"Capital Account\":\"bs_liability\",\"Fixed Assets\":\"bs_asset\"}. No markdown, no explanation.',
 };
 
 const RATE_LIMIT = 20;

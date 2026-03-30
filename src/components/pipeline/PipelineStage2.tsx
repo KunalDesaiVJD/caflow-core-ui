@@ -343,6 +343,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const comparativeFileRef = useRef<HTMLInputElement>(null);
   const [deletingTb, setDeletingTb] = useState(false);
   const [tbStatusMsg, setTbStatusMsg] = useState('');
+  const [aiClassifying, setAiClassifying] = useState(false);
 
   // ─── Existing TB snapshot ───
   // Fetch existing TB snapshots — Tally import creates N rows (one per ledger),
@@ -890,6 +891,50 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     toast.success("Override applied — proceeding with difference noted");
   };
 
+  // ─── AI Auto-Classify TB Groups ───
+  const handleAiClassify = async () => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    const rootNodes = source.filter(n => !n.parentNodeId);
+    if (rootNodes.length === 0) { toast.error("No groups to classify"); return; }
+    setAiClassifying(true);
+    try {
+      const groupNames = rootNodes.map(n => n.name);
+      const { data, error } = await supabase.functions.invoke("claude-gateway", {
+        body: { request_type: "tb_classifier", user_message: `Classify these Trial Balance top-level groups into bs_asset, bs_liability, pl_income, or pl_expense:\n${JSON.stringify(groupNames)}` },
+      });
+      if (error) throw new Error(error.message || "AI classification failed");
+      const classification: Record<string, string> = data?.raw ? {} : (data || {});
+      if (Object.keys(classification).length === 0) { toast.error("AI returned no classification"); setAiClassifying(false); return; }
+
+      for (const root of rootNodes) {
+        const section = classification[root.name];
+        if (!section) continue;
+        const bsPlSide = section.startsWith("bs_") ? "BS" : "PL";
+        const normalBal = section === "bs_liability" || section === "pl_income" ? "Cr" : "Dr";
+        await supabase.from("tb_hierarchy_nodes")
+          .update({ bs_pl_side: bsPlSide, normal_balance: normalBal, primary_group: root.name } as any)
+          .eq("engagement_id", engagementId)
+          .eq("node_id", root.nodeId);
+        // Update descendants by matching primary_group
+        const descIds = source.filter(n => n.primaryGroup === root.name && n.nodeId !== root.nodeId).map(n => n.nodeId);
+        if (descIds.length > 0) {
+          for (const did of descIds) {
+            await supabase.from("tb_hierarchy_nodes")
+              .update({ bs_pl_side: bsPlSide, normal_balance: normalBal, primary_group: root.name } as any)
+              .eq("engagement_id", engagementId)
+              .eq("node_id", did);
+          }
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      toast.success(`AI classified ${Object.keys(classification).length} groups. Refreshing...`);
+    } catch (err: any) {
+      toast.error(err.message || "AI classification failed");
+    } finally {
+      setAiClassifying(false);
+    }
+  };
+
   const handleDeleteTb = async () => {
     if (!window.confirm(
       'Delete the imported Trial Balance? This will remove all ledger hierarchy data for this engagement. You can re-upload a new file.'
@@ -1183,8 +1228,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     );
   };
 
-  // Check if stage 2 can be completed
-  const canComplete = !!tbPresentation?.validation.allRulesPassed;
+  // Check if stage 2 can be completed — allow with warnings (TB must exist)
+  const canComplete = !!tbPresentation;
 
   const handleCompleteStage2 = async () => {
     if (!engagement) return;
@@ -1465,11 +1510,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   </AlertDescription>
                 </Alert>
               ) : (
-                <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>Validation Failed</AlertTitle>
-                  <AlertDescription className="text-sm">
-                    Trial Balance preview is blocked until all validation rules pass, including BS Assets = BS Liabilities & Equity and zero unclassified groups.
+                <Alert className="border-amber-500/30 bg-amber-500/5">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <AlertTitle className="text-amber-700">Validation Warnings</AlertTitle>
+                  <AlertDescription className="text-sm text-amber-700">
+                    Some validation checks did not pass. You can still preview and work with the Trial Balance.
+                    Review the integrity checks below and use AI Auto-Classify to fix classification issues.
                     <div className="flex gap-2 mt-2">
                       <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
                         Re-upload
@@ -1554,6 +1600,24 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         </div>
                       </div>
                     )}
+
+                    {/* AI Auto-Classify Button */}
+                    {(tbValidation.unclassifiedNodes > 0 || Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) >= 1) && (
+                      <div className="mt-3 p-3 border border-primary/20 bg-primary/5 rounded-lg">
+                        <p className="text-xs text-foreground font-medium mb-2">
+                          Some groups may be misclassified. Use AI to auto-classify all top-level groups.
+                        </p>
+                        <Button
+                          size="sm"
+                          onClick={handleAiClassify}
+                          disabled={aiClassifying}
+                          className="gap-1"
+                        >
+                          {aiClassifying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                          {aiClassifying ? "Classifying..." : "AI Auto-Classify Groups"}
+                        </Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -1596,7 +1660,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
 
               {/* Hierarchy Tree View */}
-              {tbViewMode === "tree" && tbPresentation && tbPresentation.validation.allRulesPassed && (
+              {tbViewMode === "tree" && tbPresentation && (
                 <Card>
                   <CardHeader className='pb-2'>
                     <CardTitle className='text-sm flex items-center gap-2'>

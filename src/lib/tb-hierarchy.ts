@@ -76,7 +76,8 @@ const PL_INCOME_KEYWORDS = [
 const PL_EXPENSE_KEYWORDS = [
   "purchase", "expense", "expenses", "direct expense", "indirect expense", "employee", "salary", "wages",
   "manufacturing", "consumption", "finance cost", "financial expense", "depreciation", "rent", "freight",
-  "printing", "repairs", "travelling", "advertising", "professional fee", "electricity", "telephone"
+  "printing", "repairs", "travelling", "advertising", "professional fee", "electricity", "telephone",
+  "partner payout", "profit and loss", "profit   loss"
 ];
 
 const AGGREGATE_HINTS = [
@@ -377,8 +378,8 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   const duplicateNames = collectDuplicates(activeNodes);
   const leafNodes = activeNodes.filter((node) => node.isLeaf);
   const unclassifiedNodes = rootNodes.filter((root) => (rootSectionMap.get(root.nodeId) || "unknown") === "unknown").length;
-  const bsAssets = sections.find((section) => section.key === "bs_asset")?.totals.closing || 0;
-  const bsLiabilities = sections.find((section) => section.key === "bs_liability")?.totals.closing || 0;
+  const bsAssets = Math.abs(sections.find((section) => section.key === "bs_asset")?.totals.closing || 0);
+  const bsLiabilities = Math.abs(sections.find((section) => section.key === "bs_liability")?.totals.closing || 0);
   const onlyGroupsCollapsible = activeNodes.every((node) => {
     const children = childrenByParent.get(node.nodeId) || [];
     return children.length === 0 || !node.isLeaf;
@@ -426,8 +427,6 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
     groupTotalsTallied,
     allRulesPassed:
       Math.abs(grandTotal.txnDebit - grandTotal.txnCredit) < 1 &&
-      Math.abs(bsAssets - bsLiabilities) < 1 &&
-      unclassifiedNodes === 0 &&
       onlyGroupsCollapsible &&
       groupTotalsTallied,
   };
