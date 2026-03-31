@@ -10,7 +10,7 @@ import {
   Building2, FolderOpen, ChevronDown, ChevronRight, FileSearch,
   BarChart3, ClipboardCheck, CalendarDays, AlertTriangle, FileCheck,
   BookMarked, Calculator, MessageSquare, BrainCircuit, FileOutput,
-  HelpCircle, Package, Send, Layers, Eye, Award, Upload
+  HelpCircle, Package, Send, Eye, Award, Upload
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
