@@ -247,21 +247,23 @@ function CoaMasterTreeNode({ row, allRows }: { row: CoaMasterRow; allRows: CoaMa
           <div className="w-[14px]" />
         )}
         <span className="w-12 text-muted-foreground font-mono shrink-0">{row.account_code}</span>
-        <span className={`flex-1 ${row.level <= 2 ? "font-semibold text-foreground" : row.level === 3 ? "font-medium text-foreground" : "text-foreground"}`}>
+        <span className="w-6 text-center text-muted-foreground shrink-0">{row.level}</span>
+        <span className="w-20 truncate text-muted-foreground shrink-0" title={row.major_group || ""}>{row.major_group || "—"}</span>
+        <span className="w-24 truncate text-muted-foreground shrink-0" title={row.group_name || ""}>{row.group_name || "—"}</span>
+        <span className="w-24 truncate text-muted-foreground shrink-0" title={row.sub_group || ""}>{row.sub_group || "—"}</span>
+        <span className={`flex-1 min-w-[120px] ${row.level <= 2 ? "font-semibold text-foreground" : row.level === 3 ? "font-medium text-foreground" : "text-foreground"}`}>
           {row.account_head}
         </span>
+        <span className="w-16 truncate text-muted-foreground shrink-0" title={row.account_type || ""}>{row.account_type || "—"}</span>
+        <span className="w-10 text-center text-muted-foreground shrink-0">{row.normal_balance || "—"}</span>
         <Badge variant={row.bs_pl === "PL" ? "secondary" : "outline"} className="text-[10px] h-5 shrink-0">
-          {row.bs_pl}
+          {row.bs_pl || "—"}
         </Badge>
-        <span className="w-16 text-right text-muted-foreground text-[10px] shrink-0">{row.normal_balance}</span>
-        {row.note_no && (
-          <span className="w-10 text-right text-muted-foreground text-[10px] shrink-0">N{row.note_no}</span>
-        )}
-        {row.fs_line_item && (
-          <span className="w-40 truncate text-muted-foreground text-[10px] shrink-0" title={row.fs_line_item}>
-            {row.fs_line_item}
-          </span>
-        )}
+        <span className="w-36 truncate text-muted-foreground text-[10px] shrink-0" title={row.fs_line_item || ""}>{row.fs_line_item || "—"}</span>
+        <span className="w-10 text-center text-muted-foreground text-[10px] shrink-0">{row.note_no || "—"}</span>
+        <span className="w-20 truncate text-muted-foreground text-[10px] shrink-0" title={row.applicable_entities || ""}>{row.applicable_entities || "—"}</span>
+        <span className="w-28 truncate text-muted-foreground text-[10px] shrink-0" title={row.tally_group_mapping || ""}>{row.tally_group_mapping || "—"}</span>
+        <span className="w-24 truncate text-muted-foreground text-[10px] shrink-0" title={row.remarks || ""}>{row.remarks || "—"}</span>
       </div>
       {open && hasChildren && (
         <div>
@@ -801,11 +803,19 @@ const CoaMappings = () => {
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
                     <div className="w-4" />
                     <span className="w-12">Code</span>
-                    <span className="flex-1">Account Head</span>
+                    <span className="w-6 text-center">Lvl</span>
+                    <span className="w-20">Major Group</span>
+                    <span className="w-24">Group</span>
+                    <span className="w-24">Sub-Group</span>
+                    <span className="flex-1 min-w-[120px]">Account Head</span>
+                    <span className="w-16">Acct Type</span>
+                    <span className="w-10 text-center">Normal</span>
                     <span className="w-12 text-center">BS/PL</span>
-                    <span className="w-16 text-right">Normal</span>
-                    <span className="w-10 text-right">Note</span>
-                    <span className="w-40">FS Line Item</span>
+                    <span className="w-36">FS Line Item</span>
+                    <span className="w-10 text-center">Note</span>
+                    <span className="w-20">Entities</span>
+                    <span className="w-28">Tally Mapping</span>
+                    <span className="w-24">Remarks</span>
                   </div>
                   {masterRootRows.map(row => (
                     <CoaMasterTreeNode key={`${row.account_code}-${row.entity_type}`} row={row} allRows={filteredMasterData} />
