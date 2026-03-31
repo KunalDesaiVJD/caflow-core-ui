@@ -886,12 +886,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       </Select>
                                     </TableCell>
                                     <TableCell>
-                                      <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
-                                        <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
-                                        <SelectContent>
-                                          {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                                        </SelectContent>
-                                      </Select>
+                                      <div className="space-y-0.5">
+                                        <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
+                                          <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                                          <SelectContent>
+                                            {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                                          </SelectContent>
+                                        </Select>
+                                        {d.section_code && selectedChallan?.section_code && d.section_code !== selectedChallan.section_code && (
+                                          <span className="text-[9px] text-amber-600 leading-tight block">⚠ Differs from challan</span>
+                                        )}
+                                      </div>
                                     </TableCell>
                                     <TableCell className="text-right">
                                       <Input type="number" className="h-7 text-xs w-24 text-right" defaultValue={d.amount_paid_credited || ""}
@@ -926,17 +931,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       })()}
                                     </TableCell>
                                     <TableCell className="text-right text-xs font-semibold">
-                                      {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
+                                      {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                     </TableCell>
                                     <TableCell>
-                                      {(d.tds_amount === 0 || d.tds_amount === null) ? (
-                                        <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
-                                          <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
-                                          <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
-                                        </Select>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">—</span>
-                                      )}
+                                      <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
+                                        <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
+                                        <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
+                                      </Select>
                                     </TableCell>
                                   </>
                                 )}
