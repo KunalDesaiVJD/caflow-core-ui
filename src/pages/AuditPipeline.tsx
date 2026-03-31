@@ -1,3 +1,9 @@
+// NOTE: Run this Supabase SQL before deploying:
+// UPDATE audit_engagements SET
+//   pipeline_stage = LEAST(pipeline_stage, 9),
+//   stage_statuses = stage_statuses - '10'
+// WHERE pipeline_stage IS NOT NULL;
+
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
