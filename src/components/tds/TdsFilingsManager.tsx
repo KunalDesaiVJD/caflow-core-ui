@@ -31,7 +31,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null; }
 interface UserOption { id: string; name: string | null; }
 
 interface TdsFiling {
@@ -108,6 +108,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
+  const [deletedClients, setDeletedClients] = useState<Map<string, string>>(new Map()); // client_id -> deleted_at
   const [loading, setLoading] = useState(true);
   const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [quarterFilter, setQuarterFilter] = useState("all");
@@ -139,6 +140,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
+  // Helper: get quarter period end date
+  const getQuarterEndDate = (fy: string, quarter: string): Date => {
+    const fyStart = parseInt(fy.split("-")[0]);
+    const ends: Record<string, Date> = {
+      Q1: new Date(fyStart, 5, 30),   // Jun 30
+      Q2: new Date(fyStart, 8, 30),   // Sep 30
+      Q3: new Date(fyStart, 11, 31),  // Dec 31
+      Q4: new Date(fyStart + 1, 2, 31), // Mar 31
+    };
+    return ends[quarter] || new Date();
+  };
+
   const fetchFilings = useCallback(async () => {
     setLoading(true);
     const firmId = await resolveFirmId();
@@ -148,7 +161,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (quarterFilter !== "all") q = q.eq("quarter", quarterFilter);
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     const { data } = await q;
-    setFilings((data || []) as TdsFiling[]);
+    const allFilings = (data || []) as TdsFiling[];
+
+    // Fetch deleted clients info for filings' client IDs
+    const clientIds = [...new Set(allFilings.map(f => f.client_id))];
+    const delMap = new Map<string, string>();
+    if (clientIds.length > 0) {
+      const { data: delClients } = await supabase.from("clients")
+        .select("id, deleted_at")
+        .in("id", clientIds)
+        .not("deleted_at", "is", null);
+      for (const dc of (delClients || [])) {
+        if (dc.deleted_at) delMap.set(dc.id, dc.deleted_at);
+      }
+    }
+    setDeletedClients(delMap);
+    setFilings(allFilings);
     setLoading(false);
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
@@ -158,9 +186,25 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return filings.filter(f => {
       if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
+
+      // Deleted client filtering
+      const deletedAt = deletedClients.get(f.client_id);
+      if (deletedAt) {
+        const periodEnd = getQuarterEndDate(f.financial_year, f.quarter);
+        const deletionDate = new Date(deletedAt);
+        // If period is after deletion and filing wasn't already filed/processed → hide
+        if (periodEnd >= deletionDate && !["Filed", "Processed"].includes(f.work_status)) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [filings, formFilter, statusFilter]);
+  }, [filings, formFilter, statusFilter, deletedClients]);
+
+  // Check if a filing belongs to a deleted client (for archived styling)
+  const isArchivedFiling = (f: TdsFiling): boolean => {
+    return deletedClients.has(f.client_id);
+  };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
     const firmId = await resolveFirmId();
@@ -542,15 +586,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   const client = clients.find(c => c.id === f.client_id);
                   const clientTan = client?.tan_number || f.tan;
                   const isNA = f.work_status === "Not Applicable";
+                  const archived = isArchivedFiling(f);
                   return (
-                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30")}>
+                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30", archived && "bg-muted/40 opacity-70")}>
                       <TableCell>
                         <Checkbox
                           checked={selectedIds.has(f.id)}
                           onCheckedChange={() => toggleSelect(f.id)}
+                          disabled={archived}
                         />
                       </TableCell>
-                      <TableCell className="font-medium sticky left-0 bg-background">{client?.name || "—"}</TableCell>
+                      <TableCell className="font-medium sticky left-0 bg-background">
+                        <span className={cn(archived && "line-through text-muted-foreground")}>{client?.name || "—"}</span>
+                        {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
+                      </TableCell>
                       <TableCell>
                         {clientTan ? (
                           <span className="font-mono text-xs">{clientTan}</span>
@@ -564,18 +613,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       <TableCell>{f.quarter}</TableCell>
                       <TableCell>{f.financial_year}</TableCell>
                       <TableCell>
-                        <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
-                          <SelectTrigger className="h-7 text-xs w-[180px]">
-                            <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {FILING_STATUSES.map(s => (
-                              <SelectItem key={s} value={s}>
-                                <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        {archived ? (
+                          <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                        ) : (
+                          <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
+                            <SelectTrigger className="h-7 text-xs w-[180px]">
+                              <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {FILING_STATUSES.map(s => (
+                                <SelectItem key={s} value={s}>
+                                  <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </TableCell>
                       <TableCell className={getDueDateColor(f.financial_year, f.quarter, f.work_status)}>
                         {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}

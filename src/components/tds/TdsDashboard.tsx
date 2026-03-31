@@ -143,6 +143,8 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const [rateFormData, setRateFormData] = useState<Record<string, any>>({});
   const [rateSaving, setRateSaving] = useState(false);
 
+  const [deletedClientIds, setDeletedClientIds] = useState<Set<string>>(new Set());
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const firmId = await resolveFirmId();
@@ -153,6 +155,19 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     if (fyFilter !== "all") q = q.eq("financial_year", fyFilter);
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     const { data: filingsData } = await q;
+
+    // Identify deleted clients among fetched filings
+    const allFilings = (filingsData || []) as TdsFiling[];
+    const cIds = [...new Set(allFilings.map(f => f.client_id))];
+    const delIds = new Set<string>();
+    if (cIds.length > 0) {
+      const { data: delClients } = await supabase.from("clients")
+        .select("id")
+        .in("id", cIds)
+        .not("deleted_at", "is", null);
+      for (const dc of (delClients || [])) delIds.add(dc.id);
+    }
+    setDeletedClientIds(delIds);
 
     // Audit logs
     let logQ = supabase.from("tds_filing_audit_log").select("*").order("changed_at", { ascending: false }).limit(15);
@@ -165,7 +180,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     if (!isSuperadmin && firmId) rateQ = rateQ.eq("firm_id", firmId);
     const { data: rateData } = await rateQ;
 
-    setFilings((filingsData || []) as TdsFiling[]);
+    setFilings(allFilings);
     setAuditLogs((logsData || []) as AuditLogEntry[]);
     setRates((rateData || []) as RateRecord[]);
     setLoading(false);
@@ -175,9 +190,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
 
   const today = new Date();
 
-  // Apply form tab filter
+  // Apply form tab filter — exclude deleted clients
   const filteredFilings = useMemo(() => {
-    let f = filings;
+    let f = filings.filter(fl => !deletedClientIds.has(fl.client_id));
     if (formTab !== "all") {
       f = f.filter(fl => fl.tds_forms?.includes(formTab));
     }
@@ -185,7 +200,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       f = f.filter(fl => fl.quarter === quarterFilter);
     }
     return f;
-  }, [filings, formTab, quarterFilter]);
+  }, [filings, formTab, quarterFilter, deletedClientIds]);
 
   // ═══ KPI Stats ═══
   const stats = useMemo(() => {
@@ -214,10 +229,11 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     };
   }, [filteredFilings]);
 
-  // ═══ Matrix Data ═══
+  // ═══ Matrix Data — exclude deleted clients ═══
   const matrixData = useMemo(() => {
     const clientFilings: Record<string, Record<string, TdsFiling[]>> = {};
     const relevantFilings = filings.filter(f => {
+      if (deletedClientIds.has(f.client_id)) return false;
       if (f.financial_year !== fyFilter) return false;
       if (formTab !== "all" && !f.tds_forms?.includes(formTab)) return false;
       if (clientFilter !== "all" && f.client_id !== clientFilter) return false;
@@ -229,7 +245,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       clientFilings[f.client_id][f.quarter].push(f);
     }
     return clientFilings;
-  }, [filings, fyFilter, formTab, clientFilter]);
+  }, [filings, fyFilter, formTab, clientFilter, deletedClientIds]);
 
   // ═══ Rate Master filtering ═══
   const filteredRates = useMemo(() => {
