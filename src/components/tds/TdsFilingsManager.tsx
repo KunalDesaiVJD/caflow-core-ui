@@ -185,16 +185,27 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       toast({ title: "Warning", description: "Acknowledgment number is missing for this filing.", variant: "default" });
     }
 
-    const { error } = await supabase.from("tds_filings").update({
+    const updatePayload: Record<string, any> = {
       work_status: newStatus,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
-    }).eq("id", filing.id);
+    };
+
+    // Auto-set filing date when status changes to 'Filed' and date is blank
+    if (newStatus === "Filed" && !filing.date_of_filing) {
+      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD for date input
+      updatePayload.date_of_filing = today;
+    }
+
+    const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", filing.id);
 
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
       await logAuditEntry(filing.id, "STATUS_CHANGE", oldStatus, newStatus);
+      if (updatePayload.date_of_filing) {
+        await logAuditEntry(filing.id, "FILING_DATE_SET", null, updatePayload.date_of_filing, "Auto-set on filing");
+      }
       fetchFilings();
     }
   };
