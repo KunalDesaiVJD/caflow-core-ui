@@ -140,6 +140,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
+  // Helper: get quarter period end date
+  const getQuarterEndDate = (fy: string, quarter: string): Date => {
+    const fyStart = parseInt(fy.split("-")[0]);
+    const ends: Record<string, Date> = {
+      Q1: new Date(fyStart, 5, 30),   // Jun 30
+      Q2: new Date(fyStart, 8, 30),   // Sep 30
+      Q3: new Date(fyStart, 11, 31),  // Dec 31
+      Q4: new Date(fyStart + 1, 2, 31), // Mar 31
+    };
+    return ends[quarter] || new Date();
+  };
+
   const fetchFilings = useCallback(async () => {
     setLoading(true);
     const firmId = await resolveFirmId();
@@ -149,7 +161,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (quarterFilter !== "all") q = q.eq("quarter", quarterFilter);
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     const { data } = await q;
-    setFilings((data || []) as TdsFiling[]);
+    const allFilings = (data || []) as TdsFiling[];
+
+    // Fetch deleted clients info for filings' client IDs
+    const clientIds = [...new Set(allFilings.map(f => f.client_id))];
+    const delMap = new Map<string, string>();
+    if (clientIds.length > 0) {
+      const { data: delClients } = await supabase.from("clients")
+        .select("id, deleted_at")
+        .in("id", clientIds)
+        .not("deleted_at", "is", null);
+      for (const dc of (delClients || [])) {
+        if (dc.deleted_at) delMap.set(dc.id, dc.deleted_at);
+      }
+    }
+    setDeletedClients(delMap);
+    setFilings(allFilings);
     setLoading(false);
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
