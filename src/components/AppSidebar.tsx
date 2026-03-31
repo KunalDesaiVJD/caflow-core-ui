@@ -41,6 +41,7 @@ const auditStages = [
 ];
 
 const auditUtilities = [
+  { title: "Master Configuration", path: "/audit/master-config", icon: Settings },
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Documents", path: "/documents", icon: FolderOpen },

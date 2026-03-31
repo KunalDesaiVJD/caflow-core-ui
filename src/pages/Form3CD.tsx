@@ -86,9 +86,9 @@ function clauseDbColumn(clauseNo: string): string {
 }
 
 /* ──────── main component ──────── */
-export default function Form3CD() {
+export default function Form3CD({ engagementIdProp }: { engagementIdProp?: string } = {}) {
   const [searchParams] = useSearchParams();
-  const engagementId = searchParams.get("engagementId");
+  const engagementId = engagementIdProp || searchParams.get("engagementId");
   const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
