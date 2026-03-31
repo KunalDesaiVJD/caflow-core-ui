@@ -1057,6 +1057,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     <TableCell className="text-right text-xs font-semibold">
                                       {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                     </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.interest_amount || ""}
+                                        key={`int-${d.id}-${d.interest_amount}`}
+                                        onBlur={e => updateDeducteeField(d.id, "interest_amount", parseFloat(e.target.value) || 0)} />
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.late_fees_amount || ""}
+                                        key={`lf-${d.id}-${d.late_fees_amount}`}
+                                        onBlur={e => updateDeducteeField(d.id, "late_fees_amount", parseFloat(e.target.value) || 0)} />
+                                    </TableCell>
                                     <TableCell>
                                       <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
                                         <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
