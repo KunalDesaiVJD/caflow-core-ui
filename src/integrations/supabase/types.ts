@@ -4677,6 +4677,8 @@ export type Database = {
           id: string
           income_from_house_property: number | null
           income_from_other_sources: number | null
+          interest_amount: number | null
+          late_fees_amount: number | null
           lower_deduction_certificate_no: string | null
           lower_deduction_rate: number | null
           nature_of_payment: string | null
@@ -4724,6 +4726,8 @@ export type Database = {
           id?: string
           income_from_house_property?: number | null
           income_from_other_sources?: number | null
+          interest_amount?: number | null
+          late_fees_amount?: number | null
           lower_deduction_certificate_no?: string | null
           lower_deduction_rate?: number | null
           nature_of_payment?: string | null
@@ -4771,6 +4775,8 @@ export type Database = {
           id?: string
           income_from_house_property?: number | null
           income_from_other_sources?: number | null
+          interest_amount?: number | null
+          late_fees_amount?: number | null
           lower_deduction_certificate_no?: string | null
           lower_deduction_rate?: number | null
           nature_of_payment?: string | null
