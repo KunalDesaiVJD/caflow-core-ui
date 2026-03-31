@@ -581,9 +581,30 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
                       </TableCell>
                       <TableCell>
-                        <Input type="date" className="h-7 w-32 text-xs" defaultValue={f.date_of_filing || ""}
-                          onBlur={e => { if (e.target.value !== (f.date_of_filing || "")) handleInlineUpdate(f, "date_of_filing", e.target.value || null); }}
-                        />
+                        {(() => {
+                          const isFiled = f.work_status === "Filed" || f.work_status === "Processed";
+                          const hasDate = !!f.date_of_filing;
+                          const isLocked = isFiled && hasDate;
+                          return (
+                            <div className="relative group">
+                              <Input
+                                type="date"
+                                className={cn("h-7 w-32 text-xs", isLocked && "bg-muted cursor-not-allowed opacity-70")}
+                                defaultValue={f.date_of_filing || ""}
+                                disabled={isLocked}
+                                onBlur={e => {
+                                  if (e.target.value !== (f.date_of_filing || ""))
+                                    handleInlineUpdate(f, "date_of_filing", e.target.value || null);
+                                }}
+                              />
+                              {isLocked && (
+                                <span className="absolute -top-5 left-0 hidden group-hover:block text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap z-20">
+                                  🔒 Filing date locked after filing
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input className="h-7 w-28 text-xs" defaultValue={f.acknowledgment_number || ""}
