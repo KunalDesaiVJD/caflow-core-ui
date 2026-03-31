@@ -1114,6 +1114,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <span>Deductees: <strong>{summaryStats.totalDeductees}</strong></span>
                   <span>Payment: <strong>₹{summaryStats.totalPayment.toLocaleString("en-IN")}</strong></span>
                   <span>TDS: <strong>₹{summaryStats.totalTds.toLocaleString("en-IN")}</strong></span>
+                  {summaryStats.totalInterest > 0 && <span>Interest: <strong>₹{summaryStats.totalInterest.toLocaleString("en-IN")}</strong></span>}
+                  {summaryStats.totalLateFees > 0 && <span>Late Fees: <strong>₹{summaryStats.totalLateFees.toLocaleString("en-IN")}</strong></span>}
                   <div className="flex-1" />
                   <Button size="sm" variant="outline" className="gap-1" onClick={autoMatchChallans}>
                     <RefreshCw size={14} /> Auto-match
