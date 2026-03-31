@@ -86,9 +86,6 @@ export default function PipelineStage7Combined({
               <Badge variant="secondary" className="ml-1 text-[9px]">N/A</Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="master" className="gap-1">
-            <Settings size={14} /> Master Config
-          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="notes" className="mt-4">
