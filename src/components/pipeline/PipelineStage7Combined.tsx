@@ -5,10 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2, Settings } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2 } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import NotesToAccounts from '@/pages/NotesToAccounts';
-import { MasterConfigPanel } from '@/components/pipeline/MasterConfigPanel';
 
 interface Props {
   engagementId: string;
@@ -87,9 +86,6 @@ export default function PipelineStage7Combined({
               <Badge variant="secondary" className="ml-1 text-[9px]">N/A</Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="master" className="gap-1">
-            <Settings size={14} /> Master Config
-          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="notes" className="mt-4">
@@ -116,9 +112,6 @@ export default function PipelineStage7Combined({
           )}
         </TabsContent>
 
-        <TabsContent value="master" className="mt-4">
-          <MasterConfigPanel />
-        </TabsContent>
       </Tabs>
     </div>
   );

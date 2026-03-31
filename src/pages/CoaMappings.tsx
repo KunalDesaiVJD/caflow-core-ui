@@ -326,12 +326,24 @@ const CoaMappings = () => {
   }
 
   async function loadMasterFromDb() {
-    const { data } = await supabase
-      .from("coa_master" as any)
-      .select("*")
-      .or(`firm_id.eq.${firmId},firm_id.is.null`)
-      .order("account_code", { ascending: true });
-    setMasterDbRows((data || []) as unknown as CoaMasterDbRow[]);
+    // Fetch all rows (may exceed default 1000 limit), so paginate
+    let allRows: CoaMasterDbRow[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    while (true) {
+      const { data, error } = await supabase
+        .from("coa_master" as any)
+        .select("*")
+        .or(`firm_id.eq.${firmId},firm_id.is.null`)
+        .order("account_code", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) break;
+      const rows = (data || []) as unknown as CoaMasterDbRow[];
+      allRows = allRows.concat(rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+    setMasterDbRows(allRows);
   }
 
   async function loadData() {
