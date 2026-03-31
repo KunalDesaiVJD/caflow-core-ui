@@ -64,6 +64,7 @@ import ServiceMasters from "./pages/ServiceMasters";
 import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
+import AuditMasterConfig from "./pages/AuditMasterConfig";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
