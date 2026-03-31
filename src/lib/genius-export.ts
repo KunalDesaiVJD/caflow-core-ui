@@ -322,7 +322,7 @@ export async function generateGeniusExport(
       setCell(wsAnnex, r, 5, d.deductee_name || "");
       setCell(wsAnnex, r, 6, fmtDateGenius(d.date_of_payment));
       setCell(wsAnnex, r, 7, d.amount_paid_credited || 0);
-      setCell(wsAnnex, r, 8, d.tds_amount || 0);
+      setCell(wsAnnex, r, 8, Math.round(d.tds_amount || 0));
       setCell(wsAnnex, r, 9, d.surcharge_amount || 0);
       setCell(wsAnnex, r, 10, d.cess_amount || 0);
       setCell(wsAnnex, r, 11, d.total_tax_deducted || d.tds_amount || 0);
