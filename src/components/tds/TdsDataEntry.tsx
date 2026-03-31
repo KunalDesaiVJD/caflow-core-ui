@@ -93,7 +93,19 @@ const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
-const DEDUCTEE_TYPES = ["Company", "Individual", "HUF", "Firm", "AOP", "BOI", "Trust", "AJP"];
+const DEDUCTEE_TYPES = ["Company", "Individual", "HUF", "Firm", "LLP", "AOP", "BOI", "Trust", "AJP"];
+
+// PAN 4th character → deductee type mapping
+const PAN_4TH_CHAR_MAP: Record<string, string> = {
+  P: "Individual", H: "HUF", C: "Company", F: "Firm",
+  L: "LLP", T: "Trust", A: "AOP",
+};
+
+// Check if a PAN is valid format: 5 letters + 4 digits + 1 letter
+const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());
+
+// Map deductee type to rate category: Individual/HUF → individual rate, all others → company rate
+const isIndividualRateType = (type: string | null): boolean => type === "Individual" || type === "HUF";
 
 const REASON_CODES = [
   { code: "A", label: "A — Below threshold (no deduction required)" },
