@@ -613,18 +613,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       <TableCell>{f.quarter}</TableCell>
                       <TableCell>{f.financial_year}</TableCell>
                       <TableCell>
-                        <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
-                          <SelectTrigger className="h-7 text-xs w-[180px]">
-                            <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {FILING_STATUSES.map(s => (
-                              <SelectItem key={s} value={s}>
-                                <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        {archived ? (
+                          <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                        ) : (
+                          <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
+                            <SelectTrigger className="h-7 text-xs w-[180px]">
+                              <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{f.work_status}</Badge>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {FILING_STATUSES.map(s => (
+                                <SelectItem key={s} value={s}>
+                                  <span className={cn(s === "Not Applicable" && "line-through")}>{s}</span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </TableCell>
                       <TableCell className={getDueDateColor(f.financial_year, f.quarter, f.work_status)}>
                         {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
