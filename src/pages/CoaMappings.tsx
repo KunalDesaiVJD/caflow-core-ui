@@ -326,6 +326,7 @@ const CoaMappings = () => {
   }
 
   async function fetchAllMasterRows() {
+    if (!firmId) return [];
     // Fetch all rows (may exceed default 1000 limit), so paginate
     let allRows: CoaMasterDbRow[] = [];
     let from = 0;
@@ -776,7 +777,7 @@ const CoaMappings = () => {
               </div>
               {masterStats.total > 0 && (
                 <div className="flex gap-2 mt-3">
-                  <Select value={masterEntityFilter} onValueChange={setMasterEntityFilter}>
+                  <Select value={masterEntityFilter} onValueChange={(value) => setMasterEntityFilter(value as "all" | "corporate" | "llp" | "nce")}>
                     <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Entity Types</SelectItem>
