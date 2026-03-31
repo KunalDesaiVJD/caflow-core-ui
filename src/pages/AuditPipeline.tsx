@@ -568,38 +568,6 @@ export default function AuditPipeline() {
                     </AccordionContent>
                   </AccordionItem>
 
-                  {/* Block B2 — CARO (Company only) */}
-                  {isCompanyEntity && (
-                    <AccordionItem value="block-b2" className="border rounded-lg px-4">
-                      <AccordionTrigger className="text-sm font-semibold">
-                        Block B2 — CARO Applicability
-                        {blockB2Valid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
-                      </AccordionTrigger>
-                      <AccordionContent className="space-y-4 pt-2">
-                        <YesNo label="Fixed Assets register maintained?" value={questionnaire.fa_register_maintained || ""} onChange={v => setQ("fa_register_maintained", v)} />
-                        <YesNo label="Physical verification of assets conducted?" value={questionnaire.physical_verification || ""} onChange={v => setQ("physical_verification", v)} />
-                        <YesNo label="Title deeds available for immovable properties?" value={questionnaire.title_deeds || ""} onChange={v => setQ("title_deeds", v)} />
-                        <YesNo label="Working capital limits from banks?" value={questionnaire.working_capital_limits || ""} onChange={v => setQ("working_capital_limits", v)} />
-                        <YesNo label="Loans given/taken from directors?" value={questionnaire.loans_directors || ""} onChange={v => setQ("loans_directors", v)} />
-                      </AccordionContent>
-                    </AccordionItem>
-                  )}
-
-                  {/* Block C — Balance Sheet */}
-                  <AccordionItem value="block-c" className="border rounded-lg px-4">
-                    <AccordionTrigger className="text-sm font-semibold">
-                      Block C — Balance Sheet Items
-                      {blockCValid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
-                    </AccordionTrigger>
-                    <AccordionContent className="space-y-4 pt-2">
-                      <YesNo label="Cash balance > ₹2 Lakhs at year end?" value={questionnaire.cash_balance_above_2l || ""} onChange={v => setQ("cash_balance_above_2l", v)} />
-                      <YesNo label="Debtors outstanding > 180 days?" value={questionnaire.debtors_above_180 || ""} onChange={v => setQ("debtors_above_180", v)} />
-                      <YesNo label="Any MSME creditors?" value={questionnaire.creditors_msme || ""} onChange={v => setQ("creditors_msme", v)} hint="Disclosure required under MSMED Act" />
-                      <YesNo label="Contingent liabilities exist?" value={questionnaire.contingent_liabilities || ""} onChange={v => setQ("contingent_liabilities", v)} />
-                      <YesNo label="Events after reporting period requiring disclosure?" value={questionnaire.events_after_reporting || ""} onChange={v => setQ("events_after_reporting", v)} />
-                    </AccordionContent>
-                  </AccordionItem>
-
                   {/* Block D — Tax Audit (conditional) */}
                   {isTaxAuditReq && (
                     <AccordionItem value="block-d" className="border rounded-lg px-4">
