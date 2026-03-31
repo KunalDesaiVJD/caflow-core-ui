@@ -461,13 +461,13 @@ export default function AuditIntelligence() {
             </Card>
           </div>
 
-          {/* 10-Stage Audit Progress Tracker */}
+          {/* 9-Stage Audit Progress Tracker */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Audit Progress</CardTitle>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground">{completedStages}/10 stages</span>
+                  <span className="text-sm text-muted-foreground">{completedStages}/9 stages</span>
                   <span className="text-sm font-semibold text-foreground">{progressPct}%</span>
                 </div>
               </div>

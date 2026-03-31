@@ -669,35 +669,26 @@ export default function AuditPipeline() {
             onSaveDraft={() => { refetchEng(); }}
           />
         ) : activeStage === 7 ? (
-          /* STAGE 7 — Notes to Accounts/CARO */
-          <Tabs defaultValue="notes_editor">
-            <TabsList>
-              <TabsTrigger value="notes_editor">Notes to Accounts</TabsTrigger>
-              <TabsTrigger value="caro">CARO</TabsTrigger>
-              <TabsTrigger value="master_config">Master Config</TabsTrigger>
-            </TabsList>
-            <TabsContent value="notes_editor" className="mt-4">
-              <NotesToAccountsEditor engagementIdProp={selectedEngId} onFinalise={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }} />
-            </TabsContent>
-            <TabsContent value="caro" className="mt-4">
-              {(engagement?.caro_applicable || engagement?.requires_caro || engagement?.clients?.caro_applicable) ? (
-                <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
-              ) : (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">CARO is not applicable for this engagement.</CardContent></Card>
-              )}
-            </TabsContent>
-            <TabsContent value="master_config" className="mt-4">
-              <MasterConfigPanel />
-            </TabsContent>
-          </Tabs>
+          /* STAGE 7 — Notes to Accounts & CARO */
+          <PipelineStage7Combined
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : activeStage === 8 ? (
           /* STAGE 8 — 3CA / 3CB / 3CD Reports */
-          <div className="max-w-4xl space-y-6">
-            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
-              <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
-            </Button>
-            <h1 className="text-xl font-bold text-foreground">3CA / 3CB / 3CD Reports</h1>
-            <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+              </Button>
+            </div>
+            <Form3CD engagementIdProp={selectedEngId} />
           </div>
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
