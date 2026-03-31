@@ -22,9 +22,8 @@ import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award, CalendarDays
+  Eye, BarChart3, BookMarked, Shield, Award,
 } from "lucide-react";
-import { Calendar } from "@/components/ui/calendar";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import NotesToAccountsEditor from "@/pages/NotesToAccounts";
@@ -279,20 +278,14 @@ export default function AuditPipeline() {
 
   const blockAFields = ["constitution_confirmed", "registered_address", "agm_dates", "board_changes", "regulatory_actions"];
   const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "capital_transactions", "long_term_borrowings", "director_loans"];
-  const blockCFields = ["cash_balance_above_2l", "debtors_above_180", "creditors_msme", "contingent_liabilities", "events_after_reporting"];
-
   const blockAValid = blockAFields.every(f => questionnaire[f]);
   const blockBValid = blockBFields.every(f => questionnaire[f]);
-  const blockCValid = blockCFields.every(f => questionnaire[f]);
 
-  const isCompanyEntity = form1A.entity_type === "company";
   const isTaxAuditReq = form1A.audit_type === "tax_audit" || form1A.audit_type === "both";
-  const blockB2Fields = ["fa_register_maintained", "physical_verification", "title_deeds", "working_capital_limits", "loans_directors"];
-  const blockB2Valid = !isCompanyEntity || blockB2Fields.every(f => questionnaire[f]);
   const blockDFields = ["turnover_exceeds_limit", "accounting_method", "stock_valuation", "section_40a3", "donations_80g"];
   const blockDValid = !isTaxAuditReq || blockDFields.every(f => questionnaire[f]);
 
-  const questValid = blockAValid && blockBValid && blockCValid && blockB2Valid && blockDValid;
+  const questValid = blockAValid && blockBValid && blockDValid;
   const canCompleteStage1 = block1AValid && questValid;
 
   // ─── Create new engagement ───
@@ -574,38 +567,6 @@ export default function AuditPipeline() {
                     </AccordionContent>
                   </AccordionItem>
 
-                  {/* Block B2 — CARO (Company only) */}
-                  {isCompanyEntity && (
-                    <AccordionItem value="block-b2" className="border rounded-lg px-4">
-                      <AccordionTrigger className="text-sm font-semibold">
-                        Block B2 — CARO Applicability
-                        {blockB2Valid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
-                      </AccordionTrigger>
-                      <AccordionContent className="space-y-4 pt-2">
-                        <YesNo label="Fixed Assets register maintained?" value={questionnaire.fa_register_maintained || ""} onChange={v => setQ("fa_register_maintained", v)} />
-                        <YesNo label="Physical verification of assets conducted?" value={questionnaire.physical_verification || ""} onChange={v => setQ("physical_verification", v)} />
-                        <YesNo label="Title deeds available for immovable properties?" value={questionnaire.title_deeds || ""} onChange={v => setQ("title_deeds", v)} />
-                        <YesNo label="Working capital limits from banks?" value={questionnaire.working_capital_limits || ""} onChange={v => setQ("working_capital_limits", v)} />
-                        <YesNo label="Loans given/taken from directors?" value={questionnaire.loans_directors || ""} onChange={v => setQ("loans_directors", v)} />
-                      </AccordionContent>
-                    </AccordionItem>
-                  )}
-
-                  {/* Block C — Balance Sheet */}
-                  <AccordionItem value="block-c" className="border rounded-lg px-4">
-                    <AccordionTrigger className="text-sm font-semibold">
-                      Block C — Balance Sheet Items
-                      {blockCValid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
-                    </AccordionTrigger>
-                    <AccordionContent className="space-y-4 pt-2">
-                      <YesNo label="Cash balance > ₹2 Lakhs at year end?" value={questionnaire.cash_balance_above_2l || ""} onChange={v => setQ("cash_balance_above_2l", v)} />
-                      <YesNo label="Debtors outstanding > 180 days?" value={questionnaire.debtors_above_180 || ""} onChange={v => setQ("debtors_above_180", v)} />
-                      <YesNo label="Any MSME creditors?" value={questionnaire.creditors_msme || ""} onChange={v => setQ("creditors_msme", v)} hint="Disclosure required under MSMED Act" />
-                      <YesNo label="Contingent liabilities exist?" value={questionnaire.contingent_liabilities || ""} onChange={v => setQ("contingent_liabilities", v)} />
-                      <YesNo label="Events after reporting period requiring disclosure?" value={questionnaire.events_after_reporting || ""} onChange={v => setQ("events_after_reporting", v)} />
-                    </AccordionContent>
-                  </AccordionItem>
-
                   {/* Block D — Tax Audit (conditional) */}
                   {isTaxAuditReq && (
                     <AccordionItem value="block-d" className="border rounded-lg px-4">
@@ -657,103 +618,6 @@ export default function AuditPipeline() {
                     </AccordionItem>
                   )}
                 </Accordion>
-              </CardContent>
-            </Card>
-
-            {/* Planning Calendar */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <CalendarDays size={18} className="text-primary" />
-                  Audit Planning Calendar
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col lg:flex-row gap-6">
-                  <div className="shrink-0">
-                    <Calendar mode="single" className="rounded-md border" />
-                  </div>
-                  <div className="flex-1 space-y-4">
-                    <h4 className="text-sm font-semibold text-foreground">Engagement Milestones</h4>
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
-                        <CalendarDays size={14} className="text-primary shrink-0" />
-                        <div>
-                          <p className="text-xs text-muted-foreground">Planned Start</p>
-                          <p className="text-sm font-medium text-foreground">{engagement?.planned_start || "Not set"}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
-                        <CalendarDays size={14} className="text-primary shrink-0" />
-                        <div>
-                          <p className="text-xs text-muted-foreground">Expected Completion</p>
-                          <p className="text-sm font-medium text-foreground">{planning.expected_completion || engagement?.planned_end || "Not set"}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
-                        <Shield size={14} className="text-primary shrink-0" />
-                        <div>
-                          <p className="text-xs text-muted-foreground">Risk Profile</p>
-                          <p className="text-sm font-medium text-foreground capitalize">{planning.risk_profile || "Medium"}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-2.5 rounded-md bg-muted/50">
-                        <Building2 size={14} className="text-primary shrink-0" />
-                        <div>
-                          <p className="text-xs text-muted-foreground">Team Members</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {planning.team_members.length > 0
-                              ? `${planning.team_members.length} assigned`
-                              : "None assigned"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <Separator />
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <Label className="text-xs">Materiality Threshold (₹)</Label>
-                        <Input type="number" value={planning.materiality} onChange={e => setPlanning(p => ({ ...p, materiality: e.target.value }))} placeholder="Absolute amount" />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Expected Completion</Label>
-                        <Input type="date" value={planning.expected_completion} onChange={e => setPlanning(p => ({ ...p, expected_completion: e.target.value }))} />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Risk Profile</Label>
-                        <Select value={planning.risk_profile} onValueChange={v => setPlanning(p => ({ ...p, risk_profile: v }))}>
-                          <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="low">Low</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="high">High</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-xs">Engagement Team</Label>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {(firmUsers || []).slice(0, 6).map(u => {
-                            const selected = planning.team_members.includes(u.id);
-                            return (
-                              <Badge
-                                key={u.id}
-                                variant={selected ? "default" : "outline"}
-                                className="cursor-pointer text-[10px]"
-                                onClick={() => setPlanning(p => ({
-                                  ...p,
-                                  team_members: selected ? p.team_members.filter(id => id !== u.id) : [...p.team_members, u.id],
-                                }))}
-                              >
-                                {u.name}
-                              </Badge>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
               </CardContent>
             </Card>
 
