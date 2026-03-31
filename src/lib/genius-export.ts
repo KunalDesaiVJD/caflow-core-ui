@@ -387,7 +387,7 @@ export async function generateGeniusExport(
       setCell(wsAnnex, r, 15, d.rate_of_tds || 0);
       setCell(wsAnnex, r, 16, d.surcharge_rate || 0);
       setCell(wsAnnex, r, 17, cessRate);
-      setCell(wsAnnex, r, 18, d.tds_amount || 0);
+      setCell(wsAnnex, r, 18, Math.round(d.tds_amount || 0));
       setCell(wsAnnex, r, 19, d.surcharge_amount || 0);
       setCell(wsAnnex, r, 20, cessAmt);
       setCell(wsAnnex, r, 21, d.total_tax_deducted || d.tds_amount || 0);
