@@ -12,15 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  Shield, FileText, Upload, Plus, ArrowRight, Loader2, Save,
-  Sparkles, Check, Download, ClipboardCheck, AlertTriangle, Trash2
+  FileText, Plus, ArrowRight, Loader2, ClipboardCheck
 } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 
@@ -30,51 +25,6 @@ interface PipelineStage6Props {
   onStageComplete: () => void;
   onSaveDraft: () => void;
 }
-
-// ─── Risk Assessment ───
-const RISK_AREAS = [
-  "Revenue", "Fixed Assets", "Debtors", "Creditors", "Loans",
-  "Inventory", "Payroll", "Taxes", "Related Parties", "Cash"
-];
-
-const RISK_LEVELS = ["High", "Medium", "Low"] as const;
-
-interface RiskRow {
-  area: string;
-  inherent: string;
-  control: string;
-  detection: string;
-  overall: string;
-  notes: string;
-  autoSuggested?: boolean;
-}
-
-function computeDetection(inherent: string, control: string): string {
-  if (inherent === "High" && control === "High") return "Low";
-  if (inherent === "High" || control === "High") return "Low";
-  if (inherent === "Medium" && control === "Medium") return "Medium";
-  return "High";
-}
-
-function computeOverall(inherent: string, control: string): string {
-  if (inherent === "High" && control === "High") return "High";
-  if (inherent === "High" || control === "High") return "High";
-  if (inherent === "Medium" || control === "Medium") return "Medium";
-  return "Low";
-}
-
-const RISK_COLORS: Record<string, string> = {
-  High: "bg-destructive/15 text-destructive border-destructive/30",
-  Medium: "bg-amber-500/15 text-amber-700 border-amber-300",
-  Low: "bg-green-500/15 text-green-700 border-green-300",
-};
-
-// Map scrutiny categories to risk areas
-const CATEGORY_TO_AREA: Record<string, string> = {
-  SALES: "Revenue", FA: "Fixed Assets", DEBT: "Debtors", CRED: "Creditors",
-  LOAN: "Loans", INV: "Inventory", PAY: "Payroll", TDS: "Taxes",
-  RPT: "Related Parties", CASH: "Cash", BKR: "Cash",
-};
 
 // ─── Workpaper ───
 interface Workpaper {
@@ -87,97 +37,17 @@ interface Workpaper {
   signed_by: string | null;
 }
 
-// ─── Physical Verification ───
-interface PhysicalVerification {
-  category: string;
-  date: string;
-  items_verified: number;
-  discrepancies: string;
-  action_taken: string;
-}
+const AUDIT_SECTIONS = [
+  "Revenue", "Fixed Assets", "Debtors", "Creditors", "Loans",
+  "Inventory", "Payroll", "Taxes", "Related Parties", "Cash",
+  "General", "Other"
+];
 
 export default function PipelineStage6({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage6Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState("risk");
+  const [activeTab, setActiveTab] = useState("audit_sheet");
   const [saving, setSaving] = useState(false);
-
-  // ─── RISK ASSESSMENT STATE ───
-  const [riskRows, setRiskRows] = useState<RiskRow[]>(() =>
-    RISK_AREAS.map(a => ({ area: a, inherent: "Medium", control: "Medium", detection: "Medium", overall: "Medium", notes: "" }))
-  );
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-
-  // Load saved risk assessment
-  useEffect(() => {
-    if (engagement?.risk_assessment && Array.isArray(engagement.risk_assessment)) {
-      const saved = engagement.risk_assessment as any[];
-      setRiskRows(RISK_AREAS.map(area => {
-        const s = saved.find((r: any) => r.area === area);
-        if (s) {
-          const inh = s.inherent === 3 ? "High" : s.inherent === 2 ? "Medium" : s.inherent === 1 ? "Low" : (s.inherent || "Medium");
-          const ctl = s.control === 3 ? "High" : s.control === 2 ? "Medium" : s.control === 1 ? "Low" : (s.control || "Medium");
-          return { area, inherent: inh, control: ctl, detection: computeDetection(inh, ctl), overall: computeOverall(inh, ctl), notes: s.notes || "" };
-        }
-        return { area, inherent: "Medium", control: "Medium", detection: "Medium", overall: "Medium", notes: "" };
-      }));
-    }
-  }, [engagement?.id]);
-
-  // Fetch scrutiny findings to auto-suggest risk levels
-  const { data: scrutinyFindings } = useQuery({
-    queryKey: ["scrutiny-findings-for-risk", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("scrutiny_findings" as any)
-        .select("rule_id, severity, category")
-        .eq("engagement_id", engagementId);
-      return (data || []) as any[];
-    },
-    enabled: !!engagementId,
-  });
-
-  // Auto-suggest based on scrutiny findings
-  const autoSuggestRisk = useCallback(() => {
-    if (!scrutinyFindings?.length) { toast.info("No scrutiny findings to base suggestions on"); return; }
-
-    const categoryCounts: Record<string, { high: number; medium: number; low: number }> = {};
-    scrutinyFindings.forEach((f: any) => {
-      const cat = f.category || f.rule_id?.split("-")[0];
-      if (!cat) return;
-      const area = CATEGORY_TO_AREA[cat];
-      if (!area) return;
-      if (!categoryCounts[area]) categoryCounts[area] = { high: 0, medium: 0, low: 0 };
-      const sev = (f.severity || "medium").toLowerCase();
-      if (sev === "high") categoryCounts[area].high++;
-      else if (sev === "medium") categoryCounts[area].medium++;
-      else categoryCounts[area].low++;
-    });
-
-    setRiskRows(prev => prev.map(row => {
-      const counts = categoryCounts[row.area];
-      if (!counts) return row;
-      let inherent: string = row.inherent;
-      if (counts.high >= 2) inherent = "High";
-      else if (counts.high >= 1 || counts.medium >= 3) inherent = "High";
-      else if (counts.medium >= 1) inherent = "Medium";
-      const detection = computeDetection(inherent, row.control);
-      const overall = computeOverall(inherent, row.control);
-      return { ...row, inherent, detection, overall, autoSuggested: true };
-    }));
-    toast.success("Risk levels auto-suggested from scrutiny findings");
-  }, [scrutinyFindings]);
-
-  const updateRisk = (idx: number, field: keyof RiskRow, val: string) => {
-    setRiskRows(prev => prev.map((r, i) => {
-      if (i !== idx) return r;
-      const updated = { ...r, [field]: val };
-      updated.detection = computeDetection(updated.inherent, updated.control);
-      updated.overall = computeOverall(updated.inherent, updated.control);
-      return updated;
-    }));
-  };
 
   // ─── WORKPAPERS STATE ───
   const { data: workpapers, refetch: refetchWP } = useQuery({
@@ -214,54 +84,23 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
     refetchWP();
   };
 
-  // ─── PHYSICAL VERIFICATION STATE ───
-  const [verifications, setVerifications] = useState<PhysicalVerification[]>([
-    { category: "Plant & Machinery", date: "", items_verified: 0, discrepancies: "", action_taken: "" },
-    { category: "Furniture & Fixtures", date: "", items_verified: 0, discrepancies: "", action_taken: "" },
-    { category: "Vehicles", date: "", items_verified: 0, discrepancies: "", action_taken: "" },
-    { category: "Office Equipment", date: "", items_verified: 0, discrepancies: "", action_taken: "" },
-    { category: "Computer Equipment", date: "", items_verified: 0, discrepancies: "", action_taken: "" },
-  ]);
-
-  // Load saved verifications from engagement
-  useEffect(() => {
-    const saved = (engagement as any)?.materiality as any;
-    if (saved?.physical_verifications && Array.isArray(saved.physical_verifications)) {
-      setVerifications(saved.physical_verifications);
-    }
-  }, [engagement?.id]);
-
-  const updateVerification = (idx: number, field: keyof PhysicalVerification, val: any) => {
-    setVerifications(prev => prev.map((v, i) => i === idx ? { ...v, [field]: val } : v));
-  };
-
   // ─── SAVE ALL ───
   const saveAll = async (complete: boolean) => {
     setSaving(true);
-    const riskData = riskRows.map(r => ({
-      area: r.area,
-      inherent: r.inherent === "High" ? 3 : r.inherent === "Medium" ? 2 : 1,
-      control: r.control === "High" ? 3 : r.control === "Medium" ? 2 : 1,
-      notes: r.notes,
-    }));
-
-    const matData = {
-      ...(engagement?.materiality || {}),
-      physical_verifications: verifications,
+    const newStatuses = {
+      ...((engagement?.stage_statuses || {}) as Record<string, string>),
+      '6': complete ? 'complete' : 'in_progress'
     };
-
-    const newStatuses = { ...((engagement?.stage_statuses || {}) as Record<string, string>), "6": complete ? "complete" : "in_progress" };
-    const payload: Record<string, any> = {
-      risk_assessment: riskData as unknown as Json,
-      materiality: matData as unknown as Json,
-      stage_statuses: newStatuses as unknown as Json,
-    };
+    const payload: any = { stage_statuses: newStatuses };
     if (complete) payload.pipeline_stage = 7;
 
-    const { error } = await supabase.from("audit_engagements").update(payload as any).eq("id", engagementId);
+    const { error } = await supabase
+      .from('audit_engagements')
+      .update(payload)
+      .eq('id', engagementId);
     setSaving(false);
     if (error) { toast.error(error.message); return; }
-    toast.success(complete ? "Stage 6 completed" : "Progress saved");
+    toast.success(complete ? 'Stage 6 completed' : 'Progress saved');
     if (complete) onStageComplete(); else onSaveDraft();
   };
 
@@ -270,8 +109,8 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 6 — Workpapers & Risk Assessment</h1>
-          <p className="text-sm text-muted-foreground">Risk matrix, workpaper index, and physical verification</p>
+          <h1 className="text-xl font-bold text-foreground">Stage 6 — Workpapers & Audit Sheet</h1>
+          <p className="text-sm text-muted-foreground">Audit working papers and engagement documentation</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => saveAll(false)} disabled={saving}>
@@ -285,74 +124,37 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="risk" className="gap-1"><Shield size={14} /> Risk Assessment</TabsTrigger>
-          <TabsTrigger value="workpapers" className="gap-1"><FileText size={14} /> Workpapers</TabsTrigger>
-          <TabsTrigger value="physical" className="gap-1"><ClipboardCheck size={14} /> Physical Verification</TabsTrigger>
+          <TabsTrigger value="audit_sheet" className="gap-1">
+            <ClipboardCheck size={14} /> Audit Sheet
+          </TabsTrigger>
+          <TabsTrigger value="workpapers" className="gap-1">
+            <FileText size={14} /> Workpaper Index
+          </TabsTrigger>
         </TabsList>
 
-        {/* ═══ RISK ASSESSMENT ═══ */}
-        <TabsContent value="risk" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Assess risk for each audit area. Auto-suggestions based on scrutiny findings.</p>
-            <Button variant="outline" size="sm" onClick={autoSuggestRisk} className="gap-1">
-              <Sparkles size={14} /> Auto-Suggest from Scrutiny
-            </Button>
-          </div>
-
-          <div className="border rounded-lg overflow-auto bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[160px]">Audit Area</TableHead>
-                  <TableHead className="w-[120px]">Inherent Risk</TableHead>
-                  <TableHead className="w-[120px]">Control Risk</TableHead>
-                  <TableHead className="w-[100px]">Detection Risk</TableHead>
-                  <TableHead className="w-[100px]">Overall Risk</TableHead>
-                  <TableHead>Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {riskRows.map((row, i) => (
-                  <TableRow key={row.area}>
-                    <TableCell className="font-medium text-sm">
-                      {row.area}
-                      {row.autoSuggested && <Badge variant="outline" className="ml-1 text-[9px] px-1">AI</Badge>}
-                    </TableCell>
-                    <TableCell>
-                      <Select value={row.inherent} onValueChange={v => updateRisk(i, "inherent", v)}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {RISK_LEVELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell>
-                      <Select value={row.control} onValueChange={v => updateRisk(i, "control", v)}>
-                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {RISK_LEVELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={cn("text-xs", RISK_COLORS[row.detection])}>{row.detection}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={cn("text-xs", RISK_COLORS[row.overall])}>{row.overall}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Input
-                        className="h-8 text-xs"
-                        value={row.notes}
-                        onChange={e => updateRisk(i, "notes", e.target.value)}
-                        placeholder="Optional notes..."
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        {/* ═══ AUDIT SHEET — Under Development ═══ */}
+        <TabsContent value="audit_sheet">
+          <Card className="border-dashed border-2 border-primary/30">
+            <CardContent className="p-12 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+                <ClipboardCheck className="w-8 h-8 text-primary" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-foreground">Audit Sheet</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Our firm's standardised audit working paper template
+                </p>
+              </div>
+              <Badge variant="secondary" className="text-sm px-4 py-1">
+                🚧 Under Development — Coming Soon
+              </Badge>
+              <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                The audit sheet will be customised to your firm's format.
+                It will include: engagement details, materiality computation,
+                scope of audit, key findings summary, audit observations, and conclusion.
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ═══ WORKPAPERS ═══ */}
@@ -405,9 +207,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
                   <Select value={wpForm.section} onValueChange={v => setWpForm(f => ({ ...f, section: v }))}>
                     <SelectTrigger><SelectValue placeholder="Select area" /></SelectTrigger>
                     <SelectContent>
-                      {RISK_AREAS.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-                      <SelectItem value="General">General</SelectItem>
-                      <SelectItem value="Other">Other</SelectItem>
+                      {AUDIT_SECTIONS.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -430,48 +230,6 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
               </DialogFooter>
             </DialogContent>
           </Dialog>
-        </TabsContent>
-
-        {/* ═══ PHYSICAL VERIFICATION ═══ */}
-        <TabsContent value="physical" className="space-y-4">
-          <p className="text-sm text-muted-foreground">Physical verification checklist for asset categories</p>
-
-          <div className="border rounded-lg overflow-auto bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[180px]">Asset Category</TableHead>
-                  <TableHead className="w-[140px]">Date of Verification</TableHead>
-                  <TableHead className="w-[100px]">Items Verified</TableHead>
-                  <TableHead>Discrepancies Found</TableHead>
-                  <TableHead>Action Taken</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {verifications.map((v, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="font-medium text-sm">{v.category}</TableCell>
-                    <TableCell>
-                      <Input type="date" className="h-8 text-xs" value={v.date} onChange={e => updateVerification(i, "date", e.target.value)} />
-                    </TableCell>
-                    <TableCell>
-                      <Input type="number" className="h-8 text-xs w-20" value={v.items_verified || ""} onChange={e => updateVerification(i, "items_verified", parseInt(e.target.value) || 0)} />
-                    </TableCell>
-                    <TableCell>
-                      <Input className="h-8 text-xs" value={v.discrepancies} onChange={e => updateVerification(i, "discrepancies", e.target.value)} placeholder="None / describe..." />
-                    </TableCell>
-                    <TableCell>
-                      <Input className="h-8 text-xs" value={v.action_taken} onChange={e => updateVerification(i, "action_taken", e.target.value)} placeholder="Action taken..." />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          <Button variant="outline" size="sm" onClick={() => setVerifications(prev => [...prev, { category: "", date: "", items_verified: 0, discrepancies: "", action_taken: "" }])}>
-            <Plus size={14} className="mr-1" /> Add Category
-          </Button>
         </TabsContent>
       </Tabs>
     </div>

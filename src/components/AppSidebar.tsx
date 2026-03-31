@@ -34,11 +34,10 @@ const auditStages = [
   { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
   { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
   { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },
-  { title: "Workpapers & Risk",         path: "/audit/pipeline", icon: Shield,       stage: 6  },
-  { title: "Notes to Accounts/CARO",    path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
-  { title: "3CD Reports",               path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
-  { title: "Review & QC",               path: "/audit/pipeline", icon: Layers,       stage: 9  },
-  { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 10 },
+  { title: "Workpapers & Audit Sheet",   path: "/audit/pipeline", icon: Shield,       stage: 6  },
+  { title: "Notes to Accounts & CARO",  path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
+  { title: "3CA / 3CB / 3CD Reports",   path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
+  { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 9  },
 ];
 
 const auditUtilities = [
