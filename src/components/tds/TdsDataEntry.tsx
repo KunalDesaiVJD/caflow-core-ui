@@ -427,7 +427,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (!panVal || !isValidPan(panVal)) {
         // Invalid or blank PAN
         updates.pan_not_available = true;
-        // Auto-detect type from 4th char if at least 4 chars
         if (panVal && panVal.length >= 4 && PAN_4TH_CHAR_MAP[panVal[3]]) {
           updates.deductee_type = PAN_4TH_CHAR_MAP[panVal[3]];
         } else if (!panVal) {
@@ -435,15 +434,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         }
         const { noPanRate } = getRateForSection(deductee.section_code);
         updates.rate_of_tds = noPanRate || 20;
-        updates.reason_for_lower_or_nil_deduction = "Z";
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
       } else {
         // Valid PAN
         updates.pan_not_available = false;
-        // Auto-detect type from 4th character
         const detectedType = PAN_4TH_CHAR_MAP[panVal[3]] || null;
         if (detectedType) {
           updates.deductee_type = detectedType;
@@ -453,12 +450,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         if (rateFound && rate !== null) {
           updates.rate_of_tds = rate;
           if (deductee.amount_paid_credited) {
-            updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
+            updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100);
             updates.total_tax_deducted = updates.tds_amount;
           }
-        }
-        if (deductee.reason_for_lower_or_nil_deduction === "Z") {
-          updates.reason_for_lower_or_nil_deduction = null;
         }
       }
     }
