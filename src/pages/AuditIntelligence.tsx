@@ -184,7 +184,7 @@ export default function AuditIntelligence() {
 
   const stageStatuses = selectedEngagement?.stage_statuses || {};
   const completedStages = Object.values(stageStatuses).filter((s: any) => s === "complete").length;
-  const progressPct = Math.round((completedStages / 10) * 100);
+  const progressPct = Math.round((completedStages / 9) * 100);
 
   const getStageColor = (status: string) => {
     if (status === "complete") return "bg-emerald-500";
