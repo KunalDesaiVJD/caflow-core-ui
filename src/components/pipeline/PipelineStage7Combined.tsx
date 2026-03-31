@@ -112,9 +112,6 @@ export default function PipelineStage7Combined({
           )}
         </TabsContent>
 
-        <TabsContent value="master" className="mt-4">
-          <MasterConfigPanel />
-        </TabsContent>
       </Tabs>
     </div>
   );
