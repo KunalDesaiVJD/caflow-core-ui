@@ -1084,7 +1084,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             ))}
                             {/* Always-visible blank row trigger */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 10 : 11} className="text-center py-2">
+                              <TableCell colSpan={selForm === "24Q" ? 10 : 13} className="text-center py-2">
                                 <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow}>
                                   <Plus size={12} /> Add Row
                                 </Button>
