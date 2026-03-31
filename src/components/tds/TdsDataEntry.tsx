@@ -261,15 +261,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   // ─── Rate lookup helpers ───
-  const getRateForSection = (sectionCode: string, deducteeType?: string | null): { rate: number | null; noPanRate: number | null; nature: string | null; threshold: number | null } => {
+  const getRateForSection = (sectionCode: string, deducteeType?: string | null): { rate: number | null; noPanRate: number | null; nature: string | null; threshold: number | null; rateFound: boolean } => {
     const match = rateMaster.find(r => r.section_code === sectionCode);
-    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null };
-    const isCompany = deducteeType === "Company";
+    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null, rateFound: false };
+    const useIndRate = isIndividualRateType(deducteeType || null);
     return {
-      rate: isCompany ? match.rate_company : match.rate_individual,
+      rate: useIndRate ? match.rate_individual : match.rate_company,
       noPanRate: match.rate_no_pan,
       nature: match.nature_of_payment,
-      threshold: isCompany ? match.threshold_company : match.threshold_individual,
+      threshold: useIndRate ? match.threshold_individual : match.threshold_company,
+      rateFound: true,
     };
   };
 
