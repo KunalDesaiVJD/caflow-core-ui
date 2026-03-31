@@ -1985,6 +1985,77 @@ export type Database = {
           },
         ]
       }
+      coa_master: {
+        Row: {
+          account_code: string
+          account_head: string
+          account_type: string | null
+          applicable_entities: string | null
+          bs_pl: string | null
+          created_at: string | null
+          entity_type: string
+          firm_id: string | null
+          fs_line_item: string | null
+          group_name: string | null
+          id: string
+          level: number
+          major_group: string | null
+          normal_balance: string | null
+          note_no: string | null
+          remarks: string | null
+          sub_group: string | null
+          tally_group_mapping: string | null
+        }
+        Insert: {
+          account_code: string
+          account_head: string
+          account_type?: string | null
+          applicable_entities?: string | null
+          bs_pl?: string | null
+          created_at?: string | null
+          entity_type?: string
+          firm_id?: string | null
+          fs_line_item?: string | null
+          group_name?: string | null
+          id?: string
+          level?: number
+          major_group?: string | null
+          normal_balance?: string | null
+          note_no?: string | null
+          remarks?: string | null
+          sub_group?: string | null
+          tally_group_mapping?: string | null
+        }
+        Update: {
+          account_code?: string
+          account_head?: string
+          account_type?: string | null
+          applicable_entities?: string | null
+          bs_pl?: string | null
+          created_at?: string | null
+          entity_type?: string
+          firm_id?: string | null
+          fs_line_item?: string | null
+          group_name?: string | null
+          id?: string
+          level?: number
+          major_group?: string | null
+          normal_balance?: string | null
+          note_no?: string | null
+          remarks?: string | null
+          sub_group?: string | null
+          tally_group_mapping?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coa_master_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       deductees: {
         Row: {
           created_at: string | null
