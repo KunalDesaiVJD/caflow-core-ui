@@ -31,7 +31,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
+interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null; }
 interface UserOption { id: string; name: string | null; }
 
 interface TdsFiling {
