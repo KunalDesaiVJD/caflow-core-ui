@@ -913,9 +913,28 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                         onBlur={e => updateDeducteeField(d.id, "date_of_payment", e.target.value || null)} />
                                     </TableCell>
                                     <TableCell className="text-right">
-                                      <Input type="number" className={cn("h-7 text-xs w-16 text-right", d.pan_not_available && "text-destructive")}
-                                        defaultValue={d.rate_of_tds ?? ""}
-                                        onBlur={e => updateDeducteeField(d.id, "rate_of_tds", parseFloat(e.target.value) || null)} />
+                                      {(() => {
+                                        const { rateFound } = d.section_code ? getRateForSection(d.section_code, d.deductee_type) : { rateFound: false };
+                                        const isAutoRate = rateFound || d.pan_not_available;
+                                        return (
+                                          <div className="flex items-center gap-1 justify-end">
+                                            <Input type="number"
+                                              className={cn("h-7 text-xs w-16 text-right",
+                                                isAutoRate ? "bg-muted cursor-not-allowed opacity-75" : "",
+                                                d.pan_not_available && "text-destructive"
+                                              )}
+                                              defaultValue={d.rate_of_tds ?? ""}
+                                              readOnly={isAutoRate}
+                                              onBlur={e => { if (!isAutoRate) updateDeducteeField(d.id, "rate_of_tds", parseFloat(e.target.value) || null); }}
+                                              key={`rate-${d.id}-${d.rate_of_tds}`}
+                                            />
+                                            {isAutoRate && <Lock size={10} className="text-muted-foreground shrink-0" />}
+                                            {!rateFound && d.section_code && !d.pan_not_available && (
+                                              <span className="text-[9px] text-amber-600 whitespace-nowrap">No rate</span>
+                                            )}
+                                          </div>
+                                        );
+                                      })()}
                                     </TableCell>
                                     <TableCell className="text-right text-xs font-semibold">
                                       {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
