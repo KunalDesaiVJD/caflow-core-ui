@@ -29,7 +29,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw,
+  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw, Lock,
 } from "lucide-react";
 
 // ─── Types ───
