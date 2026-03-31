@@ -211,13 +211,24 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   };
 
   const handleInlineUpdate = async (filing: TdsFiling, field: string, value: any) => {
+    // Prevent changing filing date after status is 'Filed'
+    if (field === "date_of_filing" && filing.work_status === "Filed" && filing.date_of_filing) {
+      toast({ title: "Locked", description: "Filing date cannot be modified after filing.", variant: "destructive" });
+      return;
+    }
     const { error } = await supabase.from("tds_filings").update({
       [field]: value,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else fetchFilings();
+    else {
+      // If setting date on a Filed row for the first time, log it
+      if (field === "date_of_filing" && filing.work_status === "Filed") {
+        await logAuditEntry(filing.id, "FILING_DATE_SET", filing.date_of_filing || null, value, "Historical correction");
+      }
+      fetchFilings();
+    }
   };
 
   const openCopyDialog = (f: TdsFiling) => {
