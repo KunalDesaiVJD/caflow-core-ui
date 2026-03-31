@@ -203,10 +203,10 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
         sign_off_date: new Date().toISOString(),
         signed_at: new Date().toISOString(),
         signed_by: user?.id,
-        pipeline_stage: 10,
+        pipeline_stage: 9,
         stage_statuses: {
           ...(engagement.stage_statuses || {}),
-          "10": "complete",
+          "9": "complete",
         },
       };
 
