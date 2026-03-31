@@ -586,15 +586,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                   const client = clients.find(c => c.id === f.client_id);
                   const clientTan = client?.tan_number || f.tan;
                   const isNA = f.work_status === "Not Applicable";
+                  const archived = isArchivedFiling(f);
                   return (
-                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30")}>
+                    <TableRow key={f.id} className={cn(isNA && "bg-muted/30", archived && "bg-muted/40 opacity-70")}>
                       <TableCell>
                         <Checkbox
                           checked={selectedIds.has(f.id)}
                           onCheckedChange={() => toggleSelect(f.id)}
+                          disabled={archived}
                         />
                       </TableCell>
-                      <TableCell className="font-medium sticky left-0 bg-background">{client?.name || "—"}</TableCell>
+                      <TableCell className="font-medium sticky left-0 bg-background">
+                        <span className={cn(archived && "line-through text-muted-foreground")}>{client?.name || "—"}</span>
+                        {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
+                      </TableCell>
                       <TableCell>
                         {clientTan ? (
                           <span className="font-mono text-xs">{clientTan}</span>
