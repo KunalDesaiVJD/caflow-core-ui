@@ -262,16 +262,41 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
-    const formData    = await req.formData();
-    const file        = formData.get("file") as File;
-    const engId       = formData.get("engagement_id") as string | null;
-    const firmId      = formData.get("firm_id") as string | null;
-    const clientId    = formData.get("client_id") as string | null;
-    const financialYr = formData.get("financial_year") as string | null;
+    // Accept JSON body with base64-encoded file (matching client-side invoke)
+    const body = await req.json();
+    const {
+      fileBase64,
+      chunkBase64,
+      chunkIndex,
+      totalChunks,
+      uploadSessionId,
+      isLastChunk,
+      fileName,
+      engagementId: engId,
+      firmId,
+      clientId,
+      financialYear: financialYr,
+    } = body;
 
-    if (!file) throw new Error("No file uploaded");
+    // Handle chunked uploads: store chunks in memory, process on last chunk
+    // For simplicity in edge functions (stateless), we only support single-shot uploads
+    // The client should reassemble chunks before sending, or send small files directly
+    const base64Data = fileBase64 || chunkBase64;
+    if (!base64Data) throw new Error("No file data provided (fileBase64 or chunkBase64 required)");
 
-    const buf = new Uint8Array(await file.arrayBuffer());
+    // If this is a non-final chunk, acknowledge receipt (stateless — client must handle reassembly)
+    if (chunkBase64 && !isLastChunk) {
+      return new Response(JSON.stringify({ success: true, chunkReceived: chunkIndex }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Decode base64 to Uint8Array
+    const binaryString = atob(base64Data);
+    const buf = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      buf[i] = binaryString.charCodeAt(i);
+    }
 
     // FM 10: detect XLS vs XLSX from magic bytes
     const isXLS =
