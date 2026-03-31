@@ -11,56 +11,34 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
-import { ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2, ChevronRight, ChevronDown, FolderTree, AlertTriangle } from "lucide-react";
+import {
+  ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2,
+  ChevronRight, ChevronDown, FolderTree, AlertTriangle, Database, FileSpreadsheet
+} from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import * as XLSX from "xlsx";
+import coaMasterDataJson from "@/data/coa-master-data.json";
 
-const ACCOUNT_GROUPS = [
-  "Non-Current Assets", "Current Assets", "Long-Term Borrowings", "Short-Term Borrowings",
-  "Trade Payables", "Other Current Liabilities", "Equity Share Capital", "Retained Earnings",
-  "Revenue", "Cost of Goods Sold", "Employee Benefit Expenses", "Finance Costs",
-  "Depreciation", "Other Expenses", "Other Income",
-];
-
-const FUZZY_MAP: Record<string, { standard_head: string; account_group: string; bs_pl: string }> = {
-  "sundry debtors": { standard_head: "Trade Receivables", account_group: "Current Assets", bs_pl: "BS" },
-  "sundry creditors": { standard_head: "Trade Payables", account_group: "Trade Payables", bs_pl: "BS" },
-  "trade debtors": { standard_head: "Trade Receivables", account_group: "Current Assets", bs_pl: "BS" },
-  "trade creditors": { standard_head: "Trade Payables", account_group: "Trade Payables", bs_pl: "BS" },
-  "loans and advances": { standard_head: "Short-Term Loans and Advances", account_group: "Current Assets", bs_pl: "BS" },
-  "capital account": { standard_head: "Equity Share Capital", account_group: "Equity Share Capital", bs_pl: "BS" },
-  "profit & loss a/c": { standard_head: "Retained Earnings", account_group: "Retained Earnings", bs_pl: "BS" },
-  "profit and loss": { standard_head: "Retained Earnings", account_group: "Retained Earnings", bs_pl: "BS" },
-  "cash": { standard_head: "Cash and Cash Equivalents", account_group: "Current Assets", bs_pl: "BS" },
-  "cash in hand": { standard_head: "Cash and Cash Equivalents", account_group: "Current Assets", bs_pl: "BS" },
-  "bank": { standard_head: "Bank Balances", account_group: "Current Assets", bs_pl: "BS" },
-  "bank account": { standard_head: "Bank Balances", account_group: "Current Assets", bs_pl: "BS" },
-  "salary": { standard_head: "Salaries and Wages", account_group: "Employee Benefit Expenses", bs_pl: "PL" },
-  "salaries": { standard_head: "Salaries and Wages", account_group: "Employee Benefit Expenses", bs_pl: "PL" },
-  "rent": { standard_head: "Rent Expense", account_group: "Other Expenses", bs_pl: "PL" },
-  "depreciation": { standard_head: "Depreciation and Amortisation", account_group: "Depreciation", bs_pl: "PL" },
-  "interest paid": { standard_head: "Interest Expense", account_group: "Finance Costs", bs_pl: "PL" },
-  "interest received": { standard_head: "Interest Income", account_group: "Other Income", bs_pl: "PL" },
-  "sales": { standard_head: "Revenue from Operations", account_group: "Revenue", bs_pl: "PL" },
-  "sales account": { standard_head: "Revenue from Operations", account_group: "Revenue", bs_pl: "PL" },
-  "purchase": { standard_head: "Purchases", account_group: "Cost of Goods Sold", bs_pl: "PL" },
-  "purchase account": { standard_head: "Purchases", account_group: "Cost of Goods Sold", bs_pl: "PL" },
-  "opening stock": { standard_head: "Opening Stock", account_group: "Cost of Goods Sold", bs_pl: "PL" },
-  "closing stock": { standard_head: "Closing Stock", account_group: "Cost of Goods Sold", bs_pl: "PL" },
-  "secured loan": { standard_head: "Secured Loans", account_group: "Long-Term Borrowings", bs_pl: "BS" },
-  "unsecured loan": { standard_head: "Unsecured Loans", account_group: "Short-Term Borrowings", bs_pl: "BS" },
-  "duties and taxes": { standard_head: "Duties and Taxes", account_group: "Other Current Liabilities", bs_pl: "BS" },
-  "provisions": { standard_head: "Provisions", account_group: "Other Current Liabilities", bs_pl: "BS" },
-};
-
-function fuzzyMatch(ledgerName: string) {
-  const lower = ledgerName.toLowerCase().trim();
-  if (FUZZY_MAP[lower]) return FUZZY_MAP[lower];
-  for (const [key, val] of Object.entries(FUZZY_MAP)) {
-    if (lower.includes(key) || key.includes(lower)) return val;
-  }
-  return null;
+// ─── Types ───
+interface CoaMasterRow {
+  account_code: string;
+  level: number;
+  major_group: string | null;
+  group_name: string | null;
+  sub_group: string | null;
+  account_head: string;
+  account_type: string | null;
+  normal_balance: string | null;
+  bs_pl: string | null;
+  fs_line_item: string | null;
+  note_no: string | null;
+  applicable_entities: string | null;
+  tally_group_mapping: string | null;
+  remarks: string | null;
+  entity_type: string;
 }
+
+const coaMasterData: CoaMasterRow[] = coaMasterDataJson as CoaMasterRow[];
 
 interface CoaMapping {
   id: string;
@@ -86,23 +64,77 @@ interface HierarchyNode {
   bs_pl_side: string | null;
 }
 
-// ─── Hierarchy-aware mapping tree node ───
+interface CoaMasterDbRow extends CoaMasterRow {
+  id: string;
+  firm_id: string | null;
+}
+
+// ─── Derive unique account groups from master data ───
+const ACCOUNT_GROUPS = [...new Set(
+  coaMasterData
+    .filter(r => r.group_name)
+    .map(r => r.group_name!)
+)].sort();
+
+// ─── Fuzzy matching using COA master tally_group_mapping ───
+function fuzzyMatchFromMaster(ledgerName: string, entityType: string): { standard_head: string; account_group: string; bs_pl: string } | null {
+  const lower = ledgerName.toLowerCase().trim();
+  const filtered = coaMasterData.filter(r => r.entity_type === entityType || r.applicable_entities?.includes("Corp"));
+
+  // Exact tally group match
+  for (const row of filtered) {
+    if (row.tally_group_mapping && row.tally_group_mapping.toLowerCase() === lower) {
+      return {
+        standard_head: row.account_head,
+        account_group: row.group_name || row.major_group || "",
+        bs_pl: row.bs_pl || "BS",
+      };
+    }
+  }
+
+  // Partial tally group match
+  for (const row of filtered) {
+    if (row.tally_group_mapping && (
+      lower.includes(row.tally_group_mapping.toLowerCase()) ||
+      row.tally_group_mapping.toLowerCase().includes(lower)
+    )) {
+      return {
+        standard_head: row.account_head,
+        account_group: row.group_name || row.major_group || "",
+        bs_pl: row.bs_pl || "BS",
+      };
+    }
+  }
+
+  // Account head partial match
+  for (const row of filtered) {
+    if (row.level === 4 && row.account_head.toLowerCase().includes(lower)) {
+      return {
+        standard_head: row.account_head,
+        account_group: row.group_name || row.major_group || "",
+        bs_pl: row.bs_pl || "BS",
+      };
+    }
+  }
+
+  return null;
+}
+
+// ─── Hierarchy-aware tree node ───
 function MappingTreeNode({
-  node,
-  allNodes,
-  mappings,
-  onMap,
+  node, allNodes, mappings, masterRows,
 }: {
   node: HierarchyNode;
   allNodes: HierarchyNode[];
   mappings: CoaMapping[];
-  onMap: (ledgerName: string, standardHead: string, bsPl: string, accountGroup: string) => void;
+  masterRows: CoaMasterDbRow[];
 }) {
   const [open, setOpen] = useState(node.level <= 2);
   const children = allNodes.filter(n => n.parent_node_id === node.node_id);
   const hasChildren = children.length > 0;
   const mapped = mappings.find(m => (m.raw_ledger_name || "").toLowerCase() === node.tally_group_name.toLowerCase());
   const parentMapped = findAncestorMapping(node, allNodes, mappings);
+  const masterMatch = masterRows.find(m => m.tally_group_mapping?.toLowerCase() === node.tally_group_name.toLowerCase());
 
   const fmtNum = (n: number) => n ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
@@ -130,13 +162,17 @@ function MappingTreeNode({
           <Badge variant="outline" className="text-[10px] h-5 shrink-0 border-primary/30 text-primary">
             ↳ via {parentMapped.standard_head}
           </Badge>
+        ) : masterMatch ? (
+          <Badge variant="secondary" className="text-[10px] h-5 shrink-0">
+            💡 {masterMatch.account_head}
+          </Badge>
         ) : null}
         <span className="w-20 text-right font-mono text-muted-foreground shrink-0">{fmtNum(node.closing_balance)}</span>
       </div>
       {open && hasChildren && (
         <div>
           {children.map(child => (
-            <MappingTreeNode key={child.id} node={child} allNodes={allNodes} mappings={mappings} onMap={onMap} />
+            <MappingTreeNode key={child.id} node={child} allNodes={allNodes} mappings={mappings} masterRows={masterRows} />
           ))}
         </div>
       )}
@@ -144,12 +180,7 @@ function MappingTreeNode({
   );
 }
 
-/** Walk up the hierarchy to find if any ancestor is mapped */
-function findAncestorMapping(
-  node: HierarchyNode,
-  allNodes: HierarchyNode[],
-  mappings: CoaMapping[]
-): CoaMapping | null {
+function findAncestorMapping(node: HierarchyNode, allNodes: HierarchyNode[], mappings: CoaMapping[]): CoaMapping | null {
   let current = node;
   while (current.parent_node_id) {
     const parent = allNodes.find(n => n.node_id === current.parent_node_id);
@@ -161,7 +192,6 @@ function findAncestorMapping(
   return null;
 }
 
-/** Get all descendant node names for a given node */
 function getDescendantNames(nodeId: string, allNodes: HierarchyNode[]): string[] {
   const names: string[] = [];
   const children = allNodes.filter(n => n.parent_node_id === nodeId);
@@ -172,7 +202,6 @@ function getDescendantNames(nodeId: string, allNodes: HierarchyNode[]): string[]
   return names;
 }
 
-/** Sum only leaf descendants (no double-counting with parent) */
 function sumLeafDescendants(nodeId: string, allNodes: HierarchyNode[]): number {
   const children = allNodes.filter(n => n.parent_node_id === nodeId);
   if (children.length === 0) {
@@ -182,12 +211,77 @@ function sumLeafDescendants(nodeId: string, allNodes: HierarchyNode[]): number {
   return children.reduce((sum, child) => sum + sumLeafDescendants(child.node_id, allNodes), 0);
 }
 
+// ─── COA Master Tree Node (for COA Master tab) ───
+function CoaMasterTreeNode({ row, allRows }: { row: CoaMasterRow; allRows: CoaMasterRow[] }) {
+  const [open, setOpen] = useState(false);
+  const children = allRows.filter(r =>
+    r.entity_type === row.entity_type &&
+    r.level === row.level + 1 &&
+    r.major_group === row.major_group &&
+    (row.level === 1 ? true :
+     row.level === 2 ? r.group_name === row.group_name :
+     row.level === 3 ? r.sub_group === row.sub_group : false)
+  );
+  // Better: use account_code prefix matching
+  const codePrefix = row.account_code.replace(/0+$/, "");
+  const childrenByCode = allRows.filter(r =>
+    r.entity_type === row.entity_type &&
+    r.level === row.level + 1 &&
+    r.account_code.startsWith(codePrefix) &&
+    r.account_code !== row.account_code
+  );
+  const effectiveChildren = childrenByCode.length > 0 ? childrenByCode : children;
+  const hasChildren = effectiveChildren.length > 0;
+
+  return (
+    <div>
+      <div
+        className={`flex items-center gap-2 py-1 px-2 text-xs border-b border-border/20 hover:bg-muted/30`}
+        style={{ paddingLeft: `${(row.level - 1) * 20 + 8}px` }}
+      >
+        {hasChildren ? (
+          <button onClick={() => setOpen(!open)} className="shrink-0">
+            {open ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
+          </button>
+        ) : (
+          <div className="w-[14px]" />
+        )}
+        <span className="w-12 text-muted-foreground font-mono shrink-0">{row.account_code}</span>
+        <span className={`flex-1 ${row.level <= 2 ? "font-semibold text-foreground" : row.level === 3 ? "font-medium text-foreground" : "text-foreground"}`}>
+          {row.account_head}
+        </span>
+        <Badge variant={row.bs_pl === "PL" ? "secondary" : "outline"} className="text-[10px] h-5 shrink-0">
+          {row.bs_pl}
+        </Badge>
+        <span className="w-16 text-right text-muted-foreground text-[10px] shrink-0">{row.normal_balance}</span>
+        {row.note_no && (
+          <span className="w-10 text-right text-muted-foreground text-[10px] shrink-0">N{row.note_no}</span>
+        )}
+        {row.fs_line_item && (
+          <span className="w-40 truncate text-muted-foreground text-[10px] shrink-0" title={row.fs_line_item}>
+            {row.fs_line_item}
+          </span>
+        )}
+      </div>
+      {open && hasChildren && (
+        <div>
+          {effectiveChildren.map(child => (
+            <CoaMasterTreeNode key={`${child.account_code}-${child.entity_type}`} row={child} allRows={allRows} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ───
 const CoaMappings = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const firmId = user?.firm_id;
   const fileRef = useRef<HTMLInputElement>(null);
+  const masterFileRef = useRef<HTMLInputElement>(null);
 
   const [mappings, setMappings] = useState<CoaMapping[]>([]);
   const [unmappedLedgers, setUnmappedLedgers] = useState<string[]>([]);
@@ -198,12 +292,16 @@ const CoaMappings = () => {
   const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
   const [selectedEngagement, setSelectedEngagement] = useState("");
   const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
-
   const [mapForms, setMapForms] = useState<Record<string, { standard_head: string; bs_pl: string; account_group: string }>>({});
+  const [masterEntityFilter, setMasterEntityFilter] = useState("corporate");
+  const [masterDbRows, setMasterDbRows] = useState<CoaMasterDbRow[]>([]);
+  const [seedingMaster, setSeedingMaster] = useState(false);
+  const [importingMaster, setImportingMaster] = useState(false);
 
   useEffect(() => {
     loadEngagements();
     loadData();
+    loadMasterFromDb();
   }, [firmId]);
 
   useEffect(() => {
@@ -225,6 +323,15 @@ const CoaMappings = () => {
       .eq("engagement_id", selectedEngagement)
       .order("row_number", { ascending: true });
     setHierarchyNodes((data || []) as HierarchyNode[]);
+  }
+
+  async function loadMasterFromDb() {
+    const { data } = await supabase
+      .from("coa_master" as any)
+      .select("*")
+      .or(`firm_id.eq.${firmId},firm_id.is.null`)
+      .order("account_code", { ascending: true });
+    setMasterDbRows((data || []) as CoaMasterDbRow[]);
   }
 
   async function loadData() {
@@ -254,11 +361,139 @@ const CoaMappings = () => {
 
     const forms: Record<string, any> = {};
     for (const name of unmapped) {
-      const match = fuzzyMatch(name);
+      const match = fuzzyMatchFromMaster(name, "corporate");
       forms[name] = match || { standard_head: "", bs_pl: "BS", account_group: "" };
     }
     setMapForms(forms);
     setLoading(false);
+  }
+
+  async function handleSeedMaster() {
+    if (!firmId) return;
+    setSeedingMaster(true);
+    try {
+      // Delete existing firm-level master data first
+      await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+
+      // Insert in batches of 50
+      const rows = coaMasterData.map(r => ({ ...r, firm_id: firmId }));
+      for (let i = 0; i < rows.length; i += 50) {
+        const batch = rows.slice(i, i + 50);
+        const { error } = await supabase.from("coa_master" as any).insert(batch as any);
+        if (error) throw error;
+      }
+      toast({ title: `Seeded ${rows.length} COA master entries from built-in template` });
+      loadMasterFromDb();
+    } catch (e: any) {
+      toast({ title: "Error seeding master", description: e.message, variant: "destructive" });
+    } finally {
+      setSeedingMaster(false);
+    }
+  }
+
+  async function handleImportMasterFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !firmId) return;
+    setImportingMaster(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+
+      const sheetMap: Record<string, string> = {};
+      for (const sn of wb.SheetNames) {
+        const lower = sn.toLowerCase();
+        if (lower.includes("corporate") || lower.includes("corp")) sheetMap[sn] = "corporate";
+        else if (lower.includes("llp")) sheetMap[sn] = "llp";
+        else if (lower.includes("nce") || lower.includes("non-corp") || lower.includes("proprietor")) sheetMap[sn] = "nce";
+      }
+
+      if (Object.keys(sheetMap).length === 0) {
+        // Fallback: treat first data sheet as corporate
+        const firstDataSheet = wb.SheetNames.find(s => !s.toLowerCase().includes("readme") && !s.toLowerCase().includes("change"));
+        if (firstDataSheet) sheetMap[firstDataSheet] = "corporate";
+      }
+
+      let totalImported = 0;
+      // Delete existing
+      await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+
+      for (const [sheetName, entityType] of Object.entries(sheetMap)) {
+        const ws = wb.Sheets[sheetName];
+        const allRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+        // Find header row
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(10, allRows.length); i++) {
+          const cells = allRows[i].map((c: any) => String(c).toLowerCase().trim());
+          if (cells.includes("account code") && cells.includes("account head")) {
+            headerIdx = i;
+            break;
+          }
+        }
+        if (headerIdx === -1) continue;
+
+        const headers = allRows[headerIdx].map((c: any) => String(c).trim());
+        const colIdx = (name: string) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+
+        const iCode = colIdx("Account Code");
+        const iLevel = colIdx("Level");
+        const iMajor = colIdx("Major Group");
+        const iGroup = colIdx("Group");
+        const iSub = colIdx("Sub-Group");
+        const iHead = colIdx("Account Head");
+        const iType = colIdx("Account Type");
+        const iNormal = colIdx("Normal Balance");
+        const iBsPl = colIdx("BS / PL") >= 0 ? colIdx("BS / PL") : colIdx("BS/PL");
+        const iFs = colIdx("FS Line Item");
+        const iNote = colIdx("Note No");
+        const iApplicable = colIdx("Applicable Entities");
+        const iTally = colIdx("Tally Group Mapping");
+        const iRemarks = colIdx("Remarks");
+
+        const batch: any[] = [];
+        for (let r = headerIdx + 1; r < allRows.length; r++) {
+          const row = allRows[r];
+          const code = String(row[iCode] || "").trim();
+          const head = String(row[iHead >= 0 ? iHead : 5] || "").trim();
+          if (!code || !head) continue;
+
+          batch.push({
+            account_code: code,
+            level: parseInt(String(row[iLevel] || "4")) || 4,
+            major_group: iMajor >= 0 ? String(row[iMajor] || "").trim() || null : null,
+            group_name: iGroup >= 0 ? String(row[iGroup] || "").trim() || null : null,
+            sub_group: iSub >= 0 ? String(row[iSub] || "").trim() || null : null,
+            account_head: head,
+            account_type: iType >= 0 ? String(row[iType] || "").trim() || null : null,
+            normal_balance: iNormal >= 0 ? String(row[iNormal] || "").trim() || null : null,
+            bs_pl: iBsPl >= 0 ? String(row[iBsPl] || "").trim() || null : null,
+            fs_line_item: iFs >= 0 ? String(row[iFs] || "").trim() || null : null,
+            note_no: iNote >= 0 ? String(row[iNote] || "").trim() || null : null,
+            applicable_entities: iApplicable >= 0 ? String(row[iApplicable] || "").trim() || null : null,
+            tally_group_mapping: iTally >= 0 ? String(row[iTally] || "").trim() || null : null,
+            remarks: iRemarks >= 0 ? String(row[iRemarks] || "").trim() || null : null,
+            entity_type: entityType,
+            firm_id: firmId,
+          });
+        }
+
+        // Insert in batches of 50
+        for (let i = 0; i < batch.length; i += 50) {
+          const chunk = batch.slice(i, i + 50);
+          const { error } = await supabase.from("coa_master" as any).insert(chunk as any);
+          if (error) throw error;
+        }
+        totalImported += batch.length;
+      }
+
+      toast({ title: `Imported ${totalImported} COA master entries from ${Object.keys(sheetMap).length} sheet(s)` });
+      loadMasterFromDb();
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setImportingMaster(false);
+      e.target.value = "";
+    }
   }
 
   async function handleMap(ledgerName: string) {
@@ -321,6 +556,30 @@ const CoaMappings = () => {
     XLSX.writeFile(wb, "coa_mappings.xlsx");
   }
 
+  function handleExportMaster() {
+    const rows = masterDbRows.map(m => ({
+      "Account Code": m.account_code,
+      "Level": m.level,
+      "Major Group": m.major_group,
+      "Group": m.group_name,
+      "Sub-Group": m.sub_group,
+      "Account Head": m.account_head,
+      "Account Type": m.account_type,
+      "Normal Balance": m.normal_balance,
+      "BS / PL": m.bs_pl,
+      "FS Line Item": m.fs_line_item,
+      "Note No.": m.note_no,
+      "Applicable Entities": m.applicable_entities,
+      "Tally Group Mapping": m.tally_group_mapping,
+      "Remarks": m.remarks,
+      "Entity Type": m.entity_type,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "COA Master");
+    XLSX.writeFile(wb, "coa_master_export.xlsx");
+  }
+
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -354,16 +613,15 @@ const CoaMappings = () => {
     e.target.value = "";
   }
 
-  // Build aggregated mapped summary (hierarchy-aware, no double counting)
+  // Build aggregated mapped summary (hierarchy-aware)
   const mappedSummary = useMemo(() => {
     if (hierarchyNodes.length === 0 || mappings.length === 0) return [];
     const result: { mapping: CoaMapping; leafTotal: number; childCount: number; children: string[] }[] = [];
     for (const m of mappings) {
       const matchingNode = hierarchyNodes.find(n => n.tally_group_name.toLowerCase() === (m.raw_ledger_name || "").toLowerCase());
       if (!matchingNode) continue;
-      // Check this node isn't already covered by an ancestor mapping
       const ancestorMapping = findAncestorMapping(matchingNode, hierarchyNodes, mappings);
-      if (ancestorMapping) continue; // skip — already nested under a parent mapping
+      if (ancestorMapping) continue;
       const descendants = getDescendantNames(matchingNode.node_id, hierarchyNodes);
       const leafTotal = sumLeafDescendants(matchingNode.node_id, hierarchyNodes);
       result.push({ mapping: m, leafTotal, childCount: descendants.length, children: descendants.slice(0, 10) });
@@ -372,6 +630,24 @@ const CoaMappings = () => {
   }, [hierarchyNodes, mappings]);
 
   const rootNodes = useMemo(() => hierarchyNodes.filter(n => !n.parent_node_id), [hierarchyNodes]);
+
+  // Filtered master data for the master tab
+  const filteredMasterData = useMemo(() => {
+    const source = masterDbRows.length > 0 ? masterDbRows : coaMasterData;
+    return source.filter(r => r.entity_type === masterEntityFilter);
+  }, [masterDbRows, masterEntityFilter]);
+
+  const masterRootRows = useMemo(() => filteredMasterData.filter(r => r.level === 1), [filteredMasterData]);
+
+  const masterStats = useMemo(() => {
+    const source = masterDbRows.length > 0 ? masterDbRows : [];
+    return {
+      total: source.length,
+      corporate: source.filter(r => r.entity_type === "corporate").length,
+      llp: source.filter(r => r.entity_type === "llp").length,
+      nce: source.filter(r => r.entity_type === "nce").length,
+    };
+  }, [masterDbRows]);
 
   if (loading) {
     return (
@@ -400,8 +676,12 @@ const CoaMappings = () => {
         </AlertDescription>
       </Alert>
 
-      <Tabs defaultValue="hierarchy" className="space-y-4">
-        <TabsList>
+      <Tabs defaultValue="master" className="space-y-4">
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="master" className="gap-2">
+            <Database className="h-3.5 w-3.5" /> COA Master
+            {masterStats.total > 0 && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{masterStats.total}</Badge>}
+          </TabsTrigger>
           <TabsTrigger value="hierarchy" className="gap-2">
             <FolderTree className="h-3.5 w-3.5" /> Hierarchy View
           </TabsTrigger>
@@ -414,6 +694,89 @@ const CoaMappings = () => {
           <TabsTrigger value="all">All Mappings</TabsTrigger>
           <TabsTrigger value="summary">Mapped Summary</TabsTrigger>
         </TabsList>
+
+        {/* COA Master Tab */}
+        <TabsContent value="master">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Database className="h-4 w-4" /> COA Master Data
+                  </CardTitle>
+                  <CardDescription>
+                    {masterStats.total > 0
+                      ? `${masterStats.total} entries loaded (Corp: ${masterStats.corporate}, LLP: ${masterStats.llp}, NCE: ${masterStats.nce})`
+                      : "No master data loaded yet. Seed from template or import your own Excel."}
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1"
+                    onClick={handleSeedMaster}
+                    disabled={seedingMaster}
+                  >
+                    {seedingMaster ? <Loader2 className="h-3 w-3 animate-spin" /> : <Database className="h-3 w-3" />}
+                    {masterStats.total > 0 ? "Re-seed from Template" : "Seed from Template"}
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-1" onClick={() => masterFileRef.current?.click()} disabled={importingMaster}>
+                    {importingMaster ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                    Import Excel
+                  </Button>
+                  <input ref={masterFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportMasterFile} />
+                  {masterStats.total > 0 && (
+                    <Button variant="outline" size="sm" className="gap-1" onClick={handleExportMaster}>
+                      <Download className="h-3 w-3" /> Export
+                    </Button>
+                  )}
+                  <a href="/templates/CAFlow_COA_Master_v2.xlsx" download>
+                    <Button variant="ghost" size="sm" className="gap-1">
+                      <FileSpreadsheet className="h-3 w-3" /> Download Template
+                    </Button>
+                  </a>
+                </div>
+              </div>
+              {masterStats.total > 0 && (
+                <div className="flex gap-2 mt-3">
+                  <Select value={masterEntityFilter} onValueChange={setMasterEntityFilter}>
+                    <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="corporate">Corporate</SelectItem>
+                      <SelectItem value="llp">LLP</SelectItem>
+                      <SelectItem value="nce">NCE</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </CardHeader>
+            <CardContent>
+              {filteredMasterData.length === 0 ? (
+                <div className="text-center py-10 space-y-3">
+                  <Database className="h-10 w-10 text-muted-foreground mx-auto" />
+                  <p className="text-sm text-muted-foreground">No COA master data loaded for this entity type.</p>
+                  <p className="text-xs text-muted-foreground">Click "Seed from Template" to load the built-in CAFlow COA Master with 709 accounts across Corporate, LLP, and NCE.</p>
+                </div>
+              ) : (
+                <div className="border rounded-lg overflow-auto max-h-[500px]">
+                  <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
+                    <div className="w-4" />
+                    <span className="w-12">Code</span>
+                    <span className="flex-1">Account Head</span>
+                    <span className="w-12 text-center">BS/PL</span>
+                    <span className="w-16 text-right">Normal</span>
+                    <span className="w-10 text-right">Note</span>
+                    <span className="w-40">FS Line Item</span>
+                  </div>
+                  {masterRootRows.map(row => (
+                    <CoaMasterTreeNode key={`${row.account_code}-${row.entity_type}`} row={row} allRows={filteredMasterData} />
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* Hierarchy View */}
         <TabsContent value="hierarchy">
@@ -444,7 +807,7 @@ const CoaMappings = () => {
                     <span className="w-20 text-right">Closing</span>
                   </div>
                   {rootNodes.map(node => (
-                    <MappingTreeNode key={node.id} node={node} allNodes={hierarchyNodes} mappings={mappings} onMap={handleMap} />
+                    <MappingTreeNode key={node.id} node={node} allNodes={hierarchyNodes} mappings={mappings} masterRows={masterDbRows} />
                   ))}
                 </div>
               )}
@@ -452,7 +815,7 @@ const CoaMappings = () => {
           </Card>
         </TabsContent>
 
-        {/* Mapped Summary — hierarchy-aware */}
+        {/* Mapped Summary */}
         <TabsContent value="summary">
           <Card>
             <CardHeader>
@@ -500,6 +863,7 @@ const CoaMappings = () => {
           </Card>
         </TabsContent>
 
+        {/* Unmapped */}
         <TabsContent value="unmapped">
           <Card>
             <CardHeader>
@@ -573,6 +937,7 @@ const CoaMappings = () => {
           </Card>
         </TabsContent>
 
+        {/* All Mappings */}
         <TabsContent value="all">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
