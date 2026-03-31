@@ -279,20 +279,14 @@ export default function AuditPipeline() {
 
   const blockAFields = ["constitution_confirmed", "registered_address", "agm_dates", "board_changes", "regulatory_actions"];
   const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "capital_transactions", "long_term_borrowings", "director_loans"];
-  const blockCFields = ["cash_balance_above_2l", "debtors_above_180", "creditors_msme", "contingent_liabilities", "events_after_reporting"];
-
   const blockAValid = blockAFields.every(f => questionnaire[f]);
   const blockBValid = blockBFields.every(f => questionnaire[f]);
-  const blockCValid = blockCFields.every(f => questionnaire[f]);
 
-  const isCompanyEntity = form1A.entity_type === "company";
   const isTaxAuditReq = form1A.audit_type === "tax_audit" || form1A.audit_type === "both";
-  const blockB2Fields = ["fa_register_maintained", "physical_verification", "title_deeds", "working_capital_limits", "loans_directors"];
-  const blockB2Valid = !isCompanyEntity || blockB2Fields.every(f => questionnaire[f]);
   const blockDFields = ["turnover_exceeds_limit", "accounting_method", "stock_valuation", "section_40a3", "donations_80g"];
   const blockDValid = !isTaxAuditReq || blockDFields.every(f => questionnaire[f]);
 
-  const questValid = blockAValid && blockBValid && blockCValid && blockB2Valid && blockDValid;
+  const questValid = blockAValid && blockBValid && blockDValid;
   const canCompleteStage1 = block1AValid && questValid;
 
   // ─── Create new engagement ───
