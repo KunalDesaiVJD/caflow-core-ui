@@ -44,16 +44,15 @@ import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
 const STAGES = [
-  { num: 1, label: "Engagement Setup", icon: Building2 },
-  { num: 2, label: "Trial Balance Import", icon: FileText },
-  { num: 3, label: "COA & Financial Statements", icon: Calculator },
-  { num: 4, label: "Scrutiny Engine", icon: Eye },
-  { num: 5, label: "Query Tracker", icon: ClipboardCheck },
-  { num: 6, label: "Workpapers & Risk", icon: Shield },
-  { num: 7, label: "Notes to Accounts/CARO", icon: BookMarked },
-  { num: 8, label: "3CD Reports", icon: FileText },
-  { num: 9, label: "Review & QC", icon: Layers },
-  { num: 10, label: "Sign-off & UDIN", icon: Award },
+  { num: 1, label: 'Engagement Setup', icon: Building2 },
+  { num: 2, label: 'Trial Balance Import', icon: FileText },
+  { num: 3, label: 'COA & Financial Statements', icon: Calculator },
+  { num: 4, label: 'Scrutiny Engine', icon: Eye },
+  { num: 5, label: 'Query Tracker', icon: ClipboardCheck },
+  { num: 6, label: 'Workpapers & Audit Sheet', icon: Shield },
+  { num: 7, label: 'Notes to Accounts & CARO', icon: BookMarked },
+  { num: 8, label: '3CA / 3CB / 3CD Reports', icon: FileText },
+  { num: 9, label: 'Sign-off & UDIN', icon: Award },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
