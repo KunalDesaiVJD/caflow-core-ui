@@ -657,12 +657,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   // Challan balance color
   const getBalanceColor = (challan: Challan) => {
-    const entered = challan.id === selectedChallan?.id
-      ? challanDeducteeTds
-      : 0; // We only know deductees for selected challan
-    const diff = Math.abs(entered - (challan.total_challan_amount || 0));
-    if (diff <= 1) return "bg-emerald-500";
-    if (entered < (challan.total_challan_amount || 0)) return "bg-amber-500";
+    const bd = getChallanBreakdown(challan.id);
+    const unconsumed = (challan.total_challan_amount || 0) - bd.applied;
+    if (Math.abs(unconsumed) <= 1) return "bg-emerald-500";
+    if (unconsumed > 0) return "bg-amber-500";
     return "bg-destructive";
   };
 
