@@ -388,7 +388,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (rate !== null) {
         updates.rate_of_tds = deductee.pan_not_available ? (getRateForSection(value).noPanRate || 20) : rate;
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
         updates.nature_of_payment = nature;
@@ -400,7 +400,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (rate !== null && !deductee.pan_not_available) {
         updates.rate_of_tds = rate;
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
       }
@@ -409,19 +409,14 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (field === "amount_paid_credited") {
       const amt = parseFloat(value) || 0;
       const rate = deductee.rate_of_tds || 0;
-      updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
+      updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
-      // Auto-suggest reason A if below threshold
-      const { threshold } = getRateForSection(deductee.section_code, deductee.deductee_type);
-      if (threshold && amt < threshold && updates.tds_amount === 0) {
-        updates.reason_for_lower_or_nil_deduction = "A";
-      }
     }
 
     if (field === "rate_of_tds") {
       const rate = parseFloat(value) || 0;
       const amt = deductee.amount_paid_credited || 0;
-      updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
+      updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
     }
 
@@ -432,7 +427,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (!panVal || !isValidPan(panVal)) {
         // Invalid or blank PAN
         updates.pan_not_available = true;
-        // Auto-detect type from 4th char if at least 4 chars
         if (panVal && panVal.length >= 4 && PAN_4TH_CHAR_MAP[panVal[3]]) {
           updates.deductee_type = PAN_4TH_CHAR_MAP[panVal[3]];
         } else if (!panVal) {
@@ -440,15 +434,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         }
         const { noPanRate } = getRateForSection(deductee.section_code);
         updates.rate_of_tds = noPanRate || 20;
-        updates.reason_for_lower_or_nil_deduction = "Z";
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
       } else {
         // Valid PAN
         updates.pan_not_available = false;
-        // Auto-detect type from 4th character
         const detectedType = PAN_4TH_CHAR_MAP[panVal[3]] || null;
         if (detectedType) {
           updates.deductee_type = detectedType;
@@ -458,12 +450,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         if (rateFound && rate !== null) {
           updates.rate_of_tds = rate;
           if (deductee.amount_paid_credited) {
-            updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
+            updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100);
             updates.total_tax_deducted = updates.tds_amount;
           }
-        }
-        if (deductee.reason_for_lower_or_nil_deduction === "Z") {
-          updates.reason_for_lower_or_nil_deduction = null;
         }
       }
     }
@@ -897,12 +886,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       </Select>
                                     </TableCell>
                                     <TableCell>
-                                      <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
-                                        <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
-                                        <SelectContent>
-                                          {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                                        </SelectContent>
-                                      </Select>
+                                      <div className="space-y-0.5">
+                                        <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
+                                          <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                                          <SelectContent>
+                                            {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                                          </SelectContent>
+                                        </Select>
+                                        {d.section_code && selectedChallan?.section_code && d.section_code !== selectedChallan.section_code && (
+                                          <span className="text-[9px] text-amber-600 leading-tight block">⚠ Differs from challan</span>
+                                        )}
+                                      </div>
                                     </TableCell>
                                     <TableCell className="text-right">
                                       <Input type="number" className="h-7 text-xs w-24 text-right" defaultValue={d.amount_paid_credited || ""}
@@ -937,17 +931,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       })()}
                                     </TableCell>
                                     <TableCell className="text-right text-xs font-semibold">
-                                      {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
+                                      {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                     </TableCell>
                                     <TableCell>
-                                      {(d.tds_amount === 0 || d.tds_amount === null) ? (
-                                        <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
-                                          <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
-                                          <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
-                                        </Select>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">—</span>
-                                      )}
+                                      <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
+                                        <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
+                                        <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
+                                      </Select>
                                     </TableCell>
                                   </>
                                 )}
