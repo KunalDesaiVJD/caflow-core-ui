@@ -186,9 +186,25 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return filings.filter(f => {
       if (formFilter !== "all" && !(f.tds_forms || []).includes(formFilter)) return false;
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
+
+      // Deleted client filtering
+      const deletedAt = deletedClients.get(f.client_id);
+      if (deletedAt) {
+        const periodEnd = getQuarterEndDate(f.financial_year, f.quarter);
+        const deletionDate = new Date(deletedAt);
+        // If period is after deletion and filing wasn't already filed/processed → hide
+        if (periodEnd >= deletionDate && !["Filed", "Processed"].includes(f.work_status)) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [filings, formFilter, statusFilter]);
+  }, [filings, formFilter, statusFilter, deletedClients]);
+
+  // Check if a filing belongs to a deleted client (for archived styling)
+  const isArchivedFiling = (f: TdsFiling): boolean => {
+    return deletedClients.has(f.client_id);
+  };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
     const firmId = await resolveFirmId();
