@@ -22,9 +22,8 @@ import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award, CalendarDays
+  Eye, BarChart3, BookMarked, Shield, Award,
 } from "lucide-react";
-import { Calendar } from "@/components/ui/calendar";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import NotesToAccountsEditor from "@/pages/NotesToAccounts";
