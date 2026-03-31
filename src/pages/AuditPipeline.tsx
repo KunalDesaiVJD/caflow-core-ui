@@ -206,7 +206,7 @@ export default function AuditPipeline() {
     const sp = searchParams.get("stage");
     if (sp) {
       const stageNum = parseInt(sp, 10);
-      if (stageNum >= 1 && stageNum <= 10) {
+      if (stageNum >= 1 && stageNum <= 9) {
         setActiveStage(stageNum);
         return;
       }
