@@ -30,17 +30,14 @@ import {
   Building2, FileText, Calculator, ClipboardCheck,
   Eye, BookMarked, Shield, Award,
 } from "lucide-react";
-import { EngagementCARO } from "@/components/engagement/EngagementCARO";
-import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
-import NotesToAccountsEditor from "@/pages/NotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
-// PipelineStage7 removed — Notes to Accounts now uses NotesToAccountsEditor only
-import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
+import PipelineStage7Combined from "@/components/pipeline/PipelineStage7Combined";
+import Form3CD from "@/pages/Form3CD";
 
 // ─── Constants ───
 const STAGES = [
