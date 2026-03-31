@@ -321,7 +321,7 @@ export default function AuditPipeline() {
         period_label: form1A.period_label || null,
         status: "planning",
         pipeline_stage: 1,
-        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started", "10": "not_started" },
+        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
       } as any).select("id").single();
       if (error) throw error;
       return data;
