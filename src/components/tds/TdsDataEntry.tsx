@@ -768,14 +768,54 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <Plus size={12} /> Add Challan
                 </Button>
               </div>
-              {challans.length === 0 ? (
+
+              {/* Carry-forward challans */}
+              {carryForwardChallans.length > 0 && (
+                <>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carried Forward from Previous Quarter</p>
+                  {carryForwardChallans.map(cf => {
+                    const avail = (cf.challan.total_challan_amount || 0) - cf.appliedAmount;
+                    return (
+                      <TooltipProvider key={`cf-${cf.challan.id}`}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Card
+                              className={cn("cursor-pointer transition-all hover:shadow-sm bg-accent/30 border-accent",
+                                selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "")}
+                              onClick={() => { setSelectedChallan(cf.challan); fetchDeductees(cf.challan.id); }}>
+                              <CardContent className="p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <CreditCard size={14} className="text-accent-foreground" />
+                                  <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
+                                  <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter}</Badge>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 text-[10px]">
+                                  <div><span className="text-muted-foreground">Original:</span> <span className="font-medium">₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}</span></div>
+                                  <div><span className="text-muted-foreground">Used:</span> <span className="font-medium">₹{cf.appliedAmount.toLocaleString("en-IN")}</span></div>
+                                  <div><span className="text-muted-foreground">Available:</span> <span className="font-semibold text-emerald-600">₹{avail.toLocaleString("en-IN")}</span></div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          </TooltipTrigger>
+                          <TooltipContent>Carried forward from {cf.fromQuarter} FY {selFy} · Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")} · Used: ₹{cf.appliedAmount.toLocaleString("en-IN")}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  })}
+                  <div className="border-t border-dashed my-1" />
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Current Quarter Challans</p>
+                </>
+              )}
+
+              {challans.length === 0 && carryForwardChallans.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-8 text-center text-muted-foreground text-sm">
                     No challans yet. Add your first challan.
                   </CardContent>
                 </Card>
               ) : challans.map(c => {
-                const deducteeCount = c.id === selectedChallan?.id ? deductees.length : 0;
+                const bd = getChallanBreakdown(c.id);
+                const unconsumed = (c.total_challan_amount || 0) - bd.applied;
                 return (
                   <Card key={c.id}
                     className={cn("cursor-pointer transition-all hover:shadow-sm",
@@ -793,17 +833,29 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
                             {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
                           </p>
-                          <p className="text-sm font-bold text-foreground">
-                            ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}
-                            <span className="text-xs font-normal text-muted-foreground ml-2">
-                              {deducteeCount > 0 ? `${deducteeCount} deductees` : ""}
-                            </span>
-                          </p>
+                          {/* Detailed breakdown */}
+                          <div className="text-[10px] space-y-0.5 mt-1 border-t pt-1 border-border/50">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
+                            {bd.interest > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Interest</span><span>₹{bd.interest.toLocaleString("en-IN")}</span></div>}
+                            {bd.surcharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Surcharge</span><span>₹{bd.surcharge.toLocaleString("en-IN")}</span></div>}
+                            {bd.lateFees > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Late Fees</span><span>₹{bd.lateFees.toLocaleString("en-IN")}</span></div>}
+                            <div className="flex justify-between font-medium border-t border-border/30 pt-0.5">
+                              <span>Applied Total</span><span>₹{bd.applied.toLocaleString("en-IN")}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Challan Total</span>
+                              <span className="font-semibold">₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                            </div>
+                            <div className={cn("flex justify-between font-semibold",
+                              Math.abs(unconsumed) <= 1 ? "text-emerald-600" : unconsumed > 0 ? "text-amber-600" : "text-destructive")}>
+                              <span>{Math.abs(unconsumed) <= 1 ? "Fully Utilised" : unconsumed > 0 ? "Unconsumed" : "Over-applied"}</span>
+                              {Math.abs(unconsumed) > 1 && <span>₹{Math.abs(unconsumed).toLocaleString("en-IN")}</span>}
+                            </div>
+                          </div>
                           {/* Balance bar */}
                           <div className="w-full h-1.5 rounded-full bg-muted mt-1 overflow-hidden">
                             <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
-                              style={{ width: c.total_challan_amount > 0 && c.id === selectedChallan?.id
-                                ? `${Math.min(100, (challanDeducteeTds / c.total_challan_amount) * 100)}%` : "0%" }} />
+                              style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
                           </div>
                         </div>
                         <div className="flex gap-1 ml-2">
