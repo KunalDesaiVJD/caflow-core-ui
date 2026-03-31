@@ -221,10 +221,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setFiling(match as TdsFiling || null);
     if (match) {
       await fetchChallans((match as TdsFiling).id);
+      await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
     } else {
       setChallans([]);
       setDeductees([]);
       setSelectedChallan(null);
+      setCarryForwardChallans([]);
     }
     setFilingLoaded(true);
     setLoading(false);
@@ -236,6 +238,45 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setDeductees([]);
     setSelectedChallan(null);
     setFilingLoaded(false);
+    setCarryForwardChallans([]);
+    setAllChallanDeductees({});
+  };
+
+  // ─── Carry Forward: fetch prior quarter challans with unconsumed balance ───
+  const fetchCarryForwardChallans = async (clientId: string, fy: string, quarter: string, form: string) => {
+    const qNum = parseInt(quarter.replace("Q", ""));
+    if (qNum <= 1) { setCarryForwardChallans([]); return; }
+    const priorQuarters = Array.from({ length: qNum - 1 }, (_, i) => `Q${i + 1}`);
+    // Fetch all filings for prior quarters
+    const { data: priorFilings } = await supabase.from("tds_filings").select("id, quarter")
+      .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
+    if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+    const priorFilingIds = priorFilings.map(f => f.id);
+    // Fetch challans from prior quarters
+    const { data: priorChallans } = await supabase.from("tds_challans").select("*")
+      .in("filing_id", priorFilingIds).order("deposit_date");
+    if (!priorChallans || priorChallans.length === 0) { setCarryForwardChallans([]); return; }
+    // Fetch ALL deductees linked to these challans (across all quarters)
+    const challanIds = priorChallans.map(c => c.id);
+    const { data: allDeds } = await supabase.from("tds_deductees").select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+      .in("challan_id", challanIds);
+    // Calculate applied per challan
+    const appliedMap = new Map<string, number>();
+    (allDeds || []).forEach((d: any) => {
+      const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
+      appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
+    });
+    // Filter challans with unconsumed balance
+    const carried: { challan: Challan; fromQuarter: string; appliedAmount: number }[] = [];
+    priorChallans.forEach((c: any) => {
+      const applied = appliedMap.get(c.id) || 0;
+      const unconsumed = (c.total_challan_amount || 0) - applied;
+      if (unconsumed > 0) {
+        const filingQ = priorFilings.find(f => f.id === c.filing_id);
+        carried.push({ challan: c as Challan, fromQuarter: filingQ?.quarter || "?", appliedAmount: applied });
+      }
+    });
+    setCarryForwardChallans(carried);
   };
 
   const fetchChallans = async (filingId: string) => {
@@ -243,19 +284,32 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .eq("filing_id", filingId).order("deposit_date", { ascending: true });
     const list = (data || []) as Challan[];
     setChallans(list);
+    // Fetch deductee summaries for all challans
     if (list.length > 0) {
+      const challanIds = list.map(c => c.id);
+      const { data: allDeds } = await supabase.from("tds_deductees").select("*")
+        .in("challan_id", challanIds).order("created_at");
+      const grouped: Record<string, Deductee[]> = {};
+      (allDeds || []).forEach((d: any) => {
+        if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
+        grouped[d.challan_id].push(d as Deductee);
+      });
+      setAllChallanDeductees(grouped);
       setSelectedChallan(list[0]);
-      fetchDeductees(list[0].id);
+      setDeductees(grouped[list[0].id] || []);
     } else {
       setSelectedChallan(null);
       setDeductees([]);
+      setAllChallanDeductees({});
     }
   };
 
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from("tds_deductees").select("*")
       .eq("challan_id", challanId).order("created_at", { ascending: true });
-    setDeductees((data || []) as Deductee[]);
+    const list = (data || []) as Deductee[];
+    setDeductees(list);
+    setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
   };
 
   const selectChallan = (c: Challan) => {
