@@ -166,6 +166,7 @@ const App = () => (
               <Route path="/audit/3cd" element={<Form3CD />} />
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
               <Route path="/audit/comparative" element={<ComparativeStatements />} />
+              <Route path="/audit/master-config" element={<AuditMasterConfig />} />
               <Route path="/audit/:clientId/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />
