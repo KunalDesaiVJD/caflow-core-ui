@@ -178,6 +178,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [filing, setFiling] = useState<TdsFiling | null>(null);
   const [challans, setChallans] = useState<Challan[]>([]);
   const [deductees, setDeductees] = useState<Deductee[]>([]);
+  const [allChallanDeductees, setAllChallanDeductees] = useState<Record<string, Deductee[]>>({});
+  const [carryForwardChallans, setCarryForwardChallans] = useState<{ challan: Challan; fromQuarter: string; appliedAmount: number }[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
   const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
