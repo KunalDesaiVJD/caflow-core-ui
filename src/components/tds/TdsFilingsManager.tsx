@@ -108,6 +108,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
+  const [deletedClients, setDeletedClients] = useState<Map<string, string>>(new Map()); // client_id -> deleted_at
   const [loading, setLoading] = useState(true);
   const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [quarterFilter, setQuarterFilter] = useState("all");
