@@ -416,7 +416,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (field === "rate_of_tds") {
       const rate = parseFloat(value) || 0;
       const amt = deductee.amount_paid_credited || 0;
-      updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
+      updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
     }
 
