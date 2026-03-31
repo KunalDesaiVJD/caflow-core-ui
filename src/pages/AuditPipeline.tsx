@@ -326,8 +326,10 @@ export default function AuditPipeline() {
     onSuccess: (data) => {
       toast.success("Engagement created");
       setSelectedEngId(data.id);
+      setActiveStage(1);
       setShowNewEng(false);
       queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] });
+      navigate(`/audit/pipeline/${data.id}?stage=1`, { replace: true });
     },
     onError: (e: any) => toast.error(e.message),
   });

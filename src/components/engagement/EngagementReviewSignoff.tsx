@@ -7,11 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
   CheckCircle, XCircle, Upload, FileText, Shield, Loader2,
   ExternalLink, Package, Download, Lock, Award, Share2, AlertTriangle,
+  ChevronDown,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -203,10 +206,10 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
         sign_off_date: new Date().toISOString(),
         signed_at: new Date().toISOString(),
         signed_by: user?.id,
-        pipeline_stage: 10,
+        pipeline_stage: 9,
         stage_statuses: {
           ...(engagement.stage_statuses || {}),
-          "10": "complete",
+          "9": "complete",
         },
       };
 
@@ -319,56 +322,143 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
 
   return (
     <div className="space-y-6">
-      {/* Engagement Review Summary */}
+      {/* ═══ SECTION 1: AUDIT SUMMARY ═══ */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5 text-primary" />
-            Engagement Summary
+            Section 1 — Audit Summary
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
+          {/* Engagement overview */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span className="text-muted-foreground">Client</span>
-              <p className="font-semibold text-foreground">{client?.name || "—"}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Financial Year</span>
-              <p className="font-semibold text-foreground">{engagement.financial_year || "—"}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Audit Type</span>
-              <p className="font-semibold text-foreground capitalize">{engagement.audit_type || "Statutory"}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Entity Type</span>
-              <p className="font-semibold text-foreground capitalize">{engagement.entity_type || client?.entity_type || "—"}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Total Findings</span>
-              <p className="font-semibold text-foreground">
-                {findingsStats.total}
-                <span className="text-xs text-muted-foreground ml-1">
-                  ({findingsStats.accepted}A / {findingsStats.queried}Q / {findingsStats.overridden}O)
-                </span>
-              </p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Notes to Accounts</span>
-              <p className="font-semibold text-foreground">{notesCount}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">CARO Applicable</span>
-              <p className="font-semibold text-foreground">{engagement.requires_caro || engagement.caro_applicable ? "Yes" : "No"}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Reports Generated</span>
-              <div className="flex flex-wrap gap-1 mt-0.5">
-                {reportTypes.map(r => <Badge key={r} variant="secondary" className="text-[10px]">{r}</Badge>)}
+            {[
+              { label: 'Client', value: client?.name || '—' },
+              { label: 'Financial Year', value: engagement?.financial_year || '—' },
+              { label: 'Entity Type', value: engagement?.entity_type || '—' },
+              { label: 'Audit Type', value: engagement?.audit_type || '—' },
+            ].map(item => (
+              <div key={item.label}>
+                <span className="text-muted-foreground">{item.label}</span>
+                <p className="font-semibold text-foreground capitalize">{item.value}</p>
               </div>
+            ))}
+          </div>
+
+          <Separator />
+
+          {/* Scrutiny stats */}
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Scrutiny Findings Summary</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { label: 'Total Findings', value: findingsStats.total, color: 'text-foreground' },
+                { label: 'Accepted / Resolved', value: findingsStats.accepted, color: 'text-green-600' },
+                { label: 'Queried', value: findingsStats.queried, color: 'text-amber-600' },
+                { label: 'Overridden', value: findingsStats.overridden, color: 'text-blue-600' },
+              ].map(stat => (
+                <div key={stat.label} className="text-center p-3 rounded-lg bg-muted/50">
+                  <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{stat.label}</p>
+                </div>
+              ))}
             </div>
           </div>
+
+          <Separator />
+
+          {/* Query remarks — collapsible */}
+          <Collapsible>
+            <CollapsibleTrigger className="flex items-center gap-2 text-sm font-semibold text-foreground hover:text-primary transition-colors w-full">
+              <ChevronDown className="w-4 h-4" />
+              Query Remarks & Resolutions
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="mt-3 p-4 rounded-lg bg-muted/30 border border-border">
+                <p className="text-sm text-muted-foreground">
+                  Query remarks and client communications will be displayed here.
+                  This section shows all raised, resolved, and overridden findings
+                  with CA remarks for the audit file.
+                </p>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+
+          <Separator />
+
+          {/* Completion status matrix */}
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-foreground">Stage Completion Status</h4>
+            <div className="space-y-1.5">
+              {[
+                { stage: 'TB Import & COA Mapping', key: '2' },
+                { stage: 'Financial Statements', key: '3' },
+                { stage: 'Scrutiny Engine', key: '4' },
+                { stage: 'Query Tracker', key: '5' },
+                { stage: 'Workpapers & Audit Sheet', key: '6' },
+                { stage: 'Notes to Accounts & CARO', key: '7' },
+                { stage: '3CA / 3CB / 3CD Reports', key: '8' },
+              ].map(item => {
+                const status = (engagement?.stage_statuses as any)?.[item.key] || 'not_started';
+                return (
+                  <div key={item.key} className="flex items-center justify-between py-1.5 px-3 rounded bg-muted/30 text-sm">
+                    <span className="text-foreground">{item.stage}</span>
+                    <Badge variant={status === 'complete' ? 'default' : 'secondary'} className="text-[10px]">
+                      {status === 'complete' ? '✓ Complete' : status === 'in_progress' ? 'In Progress' : 'Not Started'}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ═══ SECTION 2: FINANCIAL STATEMENTS & REPORTS PREVIEW ═══ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-primary" />
+            Section 2 — Financial Statements & Reports Preview
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Review all outputs before signing off. Click any item to view.
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {[
+              { label: 'Balance Sheet', icon: '📊', available: true },
+              { label: 'Statement of P&L', icon: '📈', available: true },
+              { label: 'Notes to Accounts', icon: '📋', available: notesCount > 0, count: notesCount },
+              { label: 'CARO 2020 Report', icon: '🔍', available: engagement?.caro_applicable || false },
+              { label: 'Form 3CD', icon: '📝', available: engagement?.requires_3cd || false },
+              { label: 'Form 3CA / 3CB', icon: '📄', available: engagement?.requires_3ca || engagement?.requires_3cb || false },
+            ].map(item => (
+              <div key={item.label} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
+                <div className="flex items-center gap-2">
+                  <span>{item.icon}</span>
+                  <span className="text-sm font-medium text-foreground">{item.label}</span>
+                  {item.count !== undefined && item.count > 0 && (
+                    <Badge variant="secondary" className="text-[9px]">{item.count}</Badge>
+                  )}
+                </div>
+                {item.available ? (
+                  <Badge className="bg-green-500/15 text-green-700 border-green-300 text-[10px]">Ready</Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">N/A</Badge>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-muted-foreground italic">
+            Note: Full embedded preview of financial statements will be
+            available in the next release. Use the Download Bundle button below to
+            download and review all documents.
+          </p>
         </CardContent>
       </Card>
 
@@ -484,7 +574,7 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-primary">
               <Shield className="w-5 h-5" />
-              Stage 10 — Final Sign-Off
+              Stage 9 — Final Sign-Off
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
