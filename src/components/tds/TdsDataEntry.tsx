@@ -928,6 +928,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs">Date</TableHead>
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TCS</TableHead>
+                                  <TableHead className="text-xs text-right">Interest</TableHead>
+                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               ) : (
@@ -940,6 +942,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs">Date</TableHead>
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TDS</TableHead>
+                                  <TableHead className="text-xs text-right">Interest</TableHead>
+                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               )}
