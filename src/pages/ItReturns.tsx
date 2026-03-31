@@ -118,6 +118,23 @@ function getClientSubTab(classification: string | undefined): FilingSubTab {
   return "non_audited";
 }
 
+function isUnsavedItrProfile(profile: Pick<ItrProfile, "id">): boolean {
+  return profile.id.startsWith("virtual_") || profile.id.startsWith("new_");
+}
+
+function scoreItrProfile(profile: Partial<ItrProfile>): number {
+  let score = 0;
+  if (profile.filing_status && profile.filing_status !== "Data Pending") score += 8;
+  if (profile.itr_form) score += 4;
+  if (profile.date_filed) score += 4;
+  if (profile.acknowledgment_no) score += 3;
+  if (profile.upload_by) score += 2;
+  if (profile.prepared_by) score += 2;
+  if (profile.checked_by) score += 2;
+  if (profile.remarks) score += 1;
+  return score;
+}
+
 // ─── Main Component ───
 const ItReturns = () => {
   const navigate = useNavigate();
@@ -194,8 +211,11 @@ const ItReturns = () => {
       // Fetch client details
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type")
-        .in("id", itrClientIds);
+        .select("id, name, pan, entity_type, responsible_person_id")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .in("id", itrClientIds)
+        .order("name");
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
       // Fetch FY classifications for the selected AY
@@ -222,10 +242,21 @@ const ItReturns = () => {
       }
 
       const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
-      const existingClientIds = new Set((pData || []).map(p => p.client_id));
+      const canonicalProfilesByClient = new Map<string, any>();
+      for (const profile of (pData || [])) {
+        const clientId = profile.client_id;
+        if (!clientId || !clientMap.has(clientId)) continue;
+        const existing = canonicalProfilesByClient.get(clientId);
+        if (!existing || scoreItrProfile(profile) > scoreItrProfile(existing)) {
+          canonicalProfilesByClient.set(clientId, profile);
+        }
+      }
+
+      const canonicalProfiles = Array.from(canonicalProfilesByClient.values());
+      const existingClientIds = new Set(canonicalProfiles.map(p => p.client_id));
       const enriched: ItrProfile[] = [];
 
-      for (const p of (pData || [])) {
+      for (const p of canonicalProfiles) {
         const cl = clientMap.get(p.client_id || "");
         const wg = wgMap.get(p.itr_work_group_id || "");
         enriched.push({
@@ -240,7 +271,34 @@ const ItReturns = () => {
         });
       }
 
-      return enriched;
+      for (const client of (cData || [])) {
+        if (existingClientIds.has(client.id)) continue;
+        enriched.push({
+          id: `virtual_${client.id}_${selectedAY}`,
+          client_id: client.id,
+          firm_id: firmId,
+          financial_year: fyFromAY || null,
+          itr_form: null,
+          filing_status: "Data Pending",
+          itr_work_group_id: null,
+          assigned_to: client.responsible_person_id || null,
+          date_data_received: null,
+          date_filed: null,
+          acknowledgment_no: null,
+          assessment_year: selectedAY,
+          checked_by: null,
+          prepared_by: null,
+          remarks: null,
+          upload_by: null,
+          client_name: client.name || "Unknown",
+          client_pan: client.pan || "",
+          entity_type: client.entity_type || "",
+          client_classification: classMap.get(client.id) || "",
+          work_group_name: clientWgMap.get(client.id) || "",
+        });
+      }
+
+      return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
     enabled: itrClientIds.length > 0,
   });
@@ -271,7 +329,7 @@ const ItReturns = () => {
 
   // ─── Inline update handler ───
   const handleInlineUpdate = async (profile: ItrProfile, field: string, value: any) => {
-    const isNew = profile.id.startsWith("new_");
+    const isNew = isUnsavedItrProfile(profile);
     try {
       if (isNew) {
         const payload: any = {
@@ -279,7 +337,17 @@ const ItReturns = () => {
           firm_id: firmId,
           assessment_year: selectedAY,
           financial_year: profile.financial_year,
-          filing_status: "Data Pending",
+          filing_status: profile.filing_status || "Data Pending",
+          assigned_to: profile.assigned_to || null,
+          itr_form: profile.itr_form || null,
+          itr_work_group_id: profile.itr_work_group_id || null,
+          date_data_received: profile.date_data_received || null,
+          date_filed: profile.date_filed || null,
+          acknowledgment_no: profile.acknowledgment_no || null,
+          upload_by: profile.upload_by || null,
+          prepared_by: profile.prepared_by || null,
+          checked_by: profile.checked_by || null,
+          remarks: profile.remarks || null,
           [field]: value || null,
         };
         const { error } = await supabase.from("itr_profiles").insert(payload);
@@ -430,6 +498,10 @@ function FilingTab({
   const [addRowClientId, setAddRowClientId] = useState("");
   const [addRowClients, setAddRowClients] = useState<{id:string;name:string;pan:string|null;entity_type?:string|null}[]>([]);
   const [addRowSearch, setAddRowSearch] = useState("");
+  const representedClientIds = useMemo(
+    () => new Set((allProfiles as ItrProfile[]).map((profile) => profile.client_id).filter(Boolean)),
+    [allProfiles]
+  );
 
   const openAddRowDialog = async () => {
     // Fetch all clients with ITR service active
@@ -440,7 +512,12 @@ function FilingTab({
     const clientIds = [...new Set((cs || []).map(c => c.client_id))];
     if (!clientIds.length) { toast({ title: "No clients with ITR service enabled", variant: "destructive" }); return; }
     const { data: clients } = await supabase.from("clients").select("id, name, pan, entity_type").eq("is_draft", false).is("deleted_at", null).in("id", clientIds).order("name");
-    setAddRowClients((clients || []) as any);
+    const availableClients = (clients || []).filter((client: any) => !representedClientIds.has(client.id));
+    if (availableClients.length === 0) {
+      toast({ title: "All ITR service clients already appear automatically" });
+      return;
+    }
+    setAddRowClients(availableClients as any);
     setAddRowClientId("");
     setAddRowSearch("");
     setShowAddRowDialog(true);
@@ -448,6 +525,10 @@ function FilingTab({
 
   const handleAddRow = async () => {
     if (!addRowClientId) { toast({ title: "Please select a client", variant: "destructive" }); return; }
+    if (representedClientIds.has(addRowClientId)) {
+      toast({ title: "This client already exists in the ITR table", variant: "destructive" });
+      return;
+    }
     setAddingRow(true);
     try {
       const selectedClient = addRowClients.find(c => c.id === addRowClientId);
@@ -480,7 +561,7 @@ function FilingTab({
   );
 
   const handleDeleteRow = async (profile: ItrProfile) => {
-    if (!profile.id || profile.id.startsWith("new_") || !window.confirm(`Delete ITR row for ${profile.client_name}?`)) return;
+    if (!profile.id || isUnsavedItrProfile(profile) || !window.confirm(`Delete ITR row for ${profile.client_name}?`)) return;
     const { error } = await supabase.from("itr_profiles").delete().eq("id", profile.id);
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
