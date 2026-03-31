@@ -388,7 +388,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (rate !== null) {
         updates.rate_of_tds = deductee.pan_not_available ? (getRateForSection(value).noPanRate || 20) : rate;
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
         updates.nature_of_payment = nature;
@@ -400,7 +400,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (rate !== null && !deductee.pan_not_available) {
         updates.rate_of_tds = rate;
         if (deductee.amount_paid_credited) {
-          updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100);
           updates.total_tax_deducted = updates.tds_amount;
         }
       }
@@ -409,13 +409,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (field === "amount_paid_credited") {
       const amt = parseFloat(value) || 0;
       const rate = deductee.rate_of_tds || 0;
-      updates.tds_amount = Math.round(amt * rate / 100 * 100) / 100;
+      updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
-      // Auto-suggest reason A if below threshold
-      const { threshold } = getRateForSection(deductee.section_code, deductee.deductee_type);
-      if (threshold && amt < threshold && updates.tds_amount === 0) {
-        updates.reason_for_lower_or_nil_deduction = "A";
-      }
     }
 
     if (field === "rate_of_tds") {
