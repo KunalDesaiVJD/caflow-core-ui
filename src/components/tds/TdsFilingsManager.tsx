@@ -185,28 +185,50 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       toast({ title: "Warning", description: "Acknowledgment number is missing for this filing.", variant: "default" });
     }
 
-    const { error } = await supabase.from("tds_filings").update({
+    const updatePayload: Record<string, any> = {
       work_status: newStatus,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
-    }).eq("id", filing.id);
+    };
+
+    // Auto-set filing date when status changes to 'Filed' and date is blank
+    if (newStatus === "Filed" && !filing.date_of_filing) {
+      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD for date input
+      updatePayload.date_of_filing = today;
+    }
+
+    const { error } = await supabase.from("tds_filings").update(updatePayload).eq("id", filing.id);
 
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
       await logAuditEntry(filing.id, "STATUS_CHANGE", oldStatus, newStatus);
+      if (updatePayload.date_of_filing) {
+        await logAuditEntry(filing.id, "FILING_DATE_SET", null, updatePayload.date_of_filing, "Auto-set on filing");
+      }
       fetchFilings();
     }
   };
 
   const handleInlineUpdate = async (filing: TdsFiling, field: string, value: any) => {
+    // Prevent changing filing date after status is 'Filed'
+    if (field === "date_of_filing" && filing.work_status === "Filed" && filing.date_of_filing) {
+      toast({ title: "Locked", description: "Filing date cannot be modified after filing.", variant: "destructive" });
+      return;
+    }
     const { error } = await supabase.from("tds_filings").update({
       [field]: value,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else fetchFilings();
+    else {
+      // If setting date on a Filed row for the first time, log it
+      if (field === "date_of_filing" && filing.work_status === "Filed") {
+        await logAuditEntry(filing.id, "FILING_DATE_SET", filing.date_of_filing || null, value, "Historical correction");
+      }
+      fetchFilings();
+    }
   };
 
   const openCopyDialog = (f: TdsFiling) => {
@@ -559,9 +581,30 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         {format(getDueDate(f.financial_year, f.quarter), "dd/MM/yyyy")}
                       </TableCell>
                       <TableCell>
-                        <Input type="date" className="h-7 w-32 text-xs" defaultValue={f.date_of_filing || ""}
-                          onBlur={e => { if (e.target.value !== (f.date_of_filing || "")) handleInlineUpdate(f, "date_of_filing", e.target.value || null); }}
-                        />
+                        {(() => {
+                          const isFiled = f.work_status === "Filed" || f.work_status === "Processed";
+                          const hasDate = !!f.date_of_filing;
+                          const isLocked = isFiled && hasDate;
+                          return (
+                            <div className="relative group">
+                              <Input
+                                type="date"
+                                className={cn("h-7 w-32 text-xs", isLocked && "bg-muted cursor-not-allowed opacity-70")}
+                                defaultValue={f.date_of_filing || ""}
+                                disabled={isLocked}
+                                onBlur={e => {
+                                  if (e.target.value !== (f.date_of_filing || ""))
+                                    handleInlineUpdate(f, "date_of_filing", e.target.value || null);
+                                }}
+                              />
+                              {isLocked && (
+                                <span className="absolute -top-5 left-0 hidden group-hover:block text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap z-20">
+                                  🔒 Filing date locked after filing
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input className="h-7 w-28 text-xs" defaultValue={f.acknowledgment_number || ""}
