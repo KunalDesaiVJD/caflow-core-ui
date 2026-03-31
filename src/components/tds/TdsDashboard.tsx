@@ -229,10 +229,11 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     };
   }, [filteredFilings]);
 
-  // ═══ Matrix Data ═══
+  // ═══ Matrix Data — exclude deleted clients ═══
   const matrixData = useMemo(() => {
     const clientFilings: Record<string, Record<string, TdsFiling[]>> = {};
     const relevantFilings = filings.filter(f => {
+      if (deletedClientIds.has(f.client_id)) return false;
       if (f.financial_year !== fyFilter) return false;
       if (formTab !== "all" && !f.tds_forms?.includes(formTab)) return false;
       if (clientFilter !== "all" && f.client_id !== clientFilter) return false;
@@ -244,7 +245,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       clientFilings[f.client_id][f.quarter].push(f);
     }
     return clientFilings;
-  }, [filings, fyFilter, formTab, clientFilter]);
+  }, [filings, fyFilter, formTab, clientFilter, deletedClientIds]);
 
   // ═══ Rate Master filtering ═══
   const filteredRates = useMemo(() => {
