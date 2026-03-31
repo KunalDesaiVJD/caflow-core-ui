@@ -65,6 +65,7 @@ interface Deductee {
   date_of_payment: string | null; date_of_deduction: string | null;
   rate_of_tds: number | null; tds_amount: number | null;
   surcharge_amount: number; cess_amount: number; total_tax_deducted: number | null;
+  interest_amount: number; late_fees_amount: number;
   lower_deduction_certificate_no: string | null;
   reason_for_lower_or_nil_deduction: string | null;
   country_of_residence: string | null;
@@ -177,6 +178,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [filing, setFiling] = useState<TdsFiling | null>(null);
   const [challans, setChallans] = useState<Challan[]>([]);
   const [deductees, setDeductees] = useState<Deductee[]>([]);
+  const [allChallanDeductees, setAllChallanDeductees] = useState<Record<string, Deductee[]>>({});
+  const [carryForwardChallans, setCarryForwardChallans] = useState<{ challan: Challan; fromQuarter: string; appliedAmount: number }[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
   const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
@@ -218,10 +221,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setFiling(match as TdsFiling || null);
     if (match) {
       await fetchChallans((match as TdsFiling).id);
+      await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
     } else {
       setChallans([]);
       setDeductees([]);
       setSelectedChallan(null);
+      setCarryForwardChallans([]);
     }
     setFilingLoaded(true);
     setLoading(false);
@@ -233,6 +238,45 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setDeductees([]);
     setSelectedChallan(null);
     setFilingLoaded(false);
+    setCarryForwardChallans([]);
+    setAllChallanDeductees({});
+  };
+
+  // ─── Carry Forward: fetch prior quarter challans with unconsumed balance ───
+  const fetchCarryForwardChallans = async (clientId: string, fy: string, quarter: string, form: string) => {
+    const qNum = parseInt(quarter.replace("Q", ""));
+    if (qNum <= 1) { setCarryForwardChallans([]); return; }
+    const priorQuarters = Array.from({ length: qNum - 1 }, (_, i) => `Q${i + 1}`);
+    // Fetch all filings for prior quarters
+    const { data: priorFilings } = await supabase.from("tds_filings").select("id, quarter")
+      .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
+    if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+    const priorFilingIds = priorFilings.map(f => f.id);
+    // Fetch challans from prior quarters
+    const { data: priorChallans } = await supabase.from("tds_challans").select("*")
+      .in("filing_id", priorFilingIds).order("deposit_date");
+    if (!priorChallans || priorChallans.length === 0) { setCarryForwardChallans([]); return; }
+    // Fetch ALL deductees linked to these challans (across all quarters)
+    const challanIds = priorChallans.map(c => c.id);
+    const { data: allDeds } = await supabase.from("tds_deductees").select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+      .in("challan_id", challanIds);
+    // Calculate applied per challan
+    const appliedMap = new Map<string, number>();
+    (allDeds || []).forEach((d: any) => {
+      const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
+      appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
+    });
+    // Filter challans with unconsumed balance
+    const carried: { challan: Challan; fromQuarter: string; appliedAmount: number }[] = [];
+    priorChallans.forEach((c: any) => {
+      const applied = appliedMap.get(c.id) || 0;
+      const unconsumed = (c.total_challan_amount || 0) - applied;
+      if (unconsumed > 0) {
+        const filingQ = priorFilings.find(f => f.id === c.filing_id);
+        carried.push({ challan: c as Challan, fromQuarter: filingQ?.quarter || "?", appliedAmount: applied });
+      }
+    });
+    setCarryForwardChallans(carried);
   };
 
   const fetchChallans = async (filingId: string) => {
@@ -240,19 +284,32 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .eq("filing_id", filingId).order("deposit_date", { ascending: true });
     const list = (data || []) as Challan[];
     setChallans(list);
+    // Fetch deductee summaries for all challans
     if (list.length > 0) {
+      const challanIds = list.map(c => c.id);
+      const { data: allDeds } = await supabase.from("tds_deductees").select("*")
+        .in("challan_id", challanIds).order("created_at");
+      const grouped: Record<string, Deductee[]> = {};
+      (allDeds || []).forEach((d: any) => {
+        if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
+        grouped[d.challan_id].push(d as Deductee);
+      });
+      setAllChallanDeductees(grouped);
       setSelectedChallan(list[0]);
-      fetchDeductees(list[0].id);
+      setDeductees(grouped[list[0].id] || []);
     } else {
       setSelectedChallan(null);
       setDeductees([]);
+      setAllChallanDeductees({});
     }
   };
 
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from("tds_deductees").select("*")
       .eq("challan_id", challanId).order("created_at", { ascending: true });
-    setDeductees((data || []) as Deductee[]);
+    const list = (data || []) as Deductee[];
+    setDeductees(list);
+    setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
   };
 
   const selectChallan = (c: Challan) => {
@@ -516,28 +573,41 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   // ─── Summary stats ───
+  const getChallanBreakdown = (challanId: string) => {
+    const deds = challanId === selectedChallan?.id ? deductees : (allChallanDeductees[challanId] || []);
+    const tds = deds.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
+    const interest = deds.reduce((s, d) => s + (d.interest_amount || 0), 0);
+    const surcharge = deds.reduce((s, d) => s + (d.surcharge_amount || 0), 0);
+    const lateFees = deds.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
+    const applied = tds + interest + surcharge + lateFees;
+    return { tds, interest, surcharge, lateFees, applied, count: deds.length };
+  };
+
   const challanDeducteeTds = useMemo(() => {
     if (!selectedChallan) return 0;
-    return deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-  }, [deductees, selectedChallan]);
+    return getChallanBreakdown(selectedChallan.id).applied;
+  }, [deductees, selectedChallan, allChallanDeductees]);
 
   const summaryStats = useMemo(() => {
     const totalChallans = challans.length;
     const totalDeductees = deductees.length;
     const totalPayment = deductees.reduce((s, d) => s + (d.amount_paid_credited || 0), 0);
-    const totalTds = deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-    return { totalChallans, totalDeductees, totalPayment, totalTds };
+    const totalTds = deductees.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
+    const totalInterest = deductees.reduce((s, d) => s + (d.interest_amount || 0), 0);
+    const totalLateFees = deductees.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
+    return { totalChallans, totalDeductees, totalPayment, totalTds, totalInterest, totalLateFees };
   }, [challans, deductees]);
 
   // Auto-match challans
   const autoMatchChallans = () => {
-    const challanTdsMap = new Map<string, number>();
+    const challanTotMap = new Map<string, number>();
     deductees.forEach(d => {
-      challanTdsMap.set(d.challan_id, (challanTdsMap.get(d.challan_id) || 0) + (d.total_tax_deducted || d.tds_amount || 0));
+      const rowTotal = Math.round(d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
+      challanTotMap.set(d.challan_id, (challanTotMap.get(d.challan_id) || 0) + rowTotal);
     });
     const matched: string[] = [], unmatched: string[] = [];
     challans.forEach(c => {
-      const entered = challanTdsMap.get(c.id) || 0;
+      const entered = challanTotMap.get(c.id) || 0;
       if (Math.abs(entered - c.total_challan_amount) <= 1) matched.push(c.bsr_code || c.id.slice(0, 8));
       else unmatched.push(c.bsr_code || c.id.slice(0, 8));
     });
@@ -587,12 +657,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   // Challan balance color
   const getBalanceColor = (challan: Challan) => {
-    const entered = challan.id === selectedChallan?.id
-      ? challanDeducteeTds
-      : 0; // We only know deductees for selected challan
-    const diff = Math.abs(entered - (challan.total_challan_amount || 0));
-    if (diff <= 1) return "bg-emerald-500";
-    if (entered < (challan.total_challan_amount || 0)) return "bg-amber-500";
+    const bd = getChallanBreakdown(challan.id);
+    const unconsumed = (challan.total_challan_amount || 0) - bd.applied;
+    if (Math.abs(unconsumed) <= 1) return "bg-emerald-500";
+    if (unconsumed > 0) return "bg-amber-500";
     return "bg-destructive";
   };
 
@@ -700,14 +768,54 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <Plus size={12} /> Add Challan
                 </Button>
               </div>
-              {challans.length === 0 ? (
+
+              {/* Carry-forward challans */}
+              {carryForwardChallans.length > 0 && (
+                <>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carried Forward from Previous Quarter</p>
+                  {carryForwardChallans.map(cf => {
+                    const avail = (cf.challan.total_challan_amount || 0) - cf.appliedAmount;
+                    return (
+                      <TooltipProvider key={`cf-${cf.challan.id}`}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Card
+                              className={cn("cursor-pointer transition-all hover:shadow-sm bg-accent/30 border-accent",
+                                selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "")}
+                              onClick={() => { setSelectedChallan(cf.challan); fetchDeductees(cf.challan.id); }}>
+                              <CardContent className="p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <CreditCard size={14} className="text-accent-foreground" />
+                                  <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
+                                  <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter}</Badge>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 text-[10px]">
+                                  <div><span className="text-muted-foreground">Original:</span> <span className="font-medium">₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}</span></div>
+                                  <div><span className="text-muted-foreground">Used:</span> <span className="font-medium">₹{cf.appliedAmount.toLocaleString("en-IN")}</span></div>
+                                  <div><span className="text-muted-foreground">Available:</span> <span className="font-semibold text-emerald-600">₹{avail.toLocaleString("en-IN")}</span></div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          </TooltipTrigger>
+                          <TooltipContent>Carried forward from {cf.fromQuarter} FY {selFy} · Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")} · Used: ₹{cf.appliedAmount.toLocaleString("en-IN")}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  })}
+                  <div className="border-t border-dashed my-1" />
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Current Quarter Challans</p>
+                </>
+              )}
+
+              {challans.length === 0 && carryForwardChallans.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-8 text-center text-muted-foreground text-sm">
                     No challans yet. Add your first challan.
                   </CardContent>
                 </Card>
               ) : challans.map(c => {
-                const deducteeCount = c.id === selectedChallan?.id ? deductees.length : 0;
+                const bd = getChallanBreakdown(c.id);
+                const unconsumed = (c.total_challan_amount || 0) - bd.applied;
                 return (
                   <Card key={c.id}
                     className={cn("cursor-pointer transition-all hover:shadow-sm",
@@ -725,17 +833,29 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
                             {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
                           </p>
-                          <p className="text-sm font-bold text-foreground">
-                            ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}
-                            <span className="text-xs font-normal text-muted-foreground ml-2">
-                              {deducteeCount > 0 ? `${deducteeCount} deductees` : ""}
-                            </span>
-                          </p>
+                          {/* Detailed breakdown */}
+                          <div className="text-[10px] space-y-0.5 mt-1 border-t pt-1 border-border/50">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
+                            {bd.interest > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Interest</span><span>₹{bd.interest.toLocaleString("en-IN")}</span></div>}
+                            {bd.surcharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Surcharge</span><span>₹{bd.surcharge.toLocaleString("en-IN")}</span></div>}
+                            {bd.lateFees > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Late Fees</span><span>₹{bd.lateFees.toLocaleString("en-IN")}</span></div>}
+                            <div className="flex justify-between font-medium border-t border-border/30 pt-0.5">
+                              <span>Applied Total</span><span>₹{bd.applied.toLocaleString("en-IN")}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Challan Total</span>
+                              <span className="font-semibold">₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                            </div>
+                            <div className={cn("flex justify-between font-semibold",
+                              Math.abs(unconsumed) <= 1 ? "text-emerald-600" : unconsumed > 0 ? "text-amber-600" : "text-destructive")}>
+                              <span>{Math.abs(unconsumed) <= 1 ? "Fully Utilised" : unconsumed > 0 ? "Unconsumed" : "Over-applied"}</span>
+                              {Math.abs(unconsumed) > 1 && <span>₹{Math.abs(unconsumed).toLocaleString("en-IN")}</span>}
+                            </div>
+                          </div>
                           {/* Balance bar */}
                           <div className="w-full h-1.5 rounded-full bg-muted mt-1 overflow-hidden">
                             <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
-                              style={{ width: c.total_challan_amount > 0 && c.id === selectedChallan?.id
-                                ? `${Math.min(100, (challanDeducteeTds / c.total_challan_amount) * 100)}%` : "0%" }} />
+                              style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
                           </div>
                         </div>
                         <div className="flex gap-1 ml-2">
@@ -808,6 +928,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs">Date</TableHead>
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TCS</TableHead>
+                                  <TableHead className="text-xs text-right">Interest</TableHead>
+                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               ) : (
@@ -820,6 +942,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs">Date</TableHead>
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TDS</TableHead>
+                                  <TableHead className="text-xs text-right">Interest</TableHead>
+                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               )}
@@ -933,6 +1057,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     <TableCell className="text-right text-xs font-semibold">
                                       {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                     </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.interest_amount || ""}
+                                        key={`int-${d.id}-${d.interest_amount}`}
+                                        onBlur={e => updateDeducteeField(d.id, "interest_amount", parseFloat(e.target.value) || 0)} />
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.late_fees_amount || ""}
+                                        key={`lf-${d.id}-${d.late_fees_amount}`}
+                                        onBlur={e => updateDeducteeField(d.id, "late_fees_amount", parseFloat(e.target.value) || 0)} />
+                                    </TableCell>
                                     <TableCell>
                                       <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
                                         <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
@@ -950,7 +1084,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             ))}
                             {/* Always-visible blank row trigger */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 10 : 11} className="text-center py-2">
+                              <TableCell colSpan={selForm === "24Q" ? 10 : 13} className="text-center py-2">
                                 <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow}>
                                   <Plus size={12} /> Add Row
                                 </Button>
@@ -980,6 +1114,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <span>Deductees: <strong>{summaryStats.totalDeductees}</strong></span>
                   <span>Payment: <strong>₹{summaryStats.totalPayment.toLocaleString("en-IN")}</strong></span>
                   <span>TDS: <strong>₹{summaryStats.totalTds.toLocaleString("en-IN")}</strong></span>
+                  {summaryStats.totalInterest > 0 && <span>Interest: <strong>₹{summaryStats.totalInterest.toLocaleString("en-IN")}</strong></span>}
+                  {summaryStats.totalLateFees > 0 && <span>Late Fees: <strong>₹{summaryStats.totalLateFees.toLocaleString("en-IN")}</strong></span>}
                   <div className="flex-1" />
                   <Button size="sm" variant="outline" className="gap-1" onClick={autoMatchChallans}>
                     <RefreshCw size={14} /> Auto-match
