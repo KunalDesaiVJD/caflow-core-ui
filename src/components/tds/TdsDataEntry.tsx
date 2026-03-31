@@ -573,28 +573,41 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   // ─── Summary stats ───
+  const getChallanBreakdown = (challanId: string) => {
+    const deds = challanId === selectedChallan?.id ? deductees : (allChallanDeductees[challanId] || []);
+    const tds = deds.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
+    const interest = deds.reduce((s, d) => s + (d.interest_amount || 0), 0);
+    const surcharge = deds.reduce((s, d) => s + (d.surcharge_amount || 0), 0);
+    const lateFees = deds.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
+    const applied = tds + interest + surcharge + lateFees;
+    return { tds, interest, surcharge, lateFees, applied, count: deds.length };
+  };
+
   const challanDeducteeTds = useMemo(() => {
     if (!selectedChallan) return 0;
-    return deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-  }, [deductees, selectedChallan]);
+    return getChallanBreakdown(selectedChallan.id).applied;
+  }, [deductees, selectedChallan, allChallanDeductees]);
 
   const summaryStats = useMemo(() => {
     const totalChallans = challans.length;
     const totalDeductees = deductees.length;
     const totalPayment = deductees.reduce((s, d) => s + (d.amount_paid_credited || 0), 0);
-    const totalTds = deductees.reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
-    return { totalChallans, totalDeductees, totalPayment, totalTds };
+    const totalTds = deductees.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
+    const totalInterest = deductees.reduce((s, d) => s + (d.interest_amount || 0), 0);
+    const totalLateFees = deductees.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
+    return { totalChallans, totalDeductees, totalPayment, totalTds, totalInterest, totalLateFees };
   }, [challans, deductees]);
 
   // Auto-match challans
   const autoMatchChallans = () => {
-    const challanTdsMap = new Map<string, number>();
+    const challanTotMap = new Map<string, number>();
     deductees.forEach(d => {
-      challanTdsMap.set(d.challan_id, (challanTdsMap.get(d.challan_id) || 0) + (d.total_tax_deducted || d.tds_amount || 0));
+      const rowTotal = Math.round(d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
+      challanTotMap.set(d.challan_id, (challanTotMap.get(d.challan_id) || 0) + rowTotal);
     });
     const matched: string[] = [], unmatched: string[] = [];
     challans.forEach(c => {
-      const entered = challanTdsMap.get(c.id) || 0;
+      const entered = challanTotMap.get(c.id) || 0;
       if (Math.abs(entered - c.total_challan_amount) <= 1) matched.push(c.bsr_code || c.id.slice(0, 8));
       else unmatched.push(c.bsr_code || c.id.slice(0, 8));
     });
