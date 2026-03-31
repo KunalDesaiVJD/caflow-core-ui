@@ -1,3 +1,9 @@
+// NOTE: Run this Supabase SQL before deploying:
+// UPDATE audit_engagements SET
+//   pipeline_stage = LEAST(pipeline_stage, 9),
+//   stage_statuses = stage_statuses - '10'
+// WHERE pipeline_stage IS NOT NULL;
+
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,8 +27,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
-  Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award,
+  Building2, FileText, Calculator, ClipboardCheck,
+  Eye, BookMarked, Shield, Award,
 } from "lucide-react";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
@@ -38,16 +44,15 @@ import { MasterConfigPanel } from "@/components/pipeline/MasterConfigPanel";
 
 // ─── Constants ───
 const STAGES = [
-  { num: 1, label: "Engagement Setup", icon: Building2 },
-  { num: 2, label: "Trial Balance Import", icon: FileText },
-  { num: 3, label: "COA & Financial Statements", icon: Calculator },
-  { num: 4, label: "Scrutiny Engine", icon: Eye },
-  { num: 5, label: "Query Tracker", icon: ClipboardCheck },
-  { num: 6, label: "Workpapers & Risk", icon: Shield },
-  { num: 7, label: "Notes to Accounts/CARO", icon: BookMarked },
-  { num: 8, label: "3CD Reports", icon: FileText },
-  { num: 9, label: "Review & QC", icon: Layers },
-  { num: 10, label: "Sign-off & UDIN", icon: Award },
+  { num: 1, label: 'Engagement Setup', icon: Building2 },
+  { num: 2, label: 'Trial Balance Import', icon: FileText },
+  { num: 3, label: 'COA & Financial Statements', icon: Calculator },
+  { num: 4, label: 'Scrutiny Engine', icon: Eye },
+  { num: 5, label: 'Query Tracker', icon: ClipboardCheck },
+  { num: 6, label: 'Workpapers & Audit Sheet', icon: Shield },
+  { num: 7, label: 'Notes to Accounts & CARO', icon: BookMarked },
+  { num: 8, label: '3CA / 3CB / 3CD Reports', icon: FileText },
+  { num: 9, label: 'Sign-off & UDIN', icon: Award },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
@@ -201,7 +206,7 @@ export default function AuditPipeline() {
     const sp = searchParams.get("stage");
     if (sp) {
       const stageNum = parseInt(sp, 10);
-      if (stageNum >= 1 && stageNum <= 10) {
+      if (stageNum >= 1 && stageNum <= 9) {
         setActiveStage(stageNum);
         return;
       }
@@ -316,7 +321,7 @@ export default function AuditPipeline() {
         period_label: form1A.period_label || null,
         status: "planning",
         pipeline_stage: 1,
-        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started", "10": "not_started" },
+        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
       } as any).select("id").single();
       if (error) throw error;
       return data;
@@ -689,53 +694,17 @@ export default function AuditPipeline() {
             </TabsContent>
           </Tabs>
         ) : activeStage === 8 ? (
-          /* STAGE 8 — 3CD Reports */
-          <div className="max-w-5xl space-y-6">
+          /* STAGE 8 — 3CA / 3CB / 3CD Reports */
+          <div className="max-w-4xl space-y-6">
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-xl font-bold text-foreground">3CD Reports</h1>
-            {(engagement?.audit_type === "tax_audit" || engagement?.audit_type === "both" || engagement?.requires_3cd || engagement?.clients?.tax_audit_type) ? (
-              <Card>
-                <CardContent className="p-6 space-y-3">
-                  <h2 className="text-lg font-semibold">Form 3CD — Tax Audit Report</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {engagement?.clients?.tax_audit_type === "3cb_3cd"
-                      ? "3CB + 3CD applicable (Non-corporate entity)"
-                      : engagement?.clients?.tax_audit_type === "3ca_3cd"
-                      ? "3CA + 3CD applicable (Audited under other law)"
-                      : "Tax Audit — Form 3CD"}
-                  </p>
-                  <Button onClick={() => navigate(`/audit/3cd?engagementId=${selectedEngId}`)} className="gap-2">
-                    <FileText size={16} /> Open Form 3CD Editor
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <Card>
-                <CardContent className="p-8 text-center text-muted-foreground">
-                  Form 3CD is applicable only for Tax Audit engagements (Section 44AB).
-                </CardContent>
-              </Card>
-            )}
+            <h1 className="text-xl font-bold text-foreground">3CA / 3CB / 3CD Reports</h1>
+            <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => refetchEng()} />
           </div>
         ) : activeStage === 9 ? (
-          /* STAGE 9 — Review & QC */
-          <div className="max-w-4xl space-y-6">
-            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
-              <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
-            </Button>
-            <h1 className="text-xl font-bold text-foreground">Review & QC</h1>
-            <Card><CardContent className="p-6 space-y-4">
-              <p className="text-sm text-muted-foreground">Generate and review audit reports for this engagement.</p>
-              <Button onClick={() => navigate("/audit/report")} className="gap-2">
-                <FileText size={16} /> Open Report Engine
-              </Button>
-            </CardContent></Card>
-          </div>
-        ) : activeStage === 10 ? (
-          /* STAGE 10 — Sign-Off & UDIN */
-          <div className="max-w-4xl space-y-6">
+          /* STAGE 9 — Sign-off & UDIN */
+          <div className="max-w-5xl space-y-6">
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
