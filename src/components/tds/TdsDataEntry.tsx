@@ -29,7 +29,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw,
+  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw, Lock,
 } from "lucide-react";
 
 // ─── Types ───
@@ -93,7 +93,19 @@ const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
-const DEDUCTEE_TYPES = ["Company", "Individual", "HUF", "Firm", "AOP", "BOI", "Trust", "AJP"];
+const DEDUCTEE_TYPES = ["Company", "Individual", "HUF", "Firm", "LLP", "AOP", "BOI", "Trust", "AJP"];
+
+// PAN 4th character → deductee type mapping
+const PAN_4TH_CHAR_MAP: Record<string, string> = {
+  P: "Individual", H: "HUF", C: "Company", F: "Firm",
+  L: "LLP", T: "Trust", A: "AOP",
+};
+
+// Check if a PAN is valid format: 5 letters + 4 digits + 1 letter
+const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());
+
+// Map deductee type to rate category: Individual/HUF → individual rate, all others → company rate
+const isIndividualRateType = (type: string | null): boolean => type === "Individual" || type === "HUF";
 
 const REASON_CODES = [
   { code: "A", label: "A — Below threshold (no deduction required)" },
@@ -249,15 +261,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   // ─── Rate lookup helpers ───
-  const getRateForSection = (sectionCode: string, deducteeType?: string | null): { rate: number | null; noPanRate: number | null; nature: string | null; threshold: number | null } => {
+  const getRateForSection = (sectionCode: string, deducteeType?: string | null): { rate: number | null; noPanRate: number | null; nature: string | null; threshold: number | null; rateFound: boolean } => {
     const match = rateMaster.find(r => r.section_code === sectionCode);
-    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null };
-    const isCompany = deducteeType === "Company";
+    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null, rateFound: false };
+    const useIndRate = isIndividualRateType(deducteeType || null);
     return {
-      rate: isCompany ? match.rate_company : match.rate_individual,
+      rate: useIndRate ? match.rate_individual : match.rate_company,
       noPanRate: match.rate_no_pan,
       nature: match.nature_of_payment,
-      threshold: isCompany ? match.threshold_company : match.threshold_individual,
+      threshold: useIndRate ? match.threshold_individual : match.threshold_company,
+      rateFound: true,
     };
   };
 
@@ -413,8 +426,18 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     }
 
     if (field === "deductee_pan") {
-      if (!value || value.trim() === "") {
+      const panVal = (value || "").trim().toUpperCase();
+      updates.deductee_pan = panVal || null;
+
+      if (!panVal || !isValidPan(panVal)) {
+        // Invalid or blank PAN
         updates.pan_not_available = true;
+        // Auto-detect type from 4th char if at least 4 chars
+        if (panVal && panVal.length >= 4 && PAN_4TH_CHAR_MAP[panVal[3]]) {
+          updates.deductee_type = PAN_4TH_CHAR_MAP[panVal[3]];
+        } else if (!panVal) {
+          updates.deductee_type = null;
+        }
         const { noPanRate } = getRateForSection(deductee.section_code);
         updates.rate_of_tds = noPanRate || 20;
         updates.reason_for_lower_or_nil_deduction = "Z";
@@ -423,9 +446,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
           updates.total_tax_deducted = updates.tds_amount;
         }
       } else {
+        // Valid PAN
         updates.pan_not_available = false;
-        const { rate } = getRateForSection(deductee.section_code, deductee.deductee_type);
-        if (rate !== null) {
+        // Auto-detect type from 4th character
+        const detectedType = PAN_4TH_CHAR_MAP[panVal[3]] || null;
+        if (detectedType) {
+          updates.deductee_type = detectedType;
+        }
+        const effectiveType = detectedType || deductee.deductee_type;
+        const { rate, rateFound } = getRateForSection(deductee.section_code, effectiveType);
+        if (rateFound && rate !== null) {
           updates.rate_of_tds = rate;
           if (deductee.amount_paid_credited) {
             updates.tds_amount = Math.round(deductee.amount_paid_credited * rate / 100 * 100) / 100;
@@ -883,9 +913,28 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                         onBlur={e => updateDeducteeField(d.id, "date_of_payment", e.target.value || null)} />
                                     </TableCell>
                                     <TableCell className="text-right">
-                                      <Input type="number" className={cn("h-7 text-xs w-16 text-right", d.pan_not_available && "text-destructive")}
-                                        defaultValue={d.rate_of_tds ?? ""}
-                                        onBlur={e => updateDeducteeField(d.id, "rate_of_tds", parseFloat(e.target.value) || null)} />
+                                      {(() => {
+                                        const { rateFound } = d.section_code ? getRateForSection(d.section_code, d.deductee_type) : { rateFound: false };
+                                        const isAutoRate = rateFound || d.pan_not_available;
+                                        return (
+                                          <div className="flex items-center gap-1 justify-end">
+                                            <Input type="number"
+                                              className={cn("h-7 text-xs w-16 text-right",
+                                                isAutoRate ? "bg-muted cursor-not-allowed opacity-75" : "",
+                                                d.pan_not_available && "text-destructive"
+                                              )}
+                                              defaultValue={d.rate_of_tds ?? ""}
+                                              readOnly={isAutoRate}
+                                              onBlur={e => { if (!isAutoRate) updateDeducteeField(d.id, "rate_of_tds", parseFloat(e.target.value) || null); }}
+                                              key={`rate-${d.id}-${d.rate_of_tds}`}
+                                            />
+                                            {isAutoRate && <Lock size={10} className="text-muted-foreground shrink-0" />}
+                                            {!rateFound && d.section_code && !d.pan_not_available && (
+                                              <span className="text-[9px] text-amber-600 whitespace-nowrap">No rate</span>
+                                            )}
+                                          </div>
+                                        );
+                                      })()}
                                     </TableCell>
                                     <TableCell className="text-right text-xs font-semibold">
                                       {(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
