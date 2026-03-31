@@ -293,7 +293,7 @@ const CoaMappings = () => {
   const [selectedEngagement, setSelectedEngagement] = useState("");
   const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
   const [mapForms, setMapForms] = useState<Record<string, { standard_head: string; bs_pl: string; account_group: string }>>({});
-  const [masterEntityFilter, setMasterEntityFilter] = useState("corporate");
+  const [masterEntityFilter, setMasterEntityFilter] = useState<"all" | "corporate" | "llp" | "nce">("all");
   const [masterDbRows, setMasterDbRows] = useState<CoaMasterDbRow[]>([]);
   const [seedingMaster, setSeedingMaster] = useState(false);
   const [importingMaster, setImportingMaster] = useState(false);
@@ -325,7 +325,7 @@ const CoaMappings = () => {
     setHierarchyNodes((data || []) as HierarchyNode[]);
   }
 
-  async function loadMasterFromDb() {
+  async function fetchAllMasterRows() {
     // Fetch all rows (may exceed default 1000 limit), so paginate
     let allRows: CoaMasterDbRow[] = [];
     let from = 0;
@@ -337,13 +337,23 @@ const CoaMappings = () => {
         .or(`firm_id.eq.${firmId},firm_id.is.null`)
         .order("account_code", { ascending: true })
         .range(from, from + pageSize - 1);
-      if (error) break;
+      if (error) throw error;
       const rows = (data || []) as unknown as CoaMasterDbRow[];
       allRows = allRows.concat(rows);
       if (rows.length < pageSize) break;
       from += pageSize;
     }
-    setMasterDbRows(allRows);
+    return allRows;
+  }
+
+  async function loadMasterFromDb() {
+    try {
+      const rows = await fetchAllMasterRows();
+      setMasterDbRows(rows);
+    } catch (error: any) {
+      setMasterDbRows([]);
+      toast({ title: "Error loading COA master", description: error.message, variant: "destructive" });
+    }
   }
 
   async function loadData() {
@@ -384,18 +394,28 @@ const CoaMappings = () => {
     if (!firmId) return;
     setSeedingMaster(true);
     try {
-      // Delete existing firm-level master data first
-      await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+      const { error: deleteError } = await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+      if (deleteError) throw deleteError;
 
-      // Insert in batches of 50
       const rows = coaMasterData.map(r => ({ ...r, firm_id: firmId }));
-      for (let i = 0; i < rows.length; i += 50) {
-        const batch = rows.slice(i, i + 50);
-        const { error } = await supabase.from("coa_master" as any).insert(batch as any);
+      for (let i = 0; i < rows.length; i += 200) {
+        const batch = rows.slice(i, i + 200);
+        const { error } = await supabase.from("coa_master" as any).upsert(batch as any, {
+          onConflict: "account_code,entity_type,firm_id",
+          ignoreDuplicates: false,
+        });
         if (error) throw error;
       }
-      toast({ title: `Seeded ${rows.length} COA master entries from built-in template` });
-      loadMasterFromDb();
+
+      const seededRows = await fetchAllMasterRows();
+      const firmRows = seededRows.filter(row => row.firm_id === firmId);
+      if (firmRows.length !== rows.length) {
+        throw new Error(`Expected ${rows.length} seeded rows, but found ${firmRows.length}.`);
+      }
+
+      setMasterDbRows(seededRows);
+      setMasterEntityFilter("all");
+      toast({ title: `Seeded ${firmRows.length} COA master entries from built-in template` });
     } catch (e: any) {
       toast({ title: "Error seeding master", description: e.message, variant: "destructive" });
     } finally {
@@ -426,8 +446,8 @@ const CoaMappings = () => {
       }
 
       let totalImported = 0;
-      // Delete existing
-      await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+      const { error: deleteError } = await supabase.from("coa_master" as any).delete().eq("firm_id", firmId);
+      if (deleteError) throw deleteError;
 
       for (const [sheetName, entityType] of Object.entries(sheetMap)) {
         const ws = wb.Sheets[sheetName];
@@ -489,17 +509,21 @@ const CoaMappings = () => {
           });
         }
 
-        // Insert in batches of 50
-        for (let i = 0; i < batch.length; i += 50) {
-          const chunk = batch.slice(i, i + 50);
-          const { error } = await supabase.from("coa_master" as any).insert(chunk as any);
+        for (let i = 0; i < batch.length; i += 200) {
+          const chunk = batch.slice(i, i + 200);
+          const { error } = await supabase.from("coa_master" as any).upsert(chunk as any, {
+            onConflict: "account_code,entity_type,firm_id",
+            ignoreDuplicates: false,
+          });
           if (error) throw error;
         }
         totalImported += batch.length;
       }
 
+      const importedRows = await fetchAllMasterRows();
+      setMasterDbRows(importedRows);
+      setMasterEntityFilter("all");
       toast({ title: `Imported ${totalImported} COA master entries from ${Object.keys(sheetMap).length} sheet(s)` });
-      loadMasterFromDb();
     } catch (err: any) {
       toast({ title: "Import failed", description: err.message, variant: "destructive" });
     } finally {
@@ -646,7 +670,7 @@ const CoaMappings = () => {
   // Filtered master data for the master tab
   const filteredMasterData = useMemo(() => {
     const source = masterDbRows.length > 0 ? masterDbRows : coaMasterData;
-    return source.filter(r => r.entity_type === masterEntityFilter);
+    return masterEntityFilter === "all" ? source : source.filter(r => r.entity_type === masterEntityFilter);
   }, [masterDbRows, masterEntityFilter]);
 
   const masterRootRows = useMemo(() => filteredMasterData.filter(r => r.level === 1), [filteredMasterData]);
@@ -755,6 +779,7 @@ const CoaMappings = () => {
                   <Select value={masterEntityFilter} onValueChange={setMasterEntityFilter}>
                     <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="all">All Entity Types</SelectItem>
                       <SelectItem value="corporate">Corporate</SelectItem>
                       <SelectItem value="llp">LLP</SelectItem>
                       <SelectItem value="nce">NCE</SelectItem>
