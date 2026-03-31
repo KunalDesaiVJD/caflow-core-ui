@@ -27,8 +27,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
-  Building2, FileText, Calculator, ClipboardCheck, Layers,
-  Eye, BarChart3, BookMarked, Shield, Award,
+  Building2, FileText, Calculator, ClipboardCheck,
+  Eye, BookMarked, Shield, Award,
 } from "lucide-react";
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
