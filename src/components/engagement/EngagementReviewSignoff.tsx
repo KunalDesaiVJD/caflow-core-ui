@@ -484,7 +484,7 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-primary">
               <Shield className="w-5 h-5" />
-              Stage 10 — Final Sign-Off
+              Stage 9 — Final Sign-Off
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
