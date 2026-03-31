@@ -1,0 +1,121 @@
+import { useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
+import { ArrowRight, BookMarked, Shield, Loader2 } from 'lucide-react';
+import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNotesToAccounts';
+import { EngagementCARO } from '@/components/engagement/EngagementCARO';
+
+interface Props {
+  engagementId: string;
+  engagement: any;
+  onStageComplete: () => void;
+  onSaveDraft: () => void;
+}
+
+export default function PipelineStage7Combined({
+  engagementId, engagement, onStageComplete, onSaveDraft
+}: Props) {
+  const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState('notes');
+  const caroApplicable = engagement?.caro_applicable || engagement?.requires_caro || false;
+
+  const markComplete = async () => {
+    setSaving(true);
+    const newStatuses = {
+      ...((engagement?.stage_statuses || {}) as Record<string, string>),
+      '7': 'complete'
+    };
+    const { error } = await supabase
+      .from('audit_engagements')
+      .update({ stage_statuses: newStatuses, pipeline_stage: 8 } as any)
+      .eq('id', engagementId);
+    setSaving(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success('Stage 7 completed — proceeding to 3CD Reports');
+    onStageComplete();
+  };
+
+  const saveDraft = async () => {
+    setSaving(true);
+    const newStatuses = {
+      ...((engagement?.stage_statuses || {}) as Record<string, string>),
+      '7': 'in_progress'
+    };
+    const { error } = await supabase
+      .from('audit_engagements')
+      .update({ stage_statuses: newStatuses } as any)
+      .eq('id', engagementId);
+    setSaving(false);
+    if (error) toast.error(error.message);
+    else { toast.success('Progress saved'); onSaveDraft(); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-foreground">
+            Stage 7 — Notes to Accounts & CARO
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Notes to financial statements and CARO 2020 reporting
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={saveDraft} disabled={saving}>
+            {saving && <Loader2 className="w-4 h-4 animate-spin mr-1" />} Save Draft
+          </Button>
+          <Button onClick={markComplete} disabled={saving} className="gap-1">
+            Complete Stage 7 <ArrowRight size={14} />
+          </Button>
+        </div>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="notes" className="gap-1">
+            <BookMarked size={14} /> Notes to Accounts
+          </TabsTrigger>
+          <TabsTrigger value="caro" className="gap-1">
+            <Shield size={14} /> CARO 2020
+            {!caroApplicable && (
+              <Badge variant="secondary" className="ml-1 text-[9px]">N/A</Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="notes" className="mt-4">
+          <EngagementNotesToAccounts
+            engagement={engagement}
+            client={engagement?.clients}
+            onUpdate={() => {}}
+          />
+        </TabsContent>
+
+        <TabsContent value="caro" className="mt-4">
+          {caroApplicable ? (
+            <EngagementCARO
+              engagement={engagement}
+              client={engagement?.clients}
+              onUpdate={() => {}}
+            />
+          ) : (
+            <Card className="border-dashed border-2 border-muted">
+              <CardContent className="p-12 text-center space-y-3">
+                <Shield className="w-12 h-12 mx-auto text-muted-foreground/40" />
+                <h3 className="text-lg font-semibold text-foreground">CARO 2020 is not applicable</h3>
+                <p className="text-sm text-muted-foreground">
+                  CARO applies only to companies. Proceed to Stage 8.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
