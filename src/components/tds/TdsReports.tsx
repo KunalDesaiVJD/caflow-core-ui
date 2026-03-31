@@ -223,11 +223,14 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
                 <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground py-8">No challans found</TableCell></TableRow>
               ) : rows.map((r, i) => (
                 <TableRow key={i}>
-                  {Object.entries(r).map(([k, v], j) => (
-                    <TableCell key={j} className={cn("text-sm", ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k) ? "text-right" : "")}>
-                      {typeof v === "number" ? formatINR(v) : String(v)}
-                    </TableCell>
-                  ))}
+                  {Object.entries(r).map(([k, v], j) => {
+                    const isMoney = ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k);
+                    return (
+                      <TableCell key={j} className={cn("text-sm", isMoney ? "text-right" : "")}>
+                        {isMoney && typeof v === "number" ? formatINR(v) : String(v)}
+                      </TableCell>
+                    );
+                  })}
                 </TableRow>
               ))}
             </TableBody>
