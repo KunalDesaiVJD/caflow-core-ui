@@ -803,11 +803,19 @@ const CoaMappings = () => {
                   <div className="flex items-center gap-2 py-2 px-2 bg-muted/50 text-[10px] font-semibold text-muted-foreground uppercase sticky top-0 z-10 border-b">
                     <div className="w-4" />
                     <span className="w-12">Code</span>
-                    <span className="flex-1">Account Head</span>
+                    <span className="w-6 text-center">Lvl</span>
+                    <span className="w-20">Major Group</span>
+                    <span className="w-24">Group</span>
+                    <span className="w-24">Sub-Group</span>
+                    <span className="flex-1 min-w-[120px]">Account Head</span>
+                    <span className="w-16">Acct Type</span>
+                    <span className="w-10 text-center">Normal</span>
                     <span className="w-12 text-center">BS/PL</span>
-                    <span className="w-16 text-right">Normal</span>
-                    <span className="w-10 text-right">Note</span>
-                    <span className="w-40">FS Line Item</span>
+                    <span className="w-36">FS Line Item</span>
+                    <span className="w-10 text-center">Note</span>
+                    <span className="w-20">Entities</span>
+                    <span className="w-28">Tally Mapping</span>
+                    <span className="w-24">Remarks</span>
                   </div>
                   {masterRootRows.map(row => (
                     <CoaMasterTreeNode key={`${row.account_code}-${row.entity_type}`} row={row} allRows={filteredMasterData} />

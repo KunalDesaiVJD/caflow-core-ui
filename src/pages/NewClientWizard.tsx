@@ -429,12 +429,13 @@ const NewClientWizard = () => {
 
   const saveFYClassification = async (targetClientId: string) => {
     if (!advancedInfo.classification || !advancedInfo.financial_year) return;
-    await supabase.from("client_fy_classifications").upsert({
+    const { error } = await supabase.from("client_fy_classifications").upsert({
       client_id: targetClientId,
       financial_year: advancedInfo.financial_year,
       classification: advancedInfo.classification,
       audit_firm_id: advancedInfo.audit_firm_id || null,
     } as any, { onConflict: "client_id,financial_year" });
+    if (error) throw error;
   };
 
   const saveAuditSetup = async (targetClientId: string) => {
