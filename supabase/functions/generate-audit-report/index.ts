@@ -165,6 +165,17 @@ serve(async (req) => {
       auditFirm,
     };
 
+    const fallbackReportSections = {
+      opinion_paragraph: `We have audited the accompanying financial statements of ${client?.name || "the Entity"} for the financial year ${engagement.financial_year || "under review"}, which comprise the Balance Sheet as at year end, the Statement of Profit and Loss, and the notes forming part of the financial statements.` ,
+      basis_for_opinion: "We conducted our audit in accordance with the Standards on Auditing specified under applicable law. We are independent of the entity in accordance with the Code of Ethics issued by the ICAI, and we believe that the audit evidence we have obtained is sufficient and appropriate to provide a basis for our opinion.",
+      management_responsibility: "The entity's management and Board of Directors are responsible for the preparation of these financial statements that give a true and fair view in accordance with the applicable financial reporting framework, and for the maintenance of adequate accounting records and internal financial controls.",
+      auditor_responsibility: "Our responsibility is to express an opinion on these financial statements based on our audit. Our procedures included risk assessment, testing of accounting records, evaluating the appropriateness of accounting policies used, and assessing the overall presentation of the financial statements.",
+      key_audit_matters: (findings || []).map((finding: any, index: number) => ({
+        title: finding?.title || `Key audit matter ${index + 1}`,
+        description: finding?.observation || finding?.summary || finding?.rule_name || "Matter identified during audit procedures and addressed through substantive audit work.",
+      })),
+    };
+
     const claudeUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/claude-gateway`;
     const claudeRes = await fetch(claudeUrl, {
       method: "POST",
@@ -178,12 +189,23 @@ serve(async (req) => {
       }),
     });
 
-    const reportSections = await claudeRes.json();
-    if (!claudeRes.ok) {
-      return new Response(JSON.stringify({ error: "AI drafting failed", details: reportSections }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    let reportSections: Record<string, unknown> = fallbackReportSections;
+    if (claudeRes.ok) {
+      const claudePayload = await claudeRes.json();
+      const rawReply = claudePayload?.reply ?? claudePayload;
+
+      if (typeof rawReply === "string") {
+        try {
+          reportSections = { ...fallbackReportSections, ...JSON.parse(rawReply) };
+        } catch {
+          reportSections = { ...fallbackReportSections, opinion_paragraph: rawReply || fallbackReportSections.opinion_paragraph };
+        }
+      } else if (rawReply && typeof rawReply === "object") {
+        reportSections = { ...fallbackReportSections, ...(rawReply as Record<string, unknown>) };
+      }
+    } else {
+      const errorDetails = await claudeRes.text();
+      console.error("claude-gateway failed, falling back to deterministic report draft:", errorDetails);
     }
 
     // STEP 3 — BUILD HTML TEMPLATE

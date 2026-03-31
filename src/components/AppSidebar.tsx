@@ -220,7 +220,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                               .eq("id", selectedEngId);
                             navigate(`/audit/pipeline/${selectedEngId}?stage=${item.stage}`);
                           } else {
-                            navigate("/audit/pipeline");
+                            navigate(item.stage === 1 ? "/audit/pipeline?new=1" : "/audit/pipeline");
                           }
                         }}
                         className={cn(
