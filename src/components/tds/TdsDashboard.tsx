@@ -190,9 +190,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
 
   const today = new Date();
 
-  // Apply form tab filter
+  // Apply form tab filter — exclude deleted clients
   const filteredFilings = useMemo(() => {
-    let f = filings;
+    let f = filings.filter(fl => !deletedClientIds.has(fl.client_id));
     if (formTab !== "all") {
       f = f.filter(fl => fl.tds_forms?.includes(formTab));
     }
@@ -200,7 +200,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       f = f.filter(fl => fl.quarter === quarterFilter);
     }
     return f;
-  }, [filings, formTab, quarterFilter]);
+  }, [filings, formTab, quarterFilter, deletedClientIds]);
 
   // ═══ KPI Stats ═══
   const stats = useMemo(() => {
