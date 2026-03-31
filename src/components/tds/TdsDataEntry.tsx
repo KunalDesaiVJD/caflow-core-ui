@@ -65,6 +65,7 @@ interface Deductee {
   date_of_payment: string | null; date_of_deduction: string | null;
   rate_of_tds: number | null; tds_amount: number | null;
   surcharge_amount: number; cess_amount: number; total_tax_deducted: number | null;
+  interest_amount: number; late_fees_amount: number;
   lower_deduction_certificate_no: string | null;
   reason_for_lower_or_nil_deduction: string | null;
   country_of_residence: string | null;
