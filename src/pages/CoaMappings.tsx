@@ -331,7 +331,7 @@ const CoaMappings = () => {
       .select("*")
       .or(`firm_id.eq.${firmId},firm_id.is.null`)
       .order("account_code", { ascending: true });
-    setMasterDbRows((data || []) as CoaMasterDbRow[]);
+    setMasterDbRows((data || []) as unknown as CoaMasterDbRow[]);
   }
 
   async function loadData() {
