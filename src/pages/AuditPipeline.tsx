@@ -101,10 +101,11 @@ export default function AuditPipeline() {
   const queryClient = useQueryClient();
   const { engagementId: routeEngId } = useParams<{ engagementId?: string }>();
   const [searchParams] = useSearchParams();
+  const isNewEngagementFlow = searchParams.get("new") === "1";
   const auditCtx = useAuditContext();
   const contextEngId = auditCtx?.selectedEngagementId || "";
 
-  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || contextEngId || "");
+  const [selectedEngId, setSelectedEngId] = useState<string>(routeEngId || (isNewEngagementFlow ? "" : contextEngId) || "");
   const [showNewEng, setShowNewEng] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activeStage, setActiveStage] = useState<number>(() => {
@@ -114,11 +115,33 @@ export default function AuditPipeline() {
 
   // Sync from audit context when it changes
   useEffect(() => {
+    if (isNewEngagementFlow || !contextEngId || routeEngId || selectedEngId) {
+      return;
+    }
+
+    setSelectedEngId(contextEngId);
+    navigate(`/audit/pipeline/${contextEngId}`, { replace: true });
+  }, [contextEngId, isNewEngagementFlow, routeEngId, selectedEngId, navigate]);
+
+  useEffect(() => {
+    if (!isNewEngagementFlow || routeEngId) {
+      return;
+    }
+
+    setSelectedEngId("");
+    setActiveStage(1);
+    setShowNewEng(true);
+    if (auditCtx?.setSelectedEngagementId) {
+      auditCtx.setSelectedEngagementId("");
+    }
+  }, [auditCtx, isNewEngagementFlow, routeEngId]);
+
+  useEffect(() => {
     if (contextEngId && !routeEngId && !selectedEngId) {
       setSelectedEngId(contextEngId);
       navigate(`/audit/pipeline/${contextEngId}`, { replace: true });
     }
-  }, [contextEngId]);
+  }, [contextEngId, routeEngId, selectedEngId, navigate]);
 
   // ─── Engagement list ───
   const { data: engagements } = useQuery({
@@ -326,6 +349,9 @@ export default function AuditPipeline() {
     onSuccess: (data) => {
       toast.success("Engagement created");
       setSelectedEngId(data.id);
+      if (auditCtx?.setSelectedEngagementId) {
+        auditCtx.setSelectedEngagementId(data.id);
+      }
       setActiveStage(1);
       setShowNewEng(false);
       queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] });
