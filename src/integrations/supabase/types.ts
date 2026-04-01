@@ -3231,6 +3231,9 @@ export type Database = {
           to_gstin: string | null
           to_name: string | null
           to_pan: string | null
+          tds_amount: number | null
+          tds_rate: number | null
+          tds_section_code: string | null
           total_amount: number | null
           total_cgst: number | null
           total_igst: number | null
@@ -3282,6 +3285,9 @@ export type Database = {
           to_gstin?: string | null
           to_name?: string | null
           to_pan?: string | null
+          tds_amount?: number | null
+          tds_rate?: number | null
+          tds_section_code?: string | null
           total_amount?: number | null
           total_cgst?: number | null
           total_igst?: number | null
@@ -3333,6 +3339,9 @@ export type Database = {
           to_gstin?: string | null
           to_name?: string | null
           to_pan?: string | null
+          tds_amount?: number | null
+          tds_rate?: number | null
+          tds_section_code?: string | null
           total_amount?: number | null
           total_cgst?: number | null
           total_igst?: number | null

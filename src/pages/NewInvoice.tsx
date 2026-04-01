@@ -279,6 +279,11 @@ const NewInvoice = () => {
   // Firm-specific
   const [firmError, setFirmError] = useState(false);
 
+  // TDS Section state
+  const [tdsRates, setTdsRates] = useState<{ section_code: string; description: string; rate: number }[]>([]);
+  const [tdsSectionCode, setTdsSectionCode] = useState("");
+  const [tdsRate, setTdsRate] = useState(0);
+
   // Derived values
   const firmGstin = firm?.gstin || "";
   const placeOfSupply = getPlaceOfSupply(firmGstin);
@@ -323,6 +328,26 @@ const NewInvoice = () => {
       setItemMasters((data as ItemMaster[]) || []);
     })();
   }, []);
+
+  // Fetch TDS sections from tds_rate_master (26Q form type = non-salary TDS)
+  // 194C and 194J shown first (Change 3)
+  useEffect(() => {
+    (async () => {
+      let q = supabase.from("tds_rate_master").select("section_code, description, rate").eq("form_type", "26Q");
+      if (!isSuperadmin && user?.firm_id) q = q.eq("firm_id", user.firm_id);
+      const { data } = await q;
+      if (data && data.length > 0) {
+        const sorted = [...data].sort((a, b) => {
+          const priority = (s: string) => s.startsWith("194C") ? 0 : s.startsWith("194J") ? 1 : 2;
+          const pa = priority(a.section_code);
+          const pb = priority(b.section_code);
+          if (pa !== pb) return pa - pb;
+          return a.section_code.localeCompare(b.section_code);
+        });
+        setTdsRates(sorted);
+      }
+    })();
+  }, [isSuperadmin, user?.firm_id]);
 
   // Fetch clients
   useEffect(() => {
@@ -392,6 +417,8 @@ const NewInvoice = () => {
         setRemarksConditions((inv as any).remarks_conditions || "");
         setBaseTurnover((inv as any).base_turnover ? String((inv as any).base_turnover) : "");
         setSourceDocumentId((inv as any).source_document_id || "");
+        setTdsSectionCode((inv as any).tds_section_code || "");
+        setTdsRate(Number((inv as any).tds_rate) || 0);
         if (inv.firm_id) setSelectedFirmId(inv.firm_id);
         if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
           setLineItems(inv.line_items.map((li: any, i: number) => ({
@@ -579,6 +606,7 @@ const NewInvoice = () => {
   const totalTaxable = useMemo(() => items.reduce((s, li) => s + li.taxable_value, 0), [items]);
   const totalGst = useMemo(() => firmHasGst ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst]);
   const grandTotal = totalTaxable + totalGst;
+  const tdsAmount = useMemo(() => tdsSectionCode ? Math.round(totalTaxable * tdsRate / 100 * 100) / 100 : 0, [tdsSectionCode, tdsRate, totalTaxable]);
 
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
@@ -657,6 +685,9 @@ const NewInvoice = () => {
         })),
         signatory_name: firmName,
         created_by: user?.id,
+        tds_section_code: tdsSectionCode || null,
+        tds_rate: tdsSectionCode ? tdsRate : null,
+        tds_amount: tdsAmount > 0 ? tdsAmount : null,
       };
 
       let savedId = invoiceId;
@@ -1346,20 +1377,61 @@ const NewInvoice = () => {
           <Separator />
 
           {/* Totals */}
-          <div className="text-sm space-y-1 text-right">
-            <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
-            {firmHasGst && (
-              isIntraState ? (
-                <>
-                  <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-                  <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
-                </>
-              ) : (
-                <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
-              )
+          <div className="flex flex-col gap-3">
+            {/* TDS Section Selector (Change 2 & 3) */}
+            {docType === "invoice" && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground font-medium">TDS Section (if applicable)</Label>
+                <Select
+                  value={tdsSectionCode}
+                  onValueChange={v => {
+                    setTdsSectionCode(v);
+                    const found = tdsRates.find(t => t.section_code === v);
+                    setTdsRate(found ? Number(found.rate) : 0);
+                  }}
+                  disabled={isLocked}
+                >
+                  <SelectTrigger className="w-full text-sm h-9">
+                    <SelectValue placeholder="No TDS deduction" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No TDS deduction</SelectItem>
+                    {tdsRates.map(t => (
+                      <SelectItem key={t.section_code} value={t.section_code}>
+                        {t.section_code} — {t.description} ({t.rate}%)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             )}
-            <p className="text-lg font-bold text-foreground">Grand Total: {fmtINR(grandTotal)}</p>
-            <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(grandTotal))}</p>
+
+            {/* Amount summary */}
+            <div className="text-sm space-y-1 text-right">
+              <p>Taxable Amount: <strong>{fmtINR(totalTaxable)}</strong></p>
+              {firmHasGst && (
+                isIntraState ? (
+                  <>
+                    <p>CGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                    <p>SGST: <strong>{fmtINR(totalGst / 2)}</strong></p>
+                  </>
+                ) : (
+                  <p>IGST: <strong>{fmtINR(totalGst)}</strong></p>
+                )
+              )}
+              <p className="text-lg font-bold text-foreground">Grand Total: {fmtINR(grandTotal)}</p>
+              {tdsAmount > 0 && (
+                <p className="text-sm text-orange-600 font-medium">
+                  TDS Deductible u/s {tdsSectionCode} @ {tdsRate}%: <strong>— {fmtINR(tdsAmount)}</strong>
+                </p>
+              )}
+              {tdsAmount > 0 && (
+                <p className="text-sm font-semibold text-foreground">
+                  Net Receivable after TDS: {fmtINR(grandTotal - tdsAmount)}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground italic">{numberToWords(Math.round(grandTotal))}</p>
+            </div>
           </div>
         </div>
 

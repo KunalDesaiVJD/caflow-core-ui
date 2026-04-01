@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/table";
 import { format } from "date-fns";
 import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -54,9 +56,11 @@ interface LedgerEntry {
 }
 
 async function buildLedgerEntries(
-  filters: { clientIds: string[]; firmIds: string[]; fy: string }
+  filters: { clientIds: string[]; firmIds: string[]; fy?: string; from?: string; to?: string }
 ): Promise<LedgerEntry[]> {
-  const { start, end } = fyToDateRange(filters.fy);
+  const { start, end } = (filters.from && filters.to)
+    ? { start: filters.from, end: filters.to }
+    : fyToDateRange(filters.fy || getCurrentFY());
   const entries: LedgerEntry[] = [];
 
   // 1. First try client_ledger_entries
@@ -82,7 +86,7 @@ async function buildLedgerEntries(
 
   // 2. Fallback: build from invoices + receipts directly
   const { data: invoices } = await supabase.from("invoices")
-    .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status")
+    .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
     .in("client_id", filters.clientIds)
     .in("firm_id", filters.firmIds)
     .in("status", ["finalized", "sent", "overdue", "paid"])
@@ -101,6 +105,19 @@ async function buildLedgerEntries(
       narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
       client_id: inv.client_id || "",
     });
+    // TDS deductible entry from invoice-level TDS selection
+    if (!isCredit && Number(inv.tds_amount) > 0) {
+      entries.push({
+        id: `itds-${inv.id}`,
+        entry_date: inv.invoice_date,
+        entry_type: "adjustment",
+        document_id: inv.id,
+        debit_amount: 0,
+        credit_amount: Number(inv.tds_amount),
+        narration: `TDS deductible u/s ${inv.tds_section_code || ""} @ ${inv.tds_rate || ""}%`,
+        client_id: inv.client_id || "",
+      });
+    }
   });
 
   const { data: receipts } = await supabase.from("billing_receipts")
@@ -162,6 +179,8 @@ function ClientLedgerView() {
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
+  const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
+  const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
   const [entries, setEntries] = useState<any[]>([]);
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -182,7 +201,7 @@ function ClientLedgerView() {
     if (!clientId || !firmId) return;
     setLoading(true);
     try {
-      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: [firmId], fy });
+      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: [firmId], from: fromDate, to: toDate });
 
       // Load invoice numbers for document_ids
       const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
@@ -200,7 +219,7 @@ function ClientLedgerView() {
       toast({ title: "Error loading ledger", description: err.message, variant: "destructive" });
     }
     setLoading(false);
-  }, [clientId, firmId, fy, toast]);
+  }, [clientId, firmId, fromDate, toDate, toast]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
 
@@ -233,23 +252,95 @@ function ClientLedgerView() {
 
   const clientName = clients.find(c => c.id === clientId)?.name || "";
 
-  const handleDownloadPdf = () => {
-    const el = document.getElementById("client-ledger-table");
-    if (el) exportToPdf(el, `Ledger_${clientName}_${fy}.pdf`);
+  const handleDownloadXlsx = () => {
+    const cName = clients.find(c => c.id === clientId)?.name || "Client";
+    const fName = firms.find(f => f.id === firmId)?.name || "";
+    const aoa: any[][] = [];
+    aoa.push(["CLIENT LEDGER STATEMENT"]);
+    aoa.push([`Client: ${cName}`]);
+    aoa.push([`Firm: ${fName}`]);
+    aoa.push([`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`]);
+    aoa.push([`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
+    aoa.push([]);
+    aoa.push(["Sr.", "Date", "Document No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]);
+    rows.forEach((r, i) => aoa.push([
+      i + 1,
+      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+      r.docNo, r.narration,
+      r.debit || "", r.credit || "", r.balance,
+    ]));
+    aoa.push([]);
+    aoa.push(["", "CLOSING BALANCE", "", "", totalDebit, totalCredit, closingBalance]);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 4 }, { wch: 12 }, { wch: 14 }, { wch: 50 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 6 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 6 } },
+      { s: { r: 4, c: 0 }, e: { r: 4, c: 6 } },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Client Ledger");
+    XLSX.writeFile(wb, `Ledger_${cName}_${fromDate}_${toDate}.xlsx`);
   };
 
-  const handleDownloadXlsx = () => {
-    exportToExcel([{
-      sheetName: "Ledger",
-      rows: rows.map(r => ({
-        Date: r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-        "Document No": r.docNo,
-        Narration: r.narration,
-        "Debit (₹)": r.debit,
-        "Credit (₹)": r.credit,
-        "Balance (₹)": r.balance,
-      })),
-    }], `Ledger_${clientName}_${fy}.xlsx`);
+  const handleDownloadPdf = async () => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const DARK_BLUE = [26, 58, 92] as [number, number, number];
+    const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
+    const cName = clients.find(c => c.id === clientId)?.name || "Client";
+    const fName = firms.find(f => f.id === firmId)?.name || "";
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 210, 22, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("CLIENT LEDGER STATEMENT", 14, 9);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Client: ${cName}   |   Firm: ${fName}`, 14, 16);
+    doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 14, 20);
+    const tableRows: any[][] = rows.map(r => [
+      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+      r.docNo, r.narration,
+      r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+      r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+      r.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+    ]);
+    tableRows.push([
+      { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: totalDebit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: totalCredit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: closingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+    ]);
+    autoTable(doc, {
+      startY: 26,
+      head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
+      body: tableRows,
+      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [248, 251, 255] },
+      columnStyles: {
+        0: { cellWidth: 22, halign: "center" },
+        1: { cellWidth: 22, halign: "center" },
+        2: { cellWidth: 80 },
+        3: { cellWidth: 24, halign: "right" },
+        4: { cellWidth: 24, halign: "right" },
+        5: { cellWidth: 24, halign: "right" },
+      },
+      margin: { left: 10, right: 10 },
+      didDrawPage: (hookData) => {
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(7); doc.setTextColor(120, 130, 145);
+        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
+        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
+        doc.line(10, 287, 200, 287);
+      },
+    });
+    doc.save(`Ledger_${cName}_${fromDate}_${toDate}.pdf`);
   };
 
   return (
@@ -267,12 +358,22 @@ function ClientLedgerView() {
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={fy} onValueChange={setFy}>
-          <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+        <Select value={fy} onValueChange={v => { setFy(v); const r = fyToDateRange(v); setFromDate(r.start); setToDate(r.end); }}>
+          <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {getFYOptions().map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
           </SelectContent>
         </Select>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">From</Label>
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">To</Label>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+        </div>
       </div>
 
       {!clientId ? (
@@ -323,9 +424,9 @@ function ClientLedgerView() {
             </Table>
           </div>
           {rows.length > 0 && (
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Download PDF</Button>
-              <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Download XLSX</Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
+              <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
               <Button variant="outline" size="sm" className="gap-1" onClick={() => {
                 const phone = prompt("Enter WhatsApp number (e.g. 9876543210):");
                 if (phone) {
@@ -358,6 +459,8 @@ function GroupLedgerView() {
   const [groupId, setGroupId] = useState("");
   const [firmIds, setFirmIds] = useState<string[]>([]);
   const [fy, setFy] = useState(getCurrentFY());
+  const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
+  const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
   const [data, setData] = useState<{ clientName: string; entries: any[] }[]>([]);
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -393,7 +496,7 @@ function GroupLedgerView() {
     const clientMap: Record<string, string> = {};
     (clients || []).forEach(c => { clientMap[c.id] = c.name || "Unknown"; });
 
-    const entries = await buildLedgerEntries({ clientIds, firmIds: resolvedFirmIds, fy });
+    const entries = await buildLedgerEntries({ clientIds, firmIds: resolvedFirmIds, from: fromDate, to: toDate });
 
     const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
     if (docIds.length > 0) {
@@ -415,7 +518,7 @@ function GroupLedgerView() {
       .map(cid => ({ clientName: clientMap[cid] || "Unknown", entries: grouped[cid] }));
     setData(result);
     setLoading(false);
-  }, [groupId, firmIds, fy, toast]);
+  }, [groupId, firmIds, fromDate, toDate, toast]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -437,7 +540,7 @@ function GroupLedgerView() {
     aoa.push(["GROUP LEDGER STATEMENT"]);
     aoa.push([`Group: ${groupName}`]);
     aoa.push([`Firm(s): ${selectedFirmNames}`]);
-    aoa.push([`Financial Year: ${fy}`]);
+    aoa.push([`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`]);
     aoa.push([`Generated on: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
     aoa.push([]); // blank row
 
@@ -490,7 +593,7 @@ function GroupLedgerView() {
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Group Ledger");
-    XLSX.writeFile(wb, `GroupLedger_${groupName}_${fy}.xlsx`);
+    XLSX.writeFile(wb, `GroupLedger_${groupName}_${fromDate}_${toDate}.xlsx`);
   };
 
   const handleDownloadPdf = async () => {
@@ -514,7 +617,7 @@ function GroupLedgerView() {
     doc.text("GROUP LEDGER STATEMENT", 14, 10);
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
-    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   FY: ${fy}`, 14, 17);
+    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, 14, 17);
 
     // Generation timestamp (right-aligned)
     const genText = `Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`;
@@ -592,7 +695,7 @@ function GroupLedgerView() {
       },
     });
 
-    doc.save(`GroupLedger_${groupName}_${fy}.pdf`);
+    doc.save(`GroupLedger_${groupName}_${fromDate}_${toDate}.pdf`);
   };
 
   const handleDownloadZip = async () => {
@@ -646,12 +749,22 @@ function GroupLedgerView() {
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={fy} onValueChange={setFy}>
+        <Select value={fy} onValueChange={v => { setFy(v); const r = fyToDateRange(v); setFromDate(r.start); setToDate(r.end); }}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {getFYOptions().map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
           </SelectContent>
         </Select>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">From</Label>
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">To</Label>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+        </div>
       </div>
 
       {!groupId ? (
@@ -740,6 +853,8 @@ function FirmRevenueLedgerView() {
   const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
+  const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
+  const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
   const [docTypeFilter, setDocTypeFilter] = useState("all");
   const [entries, setEntries] = useState<any[]>([]);
   const [clientMap, setClientMap] = useState<Record<string, string>>({});
@@ -764,7 +879,7 @@ function FirmRevenueLedgerView() {
     const cm: Record<string, string> = {};
     (allClients || []).forEach(c => { cm[c.id] = c.name || "Unknown"; });
 
-    let allEntries = await buildLedgerEntries({ clientIds: allClientIds, firmIds: [firmId], fy });
+    let allEntries = await buildLedgerEntries({ clientIds: allClientIds, firmIds: [firmId], from: fromDate, to: toDate });
 
     // Apply docType filter
     if (docTypeFilter === "invoice") allEntries = allEntries.filter(e => e.entry_type === "invoice");
@@ -783,7 +898,7 @@ function FirmRevenueLedgerView() {
       setInvoiceMap({});
     }
     setLoading(false);
-  }, [firmId, fy, docTypeFilter]);
+  }, [firmId, fromDate, toDate, docTypeFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -804,14 +919,94 @@ function FirmRevenueLedgerView() {
   const netOutstanding = totalInvoiced - totalCN - totalReceived;
 
   const handleDownloadXlsx = () => {
-    exportToExcel([{
-      sheetName: "Revenue Ledger",
-      rows: rows.map(r => ({
-        Date: r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-        "Document No": r.docNo, Client: r.clientName, Type: r.docType,
-        "Debit (₹)": r.debit, "Credit (₹)": r.credit, "Running Total (₹)": r.running,
-      })),
-    }], `FirmRevenue_${fy}.xlsx`);
+    const fName = firms.find(f => f.id === firmId)?.name || "Firm";
+    const aoa: any[][] = [];
+    aoa.push(["FIRM REVENUE LEDGER"]);
+    aoa.push([`Firm: ${fName}`]);
+    aoa.push([`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`]);
+    aoa.push([`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
+    aoa.push([]);
+    aoa.push(["Sr.", "Date", "Document No", "Client", "Type", "Debit (₹)", "Credit (₹)", "Running Total (₹)"]);
+    rows.forEach((r, i) => aoa.push([
+      i + 1,
+      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+      r.docNo, r.clientName, r.docType,
+      r.debit || "", r.credit || "", r.running,
+    ]));
+    aoa.push([]);
+    const totalD = rows.reduce((s, r) => s + r.debit, 0);
+    const totalC = rows.reduce((s, r) => s + r.credit, 0);
+    aoa.push(["", "TOTAL", "", "", "", totalD, totalC, rows[rows.length - 1]?.running || 0]);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 4 }, { wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 7 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 7 } },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Firm Revenue");
+    XLSX.writeFile(wb, `FirmRevenue_${fName}_${fromDate}_${toDate}.xlsx`);
+  };
+
+  const handleDownloadPdf = async () => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const DARK_BLUE = [26, 58, 92] as [number, number, number];
+    const fName = firms.find(f => f.id === firmId)?.name || "Firm";
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 297, 22, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("FIRM REVENUE LEDGER", 14, 10);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Firm: ${fName}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`, 14, 17);
+    doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
+    const totalD = rows.reduce((s, r) => s + r.debit, 0);
+    const totalC = rows.reduce((s, r) => s + r.credit, 0);
+    const tableRows: any[][] = rows.map(r => [
+      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+      r.docNo, r.clientName, r.docType,
+      r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+      r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+      r.running.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+    ]);
+    tableRows.push([
+      { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: totalD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: totalC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: (rows[rows.length - 1]?.running || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+    ]);
+    autoTable(doc, {
+      startY: 26,
+      head: [["Date", "Doc No", "Client", "Type", "Debit (₹)", "Credit (₹)", "Running Total (₹)"]],
+      body: tableRows,
+      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [248, 251, 255] },
+      columnStyles: {
+        0: { cellWidth: 22, halign: "center" },
+        1: { cellWidth: 22, halign: "center" },
+        2: { cellWidth: 55 },
+        3: { cellWidth: 25 },
+        4: { cellWidth: 30, halign: "right" },
+        5: { cellWidth: 30, halign: "right" },
+        6: { cellWidth: 32, halign: "right" },
+      },
+      margin: { left: 10, right: 10 },
+      didDrawPage: (hookData) => {
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(7); doc.setTextColor(120, 130, 145);
+        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
+        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
+        doc.line(10, 202, 287, 202);
+      },
+    });
+    doc.save(`FirmRevenue_${fName}_${fromDate}_${toDate}.pdf`);
   };
 
   return (
@@ -823,12 +1018,22 @@ function FirmRevenueLedgerView() {
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={fy} onValueChange={setFy}>
+        <Select value={fy} onValueChange={v => { setFy(v); const r = fyToDateRange(v); setFromDate(r.start); setToDate(r.end); }}>
           <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {getFYOptions().map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
           </SelectContent>
         </Select>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">From</Label>
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">To</Label>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[140px] h-9 text-sm" />
+          </div>
+        </div>
         <Select value={docTypeFilter} onValueChange={setDocTypeFilter}>
           <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -906,7 +1111,10 @@ function FirmRevenueLedgerView() {
             </CardContent></Card>
           </div>
 
-          <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Download XLSX</Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
+            <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
+          </div>
         </>
       )}
     </div>
