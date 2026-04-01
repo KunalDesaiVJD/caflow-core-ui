@@ -29,7 +29,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, FileText, RefreshCw, ArrowRight, RotateCcw, Lock, Download,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock,
 } from "lucide-react";
 
 // ─── Types ───
@@ -53,7 +53,7 @@ interface Challan {
   is_book_entry: boolean; transfer_voucher_no: string | null;
   cheque_dd_no: string | null; bank_name: string | null;
   section_code: string | null; challan_remarks: string | null;
-  late_fees_234e: number; challan_file_url: string | null;
+  late_fees_234e: number;
   // Issue 6 + 7D + 7H
   late_fees_used: number; fully_utilized: boolean;
   origin_quarter: string | null; origin_fy: string | null;
@@ -195,11 +195,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [challanDialogOpen, setChallanDialogOpen] = useState(false);
   const [editingChallan, setEditingChallan] = useState<Challan | null>(null);
   const [challanForm, setChallanForm] = useState<Record<string, any>>({});
-  // Issue 4: Challan PDF in modal
-  const [challanModalFileUrl, setChallanModalFileUrl] = useState<string | null>(null);
-  const [challanModalUploading, setChallanModalUploading] = useState(false);
-  const challanModalFileRef = useRef<HTMLInputElement>(null);
-
   // 24Q salary drawer
   const [salaryDrawerOpen, setSalaryDrawerOpen] = useState(false);
   const [salaryDeductee, setSalaryDeductee] = useState<Deductee | null>(null);
@@ -207,7 +202,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [taxRegime, setTaxRegime] = useState<"new" | "old">("new");
 
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [challanUploading, setChallanUploading] = useState<string | null>(null);
 
   // ─── Rate Master ───
   useEffect(() => {
@@ -363,7 +357,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   const openEditChallan = (c: Challan) => {
     setEditingChallan(c);
-    setChallanModalFileUrl(c.challan_file_url); // Issue 4
     setChallanForm({
       bsr_code: c.bsr_code || "", challan_serial_no: c.challan_serial_no || "",
       deposit_date: c.deposit_date || "", minor_head: c.minor_head_of_challan || "200",
@@ -419,7 +412,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       section_code: challanForm.section_code || null,
       challan_remarks: challanForm.remarks || null,
       late_fees_234e: parseFloat(challanForm.late_fees_234e) || 0,
-      challan_file_url: challanModalFileUrl, // Issue 4
     };
     let error;
     if (editingChallan) {
@@ -438,34 +430,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
     if (filing) fetchChallans(filing.id);
-  };
-
-  // Issue 4: Upload PDF in challan modal
-  const handleModalFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    if (file.type !== "application/pdf") { toast({ title: "Only PDF files allowed", variant: "destructive" }); return; }
-    if (file.size > 5 * 1024 * 1024) { toast({ title: "File must be under 5MB", variant: "destructive" }); return; }
-    setChallanModalUploading(true);
-    const challanId = editingChallan?.id || `tmp-${Date.now()}`;
-    const path = `${filing?.id || "tmp"}/${challanId}/challan.pdf`;
-    const { error } = await supabase.storage.from("tds-challan-files").upload(path, file, { upsert: true });
-    if (error) { toast({ title: "Upload failed. Please try again.", variant: "destructive" }); }
-    else { setChallanModalFileUrl(path); toast({ title: "PDF uploaded" }); }
-    setChallanModalUploading(false);
-  };
-
-  const viewModalFile = async () => {
-    if (!challanModalFileUrl) return;
-    const { data } = await supabase.storage.from("tds-challan-files").createSignedUrl(challanModalFileUrl, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  };
-
-  const downloadModalFile = async () => {
-    if (!challanModalFileUrl) return;
-    const { data } = await supabase.storage.from("tds-challan-files").createSignedUrl(challanModalFileUrl, 60);
-    if (data?.signedUrl) { const a = document.createElement("a"); a.href = data.signedUrl; a.download = "challan.pdf"; a.click(); }
   };
 
   // ─── Deductee CRUD ───
@@ -751,39 +715,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   // Issue 1: Row-level read-only check
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
 
-  // ─── Challan file helpers (Issue 9) ───
-  const uploadChallanFile = async (challan: Challan, file: File) => {
-    if (!filing) return;
-    setChallanUploading(challan.id);
-    const ext = file.name.split(".").pop() || "pdf";
-    const path = `${filing.id}/${challan.id}.${ext}`;
-    const { error } = await supabase.storage.from("tds-challan-files").upload(path, file, { upsert: true });
-    if (error) { toast({ title: "Upload failed. Please try again.", variant: "destructive" }); }
-    else {
-      await supabase.from("tds_challans").update({ challan_file_url: path } as any).eq("id", challan.id);
-      await fetchChallans(filing.id);
-      toast({ title: "Challan file uploaded" });
-    }
-    setChallanUploading(null);
-  };
-  const viewChallanFile = async (challan: Challan) => {
-    if (!challan.challan_file_url) return;
-    const { data } = await supabase.storage.from("tds-challan-files").createSignedUrl(challan.challan_file_url, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  };
-  const downloadChallanFile = async (challan: Challan) => {
-    if (!challan.challan_file_url) return;
-    const { data } = await supabase.storage.from("tds-challan-files").createSignedUrl(challan.challan_file_url, 60);
-    if (data?.signedUrl) { const a = document.createElement("a"); a.href = data.signedUrl; a.download = "challan.pdf"; a.click(); }
-  };
-  const deleteChallanFile = async (challan: Challan) => {
-    if (!challan.challan_file_url || !filing || isFilingLocked) return;
-    await supabase.storage.from("tds-challan-files").remove([challan.challan_file_url]);
-    await supabase.from("tds_challans").update({ challan_file_url: null } as any).eq("id", challan.id);
-    await fetchChallans(filing.id);
-    toast({ title: "File removed" });
-  };
-
   const sectionOptions = useMemo(() => {
     return rateMaster.map(r => ({ value: r.section_code, label: `${r.section_code} — ${r.nature_of_payment || ""}` }));
   }, [rateMaster]);
@@ -1046,27 +977,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
                           </div>
 
-                          {/* Issue 2: PDF section - filed vs not filed */}
-                          <div className="flex items-center gap-1 mt-1 pt-1 border-t border-border/30" onClick={e => e.stopPropagation()}>
-                            {c.challan_file_url ? (
-                              <>
-                                <Button variant="ghost" size="icon" className="h-5 w-5 text-primary" title="View" onClick={() => viewChallanFile(c)}><FileText size={10} /></Button>
-                                <Button variant="ghost" size="icon" className="h-5 w-5 text-blue-600" title="Download" onClick={() => downloadChallanFile(c)}><Download size={10} /></Button>
-                                {/* Only show delete when NOT filed */}
-                                {!isFilingLocked && (
-                                  <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" title="Remove" onClick={() => deleteChallanFile(c)}><Trash2 size={10} /></Button>
-                                )}
-                                <span className="text-[9px] text-emerald-600">PDF attached</span>
-                              </>
-                            ) : isFilingLocked ? (
-                              <span className="text-[9px] text-muted-foreground">No PDF attached</span>
-                            ) : (
-                              <label className={cn("cursor-pointer text-[9px] text-muted-foreground hover:text-primary flex items-center gap-0.5", challanUploading === c.id && "opacity-50 pointer-events-none")}>
-                                <FileText size={10} /> {challanUploading === c.id ? "Uploading..." : "Attach PDF"}
-                                <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadChallanFile(c, f); e.target.value = ""; }} />
-                              </label>
-                            )}
-                          </div>
                         </div>
 
                         {/* Issue 2: Hide Edit/Delete when filed */}
@@ -1517,27 +1427,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
               <Textarea value={challanForm.remarks || ""} onChange={e => setChallanForm(p => ({ ...p, remarks: e.target.value }))} rows={2} />
             </div>
 
-            {/* Issue 4: Challan PDF Attachment */}
-            <div className="space-y-2 border-t pt-3">
-              <Label className="text-xs font-semibold">Challan Attachment (PDF)</Label>
-              {challanModalFileUrl ? (
-                <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
-                  <FileText className="w-4 h-4 text-primary shrink-0" />
-                  <span className="flex-1 text-xs text-muted-foreground truncate">PDF attached</span>
-                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={viewModalFile}>👁 View</Button>
-                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={downloadModalFile}><Download size={12} /></Button>
-                  <Button size="sm" variant="destructive" className="h-7 text-xs gap-1" onClick={() => setChallanModalFileUrl(null)}>🗑 Remove</Button>
-                </div>
-              ) : (
-                <div>
-                  <input type="file" accept=".pdf" className="hidden" ref={challanModalFileRef} onChange={handleModalFileUpload} />
-                  <Button variant="outline" size="sm" className="h-8 text-xs gap-1" disabled={challanModalUploading}
-                    onClick={() => challanModalFileRef.current?.click()}>
-                    <FileText size={12} /> {challanModalUploading ? "Uploading..." : "📎 Upload PDF"}
-                  </Button>
-                </div>
-              )}
-            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setChallanDialogOpen(false)}>Cancel</Button>
