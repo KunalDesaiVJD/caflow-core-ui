@@ -78,6 +78,40 @@ const SKIP_ROW_NAMES = new Set([
   "grand total","grand  total","grandtotal","total","grand totals"
 ]);
 
+// ── FM 13: words that indicate a REAL Tally group/sub-group row ─────────
+// Keep only terms that appear in Tally's standard group names.
+// DO NOT include words that also commonly appear in ledger names
+// (e.g. "bank", "cash", "charges", "salary" — these are often ledgers).
+const GROUP_NAME_HINTS = [
+  "accounts","assets","liabilities","capital",
+  "loans","creditors","debtors","stock",
+  "sales","purchases","expenses","incomes",
+  "investments","provisions","reserves","equity",
+  "funds","current assets","current liabilities",
+  "fixed assets","indirect","direct","sundry",
+  "payables","receivables","duties and taxes",
+  "duties & taxes","bank accounts","bank balances","bank od",
+  // Standard Tally single-child sub-group names that should never be de-grouped
+  "cash-in-hand","cash in hand",
+  "deposits (asset)","deposits (assets)",
+  "opening stock","closing stock",
+  "secured loans","unsecured loans",
+];
+
+function looksLikeGroupName(name: string): boolean {
+  const lower = normalizeGroup(name);
+  return GROUP_NAME_HINTS.some(h => lower.includes(h));
+}
+
+// ── FM 14: Read bold style from XLSX cell ─────────────────────────────────
+// Tally Excel exports: GROUP/sub-group rows are ALWAYS bold; ledger rows are NOT.
+function isRowBold(ws: XLSX.WorkSheet, r: number, c: number): boolean {
+  const cell = ws[XLSX.utils.encode_cell({ r, c })];
+  if (!cell || !cell.s) return false;
+  const bold = cell.s?.font?.bold;
+  return bold === true || bold === 1;
+}
+
 // ── Classification ────────────────────────────────────────────────────────
 function normalizeGroup(name: string): string {
   return name.toLowerCase()
@@ -213,12 +247,20 @@ interface HierarchyNode {
 }
 
 // ── FM 8: Hierarchy detection by value matching ───────────────────────────
+// KEY FIX: When accumulating children for a candidate parent row i, if we
+// encounter a row j that is already detected as a group, we must SKIP its
+// interior children and jump to spanEnd[j]+1.  Without this, a nested group
+// like "Current Assets" (value=100) would falsely match at
+// "Sundry Debtors(60) + Ledger A(40) = 100" instead of the correct
+// "Sundry Debtors(60) + Bank Accounts(40) = 100".
 function buildHierarchy(rows: TBRow[]): {
   isGrp: boolean[]; parentIdx: number[];
 } {
   const n = rows.length;
   const isGrp    = new Array<boolean>(n).fill(false);
   const parentIdx = new Array<number>(n).fill(-1);
+  // spanEnd[i] = last index in the span of group i (i.e., its last descendant)
+  const spanEnd  = new Array<number>(n).fill(-1);
 
   for (let i = n - 2; i >= 0; i--) {
     const t = rows[i];
@@ -231,23 +273,78 @@ function buildHierarchy(rows: TBRow[]): {
     if (!hasVal) continue;
 
     let sCl=0, sOp=0, sDr=0, sCr=0, cnt=0;
-    for (let j = i+1; j < n && j-i < 600; j++) {
+    // Use a while loop so we can jump over sub-group interiors
+    let j = i + 1;
+    while (j < n && j - i < 600) {
       sCl += rows[j].closing;  sOp += rows[j].opening;
       sDr += rows[j].txnDebit; sCr += rows[j].txnCredit;
       cnt++;
-      const ok =
-        (t.closing   !== 0 && Math.abs(sCl - t.closing)   <= tol) ||
-        (t.txnDebit  !== 0 && Math.abs(sDr - t.txnDebit)  <= tol) ||
-        (t.txnCredit !== 0 && Math.abs(sCr - t.txnCredit) <= tol) ||
-        (t.opening   !== 0 && Math.abs(sOp - t.opening)   <= tol);
+      // Prioritise closing-balance match.
+      // When the row has a significant closing value (> tolerance), only a
+      // closing-balance match qualifies — this prevents false positives caused
+      // by coincidental opening-balance equality (e.g. two sibling accounts
+      // both with opening=507 would otherwise falsely trigger a group).
+      // When closing ≈ 0 (contra / nil-balance accounts), fall back to a
+      // two-dimension debit+credit match, which is still tight enough.
+      const clSignificant = Math.abs(t.closing) > tol;
+      const ok = clSignificant
+        ? Math.abs(sCl - t.closing) <= tol
+        : (
+            (t.txnDebit  !== 0 && Math.abs(sDr - t.txnDebit)  <= tol &&
+             t.txnCredit !== 0 && Math.abs(sCr - t.txnCredit) <= tol) ||
+            (t.txnDebit  !== 0 && Math.abs(sDr - t.txnDebit)  <= tol &&
+             t.opening   !== 0 && Math.abs(sOp - t.opening)   <= tol)
+          );
       if (ok && cnt >= 1) {
         isGrp[i] = true;
-        for (let k = i+1; k <= j; k++)
+        spanEnd[i] = j;
+        // Assign direct parents — skip over sub-group interiors
+        let k = i + 1;
+        while (k <= j) {
           if (parentIdx[k] === -1) parentIdx[k] = i;
+          // Jump over already-detected group's children
+          k = (isGrp[k] && spanEnd[k] >= k) ? spanEnd[k] + 1 : k + 1;
+        }
         break;
       }
+      // Jump over the interior of an already-detected sub-group so its
+      // individual leaf rows are NOT double-counted in the running sum.
+      j = (isGrp[j] && spanEnd[j] >= j) ? spanEnd[j] + 1 : j + 1;
     }
   }
+  // ── FM 13: Remove spurious single-child groups ──────────────────────────
+  // Problem (bottom-to-top order): two sibling leaves A and B with the same
+  // value cause A to be falsely detected as B's parent before their real
+  // parent (which comes earlier in the file) is processed.
+  // Fix: a non-root group whose ONLY direct child is a leaf AND whose value
+  // equals that leaf's value AND whose name doesn't look like a real
+  // accounting group → de-group it and promote the child to its grandparent.
+  for (let i = 0; i < n; i++) {
+    if (!isGrp[i]) continue;
+    if (parentIdx[i] === -1) continue; // keep root groups intact
+
+    const directChildren: number[] = [];
+    for (let k = i + 1; k < n; k++) {
+      if (parentIdx[k] === i) directChildren.push(k);
+    }
+    if (directChildren.length !== 1) continue;
+
+    const k = directChildren[0];
+    if (isGrp[k]) continue; // real sub-group — leave it
+
+    const tol = adaptiveTol(rows[i].closing || rows[i].txnDebit || rows[i].txnCredit);
+    const sameVal =
+      (rows[i].closing   !== 0 && Math.abs(rows[i].closing   - rows[k].closing)   <= tol) ||
+      (rows[i].txnDebit  !== 0 && Math.abs(rows[i].txnDebit  - rows[k].txnDebit)  <= tol) ||
+      (rows[i].txnCredit !== 0 && Math.abs(rows[i].txnCredit - rows[k].txnCredit) <= tol);
+
+    if (sameVal && !looksLikeGroupName(rows[i].name)) {
+      // Promote: make i a leaf and reparent k to i's parent
+      isGrp[i]      = false;
+      parentIdx[k]  = parentIdx[i];
+    }
+  }
+
   return { isGrp, parentIdx };
 }
 
@@ -382,7 +479,34 @@ serve(async (req) => {
       throw new Error(`No data rows found (dataStart=${dataStart})`);
 
     // FM 8+11: detect hierarchy
-    const { isGrp, parentIdx } = buildHierarchy(rawRows);
+    const { isGrp: isGrpRaw, parentIdx: parentIdxRaw } = buildHierarchy(rawRows);
+    const isGrp    = [...isGrpRaw];
+    const parentIdx = [...parentIdxRaw];
+
+    // FM 14: Bold-override — authoritative correction using cell styling.
+    // In Tally Excel: GROUP rows are BOLD, ledger rows are NOT bold.
+    // When bold info is present, any non-bold row detected as a group is a
+    // false positive (e.g. "Bank Charge" falsely parenting "GST EXP").
+    const boldMap = rawRows.map(row => isRowBold(ws, row.rowNum - 1, cols.p));
+    const boldCount = boldMap.filter(Boolean).length;
+    // Only apply when we have meaningful bold info (>1 bold, not all rows bold)
+    if (boldCount >= 2 && boldCount < rawRows.length * 0.9) {
+      const deGrouped = new Set<number>();
+      for (let i = 0; i < rawRows.length; i++) {
+        if (isGrp[i] && !boldMap[i]) {
+          isGrp[i] = false;
+          deGrouped.add(i);
+        }
+      }
+      // Re-parent children of de-grouped nodes (walk up chain to nearest real group)
+      if (deGrouped.size > 0) {
+        for (let k = 0; k < rawRows.length; k++) {
+          let p = parentIdx[k];
+          while (p !== -1 && deGrouped.has(p)) p = parentIdx[p];
+          parentIdx[k] = p;
+        }
+      }
+    }
 
     // ── Resolve primary group (topmost ancestor name) ─────────────────────
     function getPrimaryGroup(idx: number): string {

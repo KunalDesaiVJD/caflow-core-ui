@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2,
-  ChevronRight, ChevronDown, FolderTree, AlertTriangle, Database, FileSpreadsheet
+  ChevronRight, ChevronDown, FolderTree, AlertTriangle, Database, FileSpreadsheet,
+  Building2, Users, Briefcase
 } from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import * as XLSX from "xlsx";
@@ -75,6 +76,52 @@ const ACCOUNT_GROUPS = [...new Set(
     .filter(r => r.group_name)
     .map(r => r.group_name!)
 )].sort();
+
+// ─── Entity type → COA category mapping ───
+const ENTITY_TYPE_TO_COA: Record<string, "corporate" | "llp" | "nce"> = {
+  "Private Ltd": "corporate",
+  "Public Ltd": "corporate",
+  "LLP": "llp",
+  "Proprietorship": "nce",
+  "Partnership": "nce",
+  "HUF": "nce",
+  "Trust": "nce",
+  "AOP": "nce",
+  "BOI": "nce",
+};
+
+const COA_CATEGORY_CONFIG = {
+  corporate: {
+    label: "Corporate",
+    description: "Private Ltd & Public Ltd",
+    subtitle: "Schedule III Div I (AS)",
+    icon: Building2,
+    activeClass: "border-blue-500 bg-blue-50 dark:bg-blue-950/30 text-blue-900 dark:text-blue-100",
+    iconBg: "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300",
+    badgeCls: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
+    entities: ["Private Ltd", "Public Ltd"],
+  },
+  llp: {
+    label: "LLP",
+    description: "Limited Liability Partnership",
+    subtitle: "LLP-specific accounts",
+    icon: Users,
+    activeClass: "border-purple-500 bg-purple-50 dark:bg-purple-950/30 text-purple-900 dark:text-purple-100",
+    iconBg: "bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300",
+    badgeCls: "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
+    entities: ["LLP"],
+  },
+  nce: {
+    label: "Non-Corporate",
+    description: "Propr. · Partnership · HUF · Trust · AOP · BOI",
+    subtitle: "NCE-applicable accounts",
+    icon: Briefcase,
+    activeClass: "border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100",
+    iconBg: "bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300",
+    badgeCls: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+    entities: ["Proprietorship", "Partnership", "HUF", "Trust", "AOP", "BOI"],
+  },
+} as const;
 
 // ─── Fuzzy matching using COA master tally_group_mapping ───
 function fuzzyMatchFromMaster(ledgerName: string, entityType: string): { standard_head: string; account_group: string; bs_pl: string } | null {
@@ -293,12 +340,17 @@ const CoaMappings = () => {
   const [editForm, setEditForm] = useState({ standard_head: "", bs_pl: "", account_group: "" });
   const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
   const [selectedEngagement, setSelectedEngagement] = useState("");
-  const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null }[]>([]);
+  const [engagements, setEngagements] = useState<{ id: string; financial_year: string | null; client_id: string | null; client_name?: string | null; client_entity_type?: string | null }[]>([]);
+  const [clientEntityType, setClientEntityType] = useState<string | null>(null);
   const [mapForms, setMapForms] = useState<Record<string, { standard_head: string; bs_pl: string; account_group: string }>>({});
   const [masterEntityFilter, setMasterEntityFilter] = useState<"all" | "corporate" | "llp" | "nce">("all");
   const [masterDbRows, setMasterDbRows] = useState<CoaMasterDbRow[]>([]);
   const [seedingMaster, setSeedingMaster] = useState(false);
   const [importingMaster, setImportingMaster] = useState(false);
+
+  // Derived: active COA category tab and client-inferred category
+  const activeCOACat = (masterEntityFilter === "all" ? "corporate" : masterEntityFilter) as "corporate" | "llp" | "nce";
+  const inferredClientCat: "corporate" | "llp" | "nce" | null = clientEntityType ? (ENTITY_TYPE_TO_COA[clientEntityType] ?? null) : null;
 
   useEffect(() => {
     loadEngagements();
@@ -310,12 +362,33 @@ const CoaMappings = () => {
     if (selectedEngagement) loadHierarchy();
   }, [selectedEngagement]);
 
+  // Auto-switch COA category when engagement (client) changes
+  useEffect(() => {
+    if (!selectedEngagement || engagements.length === 0) return;
+    const eng = engagements.find(e => e.id === selectedEngagement);
+    const et = eng?.client_entity_type ?? null;
+    setClientEntityType(et);
+    if (et && ENTITY_TYPE_TO_COA[et]) {
+      setMasterEntityFilter(ENTITY_TYPE_TO_COA[et]);
+    }
+  }, [selectedEngagement, engagements]);
+
   async function loadEngagements() {
-    let q = supabase.from("audit_engagements").select("id, financial_year, client_id").order("financial_year", { ascending: false });
+    let q = supabase
+      .from("audit_engagements")
+      .select("id, financial_year, client_id, clients(client_name, entity_type)")
+      .order("financial_year", { ascending: false });
     if (firmId) q = q.eq("firm_id", firmId);
     const { data } = await q.limit(20);
-    setEngagements(data || []);
-    if (data && data.length > 0) setSelectedEngagement(data[0].id);
+    const mapped = ((data || []) as any[]).map((e) => ({
+      id: e.id,
+      financial_year: e.financial_year,
+      client_id: e.client_id,
+      client_name: e.clients?.client_name ?? null,
+      client_entity_type: e.clients?.entity_type ?? null,
+    }));
+    setEngagements(mapped);
+    if (mapped.length > 0) setSelectedEngagement(mapped[0].id);
   }
 
   async function loadHierarchy() {
@@ -417,7 +490,8 @@ const CoaMappings = () => {
       }
 
       setMasterDbRows(seededRows);
-      setMasterEntityFilter("all");
+      // Stay on current entity category (or switch to client's if known)
+      if (inferredClientCat) setMasterEntityFilter(inferredClientCat);
       toast({ title: `Seeded ${firmRows.length} COA master entries from built-in template` });
     } catch (e: any) {
       toast({ title: "Error seeding master", description: e.message, variant: "destructive" });
@@ -525,7 +599,8 @@ const CoaMappings = () => {
 
       const importedRows = await fetchAllMasterRows();
       setMasterDbRows(importedRows);
-      setMasterEntityFilter("all");
+      // Switch to client's entity category if known, else corporate as default
+      setMasterEntityFilter(inferredClientCat ?? "corporate");
       toast({ title: `Imported ${totalImported} COA master entries from ${Object.keys(sheetMap).length} sheet(s)` });
     } catch (err: any) {
       toast({ title: "Import failed", description: err.message, variant: "destructive" });
@@ -596,7 +671,8 @@ const CoaMappings = () => {
   }
 
   function handleExportMaster() {
-    const rows = masterDbRows.map(m => ({
+    // Export only the currently active entity category
+    const exportRows = filteredMasterData.map(m => ({
       "Account Code": m.account_code,
       "Level": m.level,
       "Major Group": m.major_group,
@@ -613,10 +689,11 @@ const CoaMappings = () => {
       "Remarks": m.remarks,
       "Entity Type": m.entity_type,
     }));
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(exportRows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "COA Master");
-    XLSX.writeFile(wb, "coa_master_export.xlsx");
+    const sheetLabel = activeCOACat === "corporate" ? "Corporate COA" : activeCOACat === "llp" ? "LLP COA" : "NCE COA";
+    XLSX.utils.book_append_sheet(wb, ws, sheetLabel);
+    XLSX.writeFile(wb, `coa_master_${activeCOACat}_export.xlsx`);
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -673,7 +750,8 @@ const CoaMappings = () => {
   // Filtered master data for the master tab
   const filteredMasterData = useMemo(() => {
     const source = masterDbRows.length > 0 ? masterDbRows : coaMasterData;
-    return masterEntityFilter === "all" ? source : source.filter(r => r.entity_type === masterEntityFilter);
+    if (masterEntityFilter === "all") return source;
+    return source.filter(r => r.entity_type === masterEntityFilter);
   }, [masterDbRows, masterEntityFilter]);
 
   const masterRootRows = useMemo(() => filteredMasterData.filter(r => r.level === 1), [filteredMasterData]);
@@ -698,12 +776,47 @@ const CoaMappings = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/settings")}>
-          <ArrowLeft className="h-3 w-3" /> Back to Settings
-        </Button>
-        <h1 className="text-2xl font-display font-bold text-foreground">Chart of Accounts Mappings</h1>
-        <p className="text-sm text-muted-foreground">Map Tally/Busy ledger names to standard Schedule III account heads. Hierarchy-aware — mapping a parent auto-nests children.</p>
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <Button variant="ghost" size="sm" className="-ml-2 mb-2 text-xs gap-1" onClick={() => navigate("/settings")}>
+            <ArrowLeft className="h-3 w-3" /> Back to Settings
+          </Button>
+          <h1 className="text-2xl font-display font-bold text-foreground">Chart of Accounts Mappings</h1>
+          <p className="text-sm text-muted-foreground">Map Tally/Busy ledger names to standard Schedule III account heads. Entity-governed — COA adapts to client type automatically.</p>
+        </div>
+        {/* Global engagement / client selector */}
+        {engagements.length > 0 && (
+          <div className="flex flex-col items-end gap-1">
+            <p className="text-xs text-muted-foreground">Active Client / Engagement</p>
+            <Select value={selectedEngagement} onValueChange={setSelectedEngagement}>
+              <SelectTrigger className="w-64 h-9 text-xs">
+                <SelectValue placeholder="Select engagement" />
+              </SelectTrigger>
+              <SelectContent>
+                {engagements.map(e => (
+                  <SelectItem key={e.id} value={e.id} className="text-xs">
+                    <span className="font-medium">{e.client_name || "—"}</span>
+                    <span className="text-muted-foreground ml-2">FY {e.financial_year || "—"}</span>
+                    {e.client_entity_type && (
+                      <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{e.client_entity_type}</span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {clientEntityType && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground">Entity type:</span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{clientEntityType}</span>
+                {inferredClientCat && (
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${COA_CATEGORY_CONFIG[inferredClientCat].badgeCls}`}>
+                    → {COA_CATEGORY_CONFIG[inferredClientCat].label} COA
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <Alert>
@@ -738,14 +851,68 @@ const CoaMappings = () => {
         <TabsContent value="master">
           <Card>
             <CardHeader className="pb-3">
+              {/* ── Entity Category Selector ── */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                {(["corporate", "llp", "nce"] as const).map((cat) => {
+                  const cfg = COA_CATEGORY_CONFIG[cat];
+                  const Icon = cfg.icon;
+                  const count = masterStats[cat];
+                  const isActive = activeCOACat === cat;
+                  const isClientCat = inferredClientCat === cat;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setMasterEntityFilter(cat)}
+                      className={`relative flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                        isActive
+                          ? cfg.activeClass + " shadow-sm"
+                          : "border-border hover:border-muted-foreground/40 hover:bg-muted/30"
+                      }`}
+                    >
+                      <div className={`shrink-0 rounded-lg p-2 ${cfg.iconBg}`}>
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-sm font-semibold">{cfg.label}</span>
+                          {count > 0 && (
+                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${cfg.badgeCls}`}>
+                              {count} heads
+                            </span>
+                          )}
+                          {isClientCat && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground animate-pulse">
+                              Client
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug truncate">{cfg.description}</p>
+                        <p className="text-[10px] text-muted-foreground/70 mt-0.5 italic">{cfg.subtitle}</p>
+                      </div>
+                      {isActive && (
+                        <div className="absolute top-2 right-2">
+                          <Check className="h-3.5 w-3.5 text-primary" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <CardTitle className="text-sm flex items-center gap-2">
-                    <Database className="h-4 w-4" /> COA Master Data
+                    <Database className="h-4 w-4" />
+                    {COA_CATEGORY_CONFIG[activeCOACat].label} COA Master
+                    {inferredClientCat === activeCOACat && clientEntityType && (
+                      <span className="text-[10px] font-normal text-muted-foreground ml-1">
+                        — auto-selected for {clientEntityType} client
+                      </span>
+                    )}
                   </CardTitle>
                   <CardDescription>
                     {masterStats.total > 0
-                      ? `${masterStats.total} entries loaded (Corp: ${masterStats.corporate}, LLP: ${masterStats.llp}, NCE: ${masterStats.nce})`
+                      ? `${filteredMasterData.length} entries for ${COA_CATEGORY_CONFIG[activeCOACat].label} (${masterStats.total} total across all entity types)`
                       : "No master data loaded yet. Seed from template or import your own Excel."}
                   </CardDescription>
                 </div>
@@ -767,7 +934,7 @@ const CoaMappings = () => {
                   <input ref={masterFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportMasterFile} />
                   {masterStats.total > 0 && (
                     <Button variant="outline" size="sm" className="gap-1" onClick={handleExportMaster}>
-                      <Download className="h-3 w-3" /> Export
+                      <Download className="h-3 w-3" /> Export {COA_CATEGORY_CONFIG[activeCOACat].label}
                     </Button>
                   )}
                   <a href="/templates/CAFlow_COA_Master_v2.xlsx" download>
@@ -777,25 +944,12 @@ const CoaMappings = () => {
                   </a>
                 </div>
               </div>
-              {masterStats.total > 0 && (
-                <div className="flex gap-2 mt-3">
-                  <Select value={masterEntityFilter} onValueChange={(value) => setMasterEntityFilter(value as "all" | "corporate" | "llp" | "nce")}>
-                    <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Entity Types</SelectItem>
-                      <SelectItem value="corporate">Corporate</SelectItem>
-                      <SelectItem value="llp">LLP</SelectItem>
-                      <SelectItem value="nce">NCE</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
             </CardHeader>
             <CardContent>
               {filteredMasterData.length === 0 ? (
                 <div className="text-center py-10 space-y-3">
-                  <Database className="h-10 w-10 text-muted-foreground mx-auto" />
-                  <p className="text-sm text-muted-foreground">No COA master data loaded for this entity type.</p>
+                  {(() => { const Icon = COA_CATEGORY_CONFIG[activeCOACat].icon; return <Icon className="h-10 w-10 text-muted-foreground mx-auto" />; })()}
+                  <p className="text-sm text-muted-foreground">No {COA_CATEGORY_CONFIG[activeCOACat].label} COA master data loaded.</p>
                   <p className="text-xs text-muted-foreground">Click "Seed from Template" to load the built-in CAFlow COA Master with 709 accounts across Corporate, LLP, and NCE.</p>
                 </div>
               ) : (
@@ -830,17 +984,26 @@ const CoaMappings = () => {
         <TabsContent value="hierarchy">
           <Card>
             <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <CardTitle className="text-sm">TB Hierarchy with Mapping Status</CardTitle>
-                  <CardDescription>Select an engagement to view its hierarchy and mapping coverage.</CardDescription>
+                  <CardDescription>
+                    {selectedEngagement
+                      ? (() => {
+                          const eng = engagements.find(e => e.id === selectedEngagement);
+                          return eng
+                            ? `${eng.client_name || "—"} · FY ${eng.financial_year || "—"} · ${eng.client_entity_type || "Entity type unknown"}`
+                            : "Engagement selected";
+                        })()
+                      : "Select an engagement above to view hierarchy and mapping coverage."}
+                  </CardDescription>
                 </div>
-                <Select value={selectedEngagement} onValueChange={setSelectedEngagement}>
-                  <SelectTrigger className="w-48 h-8 text-xs"><SelectValue placeholder="Select engagement" /></SelectTrigger>
-                  <SelectContent>
-                    {engagements.map(e => <SelectItem key={e.id} value={e.id} className="text-xs">FY {e.financial_year || "—"}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                {inferredClientCat && (
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium ${COA_CATEGORY_CONFIG[inferredClientCat].badgeCls}`}>
+                    {(() => { const Icon = COA_CATEGORY_CONFIG[inferredClientCat].icon; return <Icon className="h-3.5 w-3.5" />; })()}
+                    {COA_CATEGORY_CONFIG[inferredClientCat].label} Entity
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>

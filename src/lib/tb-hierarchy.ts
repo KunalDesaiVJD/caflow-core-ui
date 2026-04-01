@@ -65,7 +65,7 @@ const BS_LIABILITY_KEYWORDS = [
   "surplus", "loan", "secured loan", "unsecured loan", "bank od", "overdraft", "current liabilities",
   "duties & taxes", "duties and taxes", "gst payable", "tds payable", "tcs payable", "provisions",
   "sundry creditors", "creditor", "payable", "liabilities", "equity", "partner", "borrowings",
-  "outstanding expenses", "accrued", "statutory dues"
+  "outstanding expenses", "accrued", "statutory dues", "profit and loss", "profit loss"
 ];
 
 const PL_INCOME_KEYWORDS = [
@@ -77,7 +77,7 @@ const PL_EXPENSE_KEYWORDS = [
   "purchase", "expense", "expenses", "direct expense", "indirect expense", "employee", "salary", "wages",
   "manufacturing", "consumption", "finance cost", "financial expense", "depreciation", "rent", "freight",
   "printing", "repairs", "travelling", "advertising", "professional fee", "electricity", "telephone",
-  "partner payout", "profit and loss", "profit   loss"
+  "partner payout"
 ];
 
 const AGGREGATE_HINTS = [
@@ -140,14 +140,24 @@ function looksLikeLedgerName(name: string) {
 
 function inferSection(name: string, bsPlSide: string, normalBal?: string | null): TbSectionType {
   const lower = normalizeTbName(name);
+  const bal = (normalBal || "").toLowerCase();
+
+  // Trust the edge function's classification when it is definitive — keyword matching can
+  // produce wrong results for uncommon Tally group names (e.g. Gujarati names, custom groups).
+  if (bsPlSide === "BS" && bal === "cr") return "bs_liability";
+  if (bsPlSide === "BS" && bal === "dr") return "bs_asset";
+  if (bsPlSide === "PL" && bal === "cr") return "pl_income";
+  if (bsPlSide === "PL" && bal === "dr") return "pl_expense";
+
+  // Fall back to keyword matching for nodes the edge function left as Unknown.
   if (BS_ASSET_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_asset";
   if (BS_LIABILITY_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_liability";
   if (PL_INCOME_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_income";
   if (PL_EXPENSE_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_expense";
 
-  const bal = (normalBal || "").toLowerCase();
-  if (bsPlSide === "BS") return bal === "cr" ? "bs_liability" : "bs_asset";
-  if (bsPlSide === "PL") return bal === "cr" ? "pl_income" : "pl_expense";
+  // Last-resort: use bsPlSide alone when normalBal is unknown
+  if (bsPlSide === "BS") return "bs_asset";
+  if (bsPlSide === "PL") return "pl_expense";
   return "unknown";
 }
 
@@ -301,8 +311,103 @@ function collectDuplicates(nodes: TbHierarchyNodeLike[]) {
   return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
 }
 
+// ── Targeted repair: re-link orphaned sub-groups to their parent ─────────────
+// Problem: the edge function may correctly detect many parent–child pairs (e.g.
+// "Capital Account → partners") yet MISS the link between a higher-level group
+// (e.g. "Current Assets") and its already-detected sub-groups (e.g. "Bank Accounts",
+// "Cash-in-Hand") — leaving those sub-groups as orphan roots.
+// This causes BS totals to double-count: the aggregate group value + all sub-group
+// values are each added separately in the section total.
+//
+// Fix: after taking the edge function hierarchy, scan every root node that
+// (a) looks like an accounting aggregate (name contains a known aggregate keyword),
+// (b) is marked as a leaf (no children from the edge function), and
+// (c) has a significant closing value.
+// For each such candidate, walk forward through subsequent root nodes and
+// accumulate |closing|.  If the running total matches the candidate's |closing|
+// within tolerance, reparent those root nodes to the candidate.
+//
+// This repair is safe: it only touches aggregate-named root leaves, so it can
+// never incorrectly absorb partner names ("Ankur V Domadiya 50% Share") which
+// are not aggregate-named.
+function repairOrphanedGroups(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike[] {
+  // Work on a shallow copy so we can mutate parentNodeId / isLeaf
+  const list = nodes.map((n) => ({ ...n }));
+  const ordered = [...list].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0));
+
+  for (let ci = 0; ci < ordered.length; ci++) {
+    const candidate = ordered[ci];
+    // Only consider root nodes that look like aggregate group names.
+    // Also handle nodes the edge function stored as isLeaf=false but with NO children
+    // (e.g. "Current Assets" detected as a bold group header but children were not linked).
+    if (candidate.parentNodeId !== null) continue;
+    const hasExistingChildren = list.some(n => n.parentNodeId === candidate.nodeId);
+    if (!candidate.isLeaf && hasExistingChildren) continue; // already has real children — skip
+    if (!looksLikeAggregateName(candidate.name)) continue;
+    if (!hasAnyValue(candidate)) continue;
+
+    const absCl = Math.abs(candidate.closing || 0);
+    const absOp = Math.abs(candidate.opening || 0);
+    const absDr = Math.abs(candidate.txnDebit || 0);
+    const absCr = Math.abs(candidate.txnCredit || 0);
+    // Require at least closing to be significant
+    if (absCl < 1) continue;
+
+    const tol = Math.max(2, absCl * 0.001); // 0.1 % relative tolerance
+
+    let sumCl = 0, sumOp = 0, sumDr = 0, sumCr = 0;
+    const span: TbHierarchyNodeLike[] = [];
+
+    for (let si = ci + 1; si < ordered.length; si++) {
+      const sibling = ordered[si];
+      if (sibling.parentNodeId !== null) continue; // skip non-root nodes
+
+      sumCl += Math.abs(sibling.closing || 0);
+      sumOp += Math.abs(sibling.opening || 0);
+      sumDr += Math.abs(sibling.txnDebit || 0);
+      sumCr += Math.abs(sibling.txnCredit || 0);
+      span.push(sibling);
+
+      const clMatch = Math.abs(sumCl - absCl) <= tol;
+      const opMatch = absOp > 1 && Math.abs(sumOp - absOp) <= tol;
+      const drMatch = absDr > 1 && Math.abs(sumDr - absDr) <= tol;
+      const crMatch = absCr > 1 && Math.abs(sumCr - absCr) <= tol;
+      const matchCount = [clMatch, opMatch, drMatch, crMatch].filter(Boolean).length;
+
+      // Accept if closing matches. Require a second dimension ONLY when the
+      // candidate itself has other significant dimensions (opening/debit/credit).
+      // Tally group summary rows often carry ONLY a closing balance — the three
+      // other columns are zero — so demanding matchCount >= 2 would never fire
+      // and the repair would be silently skipped (causing BS double-counting).
+      const hasOtherDimensions = absOp > 1 || absDr > 1 || absCr > 1;
+      if (clMatch && (!hasOtherDimensions || matchCount >= 2)) {
+        // Re-establish parent–child relationships
+        for (const child of span) {
+          child.parentNodeId = candidate.nodeId;
+        }
+        candidate.isLeaf = false;
+        break;
+      }
+
+      // If sum already exceeds target by more than tolerance, stop looking
+      if (sumCl > absCl + tol) break;
+    }
+  }
+
+  return list;
+}
+
 export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPresentationModel {
-  const repaired = rebuildHierarchy(rawNodes);
+  // Step 1 — take the edge function hierarchy when available (it uses bold-cell
+  // detection and span-skipping which is authoritative for Tally XLSX exports).
+  // Step 2 — run repairOrphanedGroups to fix any aggregate root-leaves that the
+  //          edge function missed (e.g. "Current Assets" shown as a standalone
+  //          leaf while its sub-groups appear as sibling root nodes).
+  const hasEdgeFunctionHierarchy = rawNodes.some((n) => n.parentNodeId !== null);
+  const base = hasEdgeFunctionHierarchy
+    ? [...rawNodes].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0))
+    : rebuildHierarchy(rawNodes);
+  const repaired = repairOrphanedGroups(base);
   const activeNodes = repaired.map((node) => ({ ...node }));
   const childrenByParent = new Map<string, TbHierarchyNodeLike[]>();
 

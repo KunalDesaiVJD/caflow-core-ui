@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,9 +22,10 @@ import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
-  CalendarDays
+  CalendarDays, Sparkles, Link2, SkipForward, Check
 } from "lucide-react";
-import { buildTbPresentationModel, type TbPresentationModel } from "@/lib/tb-hierarchy";
+import { buildTbPresentationModel, type TbPresentationModel, type TbSectionType } from "@/lib/tb-hierarchy";
+import coaMasterDataJson from "@/data/coa-master-data.json";
 
 // ─── Types ───
 interface PipelineStage2Props {
@@ -183,6 +184,32 @@ interface ValidationResult {
   unclassifiedNodes?: number;
   allRulesPassed?: boolean;
 }
+
+// ─── COA Mapping Row ───
+interface CoaMappingRow {
+  ledger: string;
+  tallyGroup: string;
+  closing: number;
+  bsPlSide: string;
+  suggestedHead: string;
+  suggestedGroup: string;
+  suggestedBsPl: string;
+  confidence: "high" | "medium" | "low" | "";
+  reason: string;
+  accepted: boolean;
+  skipped: boolean;
+  customHead: string;
+  customGroup: string;
+  customBsPl: string;
+  alreadyMapped?: boolean;
+}
+
+// ─── Entity type → COA category ───
+const ENTITY_TO_COA_CAT: Record<string, string> = {
+  "Private Ltd": "corporate", "Public Ltd": "corporate",
+  "LLP": "llp",
+  "Proprietorship": "nce", "Partnership": "nce", "HUF": "nce", "Trust": "nce", "AOP": "nce", "BOI": "nce",
+};
 
 // ─── Chunk size for large file uploads (1.5MB base64 per chunk) ───
 const CHUNK_SIZE_BYTES = 1.5 * 1024 * 1024;
@@ -344,6 +371,26 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [deletingTb, setDeletingTb] = useState(false);
   const [tbStatusMsg, setTbStatusMsg] = useState('');
   const [aiClassifying, setAiClassifying] = useState(false);
+
+  // ─── AI Pre-Analysis State ───
+  const [tbAiPreAnalysis, setTbAiPreAnalysis] = useState<{
+    score: number; status: string; summary: string;
+    issues: { severity: string; category: string; title: string; description: string; affected: string[] }[];
+    insights: { title: string; finding: string }[];
+    suggestions: string[];
+  } | null>(null);
+  const [tbAiAnalysing, setTbAiAnalysing] = useState(false);
+
+  // ─── COA Mapping State ───
+  const [coaMappingRows, setCoaMappingRows] = useState<CoaMappingRow[]>([]);
+  const [coaMappingLoading, setCoaMappingLoading] = useState(false);
+  const [coaMappingSaving, setCoaMappingSaving] = useState(false);
+  const [coaMappingDone, setCoaMappingDone] = useState(false);
+  // Maps root-group name → "section|||displayGroupName" (e.g. "bs_asset|||Bank Accounts")
+  // or just "section" for AI-suggested results. Section key extracted on apply.
+  const [tbManualClassifications, setTbManualClassifications] = useState<Record<string, string>>({});
+  const [aiClassifyingUnclassified, setAiClassifyingUnclassified] = useState(false);
+  const [applyingManualClassify, setApplyingManualClassify] = useState(false);
 
   // ─── Existing TB snapshot ───
   // Fetch existing TB snapshots — Tally import creates N rows (one per ledger),
@@ -803,9 +850,41 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         });
 
         setTbStep(5);
-        toast.success(`${data.leafLedgers} ledgers imported — ${data.detectedFormat} format detected. Groups: ${data.groupsDetected}, Skipped: ${data.rowsSkipped}`);
+        toast.success(`${data.leafCount} ledgers imported — ${data.detectedFormat} format detected. Groups: ${data.primaryGroupCount}, Skipped: ${data.unknownAccounts ?? 0}`);
         queryClient.invalidateQueries({ queryKey: ["tb-snapshot-for-engagement"] });
         queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes"] });
+
+        // Change-2: Auto-classify unclassified root groups immediately after import
+        const unclassifiedOnImport = strictPresentation.rootNodes.filter(
+          (r) => !strictPresentation.sections.some((s) => s.nodes.some((n) => n.nodeId === r.nodeId))
+        );
+        if (unclassifiedOnImport.length > 0) {
+          try {
+            const groupsCtx = buildGroupContext(unclassifiedOnImport, mappedHierarchy);
+            const { data: aiData } = await supabase.functions.invoke("claude-gateway", {
+              body: {
+                request_type: "tb_classifier",
+                user_message: `Classify each Tally Trial Balance group using the context (edgeClassification, normalBal, closingSign, sampleAccounts) as bs_asset, bs_liability, pl_income, or pl_expense.\nGroups: ${JSON.stringify(groupsCtx)}\nReturn ONLY JSON: {"GroupName":"bs_asset"}`,
+              },
+            });
+            if (aiData && typeof aiData === "object" && !aiData.raw) {
+              const valid = ["bs_asset","bs_liability","pl_income","pl_expense"];
+              const aiUpdates: Record<string, string> = {};
+              for (const [name, section] of Object.entries(aiData as Record<string,string>)) {
+                if (valid.includes(section)) aiUpdates[name] = section;
+              }
+              if (Object.keys(aiUpdates).length > 0) {
+                setTbManualClassifications(aiUpdates);
+                toast.info(`AI pre-classified ${Object.keys(aiUpdates).length} unclassified group(s). Review in the Unclassified panel below and click Apply.`);
+              }
+            }
+          } catch {
+            // Non-fatal — user can still manually classify
+          }
+        }
+
+        // ── New Change: AI 360° pre-analysis (runs in background, non-blocking) ──
+        handleAiPreAnalysis(strictPresentation).catch(() => {});
         return;
       }
 
@@ -867,6 +946,37 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     } finally {
       setTbProcessing(false);
       setTbProgressLabel("");
+    }
+  };
+
+  // ═══════ AI PRE-ANALYSIS ═══════
+  const handleAiPreAnalysis = async (presentation: TbPresentationModel) => {
+    setTbAiAnalysing(true);
+    try {
+      const { rootNodes, sections, grandTotal, validation } = presentation;
+
+      const groupLines = rootNodes.slice(0, 30).map(r => {
+        const sec = sections.find(s => s.nodes.some(n => n.nodeId === r.nodeId));
+        const totals = sumDisplayedNode(r.nodeId, presentation.activeNodes as TbHierarchyNode[]);
+        const childCount = presentation.activeNodes.filter(n => n.parentNodeId === r.nodeId).length;
+        return `  ${r.name}: section=${sec?.key || 'unclassified'} | closing=${Math.round(totals.closing)} | opening=${Math.round(totals.opening)} | children=${childCount}`;
+      }).join('\n');
+
+      const leafSample = presentation.activeNodes.filter(n => n.isLeaf).slice(0, 15)
+        .map(n => `  ${n.name} (${n.primaryGroup}): cl=${Math.round(n.closing || 0)}`).join('\n');
+
+      const msg = `Trial Balance Pre-Audit Analysis Request:\n\nMETRICS:\n- Total Ledgers: ${presentation.leafCount}\n- Debit Total: ${Math.round(grandTotal.txnDebit)}, Credit Total: ${Math.round(grandTotal.txnCredit)}\n- Difference: ${Math.round(Math.abs(grandTotal.txnDebit - grandTotal.txnCredit))}\n- TB Balanced: ${validation.isBalanced}\n- Primary Groups: ${rootNodes.length}\n- BS Assets: ${Math.round(validation.bsAssets)}, BS Liabilities: ${Math.round(validation.bsLiabilities)}\n- BS Balanced: ${Math.abs(validation.bsAssets - validation.bsLiabilities) < 1}\n- Unclassified Groups: ${validation.unclassifiedNodes}\n- Group Totals Tallied: ${validation.groupTotalsTallied}\n- Only Groups Collapsible: ${validation.onlyGroupsCollapsible}\n- Duplicate Ledgers: ${validation.duplicateNames.length > 0 ? validation.duplicateNames.join(', ') : 'None'}\n\nPRIMARY GROUPS:\n${groupLines}\n\nSAMPLE LEDGERS:\n${leafSample}`;
+
+      const { data, error } = await supabase.functions.invoke('claude-gateway', {
+        body: { request_type: 'tb_pre_analyser', user_message: msg },
+      });
+      if (!error && data && !data.raw && data.score !== undefined) {
+        setTbAiPreAnalysis(data);
+      }
+    } catch {
+      // Non-fatal
+    } finally {
+      setTbAiAnalysing(false);
     }
   };
 
@@ -935,6 +1045,116 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
   };
 
+  // ── Build rich context for AI classification ────────────────────────────
+  // Change-4: Send closing balance, sign, edge-function's bsPlSide + normalBal,
+  // and sample ledger names so Claude can classify using the actual Excel data.
+  function buildGroupContext(roots: typeof tbHierarchyNodes, source: typeof tbHierarchyNodes) {
+    return roots.map((r) => {
+      const leaves = source.filter((n) => n.isLeaf && n.primaryGroup === r.name);
+      const totalCl = leaves.reduce((s, n) => s + (n.closing || 0), 0);
+      return {
+        name: r.name,
+        edgeClassification: r.bsPlSide || "Unknown",
+        normalBal: r.normalBal || "Unknown",
+        closingBalance: Math.abs(totalCl).toFixed(2),
+        closingSign: totalCl >= 0 ? "Dr" : "Cr",
+        sampleAccounts: leaves.slice(0, 5).map((n) => n.name),
+      };
+    });
+  }
+
+  // ── Ask Claude API to classify unclassified root groups ────────────────
+  const handleAiClassifyUnclassified = async () => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    const presentation = buildTbPresentationModel(source);
+    const unknownRoots = presentation.rootNodes.filter(
+      (r) => (presentation.sections.find((s) => s.nodes.some((n) => n.nodeId === r.nodeId)) === undefined)
+    );
+    if (unknownRoots.length === 0) { toast.info("No unclassified groups found"); return; }
+    setAiClassifyingUnclassified(true);
+    try {
+      const groupsCtx = buildGroupContext(unknownRoots, source);
+      const { data, error } = await supabase.functions.invoke("claude-gateway", {
+        body: {
+          request_type: "tb_classifier",
+          user_message: `Classify each Tally Trial Balance group. Use the context fields (edgeClassification, normalBal, closingSign, sampleAccounts) to accurately determine if it is bs_asset, bs_liability, pl_income, or pl_expense.\nGroups: ${JSON.stringify(groupsCtx)}\nReturn ONLY JSON: {"GroupName":"bs_asset"}`,
+        },
+      });
+      if (error) throw new Error(error.message);
+      const classification: Record<string, string> = typeof data === "object" && !data?.raw ? data : {};
+      if (Object.keys(classification).length === 0) { toast.error("AI returned no results"); return; }
+      const updates: Record<string, string> = {};
+      const valid = ["bs_asset","bs_liability","pl_income","pl_expense"];
+      for (const [name, section] of Object.entries(classification)) {
+        if (valid.includes(section)) updates[name] = section;
+      }
+      setTbManualClassifications((prev) => ({ ...prev, ...updates }));
+      toast.success(`AI suggested ${Object.keys(updates).length} classifications — review dropdowns and click Apply.`);
+    } catch (err: any) {
+      toast.error(err.message || "AI classification failed");
+    } finally {
+      setAiClassifyingUnclassified(false);
+    }
+  };
+
+  // ── Apply manual classifications to hierarchy nodes and recompute ────────
+  const handleApplyManualClassifications = async () => {
+    if (Object.keys(tbManualClassifications).length === 0) {
+      toast.error("No classifications to apply");
+      return;
+    }
+    setApplyingManualClassify(true);
+    try {
+      const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+      // Extract section key: stored as "bs_asset|||Bank Accounts" or plain "bs_asset"
+      const sectionOf = (v: string) => (v.includes("|||") ? v.split("|||")[0] : v) as TbSectionType;
+      // Update in-memory nodes
+      const updated = source.map((node) => {
+        const rootName = node.primaryGroup || node.name;
+        const raw = tbManualClassifications[rootName];
+        if (!raw) return node;
+        const section = sectionOf(raw);
+        const bsPlSide = section.startsWith("bs_") ? "BS" : "PL";
+        const normalBal = (section === "bs_liability" || section === "pl_income") ? "Cr" : "Dr";
+        return { ...node, bsPlSide, normalBal: normalBal as any };
+      });
+
+      // Persist to Supabase in batches
+      for (const [rootName, raw] of Object.entries(tbManualClassifications)) {
+        const section = sectionOf(raw);
+        const bsPlSide = section.startsWith("bs_") ? "BS" : "PL";
+        const normalBal = (section === "bs_liability" || section === "pl_income") ? "Cr" : "Dr";
+        const affectedIds = source
+          .filter((n) => n.primaryGroup === rootName || n.name === rootName)
+          .map((n) => n.nodeId);
+        for (const nid of affectedIds) {
+          await supabase.from("tb_hierarchy_nodes" as any)
+            .update({ bs_pl_side: bsPlSide, normal_balance: normalBal } as any)
+            .eq("engagement_id", engagementId)
+            .eq("node_id", nid);
+        }
+      }
+
+      setTbHierarchyNodes(updated);
+      const newPresentation = buildTbPresentationModel(updated);
+      setTbValidation(newPresentation.validation as any);
+      setTbResult((prev) => prev ? {
+        ...prev,
+        debitTotal: Math.round(newPresentation.grandTotal.txnDebit * 100) / 100,
+        creditTotal: Math.round(newPresentation.grandTotal.txnCredit * 100) / 100,
+        difference: Math.round(Math.abs(newPresentation.grandTotal.txnDebit - newPresentation.grandTotal.txnCredit) * 100) / 100,
+        isValid: newPresentation.validation.allRulesPassed,
+      } : prev);
+      setTbManualClassifications({});
+      queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      toast.success("Classifications applied. Integrity checks updated.");
+    } catch (err: any) {
+      toast.error(err.message || "Apply failed");
+    } finally {
+      setApplyingManualClassify(false);
+    }
+  };
+
   const handleDeleteTb = async () => {
     if (!window.confirm(
       'Delete the imported Trial Balance? This will remove all ledger hierarchy data for this engagement. You can re-upload a new file.'
@@ -947,6 +1167,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         .delete().eq('engagement_id', engagementId);
       setTbResult(null);
       setTbHierarchyNodes([]);
+      setTbAiPreAnalysis(null);
       setTbStep(1);
       setTbFormat('');
       setTbFile(null);
@@ -960,6 +1181,126 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       toast.error(err.message || 'Delete failed');
     } finally {
       setDeletingTb(false);
+    }
+  };
+
+  // ═══════ COA MAPPING LOGIC ═══════
+
+  const handleInitCoaMapping = async () => {
+    const source = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    const leaves = source.filter((n) => n.isLeaf);
+    if (leaves.length === 0) { toast.error("No leaf ledgers found. Import a TB first."); return; }
+
+    setCoaMappingLoading(true);
+    try {
+      // 1. Check which ledgers are already mapped
+      const firmId = user?.firm_id;
+      const { data: existingMappings } = await supabase
+        .from("coa_mappings")
+        .select("raw_ledger_name, standard_head, bs_pl, account_group")
+        .or(firmId ? `firm_id.eq.${firmId},firm_id.is.null` : "firm_id.is.null");
+      const existingMap = new Map<string, { standard_head: string; bs_pl: string; account_group: string }>();
+      for (const m of existingMappings || []) {
+        if (m.raw_ledger_name) existingMap.set(m.raw_ledger_name.toLowerCase(), m);
+      }
+
+      // 2. Determine entity COA category from engagement
+      const entityType = engagement?.entity_type || engagement?.clients?.entity_type || null;
+      const coaCat = entityType ? (ENTITY_TO_COA_CAT[entityType] || "corporate") : "corporate";
+      const coaMaster = (coaMasterDataJson as any[]).filter((r: any) => r.entity_type === coaCat);
+      const coaHeads = coaMaster
+        .filter((r: any) => r.level === 4)
+        .map((r: any) => `${r.account_head} (${r.group_name || r.major_group}, ${r.bs_pl})`)
+        .join("; ");
+
+      // 3. Build ledger objects for AI prompt (batch in groups of 40)
+      const ledgerObjects = leaves.map((n) => ({
+        ledger: n.name,
+        tally_group: n.primaryGroup || "",
+        closing_balance: +(n.closing || 0).toFixed(2),
+        bs_pl_side: n.bsPlSide || "",
+      }));
+
+      const BATCH_SIZE = 40;
+      const aiResults = new Map<string, { suggested_head: string; bs_pl: string; account_group: string; confidence: string; reason: string }>();
+
+      for (let bi = 0; bi < ledgerObjects.length; bi += BATCH_SIZE) {
+        const batch = ledgerObjects.slice(bi, bi + BATCH_SIZE);
+        const prompt = `Entity type: ${entityType || "Corporate"}. Available COA heads (sample): ${coaHeads.slice(0, 2000)}.\n\nLedgers to map:\n${JSON.stringify(batch)}`;
+        const { data, error } = await supabase.functions.invoke("claude-gateway", {
+          body: { request_type: "coa_mapper", user_message: prompt },
+        });
+        if (error) { toast.warning(`AI batch ${bi / BATCH_SIZE + 1} failed: ${error.message}`); continue; }
+        const arr: any[] = Array.isArray(data) ? data : (data?.raw ? [] : []);
+        for (const item of arr) {
+          if (item?.ledger) aiResults.set(item.ledger.toLowerCase(), item);
+        }
+      }
+
+      // 4. Build the full row list
+      const rows: CoaMappingRow[] = leaves.map((n) => {
+        const key = n.name.toLowerCase();
+        const existing = existingMap.get(key);
+        const ai = aiResults.get(key);
+        return {
+          ledger: n.name,
+          tallyGroup: n.primaryGroup || "",
+          closing: n.closing || 0,
+          bsPlSide: n.bsPlSide || "",
+          suggestedHead: existing?.standard_head || ai?.suggested_head || "",
+          suggestedGroup: existing?.account_group || ai?.account_group || "",
+          suggestedBsPl: existing?.bs_pl || ai?.bs_pl || (n.bsPlSide === "BS" ? "BS" : "PL"),
+          confidence: existing ? "high" : (ai?.confidence || "") as any,
+          reason: existing ? "Already mapped" : (ai?.reason || ""),
+          accepted: !!existing,
+          skipped: false,
+          customHead: existing?.standard_head || ai?.suggested_head || "",
+          customGroup: existing?.account_group || ai?.account_group || "",
+          customBsPl: existing?.bs_pl || ai?.bs_pl || (n.bsPlSide === "BS" ? "BS" : "PL"),
+          alreadyMapped: !!existing,
+        };
+      });
+
+      setCoaMappingRows(rows);
+      setCoaMappingDone(false);
+      setTbStep(6);
+      toast.success(`Loaded ${rows.length} ledgers — ${aiResults.size} AI suggestions fetched`);
+    } catch (err: any) {
+      toast.error(err.message || "COA mapping init failed");
+    } finally {
+      setCoaMappingLoading(false);
+    }
+  };
+
+  const handleSaveCoaMappings = async () => {
+    const firmId = user?.firm_id;
+    if (!firmId) { toast.error("Firm not found"); return; }
+    const toSave = coaMappingRows.filter((r) => r.accepted && !r.alreadyMapped && r.customHead);
+    if (toSave.length === 0) { toast.info("No new mappings to save"); return; }
+    setCoaMappingSaving(true);
+    try {
+      const inserts = toSave.map((r) => ({
+        firm_id: firmId,
+        raw_ledger_name: r.ledger,
+        standard_head: r.customHead || r.suggestedHead,
+        bs_pl: r.customBsPl || r.suggestedBsPl || "BS",
+        account_group: r.customGroup || r.suggestedGroup || "",
+      }));
+      for (let i = 0; i < inserts.length; i += 100) {
+        const { error } = await supabase.from("coa_mappings").upsert(
+          inserts.slice(i, i + 100) as any,
+          { onConflict: "firm_id,raw_ledger_name", ignoreDuplicates: false }
+        );
+        if (error) throw error;
+      }
+      // Mark saved rows as alreadyMapped
+      setCoaMappingRows((prev) => prev.map((r) => (r.accepted && !r.alreadyMapped ? { ...r, alreadyMapped: true } : r)));
+      setCoaMappingDone(true);
+      toast.success(`Saved ${inserts.length} COA mappings`);
+    } catch (err: any) {
+      toast.error(err.message || "Save failed");
+    } finally {
+      setCoaMappingSaving(false);
     }
   };
 
@@ -1282,16 +1623,32 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         <TabsContent value="tb" className="space-y-4 mt-4">
           {/* Progress indicator */}
           <div className="flex gap-1 mb-2">
-            {["Format", "Upload", "Map Columns", "Process", "Result"].map((label, i) => (
-              <div key={label} className={cn(
-                "flex-1 text-center text-[10px] py-1 rounded-sm font-medium",
-                tbStep > i + 1 ? "bg-primary/20 text-primary" :
-                tbStep === i + 1 ? "bg-primary text-primary-foreground" :
-                "bg-muted text-muted-foreground"
-              )}>
-                {label}
-              </div>
-            ))}
+            {["Format", "Upload", "Map Cols", "Process", "Result", "COA Map"].map((label, i) => {
+              const isCoaMapStep = i === 5;
+              const coaMapClickable = isCoaMapStep && tbStep >= 5 && (tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && !coaMappingLoading;
+              return (
+                <div
+                  key={label}
+                  className={cn(
+                    "flex-1 text-center text-[10px] py-1 rounded-sm font-medium transition-colors",
+                    tbStep > i + 1 ? "bg-primary/20 text-primary" :
+                    tbStep === i + 1 ? "bg-primary text-primary-foreground" :
+                    "bg-muted text-muted-foreground",
+                    coaMapClickable && tbStep !== 6 && "cursor-pointer hover:bg-primary/40 hover:text-primary",
+                    isCoaMapStep && tbStep < 5 && "opacity-40",
+                  )}
+                  onClick={() => {
+                    if (coaMapClickable) {
+                      if (tbStep === 6) return; // already on COA Map step
+                      handleInitCoaMapping();
+                    }
+                  }}
+                  title={isCoaMapStep && coaMapClickable ? "Click to map ledgers to COA with AI" : undefined}
+                >
+                  {coaMappingLoading && isCoaMapStep ? "Loading…" : label}
+                </div>
+              );
+            })}
           </div>
 
           {/* Step 1: Format Selection */}
@@ -1517,7 +1874,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     Some validation checks did not pass. You can still preview and work with the Trial Balance.
                     Review the integrity checks below and use AI Auto-Classify to fix classification issues.
                     <div className="flex gap-2 mt-2">
-                      <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); }}>
+                      <Button size="sm" variant="outline" onClick={() => { setTbStep(1); setTbResult(null); setTbValidation(null); setTbAiPreAnalysis(null); }}>
                         Re-upload
                       </Button>
                     </div>
@@ -1618,6 +1975,244 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         </Button>
                       </div>
                     )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* ─── AI 360° Pre-Analysis Card ─── */}
+              {(tbAiAnalysing || tbAiPreAnalysis) && (
+                <Card className={cn(
+                  "border",
+                  tbAiAnalysing ? "border-primary/20" :
+                  tbAiPreAnalysis?.status === "clean" ? "border-green-500/30 bg-green-500/5" :
+                  tbAiPreAnalysis?.status === "errors" ? "border-destructive/30 bg-destructive/5" :
+                  "border-amber-500/30 bg-amber-500/5"
+                )}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      {tbAiAnalysing ? (
+                        <><Loader2 size={15} className="animate-spin text-primary" /><span>AI is analysing your Trial Balance at 360°…</span></>
+                      ) : (
+                        <>
+                          <span className={cn(
+                            "inline-flex items-center justify-center rounded-full w-8 h-8 text-sm font-bold shrink-0",
+                            tbAiPreAnalysis!.score >= 90 ? "bg-green-500/20 text-green-700" :
+                            tbAiPreAnalysis!.score >= 70 ? "bg-amber-500/20 text-amber-700" :
+                            "bg-destructive/20 text-destructive"
+                          )}>{tbAiPreAnalysis!.score}</span>
+                          <span>AI Pre-Audit Analysis
+                            <span className={cn("ml-2 text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded",
+                              tbAiPreAnalysis!.status === "clean" ? "bg-green-500/20 text-green-700" :
+                              tbAiPreAnalysis!.status === "errors" ? "bg-destructive/20 text-destructive" :
+                              "bg-amber-500/20 text-amber-700"
+                            )}>{tbAiPreAnalysis!.status}</span>
+                          </span>
+                        </>
+                      )}
+                    </CardTitle>
+                    {tbAiPreAnalysis && (
+                      <p className="text-xs text-muted-foreground mt-1">{tbAiPreAnalysis.summary}</p>
+                    )}
+                  </CardHeader>
+                  {tbAiPreAnalysis && (
+                    <CardContent className="space-y-3 pt-0">
+                      {/* Issues */}
+                      {tbAiPreAnalysis.issues.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wider">Issues Found</p>
+                          {tbAiPreAnalysis.issues.map((issue, idx) => (
+                            <div key={idx} className={cn(
+                              "flex gap-2 p-2 rounded text-xs",
+                              issue.severity === "error" ? "bg-destructive/10" :
+                              issue.severity === "warning" ? "bg-amber-500/10" : "bg-primary/5"
+                            )}>
+                              {issue.severity === "error" ? <AlertTriangle size={13} className="text-destructive shrink-0 mt-0.5" /> :
+                               issue.severity === "warning" ? <AlertTriangle size={13} className="text-amber-600 shrink-0 mt-0.5" /> :
+                               <CheckCircle2 size={13} className="text-primary shrink-0 mt-0.5" />}
+                              <div>
+                                <p className="font-semibold">{issue.title}</p>
+                                <p className="text-muted-foreground">{issue.description}</p>
+                                {issue.affected?.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {issue.affected.slice(0, 4).map((a, ai) => (
+                                      <Badge key={ai} variant="outline" className="text-[9px]">{a}</Badge>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Insights */}
+                      {tbAiPreAnalysis.insights?.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wider">Key Insights</p>
+                          {tbAiPreAnalysis.insights.slice(0, 4).map((ins, idx) => (
+                            <div key={idx} className="text-xs p-2 bg-primary/5 rounded">
+                              <span className="font-semibold">{ins.title}: </span>
+                              <span className="text-muted-foreground">{ins.finding}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Suggestions */}
+                      {tbAiPreAnalysis.suggestions?.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wider">CA Action Items</p>
+                          <ol className="space-y-1 pl-1">
+                            {tbAiPreAnalysis.suggestions.slice(0, 5).map((s, idx) => (
+                              <li key={idx} className="text-xs flex gap-1.5">
+                                <span className="shrink-0 font-bold text-primary">{idx + 1}.</span>
+                                <span className="text-muted-foreground">{s}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
+                    </CardContent>
+                  )}
+                </Card>
+              )}
+
+              {/* ─── Unclassified Accounts Panel ─── */}
+              {tbPresentation && tbPresentation.rootNodes.filter(
+                (r) => !tbPresentation.sections.some((s) => s.nodes.some((n) => n.nodeId === r.nodeId))
+              ).length > 0 && (
+                <Card className="border-amber-500/40 bg-amber-500/5">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2 text-amber-700">
+                      <FileWarning size={16} />
+                      Unclassified Groups
+                      <Badge variant="outline" className="ml-1 border-amber-500/40 text-amber-700 text-[10px]">
+                        {tbPresentation.rootNodes.filter(
+                          (r) => !tbPresentation.sections.some((s) => s.nodes.some((n) => n.nodeId === r.nodeId))
+                        ).length} unclassified
+                      </Badge>
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      These top-level groups could not be auto-classified. Classify them manually or use AI to fix BS/PL checks.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {/* AI classify button */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 border-amber-500/40 text-amber-700 hover:bg-amber-500/10"
+                        onClick={handleAiClassifyUnclassified}
+                        disabled={aiClassifyingUnclassified}
+                      >
+                        {aiClassifyingUnclassified ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                        {aiClassifyingUnclassified ? "Classifying…" : "AI Classify All"}
+                      </Button>
+                      {Object.keys(tbManualClassifications).length > 0 && (
+                        <Button
+                          size="sm"
+                          className="gap-1"
+                          onClick={handleApplyManualClassifications}
+                          disabled={applyingManualClassify}
+                        >
+                          {applyingManualClassify ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                          {applyingManualClassify ? "Applying…" : `Apply ${Object.keys(tbManualClassifications).length} Classification(s)`}
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Table of unclassified roots */}
+                    <div className="border border-amber-500/20 rounded-md overflow-hidden text-xs">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-amber-500/10">
+                            <TableHead className="text-[11px] h-7 text-amber-800">Group / Account</TableHead>
+                            <TableHead className="text-[11px] h-7 text-amber-800 text-right">Closing Bal</TableHead>
+                            <TableHead className="text-[11px] h-7 text-amber-800">Classify As</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {tbPresentation.rootNodes
+                            .filter((r) => !tbPresentation.sections.some((s) => s.nodes.some((n) => n.nodeId === r.nodeId)))
+                            .map((root) => {
+                              const totals = (() => {
+                                const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                                const leaves = src.filter((n) => n.isLeaf && n.primaryGroup === root.name);
+                                return leaves.reduce((a, n) => ({ closing: a.closing + (n.closing || 0) }), { closing: 0 });
+                              })();
+                              const chosen = tbManualClassifications[root.name];
+                              return (
+                                <TableRow key={root.nodeId} className="hover:bg-amber-500/5">
+                                  <TableCell className="font-medium py-2 text-foreground">
+                                    {root.name}
+                                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                                      {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
+                                        .filter((n) => n.isLeaf && n.primaryGroup === root.name)
+                                        .slice(0, 3)
+                                        .map((n) => n.name)
+                                        .join(", ")}
+                                      {(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy)
+                                        .filter((n) => n.isLeaf && n.primaryGroup === root.name).length > 3 &&
+                                        ` +${(tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter((n) => n.isLeaf && n.primaryGroup === root.name).length - 3} more`}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-right py-2 font-mono">
+                                    ₹{Math.abs(totals.closing).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    <span className="ml-1 text-[9px] text-muted-foreground">{totals.closing >= 0 ? "Dr" : "Cr"}</span>
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <Select
+                                      value={chosen || ""}
+                                      onValueChange={(val) =>
+                                        setTbManualClassifications((prev) => ({ ...prev, [root.name]: val }))
+                                      }
+                                    >
+                                      <SelectTrigger className="h-7 text-xs w-56 border-amber-500/30">
+                                        <SelectValue placeholder="Select group / category…" />
+                                      </SelectTrigger>
+                                      <SelectContent className="max-h-64">
+                                        {/* ── Actual groups from this TB, grouped by section ── */}
+                                        {tbPresentation && tbPresentation.sections.length > 0
+                                          ? tbPresentation.sections.map((section) => {
+                                              // Only show group-level nodes (non-leaf) — never individual ledgers
+                                              const groupNodes = section.nodes.filter(n => !n.isLeaf);
+                                              if (groupNodes.length === 0) return null;
+                                              return (
+                                                <SelectGroup key={section.key}>
+                                                  <SelectLabel className="text-[10px] text-muted-foreground px-2 py-1 font-semibold">
+                                                    {section.label}
+                                                  </SelectLabel>
+                                                  {groupNodes.map((groupNode) => (
+                                                    <SelectItem
+                                                      key={groupNode.nodeId}
+                                                      value={`${section.key}|||${groupNode.name}`}
+                                                      className="text-xs"
+                                                    >
+                                                      {groupNode.name}
+                                                    </SelectItem>
+                                                  ))}
+                                                </SelectGroup>
+                                              );
+                                            })
+                                          : null}
+                                        {/* ── Generic fallback categories ── */}
+                                        <SelectGroup>
+                                          <SelectLabel className="text-[10px] text-muted-foreground px-2 py-1 font-semibold">
+                                            Generic Categories
+                                          </SelectLabel>
+                                          <SelectItem value="bs_asset" className="text-xs">BS — Asset (General)</SelectItem>
+                                          <SelectItem value="bs_liability" className="text-xs">BS — Liability / Equity (General)</SelectItem>
+                                          <SelectItem value="pl_income" className="text-xs">P&L — Income (General)</SelectItem>
+                                          <SelectItem value="pl_expense" className="text-xs">P&L — Expense (General)</SelectItem>
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -1869,6 +2464,244 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     )}
                   </CardContent>
                 )}
+              </Card>
+
+              {/* ─── Proceed to COA Mapping ─── */}
+              {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && tbStep === 5 && (
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardContent className="p-4 flex items-center justify-between flex-wrap gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Next: Map Ledgers to COA</p>
+                      <p className="text-xs text-muted-foreground">
+                        {(() => {
+                          const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                          return `${src.filter(n => n.isLeaf).length} leaf ledgers ready for mapping to Schedule III account heads.`;
+                        })()}
+                      </p>
+                    </div>
+                    <Button
+                      onClick={handleInitCoaMapping}
+                      disabled={coaMappingLoading}
+                      className="gap-2"
+                    >
+                      {coaMappingLoading
+                        ? <><Loader2 size={14} className="animate-spin" /> Loading AI Suggestions…</>
+                        : <><Sparkles size={14} /> Map to COA with AI</>
+                      }
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* ─── Step 6: COA Mapping ─── */}
+          {tbStep === 6 && (
+            <div className="space-y-4">
+              {/* Header */}
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <h3 className="text-base font-semibold flex items-center gap-2">
+                    <Link2 size={16} className="text-primary" /> COA Mapping
+                    <Badge variant="secondary" className="text-[10px]">
+                      {coaMappingRows.filter(r => r.accepted || r.alreadyMapped).length} / {coaMappingRows.length} mapped
+                    </Badge>
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    AI suggestions shown. Accept, edit, or skip each ledger. Only ledgers are mapped — groups are used as context.
+                  </p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" className="gap-1" onClick={() => setTbStep(5)}>
+                    <ArrowLeft size={13} /> Back
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => {
+                      setCoaMappingRows(prev => prev.map(r => (!r.alreadyMapped && !r.skipped && r.suggestedHead) ? { ...r, accepted: true, customHead: r.customHead || r.suggestedHead, customGroup: r.customGroup || r.suggestedGroup, customBsPl: r.customBsPl || r.suggestedBsPl } : r));
+                      toast.success("Accepted all AI suggestions");
+                    }}
+                  >
+                    <Check size={13} /> Accept All Suggestions
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="gap-1"
+                    onClick={handleSaveCoaMappings}
+                    disabled={coaMappingSaving || coaMappingRows.filter(r => r.accepted && !r.alreadyMapped).length === 0}
+                  >
+                    {coaMappingSaving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                    Save {coaMappingRows.filter(r => r.accepted && !r.alreadyMapped).length} Mappings
+                  </Button>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{coaMappingRows.filter(r => r.accepted || r.alreadyMapped).length} mapped</span>
+                  <span>{coaMappingRows.filter(r => r.skipped).length} skipped</span>
+                  <span>{coaMappingRows.filter(r => !r.accepted && !r.skipped && !r.alreadyMapped).length} pending</span>
+                </div>
+                <Progress
+                  value={coaMappingRows.length > 0 ? (coaMappingRows.filter(r => r.accepted || r.alreadyMapped).length / coaMappingRows.length) * 100 : 0}
+                  className="h-2"
+                />
+              </div>
+
+              {coaMappingDone && (
+                <Alert className="border-primary/30 bg-primary/5">
+                  <CheckCircle2 className="h-4 w-4 text-primary" />
+                  <AlertTitle className="text-primary text-sm">Mappings Saved!</AlertTitle>
+                  <AlertDescription className="text-xs">
+                    COA mappings saved. Financial statements can now be prepared from these mapped ledgers.
+                    View the full COA Mappings Master for more options.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Mapping table */}
+              <Card>
+                <CardContent className="p-0">
+                  <div className="overflow-auto max-h-[600px]">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 z-10 bg-muted border-b">
+                        <tr>
+                          <th className="text-left p-2 font-semibold w-48">Ledger (Tally)</th>
+                          <th className="text-left p-2 font-semibold w-32">Tally Group</th>
+                          <th className="text-right p-2 font-semibold w-24">Closing</th>
+                          <th className="text-left p-2 font-semibold">Standard Head</th>
+                          <th className="text-left p-2 font-semibold w-28">Account Group</th>
+                          <th className="text-center p-2 font-semibold w-16">BS/PL</th>
+                          <th className="text-center p-2 font-semibold w-20">Confidence</th>
+                          <th className="text-center p-2 font-semibold w-28">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {coaMappingRows.map((row, idx) => (
+                          <tr
+                            key={row.ledger}
+                            className={cn(
+                              "border-b transition-colors",
+                              row.alreadyMapped ? "bg-primary/5 opacity-70" :
+                              row.accepted ? "bg-green-50 dark:bg-green-950/20" :
+                              row.skipped ? "bg-muted/30 opacity-60" : "hover:bg-muted/30"
+                            )}
+                          >
+                            <td className="p-2 font-mono font-medium truncate max-w-[180px]" title={row.ledger}>
+                              {row.ledger}
+                            </td>
+                            <td className="p-2 text-muted-foreground truncate max-w-[120px]" title={row.tallyGroup}>
+                              {row.tallyGroup || "—"}
+                            </td>
+                            <td className="p-2 text-right font-mono tabular-nums text-muted-foreground">
+                              {row.closing ? row.closing.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : "—"}
+                            </td>
+                            {/* Editable Standard Head */}
+                            <td className="p-1">
+                              {row.alreadyMapped || row.skipped ? (
+                                <span className="text-muted-foreground px-1">{row.customHead || row.suggestedHead || "—"}</span>
+                              ) : (
+                                <input
+                                  type="text"
+                                  className="w-full border border-border rounded px-2 py-1 text-xs bg-background focus:ring-1 focus:ring-primary outline-none"
+                                  value={row.customHead}
+                                  onChange={(e) => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, customHead: e.target.value } : r))}
+                                  placeholder={row.suggestedHead || "Enter standard head"}
+                                />
+                              )}
+                              {row.reason && !row.alreadyMapped && (
+                                <p className="text-[10px] text-muted-foreground/70 px-1 mt-0.5 italic truncate" title={row.reason}>
+                                  {row.reason}
+                                </p>
+                              )}
+                            </td>
+                            {/* Account Group */}
+                            <td className="p-1">
+                              {row.alreadyMapped || row.skipped ? (
+                                <span className="text-muted-foreground px-1">{row.customGroup || "—"}</span>
+                              ) : (
+                                <input
+                                  type="text"
+                                  className="w-full border border-border rounded px-2 py-1 text-xs bg-background focus:ring-1 focus:ring-primary outline-none"
+                                  value={row.customGroup}
+                                  onChange={(e) => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, customGroup: e.target.value } : r))}
+                                  placeholder="Group"
+                                />
+                              )}
+                            </td>
+                            {/* BS/PL */}
+                            <td className="p-1 text-center">
+                              {row.alreadyMapped || row.skipped ? (
+                                <Badge variant="outline" className="text-[9px]">{row.customBsPl || "BS"}</Badge>
+                              ) : (
+                                <select
+                                  className="border border-border rounded px-1 py-1 text-xs bg-background"
+                                  value={row.customBsPl}
+                                  onChange={(e) => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, customBsPl: e.target.value } : r))}
+                                >
+                                  <option value="BS">BS</option>
+                                  <option value="PL">PL</option>
+                                </select>
+                              )}
+                            </td>
+                            {/* Confidence */}
+                            <td className="p-2 text-center">
+                              {row.alreadyMapped ? (
+                                <Badge className="text-[9px] bg-primary/10 text-primary">Saved</Badge>
+                              ) : row.confidence === "high" ? (
+                                <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">High</Badge>
+                              ) : row.confidence === "medium" ? (
+                                <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Medium</Badge>
+                              ) : row.confidence === "low" ? (
+                                <Badge className="text-[9px] bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">Low</Badge>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            {/* Actions */}
+                            <td className="p-1 text-center">
+                              {row.alreadyMapped ? (
+                                <span className="text-[10px] text-primary font-medium">✓ Mapped</span>
+                              ) : row.skipped ? (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 text-[10px] px-2"
+                                  onClick={() => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, skipped: false } : r))}
+                                >
+                                  Undo
+                                </Button>
+                              ) : (
+                                <div className="flex items-center justify-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant={row.accepted ? "default" : "outline"}
+                                    className="h-6 px-2 text-[10px] gap-0.5"
+                                    onClick={() => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, accepted: !r.accepted } : r))}
+                                  >
+                                    <Check size={10} />
+                                    {row.accepted ? "Acc" : "Accept"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-1.5 text-[10px]"
+                                    onClick={() => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, skipped: true, accepted: false } : r))}
+                                  >
+                                    <SkipForward size={10} />
+                                  </Button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
               </Card>
             </div>
           )}
