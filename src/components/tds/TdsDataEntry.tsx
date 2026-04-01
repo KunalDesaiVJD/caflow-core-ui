@@ -413,13 +413,29 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       challan_remarks: challanForm.remarks || null,
       late_fees_234e: parseFloat(challanForm.late_fees_234e) || 0,
     };
-    let error;
-    if (editingChallan) {
-      ({ error } = await supabase.from("tds_challans").update(payload).eq("id", editingChallan.id));
-    } else {
-      ({ error } = await supabase.from("tds_challans").insert(payload));
+    // Try with late_fees_234e first; if the column doesn't exist yet in DB,
+    // fall back to saving without it (migration pending).
+    let error: any;
+    const tryInsertOrUpdate = async (p: any) => {
+      if (editingChallan) {
+        return supabase.from("tds_challans").update(p).eq("id", editingChallan.id);
+      } else {
+        return supabase.from("tds_challans").insert(p);
+      }
+    };
+    ({ error } = await tryInsertOrUpdate(payload));
+    if (error && (error.message?.includes("late_fees_234e") || error.message?.includes("schema cache"))) {
+      // Column not yet in DB — save without it, show partial success notice
+      const { late_fees_234e: _removed, ...payloadWithoutLateFees } = payload;
+      ({ error } = await tryInsertOrUpdate(payloadWithoutLateFees));
+      if (!error) {
+        toast({ title: editingChallan ? "Challan updated" : "Challan added", description: "Note: Late Fees field will be available after database migration is applied." });
+        setChallanDialogOpen(false);
+        await fetchChallans(filing.id);
+        return;
+      }
     }
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    if (error) { toast({ title: "Error saving challan", description: error.message, variant: "destructive" }); return; }
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
     await fetchChallans(filing.id);

@@ -4630,10 +4630,15 @@ export type Database = {
           financial_year: string
           firm_id: string
           form_type: string
+          fully_utilized: boolean | null
           id: string
           interest_deposited: number | null
           is_book_entry: boolean | null
+          late_fees_234e: number | null
+          late_fees_used: number | null
           minor_head_of_challan: string | null
+          origin_fy: string | null
+          origin_quarter: string | null
           others_deposited: number | null
           quarter: string
           section_code: string | null
@@ -4657,10 +4662,15 @@ export type Database = {
           financial_year: string
           firm_id: string
           form_type: string
+          fully_utilized?: boolean | null
           id?: string
           interest_deposited?: number | null
           is_book_entry?: boolean | null
+          late_fees_234e?: number | null
+          late_fees_used?: number | null
           minor_head_of_challan?: string | null
+          origin_fy?: string | null
+          origin_quarter?: string | null
           others_deposited?: number | null
           quarter: string
           section_code?: string | null
@@ -4684,10 +4694,15 @@ export type Database = {
           financial_year?: string
           firm_id?: string
           form_type?: string
+          fully_utilized?: boolean | null
           id?: string
           interest_deposited?: number | null
           is_book_entry?: boolean | null
+          late_fees_234e?: number | null
+          late_fees_used?: number | null
           minor_head_of_challan?: string | null
+          origin_fy?: string | null
+          origin_quarter?: string | null
           others_deposited?: number | null
           quarter?: string
           section_code?: string | null
@@ -5121,6 +5136,7 @@ export type Database = {
       }
       tds_filings: {
         Row: {
+          ack_file_url: string | null
           acknowledgment_number: string | null
           approver_id: string | null
           assigned_staff: string | null
@@ -5153,6 +5169,7 @@ export type Database = {
           work_status: string
         }
         Insert: {
+          ack_file_url?: string | null
           acknowledgment_number?: string | null
           approver_id?: string | null
           assigned_staff?: string | null
@@ -5185,6 +5202,7 @@ export type Database = {
           work_status?: string
         }
         Update: {
+          ack_file_url?: string | null
           acknowledgment_number?: string | null
           approver_id?: string | null
           assigned_staff?: string | null
