@@ -345,7 +345,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   // ─── Challan CRUD ───
   const openAddChallan = () => {
     setEditingChallan(null);
-    setChallanModalFileUrl(null); // Issue 4
     setChallanForm({
       bsr_code: "", challan_serial_no: "", deposit_date: "",
       minor_head: "200", total_tax: "", surcharge: "", education_cess: "",
