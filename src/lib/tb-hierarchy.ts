@@ -121,7 +121,9 @@ function hasAnyValue(node: Pick<TbHierarchyNodeLike, "opening" | "txnDebit" | "t
 
 function looksLikeAggregateName(name: string) {
   const lower = normalizeTbName(name);
-  return AGGREGATE_HINTS.some((hint) => lower.includes(hint));
+  // Normalize hints too so hyphenated hints like "cash-in-hand" match
+  // the normalized name "cash in hand" correctly.
+  return AGGREGATE_HINTS.some((hint) => lower.includes(normalizeTbName(hint)));
 }
 
 function looksLikeLedgerName(name: string) {
@@ -417,12 +419,16 @@ function repairOrphanedLeaves(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
     if (!node.isLeaf) continue;
     if (looksLikeAggregateName(node.name)) continue; // aggregate-named = likely a group itself
 
-    // Walk backwards to find the nearest non-leaf root node (a group header)
+    // Walk backwards to find the nearest root node that looks like an accounting
+    // group header (aggregate name). This correctly handles cases where the edge
+    // function stored a group like "Sundry Debtors" as isLeaf=true because it
+    // failed value-sum matching — we should still reparent individual debtor
+    // accounts to it based on proximity and naming.
     let bestParent: TbHierarchyNodeLike | null = null;
     for (let j = i - 1; j >= 0 && i - j <= 300; j--) {
       const candidate = sorted[j];
       if (candidate.parentNodeId !== null) continue; // only root groups
-      if (candidate.isLeaf) continue; // must be a group (non-leaf)
+      if (!looksLikeAggregateName(candidate.name)) continue; // must look like an accounting group header
       bestParent = candidate;
       break;
     }
@@ -433,6 +439,7 @@ function repairOrphanedLeaves(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
       const listParent = list.find((n) => n.nodeId === bestParent!.nodeId);
       if (listNode && listParent) {
         listNode.parentNodeId = bestParent.nodeId;
+        listParent.isLeaf = false; // mark parent as a group now that it has children
         // Also update bsPlSide/normalBal to match parent for better classification
         if (listParent.bsPlSide !== "Unknown") {
           listNode.bsPlSide = listParent.bsPlSide;
@@ -455,9 +462,15 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   const base = hasEdgeFunctionHierarchy
     ? [...rawNodes].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0))
     : rebuildHierarchy(rawNodes);
-  // repairOrphanedGroups: re-links aggregate root-leaves to their sub-groups
-  // repairOrphanedLeaves: links zero-balance individual ledgers to their parent group
-  const repaired = repairOrphanedLeaves(repairOrphanedGroups(base));
+  // Order matters:
+  // 1. repairOrphanedLeaves FIRST — links individual ledger accounts (e.g. Sundry Debtor
+  //    party names) to their nearest preceding aggregate group (e.g. Sundry Debtors).
+  //    After this pass those accounts are non-root (parentNodeId set), so they are
+  //    EXCLUDED from the sumCl accumulation in step 2.
+  // 2. repairOrphanedGroups SECOND — now the only root nodes are genuine sub-group
+  //    headers (Opening Stock, Loans & Advances, Sundry Debtors, Cash-in-Hand, …),
+  //    so the running sum converges to Current Assets total without early break.
+  const repaired = repairOrphanedGroups(repairOrphanedLeaves(base));
   const activeNodes = repaired.map((node) => ({ ...node }));
   const childrenByParent = new Map<string, TbHierarchyNodeLike[]>();
 
