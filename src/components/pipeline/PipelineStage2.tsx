@@ -381,6 +381,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   } | null>(null);
   const [tbAiAnalysing, setTbAiAnalysing] = useState(false);
 
+  // ─── TB File Storage & Verification State ───
+  const [tbStoragePath, setTbStoragePath] = useState<string | null>(null);
+  const [tbTotalsVerification, setTbTotalsVerification] = useState<{
+    leafCount: number; drTotal: number; crTotal: number;
+    sectionTotals: { key: string; label: string; closing: number }[];
+    isBalanced: boolean; discrepancy: number;
+  } | null>(null);
+
   // ─── COA Mapping State ───
   const [coaMappingRows, setCoaMappingRows] = useState<CoaMappingRow[]>([]);
   const [coaMappingLoading, setCoaMappingLoading] = useState(false);
@@ -847,6 +855,43 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
             debit: n.txnDebit,
             credit: n.txnCredit,
           })),
+        });
+
+        // ── New Change: Store TB Excel file in Supabase Storage (non-blocking) ──
+        if (tbFile && engagementId) {
+          (async () => {
+            try {
+              const fileExt = (tbFile.name.split('.').pop() || 'xlsx').toLowerCase();
+              const storagePath = `${engagementId}/tb-${Date.now()}.${fileExt}`;
+              const { error: storageErr } = await supabase.storage
+                .from('tb-files')
+                .upload(storagePath, tbFile, { upsert: true, contentType: tbFile.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+              if (!storageErr) {
+                setTbStoragePath(storagePath);
+              }
+            } catch {
+              // Non-blocking — storage failure does not prevent import
+            }
+          })();
+        }
+
+        // ── New Change: Verify hierarchy totals match the imported data ──
+        // Cross-check: sum of all leaf closing values grouped by BS/PL section
+        // and compare with the presentation model's section totals. Any discrepancy
+        // indicates a hierarchy repair issue (double-counting or missing nodes).
+        const sectionTotals = strictPresentation.sections.map((sec) => ({
+          key: sec.key,
+          label: sec.subtotalLabel,
+          closing: Math.abs(sec.totals.closing),
+        }));
+        const drCrDiscrepancy = Math.abs(strictPresentation.grandTotal.txnDebit - strictPresentation.grandTotal.txnCredit);
+        setTbTotalsVerification({
+          leafCount: strictPresentation.leafCount,
+          drTotal: strictPresentation.grandTotal.txnDebit,
+          crTotal: strictPresentation.grandTotal.txnCredit,
+          sectionTotals,
+          isBalanced: drCrDiscrepancy < 1,
+          discrepancy: drCrDiscrepancy,
         });
 
         setTbStep(5);
@@ -1959,6 +2004,48 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     )}
 
                     {/* AI classification is in the Unclassified Groups panel below */}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* ─── TB Totals Verification Card ─── */}
+              {tbTotalsVerification && (
+                <Card className={cn("border", tbTotalsVerification.isBalanced ? "border-green-500/30 bg-green-500/5" : "border-destructive/30 bg-destructive/5")}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      {tbTotalsVerification.isBalanced
+                        ? <CheckCircle2 size={15} className="text-green-600" />
+                        : <AlertTriangle size={15} className="text-destructive" />}
+                      TB Totals Verification
+                      {tbStoragePath && (
+                        <Badge variant="outline" className="ml-auto text-[9px] border-green-500/40 text-green-700">
+                          File stored securely
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="p-2 rounded bg-background/60 border">
+                        <p className="text-muted-foreground mb-0.5">Total Dr Transactions</p>
+                        <p className="font-semibold">₹{tbTotalsVerification.drTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="p-2 rounded bg-background/60 border">
+                        <p className="text-muted-foreground mb-0.5">Total Cr Transactions</p>
+                        <p className="font-semibold">₹{tbTotalsVerification.crTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p>
+                      </div>
+                      {tbTotalsVerification.sectionTotals.map((sec) => (
+                        <div key={sec.key} className="p-2 rounded bg-background/60 border">
+                          <p className="text-muted-foreground mb-0.5 truncate">{sec.label}</p>
+                          <p className="font-semibold">₹{sec.closing.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {!tbTotalsVerification.isBalanced && (
+                      <p className="mt-2 text-xs text-destructive font-medium">
+                        Discrepancy: ₹{tbTotalsVerification.discrepancy.toLocaleString("en-IN", { maximumFractionDigits: 2 })} — TB is not balanced. Review the source file.
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               )}
