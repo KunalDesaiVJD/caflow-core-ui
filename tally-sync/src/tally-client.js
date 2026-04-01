@@ -67,11 +67,20 @@ class TallyClient {
       return response.data;
     } catch (err) {
       if (err.code === 'ECONNREFUSED') {
+        const isRemote = !this.url.includes('localhost') && !this.url.includes('127.0.0.1');
         throw new Error(
           `Cannot connect to Tally at ${this.url}.\n` +
-          `  → Make sure Tally ERP 9 / Prime is open\n` +
-          `  → Enable the XML Server: Gateway of Tally → F12 → Advanced Config → Enable Tally.ERP9 Act as Server = Yes\n` +
-          `  → Verify port: default is 9000`
+          (isRemote
+            ? `  → REMOTE/LAN MODE: Check these on the SERVER PC:\n` +
+              `     1. Tally is open and a company is loaded\n` +
+              `     2. Tally XML Server is enabled (F12 → Advanced Config → Enable as Server = Yes)\n` +
+              `     3. Windows Firewall on SERVER allows TCP port ${config_port(this.url)} INBOUND\n` +
+              `        (Run on server: netsh advfirewall firewall add rule name="Tally XML" dir=in action=allow protocol=TCP localport=${config_port(this.url)})\n` +
+              `     4. Server IP in .env TALLY_HOST is correct (run 'ipconfig' on server to verify)`
+            : `  → LOCAL MODE: Check these on THIS PC:\n` +
+              `     1. Tally is open with a company loaded\n` +
+              `     2. Enable XML Server: Gateway of Tally → F12 → Advanced Config → Enable as Server = Yes\n` +
+              `     3. Port 9000 is correct`)
         );
       }
       if (err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED') {
@@ -163,6 +172,10 @@ function getText(val) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function config_port(url) {
+  try { return new URL(url).port || '9000'; } catch { return '9000'; }
 }
 
 module.exports = { TallyClient, toArray, getText };
