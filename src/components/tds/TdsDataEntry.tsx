@@ -53,6 +53,7 @@ interface Challan {
   is_book_entry: boolean; transfer_voucher_no: string | null;
   cheque_dd_no: string | null; bank_name: string | null;
   section_code: string | null; challan_remarks: string | null;
+  late_fees_234e: number; challan_file_url: string | null;
 }
 
 interface Deductee {
@@ -160,6 +161,17 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
   return Math.round(tax + cess);
 };
 
+// ─── Auto-Interest Calculator ───
+const calcAutoInterest = (tdsAmount: number, paymentDate: string | null, depositDate: string | null): number => {
+  if (!paymentDate || !depositDate || !tdsAmount) return 0;
+  const payment = new Date(paymentDate);
+  const deposit = new Date(depositDate);
+  if (deposit <= payment) return 0;
+  const diffDays = Math.ceil((deposit.getTime() - payment.getTime()) / (1000 * 60 * 60 * 24));
+  const lateMonths = Math.ceil(diffDays / 30);
+  return Math.round(tdsAmount * 0.015 * lateMonths);
+};
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -197,6 +209,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   // Auto-save ref
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Challan file upload state
+  const [challanUploading, setChallanUploading] = useState<string | null>(null);
 
   // ─── Rate Master fetch ───
   useEffect(() => {
@@ -254,7 +269,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const priorFilingIds = priorFilings.map(f => f.id);
     // Fetch challans from prior quarters
     const { data: priorChallans } = await supabase.from("tds_challans").select("*")
-      .in("filing_id", priorFilingIds).order("deposit_date");
+      .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
     if (!priorChallans || priorChallans.length === 0) { setCarryForwardChallans([]); return; }
     // Fetch ALL deductees linked to these challans (across all quarters)
     const challanIds = priorChallans.map(c => c.id);
@@ -337,7 +352,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setChallanForm({
       bsr_code: "", challan_serial_no: "", deposit_date: "",
       minor_head: "200", total_tax: "", surcharge: "", education_cess: "",
-      interest: "", others: "", is_book_entry: false,
+      interest: "", others: "", late_fees_234e: "", is_book_entry: false,
       transfer_voucher_no: "", bank_name: "", section_code: "", remarks: "",
     });
     setChallanDialogOpen(true);
@@ -353,6 +368,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       education_cess: String(c.education_cess_deposited || ""),
       interest: String(c.interest_deposited || ""),
       others: String(c.others_deposited || ""),
+      late_fees_234e: String(c.late_fees_234e || ""),
       is_book_entry: c.is_book_entry,
       transfer_voucher_no: c.transfer_voucher_no || "",
       bank_name: c.bank_name || "",
@@ -367,8 +383,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       (parseFloat(challanForm.surcharge) || 0) +
       (parseFloat(challanForm.education_cess) || 0) +
       (parseFloat(challanForm.interest) || 0) +
-      (parseFloat(challanForm.others) || 0);
-  }, [challanForm.total_tax, challanForm.surcharge, challanForm.education_cess, challanForm.interest, challanForm.others]);
+      (parseFloat(challanForm.others) || 0) +
+      (parseFloat(challanForm.late_fees_234e) || 0);
+  }, [challanForm.total_tax, challanForm.surcharge, challanForm.education_cess, challanForm.interest, challanForm.others, challanForm.late_fees_234e]);
 
   const saveChallan = async () => {
     if (!filing) return;
@@ -397,6 +414,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       bank_name: challanForm.bank_name || null,
       section_code: challanForm.section_code || null,
       challan_remarks: challanForm.remarks || null,
+      late_fees_234e: parseFloat(challanForm.late_fees_234e) || 0,
     };
 
     let error;
@@ -475,6 +493,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       const amt = deductee.amount_paid_credited || 0;
       updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
+    }
+
+    // Auto-calculate interest when TDS amount or dates change
+    if (["amount_paid_credited", "rate_of_tds", "date_of_payment", "deductee_pan"].includes(field)) {
+      const newTds = updates.tds_amount ?? deductee.tds_amount ?? deductee.total_tax_deducted ?? 0;
+      const newPayDate = field === "date_of_payment" ? value : deductee.date_of_payment;
+      updates.interest_amount = calcAutoInterest(newTds, newPayDate, selectedChallan?.deposit_date || null);
     }
 
     if (field === "deductee_pan") {
@@ -575,10 +600,11 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   // ─── Summary stats ───
   const getChallanBreakdown = (challanId: string) => {
     const deds = challanId === selectedChallan?.id ? deductees : (allChallanDeductees[challanId] || []);
+    const challanObj = challans.find(c => c.id === challanId) || (selectedChallan?.id === challanId ? selectedChallan : null);
     const tds = deds.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
     const interest = deds.reduce((s, d) => s + (d.interest_amount || 0), 0);
     const surcharge = deds.reduce((s, d) => s + (d.surcharge_amount || 0), 0);
-    const lateFees = deds.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
+    const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
     const applied = tds + interest + surcharge + lateFees;
     return { tds, interest, surcharge, lateFees, applied, count: deds.length };
   };
@@ -665,6 +691,35 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   const client = clients.find(c => c.id === selClient);
+  const isFilingLocked = filing?.work_status === 'Filed';
+
+  // Challan file upload/view/delete (Issue 9)
+  const uploadChallanFile = async (challan: Challan, file: File) => {
+    if (!filing) return;
+    setChallanUploading(challan.id);
+    const ext = file.name.split('.').pop() || 'pdf';
+    const path = `${filing.id}/${challan.id}.${ext}`;
+    const { error } = await supabase.storage.from('tds-challan-files').upload(path, file, { upsert: true });
+    if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); }
+    else {
+      await supabase.from('tds_challans').update({ challan_file_url: path } as any).eq('id', challan.id);
+      await fetchChallans(filing.id);
+      toast({ title: "Challan file uploaded" });
+    }
+    setChallanUploading(null);
+  };
+  const viewChallanFile = async (challan: Challan) => {
+    if (!challan.challan_file_url) return;
+    const { data } = await supabase.storage.from('tds-challan-files').createSignedUrl(challan.challan_file_url, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+  };
+  const deleteChallanFile = async (challan: Challan) => {
+    if (!challan.challan_file_url || !filing) return;
+    await supabase.storage.from('tds-challan-files').remove([challan.challan_file_url]);
+    await supabase.from('tds_challans').update({ challan_file_url: null } as any).eq('id', challan.id);
+    await fetchChallans(filing.id);
+    toast({ title: "File removed" });
+  };
 
   // Section dropdown options
   const sectionOptions = useMemo(() => {
@@ -740,6 +795,11 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
               "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
               "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
             })}>{filing.work_status}</Badge>
+            {isFilingLocked && (
+              <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
+                <Lock size={10} /> Data Entry Locked
+              </Badge>
+            )}
             <div className="flex-1" />
             <Button size="sm" variant="outline" className="gap-1" onClick={resetFiling}>
               <RotateCcw size={14} /> Change Filing
@@ -764,7 +824,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">Challans</h3>
-                <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
+                <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan} disabled={isFilingLocked}>
                   <Plus size={12} /> Add Challan
                 </Button>
               </div>
@@ -838,7 +898,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
                             {bd.interest > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Interest</span><span>₹{bd.interest.toLocaleString("en-IN")}</span></div>}
                             {bd.surcharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Surcharge</span><span>₹{bd.surcharge.toLocaleString("en-IN")}</span></div>}
-                            {bd.lateFees > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Late Fees</span><span>₹{bd.lateFees.toLocaleString("en-IN")}</span></div>}
+                            {bd.lateFees > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Late Fees 234E</span><span>₹{bd.lateFees.toLocaleString("en-IN")}</span></div>}
                             <div className="flex justify-between font-medium border-t border-border/30 pt-0.5">
                               <span>Applied Total</span><span>₹{bd.applied.toLocaleString("en-IN")}</span>
                             </div>
@@ -857,12 +917,29 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
                               style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
                           </div>
+                          {/* Issue 9: Challan PDF file */}
+                          <div className="flex items-center gap-1 mt-1 pt-1 border-t border-border/30" onClick={e => e.stopPropagation()}>
+                            {c.challan_file_url ? (
+                              <>
+                                <Button variant="ghost" size="icon" className="h-5 w-5 text-primary" title="View file" onClick={() => viewChallanFile(c)}><FileText size={10} /></Button>
+                                <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" title="Remove file" disabled={isFilingLocked} onClick={() => deleteChallanFile(c)}><Trash2 size={10} /></Button>
+                                <span className="text-[9px] text-emerald-600">PDF attached</span>
+                              </>
+                            ) : (
+                              <>
+                                <label className={cn("cursor-pointer text-[9px] text-muted-foreground hover:text-primary flex items-center gap-0.5", (isFilingLocked || challanUploading === c.id) && "opacity-50 pointer-events-none")}>
+                                  <FileText size={10} /> {challanUploading === c.id ? "Uploading..." : "Attach PDF"}
+                                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadChallanFile(c, f); e.target.value = ""; }} />
+                                </label>
+                              </>
+                            )}
+                          </div>
                         </div>
                         <div className="flex gap-1 ml-2">
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" disabled={isFilingLocked} onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
                             <Pencil size={12} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" disabled={isFilingLocked} onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
                             <Trash2 size={12} className="text-destructive" />
                           </Button>
                         </div>
@@ -877,6 +954,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <div className="space-y-3">
               {selectedChallan ? (
                 <>
+                  {/* Issue 1: Locked notice */}
+                  {isFilingLocked && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                      <Lock size={12} /> This filing is <strong>Filed</strong>. Data is read-only. Change status to unlock.
+                    </div>
+                  )}
                   {/* Challan Summary Bar */}
                   <Card className="bg-muted/30">
                     <CardContent className="p-3">
@@ -929,7 +1012,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TCS</TableHead>
                                   <TableHead className="text-xs text-right">Interest</TableHead>
-                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               ) : (
@@ -943,7 +1025,6 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                   <TableHead className="text-xs text-right">Rate%</TableHead>
                                   <TableHead className="text-xs text-right">TDS</TableHead>
                                   <TableHead className="text-xs text-right">Interest</TableHead>
-                                  <TableHead className="text-xs text-right">Late Fees</TableHead>
                                   <TableHead className="text-xs">Reason</TableHead>
                                 </>
                               )}
@@ -1004,10 +1085,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       </TooltipProvider>
                                     </TableCell>
                                     <TableCell>
-                                      <Select value={d.deductee_type || ""} onValueChange={v => updateDeducteeField(d.id, "deductee_type", v)}>
-                                        <SelectTrigger className="h-7 text-xs w-24"><SelectValue placeholder="—" /></SelectTrigger>
-                                        <SelectContent>{DEDUCTEE_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-                                      </Select>
+                                      <span className="text-xs px-1 text-muted-foreground">{d.deductee_type || "—"}</span>
                                     </TableCell>
                                     <TableCell>
                                       <div className="space-y-0.5">
@@ -1057,26 +1135,25 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     <TableCell className="text-right text-xs font-semibold">
                                       {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                     </TableCell>
-                                    <TableCell className="text-right">
-                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.interest_amount || ""}
-                                        key={`int-${d.id}-${d.interest_amount}`}
-                                        onBlur={e => updateDeducteeField(d.id, "interest_amount", parseFloat(e.target.value) || 0)} />
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                      <Input type="number" className="h-7 text-xs w-16 text-right" defaultValue={d.late_fees_amount || ""}
-                                        key={`lf-${d.id}-${d.late_fees_amount}`}
-                                        onBlur={e => updateDeducteeField(d.id, "late_fees_amount", parseFloat(e.target.value) || 0)} />
+                                    <TableCell className="text-right text-xs">
+                                      {(() => {
+                                        const auto = calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment, selectedChallan?.deposit_date || null);
+                                        return <span className={cn("font-medium tabular-nums", auto > 0 && "text-amber-600")} title="Auto-calculated (1.5%/month)">{auto.toLocaleString("en-IN")}</span>;
+                                      })()}
                                     </TableCell>
                                     <TableCell>
-                                      <Select value={d.reason_for_lower_or_nil_deduction || ""} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v)}>
+                                      <Select value={d.reason_for_lower_or_nil_deduction || "__none__"} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v === "__none__" ? null : v)}>
                                         <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
-                                        <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
+                                        <SelectContent>
+                                          <SelectItem value="__none__">— None —</SelectItem>
+                                          {REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}
+                                        </SelectContent>
                                       </Select>
                                     </TableCell>
                                   </>
                                 )}
                                 <TableCell>
-                                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => deleteDeductee(d.id)}>
+                                  <Button variant="ghost" size="icon" className="h-6 w-6" disabled={isFilingLocked} onClick={() => deleteDeductee(d.id)}>
                                     <Trash2 size={12} className="text-destructive" />
                                   </Button>
                                 </TableCell>
@@ -1084,8 +1161,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             ))}
                             {/* Always-visible blank row trigger */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 10 : 13} className="text-center py-2">
-                                <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow}>
+                              <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="text-center py-2">
+                                <Button variant="ghost" size="sm" className="gap-1 text-xs h-7" onClick={addDeducteeRow} disabled={isFilingLocked}>
                                   <Plus size={12} /> Add Row
                                 </Button>
                               </TableCell>
@@ -1186,13 +1263,17 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 <Input type="number" value={challanForm.interest || ""} onChange={e => setChallanForm(p => ({ ...p, interest: e.target.value }))} />
               </div>
               <div className="space-y-1">
+                <Label className="text-xs">Late Fees u/s 234E</Label>
+                <Input type="number" value={challanForm.late_fees_234e || ""} onChange={e => setChallanForm(p => ({ ...p, late_fees_234e: e.target.value }))} placeholder="0" />
+              </div>
+              <div className="space-y-1">
                 <Label className="text-xs">Others</Label>
                 <Input type="number" value={challanForm.others || ""} onChange={e => setChallanForm(p => ({ ...p, others: e.target.value }))} />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Total (auto)</Label>
-                <Input readOnly className="bg-muted font-semibold" value={`₹${challanTotal.toLocaleString("en-IN")}`} />
-              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Total (auto)</Label>
+              <Input readOnly className="bg-muted font-semibold" value={`₹${challanTotal.toLocaleString("en-IN")}`} />
             </div>
             <div className="flex items-center gap-3 pt-1">
               <Switch checked={challanForm.is_book_entry || false} onCheckedChange={v => setChallanForm(p => ({ ...p, is_book_entry: v }))} />

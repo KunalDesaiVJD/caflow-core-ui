@@ -41,6 +41,7 @@ interface TdsFiling {
   prn_no: string | null; tan: string | null; assigned_staff: string | null;
   last_updated_by: string | null; last_updated_at: string | null;
   remarks: string | null; created_at: string | null;
+  ack_file_url?: string | null;
 }
 
 interface AuditLogEntry {
@@ -108,7 +109,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const { user } = useAuth();
   const { toast } = useToast();
   const [filings, setFilings] = useState<TdsFiling[]>([]);
-  const [deletedClients, setDeletedClients] = useState<Map<string, string>>(new Map()); // client_id -> deleted_at
+  const [deletedClients, setDeletedClients] = useState<Map<string, { name: string | null; deleted_at: string }>>(new Map()); // client_id -> { name, deleted_at }
+  const [ackUploading, setAckUploading] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [quarterFilter, setQuarterFilter] = useState("all");
@@ -163,16 +165,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const { data } = await q;
     const allFilings = (data || []) as TdsFiling[];
 
-    // Fetch deleted clients info for filings' client IDs
+    // Fetch deleted clients info (including name) for filings' client IDs
     const clientIds = [...new Set(allFilings.map(f => f.client_id))];
-    const delMap = new Map<string, string>();
+    const delMap = new Map<string, { name: string | null; deleted_at: string }>();
     if (clientIds.length > 0) {
       const { data: delClients } = await supabase.from("clients")
-        .select("id, deleted_at")
+        .select("id, name, deleted_at")
         .in("id", clientIds)
         .not("deleted_at", "is", null);
       for (const dc of (delClients || [])) {
-        if (dc.deleted_at) delMap.set(dc.id, dc.deleted_at);
+        if (dc.deleted_at) delMap.set(dc.id, { name: dc.name || null, deleted_at: dc.deleted_at });
       }
     }
     setDeletedClients(delMap);
@@ -188,10 +190,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       if (statusFilter !== "all" && f.work_status !== statusFilter) return false;
 
       // Deleted client filtering
-      const deletedAt = deletedClients.get(f.client_id);
-      if (deletedAt) {
+      const deletedInfo = deletedClients.get(f.client_id);
+      if (deletedInfo) {
         const periodEnd = getQuarterEndDate(f.financial_year, f.quarter);
-        const deletionDate = new Date(deletedAt);
+        const deletionDate = new Date(deletedInfo.deleted_at);
         // If period is after deletion and filing wasn't already filed/processed → hide
         if (periodEnd >= deletionDate && !["Filed", "Processed"].includes(f.work_status)) {
           return false;
@@ -204,6 +206,33 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // Check if a filing belongs to a deleted client (for archived styling)
   const isArchivedFiling = (f: TdsFiling): boolean => {
     return deletedClients.has(f.client_id);
+  };
+
+  // ACK file upload/view/delete (Issue 7)
+  const uploadAckFile = async (filing: TdsFiling, file: File) => {
+    setAckUploading(filing.id);
+    const ext = file.name.split('.').pop() || 'pdf';
+    const path = `${filing.id}/ack.${ext}`;
+    const { error } = await supabase.storage.from('tds-ack-files').upload(path, file, { upsert: true });
+    if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); }
+    else {
+      await supabase.from('tds_filings').update({ ack_file_url: path } as any).eq('id', filing.id);
+      fetchFilings();
+      toast({ title: "ACK file uploaded" });
+    }
+    setAckUploading(null);
+  };
+  const viewAckFile = async (filing: TdsFiling) => {
+    if (!filing.ack_file_url) return;
+    const { data } = await supabase.storage.from('tds-ack-files').createSignedUrl(filing.ack_file_url, 60);
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+  };
+  const deleteAckFile = async (filing: TdsFiling) => {
+    if (!filing.ack_file_url) return;
+    await supabase.storage.from('tds-ack-files').remove([filing.ack_file_url]);
+    await supabase.from('tds_filings').update({ ack_file_url: null } as any).eq('id', filing.id);
+    fetchFilings();
+    toast({ title: "ACK file removed" });
   };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
@@ -223,6 +252,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const handleStatusChange = async (filing: TdsFiling, newStatus: string) => {
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
+
+    // Block 'Filed' if ack number is missing (Issue 10)
+    if (newStatus === "Filed" && !filing.acknowledgment_number) {
+      toast({ title: "Cannot mark as Filed", description: "Acknowledgment number is required before marking as Filed.", variant: "destructive" });
+      return;
+    }
 
     // Soft warning for Processed without ack number
     if (newStatus === "Processed" && !filing.acknowledgment_number) {
@@ -597,7 +632,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         />
                       </TableCell>
                       <TableCell className="font-medium sticky left-0 bg-background">
-                        <span className={cn(archived && "line-through text-muted-foreground")}>{client?.name || "—"}</span>
+                        <span className={cn(archived && "line-through text-muted-foreground")}>{client?.name || deletedClients.get(f.client_id)?.name || "—"}</span>
                         {archived && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">Archived</Badge>}
                       </TableCell>
                       <TableCell>
@@ -660,9 +695,25 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         })()}
                       </TableCell>
                       <TableCell>
-                        <Input className="h-7 w-28 text-xs" defaultValue={f.acknowledgment_number || ""}
-                          onBlur={e => { if (e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
-                        />
+                        <div className="space-y-1">
+                          <Input className="h-7 w-28 text-xs" defaultValue={f.acknowledgment_number || ""}
+                            onBlur={e => { if (e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
+                          />
+                          {/* Issue 7: ACK file upload */}
+                          <div className="flex items-center gap-1">
+                            {f.ack_file_url ? (
+                              <>
+                                <button className="text-[9px] text-primary hover:underline" onClick={() => viewAckFile(f)} title="View ACK">📄 View</button>
+                                <button className="text-[9px] text-destructive hover:underline" onClick={() => deleteAckFile(f)} title="Remove ACK">✕</button>
+                              </>
+                            ) : (
+                              <label className={cn("text-[9px] text-muted-foreground hover:text-primary cursor-pointer", ackUploading === f.id && "opacity-50 pointer-events-none")}>
+                                {ackUploading === f.id ? "Uploading..." : "📎 Attach ACK"}
+                                <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) uploadAckFile(f, fl); e.target.value = ""; }} />
+                              </label>
+                            )}
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Input className="h-7 w-24 text-xs" defaultValue={f.prn_no || ""}
