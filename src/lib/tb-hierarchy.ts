@@ -138,22 +138,34 @@ function looksLikeLedgerName(name: string) {
   return false;
 }
 
-function inferSection(name: string, bsPlSide: string, normalBal?: string | null): TbSectionType {
+function inferSectionFromKeywords(name: string): TbSectionType {
   const lower = normalizeTbName(name);
+  if (BS_ASSET_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_asset";
+  if (BS_LIABILITY_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_liability";
+  if (PL_INCOME_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_income";
+  if (PL_EXPENSE_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_expense";
+  return "unknown";
+}
+
+function inferSection(name: string, bsPlSide: string, normalBal?: string | null, primaryGroup?: string | null): TbSectionType {
   const bal = (normalBal || "").toLowerCase();
 
-  // Trust the edge function's classification when it is definitive — keyword matching can
-  // produce wrong results for uncommon Tally group names (e.g. Gujarati names, custom groups).
+  // Trust the edge function's classification when it is definitive.
   if (bsPlSide === "BS" && bal === "cr") return "bs_liability";
   if (bsPlSide === "BS" && bal === "dr") return "bs_asset";
   if (bsPlSide === "PL" && bal === "cr") return "pl_income";
   if (bsPlSide === "PL" && bal === "dr") return "pl_expense";
 
-  // Fall back to keyword matching for nodes the edge function left as Unknown.
-  if (BS_ASSET_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_asset";
-  if (BS_LIABILITY_KEYWORDS.some((keyword) => lower.includes(keyword))) return "bs_liability";
-  if (PL_INCOME_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_income";
-  if (PL_EXPENSE_KEYWORDS.some((keyword) => lower.includes(keyword))) return "pl_expense";
+  // Fall back to keyword matching on the node's own name.
+  const byName = inferSectionFromKeywords(name);
+  if (byName !== "unknown") return byName;
+
+  // Use primaryGroup as a strong classification signal — if the Tally group
+  // (e.g. "Sundry Debtors", "Capital Account") is known, classify accordingly.
+  if (primaryGroup && primaryGroup !== name) {
+    const byPg = inferSectionFromKeywords(primaryGroup);
+    if (byPg !== "unknown") return byPg;
+  }
 
   // Last-resort: use bsPlSide alone when normalBal is unknown
   if (bsPlSide === "BS") return "bs_asset";
@@ -347,15 +359,12 @@ function repairOrphanedGroups(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
     if (!hasAnyValue(candidate)) continue;
 
     const absCl = Math.abs(candidate.closing || 0);
-    const absOp = Math.abs(candidate.opening || 0);
-    const absDr = Math.abs(candidate.txnDebit || 0);
-    const absCr = Math.abs(candidate.txnCredit || 0);
     // Require at least closing to be significant
     if (absCl < 1) continue;
 
     const tol = Math.max(2, absCl * 0.001); // 0.1 % relative tolerance
 
-    let sumCl = 0, sumOp = 0, sumDr = 0, sumCr = 0;
+    let sumCl = 0;
     const span: TbHierarchyNodeLike[] = [];
 
     for (let si = ci + 1; si < ordered.length; si++) {
@@ -363,24 +372,16 @@ function repairOrphanedGroups(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
       if (sibling.parentNodeId !== null) continue; // skip non-root nodes
 
       sumCl += Math.abs(sibling.closing || 0);
-      sumOp += Math.abs(sibling.opening || 0);
-      sumDr += Math.abs(sibling.txnDebit || 0);
-      sumCr += Math.abs(sibling.txnCredit || 0);
       span.push(sibling);
 
       const clMatch = Math.abs(sumCl - absCl) <= tol;
-      const opMatch = absOp > 1 && Math.abs(sumOp - absOp) <= tol;
-      const drMatch = absDr > 1 && Math.abs(sumDr - absDr) <= tol;
-      const crMatch = absCr > 1 && Math.abs(sumCr - absCr) <= tol;
-      const matchCount = [clMatch, opMatch, drMatch, crMatch].filter(Boolean).length;
 
-      // Accept if closing matches. Require a second dimension ONLY when the
-      // candidate itself has other significant dimensions (opening/debit/credit).
-      // Tally group summary rows often carry ONLY a closing balance — the three
-      // other columns are zero — so demanding matchCount >= 2 would never fire
-      // and the repair would be silently skipped (causing BS double-counting).
-      const hasOtherDimensions = absOp > 1 || absDr > 1 || absCr > 1;
-      if (clMatch && (!hasOtherDimensions || matchCount >= 2)) {
+      // Accept on closing-match alone for aggregate-named candidates.
+      // Requiring a second dimension (opening/debit/credit) causes false
+      // negatives when orphan zero-balance ledgers (e.g. inactive Sundry
+      // Debtors) inflate sumOp/sumDr but not sumCl, breaking the multi-
+      // dimension check for groups like "Current Assets".
+      if (clMatch) {
         // Re-establish parent–child relationships
         for (const child of span) {
           child.parentNodeId = candidate.nodeId;
@@ -397,6 +398,53 @@ function repairOrphanedGroups(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
   return list;
 }
 
+// ── Link orphan leaf ledgers to their nearest preceding group ─────────────
+// Problem: when value-sum matching fails for zero-balance accounts (e.g.
+// inactive Sundry Debtors with closing=0), those accounts become orphan root
+// nodes with primaryGroup = their own name → classified as "unknown".
+// Fix: sort by rowNumber and walk backwards from each orphan leaf to find the
+// nearest non-leaf root node (which is almost certainly the Tally parent group
+// in the Excel file). This correctly links the leaf to its parent so it
+// inherits the parent's section classification.
+function repairOrphanedLeaves(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike[] {
+  const list = nodes.map((n) => ({ ...n }));
+  const sorted = [...list].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0));
+
+  for (let i = 0; i < sorted.length; i++) {
+    const node = sorted[i];
+    // Only process orphan root leaves (no parent, leaf, has no children from previous passes)
+    if (node.parentNodeId !== null) continue;
+    if (!node.isLeaf) continue;
+    if (looksLikeAggregateName(node.name)) continue; // aggregate-named = likely a group itself
+
+    // Walk backwards to find the nearest non-leaf root node (a group header)
+    let bestParent: TbHierarchyNodeLike | null = null;
+    for (let j = i - 1; j >= 0 && i - j <= 300; j--) {
+      const candidate = sorted[j];
+      if (candidate.parentNodeId !== null) continue; // only root groups
+      if (candidate.isLeaf) continue; // must be a group (non-leaf)
+      bestParent = candidate;
+      break;
+    }
+
+    if (bestParent) {
+      // Link the orphan leaf to the nearest group
+      const listNode = list.find((n) => n.nodeId === node.nodeId);
+      const listParent = list.find((n) => n.nodeId === bestParent!.nodeId);
+      if (listNode && listParent) {
+        listNode.parentNodeId = bestParent.nodeId;
+        // Also update bsPlSide/normalBal to match parent for better classification
+        if (listParent.bsPlSide !== "Unknown") {
+          listNode.bsPlSide = listParent.bsPlSide;
+          listNode.normalBal = listParent.normalBal;
+        }
+      }
+    }
+  }
+
+  return list;
+}
+
 export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPresentationModel {
   // Step 1 — take the edge function hierarchy when available (it uses bold-cell
   // detection and span-skipping which is authoritative for Tally XLSX exports).
@@ -407,7 +455,9 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   const base = hasEdgeFunctionHierarchy
     ? [...rawNodes].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0))
     : rebuildHierarchy(rawNodes);
-  const repaired = repairOrphanedGroups(base);
+  // repairOrphanedGroups: re-links aggregate root-leaves to their sub-groups
+  // repairOrphanedLeaves: links zero-balance individual ledgers to their parent group
+  const repaired = repairOrphanedLeaves(repairOrphanedGroups(base));
   const activeNodes = repaired.map((node) => ({ ...node }));
   const childrenByParent = new Map<string, TbHierarchyNodeLike[]>();
 
@@ -421,7 +471,7 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   const rootNodes = activeNodes.filter((node) => node.parentNodeId === null);
   const rootSectionMap = new Map<string, TbSectionType>();
   for (const root of rootNodes) {
-    rootSectionMap.set(root.nodeId, inferSection(root.name, root.bsPlSide, root.normalBal));
+    rootSectionMap.set(root.nodeId, inferSection(root.name, root.bsPlSide, root.normalBal, root.primaryGroup));
   }
 
   for (const node of activeNodes) {

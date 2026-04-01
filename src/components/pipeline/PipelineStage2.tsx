@@ -1958,23 +1958,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       </div>
                     )}
 
-                    {/* AI Auto-Classify Button */}
-                    {(tbValidation.unclassifiedNodes > 0 || Math.abs(tbValidation.bsAssets - tbValidation.bsLiabilities) >= 1) && (
-                      <div className="mt-3 p-3 border border-primary/20 bg-primary/5 rounded-lg">
-                        <p className="text-xs text-foreground font-medium mb-2">
-                          Some groups may be misclassified. Use AI to auto-classify all top-level groups.
-                        </p>
-                        <Button
-                          size="sm"
-                          onClick={handleAiClassify}
-                          disabled={aiClassifying}
-                          className="gap-1"
-                        >
-                          {aiClassifying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                          {aiClassifying ? "Classifying..." : "AI Auto-Classify Groups"}
-                        </Button>
-                      </div>
-                    )}
+                    {/* AI classification is in the Unclassified Groups panel below */}
                   </CardContent>
                 </Card>
               )}
@@ -2091,7 +2075,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       </Badge>
                     </CardTitle>
                     <p className="text-xs text-muted-foreground mt-1">
-                      These top-level groups could not be auto-classified. Classify them manually or use AI to fix BS/PL checks.
+                      These groups could not be auto-classified. Use AI to get suggestions, review them, then click Apply.
                     </p>
                   </CardHeader>
                   <CardContent className="space-y-3">

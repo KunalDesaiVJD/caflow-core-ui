@@ -508,6 +508,29 @@ serve(async (req) => {
       }
     }
 
+    // ── Secondary pass: link orphan non-bold leaves to nearest bold parent ──
+    // When value-sum matching fails for zero-balance accounts (e.g. inactive
+    // Sundry Debtors with closing=0 but non-zero opening), those accounts
+    // remain unparented (parentIdx = -1). Since Tally TB exports always place
+    // ledger rows immediately after their group header row (bold), we walk
+    // backwards from each unparented non-bold leaf to the nearest bold group.
+    if (boldCount >= 2 && boldCount < rawRows.length * 0.9) {
+      for (let i = 1; i < rawRows.length; i++) {
+        if (parentIdx[i] !== -1) continue; // already linked
+        if (isGrp[i]) continue;            // skip detected groups
+        if (boldMap[i]) continue;          // skip bold rows (group headers)
+
+        // Walk backwards, find the nearest detected bold group
+        for (let j = i - 1; j >= 0 && i - j <= 400; j--) {
+          if (isGrp[j] && boldMap[j]) {
+            parentIdx[i] = j;
+            if (spanEnd[j] < i) spanEnd[j] = i;
+            break;
+          }
+        }
+      }
+    }
+
     // ── Resolve primary group (topmost ancestor name) ─────────────────────
     function getPrimaryGroup(idx: number): string {
       let cur = idx;
