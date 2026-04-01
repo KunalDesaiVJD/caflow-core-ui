@@ -377,6 +377,14 @@ function GroupLedgerView() {
   const loadData = useCallback(async () => {
     if (!groupId || firmIds.length === 0) return;
     setLoading(true);
+
+    // Resolve "all" → actual firm IDs
+    let resolvedFirmIds = firmIds;
+    if (firmIds[0] === "all") {
+      resolvedFirmIds = firms.map(f => f.id);
+    }
+    if (resolvedFirmIds.length === 0) { setData([]); setLoading(false); return; }
+
     const { data: memberships } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupId);
     const clientIds = (memberships || []).map(m => m.client_id);
     if (clientIds.length === 0) { setData([]); setLoading(false); return; }
@@ -385,7 +393,7 @@ function GroupLedgerView() {
     const clientMap: Record<string, string> = {};
     (clients || []).forEach(c => { clientMap[c.id] = c.name || "Unknown"; });
 
-    const entries = await buildLedgerEntries({ clientIds, firmIds, fy });
+    const entries = await buildLedgerEntries({ clientIds, firmIds: resolvedFirmIds, fy });
 
     const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
     if (docIds.length > 0) {
@@ -418,20 +426,173 @@ function GroupLedgerView() {
   };
 
   const handleDownloadXlsx = () => {
-    const allRows: any[] = [];
+    const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+    const selectedFirmNames = firmIds[0] === "all"
+      ? "All Firms"
+      : firms.filter(f => firmIds.includes(f.id)).map(f => f.name).join(", ");
+
+    // Build AOA (array-of-arrays) for professional formatting
+    const aoa: any[][] = [];
+    // Title block
+    aoa.push(["GROUP LEDGER STATEMENT"]);
+    aoa.push([`Group: ${groupName}`]);
+    aoa.push([`Firm(s): ${selectedFirmNames}`]);
+    aoa.push([`Financial Year: ${fy}`]);
+    aoa.push([`Generated on: ${format(new Date(), "dd/MM/yyyy HH:mm")}`]);
+    aoa.push([]); // blank row
+
+    // Column headers
+    aoa.push(["Sr.", "Client", "Date", "Document No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]);
+
+    let srNo = 1;
     data.forEach(({ clientName, entries }) => {
       let bal = 0;
       entries.forEach(e => {
         const d = Number(e.debit_amount) || 0;
         const c = Number(e.credit_amount) || 0;
         bal += d - c;
-        allRows.push({
-          Client: clientName, Date: e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
-          "Document No": getDocNo(e), Narration: e.narration || "", "Debit (₹)": d, "Credit (₹)": c, "Balance (₹)": bal,
-        });
+        aoa.push([
+          srNo++,
+          clientName,
+          e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
+          getDocNo(e),
+          e.narration || "",
+          d || "",
+          c || "",
+          bal,
+        ]);
       });
+      // Subtotal row
+      const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
+      const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
+      aoa.push(["", `Subtotal — ${clientName}`, "", "", "", subtotalD, subtotalC, subtotalD - subtotalC]);
+      aoa.push([]); // blank row between clients
     });
-    exportToExcel([{ sheetName: "Group Ledger", rows: allRows }], `GroupLedger_${fy}.xlsx`);
+
+    // Grand total
+    const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
+    const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
+    aoa.push(["", "GRAND TOTAL", "", "", "", grandD, grandC, grandD - grandC]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // Column widths
+    ws["!cols"] = [{ wch: 5 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+
+    // Merge title cells A1:H1 through A5:H5
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 7 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 7 } },
+      { s: { r: 4, c: 0 }, e: { r: 4, c: 7 } },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Group Ledger");
+    XLSX.writeFile(wb, `GroupLedger_${groupName}_${fy}.xlsx`);
+  };
+
+  const handleDownloadPdf = async () => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+    const selectedFirmNames = firmIds[0] === "all"
+      ? "All Firms"
+      : firms.filter(f => firmIds.includes(f.id)).map(f => f.name).join(", ");
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+
+    // Corporate header bar
+    const DARK_BLUE = [26, 58, 92] as [number, number, number];
+    const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 297, 22, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("GROUP LEDGER STATEMENT", 14, 10);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   FY: ${fy}`, 14, 17);
+
+    // Generation timestamp (right-aligned)
+    const genText = `Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`;
+    doc.text(genText, 297 - 14, 17, { align: "right" });
+
+    // Table
+    const tableRows: any[][] = [];
+    data.forEach(({ clientName, entries }) => {
+      let bal = 0;
+      entries.forEach((e: any) => {
+        const d = Number(e.debit_amount) || 0;
+        const c = Number(e.credit_amount) || 0;
+        bal += d - c;
+        tableRows.push([
+          clientName,
+          e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
+          getDocNo(e),
+          e.narration || "",
+          d > 0 ? d.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+          c > 0 ? c.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+          bal.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+        ]);
+      });
+      // Subtotal
+      const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
+      const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
+      tableRows.push([
+        { content: `Subtotal — ${clientName}`, colSpan: 4, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
+        { content: subtotalD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: subtotalC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: (subtotalD - subtotalC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+      ]);
+    });
+
+    // Grand total row
+    const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
+    const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
+    tableRows.push([
+      { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: grandD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: grandC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: (grandD - grandC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+    ]);
+
+    autoTable(doc, {
+      startY: 26,
+      head: [["Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
+      body: tableRows,
+      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
+      alternateRowStyles: { fillColor: [248, 251, 255] },
+      columnStyles: {
+        0: { cellWidth: 40 },
+        1: { cellWidth: 22, halign: "center" },
+        2: { cellWidth: 22, halign: "center" },
+        3: { cellWidth: 70 },
+        4: { cellWidth: 28, halign: "right" },
+        5: { cellWidth: 28, halign: "right" },
+        6: { cellWidth: 30, halign: "right" },
+      },
+      margin: { left: 10, right: 10 },
+      didDrawPage: (hookData) => {
+        // Footer on every page
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(7);
+        doc.setTextColor(120, 130, 145);
+        doc.text(
+          `Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`,
+          148.5, 205, { align: "center" }
+        );
+        // Bottom border line
+        doc.setDrawColor(...DARK_BLUE);
+        doc.setLineWidth(0.5);
+        doc.line(10, 202, 287, 202);
+      },
+    });
+
+    doc.save(`GroupLedger_${groupName}_${fy}.pdf`);
   };
 
   const handleDownloadZip = async () => {
@@ -441,8 +602,9 @@ function GroupLedgerView() {
     const clientIds = (memberships || []).map(m => m.client_id);
     if (clientIds.length === 0) return;
 
+    const resolvedFirmIds = firmIds[0] === "all" ? firms.map(f => f.id) : firmIds;
     const { data: invoices } = await supabase.from("invoices").select("id, invoice_no, client_id")
-      .in("client_id", clientIds).in("firm_id", firmIds).eq("financial_year", fy);
+      .in("client_id", clientIds).in("firm_id", resolvedFirmIds).eq("financial_year", fy);
     if (!invoices?.length) { toast({ title: "No invoices found" }); return; }
 
     const { data: clients } = await supabase.from("clients").select("id, name").in("id", clientIds);
@@ -471,9 +633,16 @@ function GroupLedgerView() {
             {groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={firmIds[0] || ""} onValueChange={v => setFirmIds([v])}>
-          <SelectTrigger className="w-[180px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
+        <Select
+          value={firmIds[0] === "all" ? "all" : (firmIds[0] || "")}
+          onValueChange={v => {
+            if (v === "all") setFirmIds(["all"]);
+            else setFirmIds([v]);
+          }}
+        >
+          <SelectTrigger className="w-[200px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
           <SelectContent>
+            <SelectItem value="all">All Firms</SelectItem>
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -551,8 +720,9 @@ function GroupLedgerView() {
               </TableRow>
             </TableFooter>
           </Table>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Download Combined PDF</Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
+            <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadZip} className="gap-1"><Archive size={14} /> Download All Invoices (ZIP)</Button>
           </div>
         </>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate, Navigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,11 +11,10 @@ import {
   Receipt,
   FileText,
   Search,
-  ArrowRight,
   Plus,
   Clock,
 } from "lucide-react";
-import { formatDistanceToNow, startOfMonth, endOfMonth } from "date-fns";
+import { startOfMonth, endOfMonth } from "date-fns";
 
 const ROLE_GREETINGS: Record<string, string> = {
   partner_ca: "Partner Dashboard",
@@ -23,12 +22,6 @@ const ROLE_GREETINGS: Record<string, string> = {
   staff_article: "My Tasks",
   firm_admin: "Firm Overview",
   superadmin: "Admin Dashboard",
-};
-
-const OP_COLORS: Record<string, string> = {
-  INSERT: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  UPDATE: "bg-sky-100 text-sky-700 border-sky-200",
-  DELETE: "bg-red-100 text-red-700 border-red-200",
 };
 
 interface DashboardStats {
@@ -44,14 +37,6 @@ interface DueItem {
   type: string;
 }
 
-interface ActivityItem {
-  user: string;
-  role: string;
-  table: string;
-  op: string;
-  at: Date;
-}
-
 function daysUntil(date: Date) {
   return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000));
 }
@@ -62,7 +47,6 @@ const Index = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({ activeClients: 0, tdsDue: 0, itrPending: 0, openAudits: 0 });
   const [dueItems, setDueItems] = useState<DueItem[]>([]);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
 
   const fetchDashboard = useCallback(async () => {
     if (!user) {
@@ -106,12 +90,8 @@ const Index = () => {
       .limit(5);
     if (!isSuperadmin && firmId) dueQ = dueQ.eq("firm_id", firmId);
 
-    let activityQ = supabase.from("version_history").select("user_name, user_role, table_name, operation, created_at")
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, activityRes] = await Promise.all([
-      clientsQ, tdsQ, itrQ, auditsQ, dueQ, activityQ,
+    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes] = await Promise.all([
+      clientsQ, tdsQ, itrQ, auditsQ, dueQ,
     ]);
 
     setStats({
@@ -126,16 +106,6 @@ const Index = () => {
         client: d.party_name || "Unknown",
         due: new Date(d.due_date),
         type: "TDS",
-      }))
-    );
-
-    setActivity(
-      (activityRes.data || []).map((a: any) => ({
-        user: a.user_name || "System",
-        role: a.user_role || "unknown",
-        table: a.table_name || "",
-        op: a.operation || "",
-        at: new Date(a.created_at),
       }))
     );
 
@@ -199,9 +169,8 @@ const Index = () => {
         )}
       </div>
 
-      {/* Two-column section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Due This Week */}
+      {/* Due This Week */}
+      <div className="grid grid-cols-1 gap-6">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-display flex items-center gap-2">
@@ -235,46 +204,6 @@ const Index = () => {
                   </div>
                 );
               })
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Recent Activity */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base font-display flex items-center gap-2">
-              <ArrowRight className="h-4 w-4 text-primary" />
-              Recent Activity
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {loading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 py-3">
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-5 w-14" />
-                  <Skeleton className="ml-auto h-4 w-24" />
-                </div>
-              ))
-            ) : activity.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">No recent activity.</p>
-            ) : (
-              activity.map((item, i) => (
-                <div key={i} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm font-medium text-foreground whitespace-nowrap">{item.user}</span>
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">{item.role}</Badge>
-                    <span className="text-xs text-muted-foreground truncate">
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border ${OP_COLORS[item.op] || ""}`}>
-                        {item.op}
-                      </span>{" "}on <span className="font-mono">{item.table}</span>
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                    {formatDistanceToNow(item.at, { addSuffix: true })}
-                  </span>
-                </div>
-              ))
             )}
           </CardContent>
         </Card>

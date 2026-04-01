@@ -13,9 +13,6 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -62,6 +59,8 @@ const SEED_DATA: Omit<RateRecord, "id" | "firm_id" | "created_at">[] = [
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194A", nature_of_payment: "Interest (Banks - Others)", threshold_individual: 40000, threshold_company: 40000, rate_individual: 10, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194B", nature_of_payment: "Lottery/Crossword", threshold_individual: 10000, threshold_company: 10000, rate_individual: 30, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194BB", nature_of_payment: "Horse Racing", threshold_individual: 10000, threshold_company: 10000, rate_individual: 30, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
+  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194BA", nature_of_payment: "Online Gaming Winnings", threshold_individual: 0, threshold_company: 0, rate_individual: 30, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "IT Act 2025: TDS on net winnings from online gaming platforms. No threshold limit.", section_description: null },
+  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194LBC", nature_of_payment: "Securitisation Trust Income", threshold_individual: 0, threshold_company: 0, rate_individual: 25, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "IT Act 2025: 25% for Ind/HUF, 30% for others (companies/firms).", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194C-S", nature_of_payment: "Contractor (Single Transaction)", threshold_individual: 30000, threshold_company: 30000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "1% for Ind/HUF, 2% for Others", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194C-A", nature_of_payment: "Contractor (Aggregate)", threshold_individual: 100000, threshold_company: 100000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "1% for Ind/HUF, 2% for Others", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194D", nature_of_payment: "Insurance Commission", threshold_individual: 15000, threshold_company: 15000, rate_individual: 5, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
@@ -71,7 +70,7 @@ const SEED_DATA: Omit<RateRecord, "id" | "firm_id" | "created_at">[] = [
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194I(a)", nature_of_payment: "Rent - Plant & Machinery", threshold_individual: 240000, threshold_company: 240000, rate_individual: 2, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194I(b)", nature_of_payment: "Rent - Land/Building", threshold_individual: 240000, threshold_company: 240000, rate_individual: 10, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194IA", nature_of_payment: "Immovable Property Purchase", threshold_individual: 5000000, threshold_company: 5000000, rate_individual: 1, rate_company: 1, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
-  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194IB", nature_of_payment: "Rent by Ind/HUF (>50k/month)", threshold_individual: 50000, threshold_company: 0, rate_individual: 5, rate_company: 0, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "Per month threshold", section_description: null },
+  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194IB", nature_of_payment: "Rent by Ind/HUF (>50k/month)", threshold_individual: 50000, threshold_company: 0, rate_individual: 2, rate_company: 0, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "Rate reduced to 2% w.e.f. 01-Apr-2025 (Finance Act 2025). Per month threshold.", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194IC", nature_of_payment: "Joint Dev Agreement", threshold_individual: 0, threshold_company: 0, rate_individual: 10, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194J(a)", nature_of_payment: "Professional Services", threshold_individual: 30000, threshold_company: 30000, rate_individual: 10, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194J(b)", nature_of_payment: "Technical Services", threshold_individual: 30000, threshold_company: 30000, rate_individual: 2, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
@@ -163,27 +162,38 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
 
   const importFromPrevYear = async () => {
     const firmId = await resolveFirmId();
+    if (!firmId) { toast({ title: "No firm ID", variant: "destructive" }); return; }
     const prevAYStart = parseInt(selectedAY.split("-")[0]) - 1;
     const prevAY = `${prevAYStart}-${String(prevAYStart + 1).slice(2)}`;
-    const { data: prevRates } = await supabase.from("tds_rate_master").select("*")
-      .eq("assessment_year", prevAY)
-      .eq("form_type", selectedForm);
-    if (!prevRates || prevRates.length === 0) {
-      toast({ title: `No rates found for AY ${prevAY}`, variant: "destructive" });
+    const newFY = `${parseInt(selectedAY.split("-")[0]) - 1}-${selectedAY.split("-")[0].slice(2)}`;
+
+    // Import ALL form types, not just the currently selected one
+    let totalImported = 0;
+    for (const formType of FORM_TYPES) {
+      let q = supabase.from("tds_rate_master").select("*")
+        .eq("assessment_year", prevAY)
+        .eq("form_type", formType)
+        .eq("firm_id", firmId);
+      const { data: prevRates } = await q;
+      if (!prevRates || prevRates.length === 0) continue;
+      const toInsert = prevRates.map((r: any) => ({
+        ...r,
+        id: undefined,
+        assessment_year: selectedAY,
+        financial_year: newFY,
+        firm_id: firmId,
+        created_at: undefined,
+      }));
+      const { error } = await supabase.from("tds_rate_master").upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
+      if (error) { toast({ title: `Error importing ${formType}`, description: error.message, variant: "destructive" }); return; }
+      totalImported += toInsert.length;
+    }
+    if (totalImported === 0) {
+      toast({ title: `No rates found for AY ${prevAY} for this firm`, variant: "destructive" });
       return;
     }
-    const newFY = `${parseInt(selectedAY.split("-")[0]) - 1}-${selectedAY.split("-")[0].slice(2)}`;
-    const toInsert = prevRates.map((r: any) => ({
-      ...r,
-      id: undefined,
-      assessment_year: selectedAY,
-      financial_year: newFY,
-      firm_id: firmId,
-      created_at: undefined,
-    }));
-    const { error } = await supabase.from("tds_rate_master").upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: `Imported ${toInsert.length} rates from AY ${prevAY}` }); fetchRates(); }
+    toast({ title: `Imported ${totalImported} rates from AY ${prevAY} (all form types)` });
+    fetchRates();
   };
 
   const openAdd = () => {
@@ -405,60 +415,81 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
         <Button size="sm" className="gap-1" onClick={openAdd}><Plus size={14} /> Add Section</Button>
         <Button size="sm" variant="outline" className="gap-1" onClick={importFromPrevYear}><Copy size={14} /> Import from Previous Year</Button>
         <Button size="sm" variant="outline" className="gap-1" onClick={() => setUploadOpen(true)}><Upload size={14} /> Upload New Year Rules</Button>
-        {rates.length === 0 && (
-          <Button size="sm" variant="secondary" onClick={seedRates}>Seed Default Rates (AY 2026-27)</Button>
-        )}
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Section</TableHead>
-                  <TableHead className="min-w-[180px]">Nature of Payment</TableHead>
-                  <TableHead className="text-right">Threshold (Ind)</TableHead>
-                  <TableHead className="text-right">Threshold (Co.)</TableHead>
-                  <TableHead className="text-right">Rate Ind</TableHead>
-                  <TableHead className="text-right">Rate Co.</TableHead>
-                  <TableHead className="text-right">No PAN</TableHead>
-                  <TableHead className="text-center">Surcharge</TableHead>
-                  <TableHead className="text-center">Cess</TableHead>
-                  <TableHead>Effective From</TableHead>
-                  <TableHead className="w-[80px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 11 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
-                )) : filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No rates found. Click "Add Section" or "Seed Default Rates".</TableCell></TableRow>
-                ) : filtered.map(r => (
-                  <TableRow key={r.id}>
-                    <TableCell><Badge variant="outline" className="font-mono text-xs">{r.section_code}</Badge></TableCell>
-                    <TableCell className="text-sm">{r.nature_of_payment}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">₹{fmt(r.threshold_individual)}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">₹{fmt(r.threshold_company)}</TableCell>
-                    <TableCell className="text-right font-semibold">{fmtRate(r.rate_individual)}</TableCell>
-                    <TableCell className="text-right">{fmtRate(r.rate_company)}</TableCell>
-                    <TableCell className="text-right text-destructive font-semibold">{fmtRate(r.rate_no_pan)}</TableCell>
-                    <TableCell className="text-center">{r.surcharge_applicable ? "✓" : "—"}</TableCell>
-                    <TableCell className="text-center">{r.cess_applicable ? "✓" : "—"}</TableCell>
-                    <TableCell className="text-xs">{r.effective_from || "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(r)}><Pencil size={12} /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(r.id)}><Trash2 size={12} className="text-destructive" /></Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i}><CardContent className="p-4 space-y-3">
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-4 w-48" />
+              <div className="grid grid-cols-3 gap-2">
+                <Skeleton className="h-8 rounded" />
+                <Skeleton className="h-8 rounded" />
+                <Skeleton className="h-8 rounded" />
+              </div>
+            </CardContent></Card>
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground">
+          No rates found. Click "Add Section" to add a new TDS section.
+        </CardContent></Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {filtered.map(r => (
+            <Card key={r.id} className="border border-border hover:shadow-md transition-shadow">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline" className="font-mono text-xs font-bold px-2 py-0.5 border-primary/40 text-primary">
+                      {r.section_code}
+                    </Badge>
+                    {r.effective_from && r.effective_from >= "2025-04-01" && (
+                      <Badge className="text-[10px] px-1.5 py-0 bg-emerald-100 text-emerald-700 border border-emerald-200">
+                        IT Act 2025
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(r)}><Pencil size={12} /></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(r.id)}><Trash2 size={12} className="text-destructive" /></Button>
+                  </div>
+                </div>
+
+                <p className="text-sm font-medium text-foreground mb-3 leading-snug">{r.nature_of_payment || "—"}</p>
+
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-muted/50 rounded-md px-2 py-1.5 text-center">
+                    <p className="text-[10px] text-muted-foreground mb-0.5">Rate (Ind)</p>
+                    <p className="text-sm font-bold text-foreground">{fmtRate(r.rate_individual)}</p>
+                  </div>
+                  <div className="bg-muted/50 rounded-md px-2 py-1.5 text-center">
+                    <p className="text-[10px] text-muted-foreground mb-0.5">Rate (Co.)</p>
+                    <p className="text-sm font-bold text-foreground">{fmtRate(r.rate_company)}</p>
+                  </div>
+                  <div className="bg-red-50 dark:bg-red-950/20 rounded-md px-2 py-1.5 text-center border border-red-100 dark:border-red-900/30">
+                    <p className="text-[10px] text-muted-foreground mb-0.5">No PAN</p>
+                    <p className="text-sm font-bold text-destructive">{fmtRate(r.rate_no_pan)}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-muted-foreground flex-wrap gap-1">
+                  <span>Threshold: <span className="font-mono text-foreground">₹{fmt(r.threshold_individual)}</span> / <span className="font-mono text-foreground">₹{fmt(r.threshold_company)}</span></span>
+                  <div className="flex gap-1">
+                    {r.surcharge_applicable && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Surcharge</Badge>}
+                    {r.cess_applicable && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Cess</Badge>}
+                  </div>
+                </div>
+
+                {r.notes && (
+                  <p className="text-[11px] text-muted-foreground mt-2 border-t pt-2 leading-relaxed italic">{r.notes}</p>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Add/Edit Sheet */}
       <Sheet open={formOpen} onOpenChange={setFormOpen}>
