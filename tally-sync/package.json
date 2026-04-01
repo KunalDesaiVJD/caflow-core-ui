@@ -1,0 +1,24 @@
+{
+  "name": "caflow-tally-sync",
+  "version": "2.0.0",
+  "description": "Robust Tally ERP → CAFlow (Supabase) auto-sync bridge",
+  "main": "src/index.js",
+  "scripts": {
+    "sync": "node src/index.js sync",
+    "watch": "node src/index.js watch",
+    "test-connection": "node src/index.js test",
+    "companies": "node src/index.js companies"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.7",
+    "fast-xml-parser": "^4.3.4",
+    "node-cron": "^3.0.3",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.1",
+    "uuid": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
