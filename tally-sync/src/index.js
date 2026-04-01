@@ -10,7 +10,12 @@
  * ╚══════════════════════════════════════════════════════════════════════════╝
  */
 
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+// Support --env flag for multi-client: node src/index.js sync --env clients/ABC.env
+const envFlagIdx = process.argv.indexOf('--env');
+const envFile = envFlagIdx !== -1
+  ? require('path').resolve(process.argv[envFlagIdx + 1])
+  : require('path').join(__dirname, '..', '.env');
+require('dotenv').config({ path: envFile });
 const cron = require('node-cron');
 const chalk = require('chalk');
 const { TallyClient } = require('./tally-client');
@@ -45,13 +50,47 @@ function validateConfig() {
   }
 }
 
+// ─── FORMAT DATE FOR DISPLAY ───────────────────────────────────────────────
+function formatDisplayDate(yyyymmdd) {
+  if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const y = yyyymmdd.slice(0, 4);
+  const m = parseInt(yyyymmdd.slice(4, 6)) - 1;
+  const d = yyyymmdd.slice(6, 8);
+  return `${d}-${months[m]}-${y}`;
+}
+
 // ─── MAIN SYNC FUNCTION ────────────────────────────────────────────────────
 async function runSync() {
   const startTime = Date.now();
-  console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-  console.log(chalk.bold.cyan('  CAFlow Tally Sync'));
-  console.log(chalk.cyan(`  ${new Date().toLocaleString('en-IN')}`));
-  console.log(chalk.cyan('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
+
+  // ── Pre-Sync Summary — show exactly what will happen ─────────────────
+  console.log(chalk.cyan('\n╔══════════════════════════════════════════════════════╗'));
+  console.log(chalk.cyan('║           CAFlow Tally Sync — Pre-Sync Summary       ║'));
+  console.log(chalk.cyan('╠══════════════════════════════════════════════════════╣'));
+  console.log(chalk.cyan('║') + chalk.bold('  WHAT WILL BE SYNCED FROM TALLY:') + chalk.cyan(''));
+  console.log(chalk.cyan('║'));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Tally Company  : ') +
+    chalk.white(config.company
+      ? `"${config.company}" (named in .env — does NOT need to be open on screen)`
+      : chalk.italic('(whichever company is currently open on Gateway of Tally)')));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Period From    : ') + chalk.white(formatDisplayDate(config.fromDate)));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Period To      : ') + chalk.white(formatDisplayDate(config.toDate)));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Financial Year : ') + chalk.white(config.financialYear));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Tally Server   : ') + chalk.white(`${config.tallyHost}:${config.tallyPort}`));
+  console.log(chalk.cyan('║'));
+  console.log(chalk.cyan('║') + chalk.bold('  WHERE DATA WILL GO IN CAFLOW:'));
+  console.log(chalk.cyan('║'));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Client ID      : ') + chalk.white(config.clientId));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Engagement ID  : ') + chalk.white(config.engagementId));
+  console.log(chalk.cyan('║  ') + chalk.yellow('Firm ID        : ') + chalk.white(config.firmId));
+  console.log(chalk.cyan('║'));
+  console.log(chalk.cyan('║') + chalk.bold('  TRANSLATION (Tally → CAFlow):'));
+  console.log(chalk.cyan('║  ') + 'Tally group names → Standard account types (automatic)');
+  console.log(chalk.cyan('║  ') + 'e.g. "Sundry Debtors" → Asset | "Capital Account" → Equity');
+  console.log(chalk.cyan('║  ') + 'e.g. "Indirect Expenses" → Expense | "Sales" → Revenue');
+  console.log(chalk.cyan('╚══════════════════════════════════════════════════════╝'));
+  console.log(chalk.gray(`\n  Started at: ${new Date().toLocaleString('en-IN')}\n`));
 
   const tally = new TallyClient(config.tallyHost, config.tallyPort);
   const pusher = new SupabasePush(config.supabaseUrl, config.supabaseKey);
