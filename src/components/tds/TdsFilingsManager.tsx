@@ -208,11 +208,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return deletedClients.has(f.client_id);
   };
 
-  // ACK file upload/view/delete (Issue 7)
+  // ACK file upload/view/download/delete (Issue 3)
   const uploadAckFile = async (filing: TdsFiling, file: File) => {
     setAckUploading(filing.id);
     const ext = file.name.split('.').pop() || 'pdf';
-    const path = `${filing.id}/ack.${ext}`;
+    const form = filing.tds_forms?.[0] || 'unknown';
+    const path = `${filing.firm_id}/${filing.client_id}/${filing.financial_year}/${form}/${filing.quarter}/ack.${ext}`;
     const { error } = await supabase.storage.from('tds-ack-files').upload(path, file, { upsert: true });
     if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); }
     else {
@@ -226,6 +227,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (!filing.ack_file_url) return;
     const { data } = await supabase.storage.from('tds-ack-files').createSignedUrl(filing.ack_file_url, 60);
     if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+  };
+  const downloadAckFile = async (filing: TdsFiling) => {
+    if (!filing.ack_file_url) return;
+    const { data } = await supabase.storage.from('tds-ack-files').createSignedUrl(filing.ack_file_url, 60);
+    if (data?.signedUrl) {
+      const a = document.createElement('a');
+      a.href = data.signedUrl;
+      a.download = `ack_${filing.quarter}_${filing.financial_year}.pdf`;
+      a.click();
+    }
   };
   const deleteAckFile = async (filing: TdsFiling) => {
     if (!filing.ack_file_url) return;
@@ -253,10 +264,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
-    // Block 'Filed' if ack number is missing (Issue 10)
-    if (newStatus === "Filed" && !filing.acknowledgment_number) {
-      toast({ title: "Cannot mark as Filed", description: "Acknowledgment number is required before marking as Filed.", variant: "destructive" });
-      return;
+    // Issue 3: Block 'Filed' if EITHER ack number OR ack file is missing
+    if (newStatus === "Filed") {
+      if (!filing.acknowledgment_number) {
+        toast({ title: "Cannot mark as Filed", description: "Acknowledgment number is required before marking as Filed.", variant: "destructive" });
+        return;
+      }
+      if (!filing.ack_file_url) {
+        toast({ title: "Cannot mark as Filed", description: "ACK file (PDF) must be uploaded before marking as Filed.", variant: "destructive" });
+        return;
+      }
     }
 
     // Soft warning for Processed without ack number
@@ -695,25 +712,39 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         })()}
                       </TableCell>
                       <TableCell>
-                        <div className="space-y-1">
-                          <Input className="h-7 w-28 text-xs" defaultValue={f.acknowledgment_number || ""}
-                            onBlur={e => { if (e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
-                          />
-                          {/* Issue 7: ACK file upload */}
-                          <div className="flex items-center gap-1">
-                            {f.ack_file_url ? (
-                              <>
-                                <button className="text-[9px] text-primary hover:underline" onClick={() => viewAckFile(f)} title="View ACK">📄 View</button>
-                                <button className="text-[9px] text-destructive hover:underline" onClick={() => deleteAckFile(f)} title="Remove ACK">✕</button>
-                              </>
-                            ) : (
-                              <label className={cn("text-[9px] text-muted-foreground hover:text-primary cursor-pointer", ackUploading === f.id && "opacity-50 pointer-events-none")}>
-                                {ackUploading === f.id ? "Uploading..." : "📎 Attach ACK"}
-                                <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) uploadAckFile(f, fl); e.target.value = ""; }} />
-                              </label>
-                            )}
-                          </div>
-                        </div>
+                        {(() => {
+                          const isFiledLocked = f.work_status === "Filed" || f.work_status === "Processed";
+                          return (
+                            <div className="space-y-1">
+                              {/* Ack No — locked once Filed */}
+                              <Input
+                                className={cn("h-7 w-28 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
+                                defaultValue={f.acknowledgment_number || ""}
+                                disabled={isFiledLocked}
+                                onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
+                              />
+                              {/* Issue 3: ACK file — view+download only when Filed; upload+delete otherwise */}
+                              <div className="flex items-center gap-1">
+                                {f.ack_file_url ? (
+                                  <>
+                                    <button className="text-[9px] text-primary hover:underline" onClick={() => viewAckFile(f)} title="View ACK">📄 View</button>
+                                    <button className="text-[9px] text-primary hover:underline" onClick={() => downloadAckFile(f)} title="Download ACK">⬇ DL</button>
+                                    {!isFiledLocked && (
+                                      <button className="text-[9px] text-destructive hover:underline" onClick={() => deleteAckFile(f)} title="Remove ACK">✕</button>
+                                    )}
+                                  </>
+                                ) : isFiledLocked ? (
+                                  <span className="text-[9px] text-muted-foreground italic">No ACK file</span>
+                                ) : (
+                                  <label className={cn("text-[9px] text-muted-foreground hover:text-primary cursor-pointer", ackUploading === f.id && "opacity-50 pointer-events-none")}>
+                                    {ackUploading === f.id ? "Uploading..." : "📎 Attach ACK"}
+                                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) uploadAckFile(f, fl); e.target.value = ""; }} />
+                                  </label>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input className="h-7 w-24 text-xs" defaultValue={f.prn_no || ""}
