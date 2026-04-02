@@ -383,7 +383,7 @@ function parseTallyXmlRows(buf: Uint8Array): TBRow[] {
     if (!name) continue;
 
     const info      = m[2];
-    const opening   = parseNum(tagVal(info, "DSPOPAМTA"));
+    const opening   = parseNum(tagVal(info, "DSPOPAMTA"));
     const debitRaw  = parseNum(tagVal(info, "DSPDRAMTA")); // stored negative in Tally
     const credit    = parseNum(tagVal(info, "DSPCRAMTA"));
     const closing   = parseNum(tagVal(info, "DSPCLAMTA"));

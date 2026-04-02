@@ -581,11 +581,16 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           // For Tally formats, store base64 for edge function
           const base64 = arrayBufferToBase64(data as ArrayBuffer);
           setTbFileBase64(base64);
-          // Also parse locally for row count preview
-          const wb = XLSX.read(data, { type: "array" });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-          setTbParsedData(jsonData);
+          if (tbFormat === "tally_xml") {
+            // XML cannot be parsed by XLSX — skip local preview, edge function handles it
+            setTbParsedData([]);
+          } else {
+            // Excel — parse locally for row count preview
+            const wb = XLSX.read(data, { type: "array" });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const jsonData: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+            setTbParsedData(jsonData);
+          }
           setTbStep(4); // Go directly to process step
         } else {
           const wb = XLSX.read(data, { type: "array" });
