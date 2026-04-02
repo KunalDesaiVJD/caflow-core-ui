@@ -66,9 +66,9 @@ async function buildLedgerEntries(
   // 1. First try client_ledger_entries
   let leQuery = supabase.from("client_ledger_entries").select("*")
     .in("client_id", filters.clientIds)
-    .in("firm_id", filters.firmIds)
     .gte("entry_date", start).lte("entry_date", end)
     .order("entry_date", { ascending: true });
+  if (filters.firmIds.length > 0) leQuery = leQuery.in("firm_id", filters.firmIds);
   const { data: leData } = await leQuery;
 
   if (leData && leData.length > 0) {
@@ -85,13 +85,14 @@ async function buildLedgerEntries(
   }
 
   // 2. Fallback: build from invoices + receipts directly
-  const { data: invoices } = await supabase.from("invoices")
+  let invQuery = supabase.from("invoices")
     .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
     .in("client_id", filters.clientIds)
-    .in("firm_id", filters.firmIds)
     .in("status", ["finalized", "sent", "overdue", "paid"])
     .gte("invoice_date", start).lte("invoice_date", end)
     .order("invoice_date", { ascending: true });
+  if (filters.firmIds.length > 0) invQuery = invQuery.in("firm_id", filters.firmIds);
+  const { data: invoices } = await invQuery;
 
   (invoices || []).forEach(inv => {
     const isCredit = inv.document_type === "credit_note";
@@ -105,27 +106,28 @@ async function buildLedgerEntries(
       narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
       client_id: inv.client_id || "",
     });
-    // TDS deductible entry from invoice-level TDS selection
-    if (!isCredit && Number(inv.tds_amount) > 0) {
+    // TDS deductible entry — added once invoice TDS columns migration is applied
+    if (!isCredit && (inv as any).tds_amount && Number((inv as any).tds_amount) > 0) {
       entries.push({
         id: `itds-${inv.id}`,
         entry_date: inv.invoice_date,
         entry_type: "adjustment",
         document_id: inv.id,
         debit_amount: 0,
-        credit_amount: Number(inv.tds_amount),
-        narration: `TDS deductible u/s ${inv.tds_section_code || ""} @ ${inv.tds_rate || ""}%`,
+        credit_amount: Number((inv as any).tds_amount),
+        narration: `TDS deductible u/s ${(inv as any).tds_section_code || ""} @ ${(inv as any).tds_rate || ""}%`,
         client_id: inv.client_id || "",
       });
     }
   });
 
-  const { data: receipts } = await supabase.from("billing_receipts")
+  let rcptQuery = supabase.from("billing_receipts")
     .select("id, client_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
     .in("client_id", filters.clientIds)
-    .in("firm_id", filters.firmIds)
     .gte("receipt_date", start).lte("receipt_date", end)
     .order("receipt_date", { ascending: true });
+  if (filters.firmIds.length > 0) rcptQuery = rcptQuery.in("firm_id", filters.firmIds);
+  const { data: receipts } = await rcptQuery;
 
   (receipts || []).forEach(r => {
     entries.push({
@@ -198,10 +200,10 @@ function ClientLedgerView() {
   }, [user]);
 
   const loadEntries = useCallback(async () => {
-    if (!clientId || !firmId) return;
+    if (!clientId) return;
     setLoading(true);
     try {
-      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: [firmId], from: fromDate, to: toDate });
+      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: firmId ? [firmId] : [], from: fromDate, to: toDate });
 
       // Load invoice numbers for document_ids
       const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
@@ -478,15 +480,14 @@ function GroupLedgerView() {
   }, [user]);
 
   const loadData = useCallback(async () => {
-    if (!groupId || firmIds.length === 0) return;
+    if (!groupId) return;
     setLoading(true);
 
-    // Resolve "all" → actual firm IDs
-    let resolvedFirmIds = firmIds;
-    if (firmIds[0] === "all") {
-      resolvedFirmIds = firms.map(f => f.id);
+    // Resolve "all" or empty → pass [] to buildLedgerEntries (skips firm filter = all firms)
+    let resolvedFirmIds: string[] = [];
+    if (firmIds.length > 0 && firmIds[0] !== "all") {
+      resolvedFirmIds = firmIds;
     }
-    if (resolvedFirmIds.length === 0) { setData([]); setLoading(false); return; }
 
     const { data: memberships } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupId);
     const clientIds = (memberships || []).map(m => m.client_id);
@@ -699,15 +700,17 @@ function GroupLedgerView() {
   };
 
   const handleDownloadZip = async () => {
-    if (!groupId || firmIds.length === 0) return;
+    if (!groupId) return;
     toast({ title: "Generating ZIP..." });
     const { data: memberships } = await supabase.from("client_group_memberships").select("client_id").eq("group_id", groupId);
     const clientIds = (memberships || []).map(m => m.client_id);
     if (clientIds.length === 0) return;
 
-    const resolvedFirmIds = firmIds[0] === "all" ? firms.map(f => f.id) : firmIds;
-    const { data: invoices } = await supabase.from("invoices").select("id, invoice_no, client_id")
-      .in("client_id", clientIds).in("firm_id", resolvedFirmIds).eq("financial_year", fy);
+    const resolvedFirmIds = (firmIds.length === 0 || firmIds[0] === "all") ? [] : firmIds;
+    let zipInvQuery = supabase.from("invoices").select("id, invoice_no, client_id")
+      .in("client_id", clientIds).eq("financial_year", fy);
+    if (resolvedFirmIds.length > 0) zipInvQuery = zipInvQuery.in("firm_id", resolvedFirmIds);
+    const { data: invoices } = await zipInvQuery;
     if (!invoices?.length) { toast({ title: "No invoices found" }); return; }
 
     const { data: clients } = await supabase.from("clients").select("id, name").in("id", clientIds);

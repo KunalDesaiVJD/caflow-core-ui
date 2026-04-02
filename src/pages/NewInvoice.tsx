@@ -333,7 +333,10 @@ const NewInvoice = () => {
   // 194C and 194J shown first (Change 3)
   useEffect(() => {
     (async () => {
-      let q = supabase.from("tds_rate_master").select("section_code, description, rate").eq("form_type", "26Q");
+      let q = supabase.from("tds_rate_master")
+        .select("section_code, nature_of_payment, rate_individual")
+        .eq("form_type", "26Q")
+        .eq("is_active", true);
       if (!isSuperadmin && user?.firm_id) q = q.eq("firm_id", user.firm_id);
       const { data } = await q;
       if (data && data.length > 0) {
@@ -344,7 +347,11 @@ const NewInvoice = () => {
           if (pa !== pb) return pa - pb;
           return a.section_code.localeCompare(b.section_code);
         });
-        setTdsRates(sorted);
+        setTdsRates(sorted.map(r => ({
+          section_code: r.section_code,
+          description: (r as any).nature_of_payment || r.section_code,
+          rate: Number((r as any).rate_individual) || 0,
+        })));
       }
     })();
   }, [isSuperadmin, user?.firm_id]);
@@ -1383,10 +1390,11 @@ const NewInvoice = () => {
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground font-medium">TDS Section (if applicable)</Label>
                 <Select
-                  value={tdsSectionCode}
+                  value={tdsSectionCode || "_none"}
                   onValueChange={v => {
-                    setTdsSectionCode(v);
-                    const found = tdsRates.find(t => t.section_code === v);
+                    const actual = v === "_none" ? "" : v;
+                    setTdsSectionCode(actual);
+                    const found = tdsRates.find(t => t.section_code === actual);
                     setTdsRate(found ? Number(found.rate) : 0);
                   }}
                   disabled={isLocked}
@@ -1395,7 +1403,7 @@ const NewInvoice = () => {
                     <SelectValue placeholder="No TDS deduction" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No TDS deduction</SelectItem>
+                    <SelectItem value="_none">No TDS deduction</SelectItem>
                     {tdsRates.map(t => (
                       <SelectItem key={t.section_code} value={t.section_code}>
                         {t.section_code} — {t.description} ({t.rate}%)
