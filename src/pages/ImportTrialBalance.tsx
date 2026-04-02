@@ -305,8 +305,8 @@ export default function ImportTrialBalance() {
     const file = e.target.files?.[0];
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase();
-    if (!["xlsx", "xls", "csv"].includes(ext || "")) {
-      toast({ title: "Invalid file type", description: "Please upload .xlsx, .xls or .csv", variant: "destructive" });
+    if (!["xlsx", "xls", "csv", "xml", "json"].includes(ext || "")) {
+      toast({ title: "Invalid file type", description: "Please upload .xlsx, .xls, .csv, .xml or .json", variant: "destructive" });
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
@@ -573,8 +573,8 @@ export default function ImportTrialBalance() {
                   onClick={() => fileRef.current?.click()}
                 >
                   <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-1" />
-                  <p className="text-xs font-medium text-foreground">{fileName || "Click to upload .xlsx, .xls, .csv"}</p>
-                  <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileSelect} />
+                  <p className="text-xs font-medium text-foreground">{fileName || "Click to upload .xlsx, .xls, .csv, .xml, .json"}</p>
+                  <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.xml,.json" className="hidden" onChange={handleFileSelect} />
                 </div>
               </div>
             </div>
@@ -624,6 +624,26 @@ export default function ImportTrialBalance() {
                 <AlertDescription className="text-xs">
                   CSV format does not contain hierarchy/indent information. All accounts will be imported as flat ledgers.
                   For full hierarchy, export as Excel from Tally (Reports → Trial Balance → Export).
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {fileName?.toLowerCase().endsWith(".xml") && (
+              <Alert>
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <AlertTitle className="text-sm">Tally XML Format Detected</AlertTitle>
+                <AlertDescription className="text-xs">
+                  Tally XML export detected (UTF-16LE). Hierarchy will be reconstructed automatically via value-sum matching — same accuracy as Excel import. Export via: Tally → Display → Trial Balance → Export → XML.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {fileName?.toLowerCase().endsWith(".json") && (
+              <Alert>
+                <CheckCircle2 className="h-4 w-4 text-blue-600" />
+                <AlertTitle className="text-sm">JSON Format Detected</AlertTitle>
+                <AlertDescription className="text-xs">
+                  Supports flat array <code>[&#123;"name","opening","debit","credit","closing"&#125;]</code> or CAFlow hierarchy export format.
                 </AlertDescription>
               </Alert>
             )}

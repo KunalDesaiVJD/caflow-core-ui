@@ -348,6 +348,152 @@ function buildHierarchy(rows: TBRow[]): {
   return { isGrp, parentIdx };
 }
 
+// ── XML parser for Tally XML exports (UTF-16LE) ───────────────────────────
+function parseTallyXmlRows(buf: Uint8Array): TBRow[] {
+  // Decode: Tally XML is UTF-16LE with BOM 0xFF 0xFE
+  let xmlStr: string;
+  if (buf[0] === 0xFF && buf[1] === 0xFE) {
+    xmlStr = new TextDecoder("utf-16le").decode(buf.slice(2));
+  } else if (buf[0] === 0xFE && buf[1] === 0xFF) {
+    xmlStr = new TextDecoder("utf-16be").decode(buf.slice(2));
+  } else {
+    xmlStr = new TextDecoder("utf-8").decode(buf);
+  }
+
+  // Unescape XML entities in account names
+  const unesc = (s: string) => s
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+
+  // Extract first inner-text of a tag within a block
+  const tagVal = (s: string, t: string): string => {
+    const re = new RegExp(`<${t}[^>]*>([^<]*)<\\/${t}>`, "i");
+    const m  = re.exec(s);
+    return m ? m[1].trim() : "";
+  };
+
+  const rows: TBRow[] = [];
+  // Tally XML alternates <DSPACCNAME>…</DSPACCNAME> <DSPACCINFO>…</DSPACCINFO>
+  const pairRe = /<DSPACCNAME>([\s\S]*?)<\/DSPACCNAME>[\s\S]*?<DSPACCINFO>([\s\S]*?)<\/DSPACCINFO>/gi;
+  let m: RegExpExecArray | null;
+  let idx = 0;
+
+  while ((m = pairRe.exec(xmlStr)) !== null) {
+    const name = unesc(tagVal(m[1], "DSPDISPNAME"));
+    if (!name) continue;
+
+    const info      = m[2];
+    const opening   = parseNum(tagVal(info, "DSPOPAМTA"));
+    const debitRaw  = parseNum(tagVal(info, "DSPDRAMTA")); // stored negative in Tally
+    const credit    = parseNum(tagVal(info, "DSPCRAMTA"));
+    const closing   = parseNum(tagVal(info, "DSPCLAMTA"));
+
+    rows.push({
+      idx, rowNum: idx + 1, name,
+      opening,
+      txnDebit:  Math.abs(debitRaw), // normalise to positive
+      txnCredit: credit,
+      closing,
+    });
+    idx++;
+  }
+
+  if (rows.length === 0) throw new Error("No data entries found in Tally XML file");
+  return rows;
+}
+
+// ── JSON parser (flat array or CAFlow hierarchy export) ───────────────────
+function parseJsonRows(buf: Uint8Array): TBRow[] {
+  const text = new TextDecoder("utf-8").decode(buf);
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { throw new Error("Invalid JSON file"); }
+
+  // Format 1: Array of TB rows
+  if (Array.isArray(json)) {
+    const rows: TBRow[] = (json as any[])
+      .map((item: any, idx: number) => ({
+        idx, rowNum: idx + 1,
+        name:       String(item.name ?? item.ledger_name ?? item.account ?? item.particulars ?? "").trim(),
+        opening:    parseNum(item.opening    ?? item.opening_balance ?? item.op ?? 0),
+        txnDebit:   parseNum(item.debit      ?? item.txn_debit       ?? item.dr ?? 0),
+        txnCredit:  parseNum(item.credit     ?? item.txn_credit      ?? item.cr ?? 0),
+        closing:    parseNum(item.closing    ?? item.closing_balance ?? item.cl ?? 0),
+      }))
+      .filter((r: TBRow) => r.name);
+    if (rows.length === 0) throw new Error("No data entries found in JSON array");
+    return rows;
+  }
+
+  // Format 2: CAFlow hierarchy export { hierarchy: [...] }
+  const obj = json as any;
+  if (obj.hierarchy && Array.isArray(obj.hierarchy)) {
+    const rows: TBRow[] = (obj.hierarchy as any[])
+      .map((item: any, idx: number) => ({
+        idx, rowNum: idx + 1,
+        name:       String(item.name ?? item.tally_group_name ?? "").trim(),
+        opening:    parseNum(item.opening    ?? item.opening_balance ?? 0),
+        txnDebit:   parseNum(item.txnDebit   ?? item.txn_debit       ?? 0),
+        txnCredit:  parseNum(item.txnCredit  ?? item.txn_credit      ?? 0),
+        closing:    parseNum(item.closing    ?? item.closing_balance  ?? 0),
+      }))
+      .filter((r: TBRow) => r.name);
+    if (rows.length === 0) throw new Error("No data entries in JSON hierarchy array");
+    return rows;
+  }
+
+  throw new Error("Unrecognised JSON format. Expected an array of TB rows or { hierarchy: [...] }.");
+}
+
+// ── Shared: build nodes from rawRows (no bold override) ───────────────────
+function buildNodesFromRows(
+  rawRows: TBRow[],
+): { nodes: HierarchyNode[]; isBalanced: boolean; drSum: number; crSum: number } {
+  if (rawRows.length === 0) throw new Error("No data rows to process");
+
+  const { isGrp: iGR, parentIdx: pIR } = buildHierarchy(rawRows);
+  const iG = [...iGR], pIdx = [...pIR];
+
+  const getPG = (i: number): string => {
+    let c = i;
+    while (pIdx[c] !== -1) c = pIdx[c];
+    return rawRows[c].name;
+  };
+  const getLvl = (i: number): number => pIdx[i] === -1 ? 1 : getLvl(pIdx[i]) + 1;
+
+  const nodes: HierarchyNode[] = rawRows.map((row, idx) => {
+    const pg = getPG(idx), lvl = getLvl(idx);
+    return {
+      nodeId:       `N${String(idx + 1).padStart(4, "0")}`,
+      parentNodeId: pIdx[idx] !== -1 ? `N${String(pIdx[idx] + 1).padStart(4, "0")}` : null,
+      level: lvl, name: row.name, indent: Math.max(0, lvl - 1),
+      bold: iG[idx], isLeaf: !iG[idx],
+      primaryGroup: getPG(idx), bsPlSide: detectBsPlSide(getPG(idx)),
+      normalBal: detectNormalBal(getPG(idx)),
+      opening: row.opening, txnDebit: row.txnDebit,
+      txnCredit: row.txnCredit, closing: row.closing, rowNumber: row.rowNum,
+    };
+  });
+
+  // P&L post-process
+  for (const nd of nodes) {
+    const lo = nd.name.toLowerCase();
+    if (lo.includes("profit") && lo.includes("loss")) {
+      nd.primaryGroup = "Profit & Loss"; nd.bsPlSide = "BS"; nd.normalBal = "Cr";
+    }
+  }
+
+  const lfs = nodes.filter(n => n.isLeaf);
+  let drSum = 0, crSum = 0;
+  for (const n of lfs) {
+    const s = n.closing !== 0
+      ? (n.normalBal === "Cr" ? -Math.abs(n.closing) : Math.abs(n.closing))
+      : (n.txnDebit - n.txnCredit);
+    if (s >= 0) drSum += s; else crSum += Math.abs(s);
+  }
+
+  return { nodes, isBalanced: Math.abs(drSum - crSum) < 5.0, drSum, crSum };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === "OPTIONS")
@@ -394,6 +540,71 @@ serve(async (req) => {
     for (let i = 0; i < binaryString.length; i++) {
       buf[i] = binaryString.charCodeAt(i);
     }
+
+    // ── XML / JSON early-return path ──────────────────────────────────────
+    const fnLower = (fileName || "").toLowerCase();
+    if (fnLower.endsWith(".xml") || fnLower.endsWith(".json")) {
+      const rawRows = fnLower.endsWith(".xml")
+        ? parseTallyXmlRows(buf)
+        : parseJsonRows(buf);
+      const detFmt = fnLower.endsWith(".xml") ? "Tally XML" : "JSON";
+      const fyUsed = financialYr || "Unknown";
+
+      const { nodes, isBalanced, drSum, crSum } = buildNodesFromRows(rawRows);
+      const lfs  = nodes.filter(n => n.isLeaf);
+      const pgs  = [...new Set(nodes.map(n => n.primaryGroup))];
+      const bId  = crypto.randomUUID();
+
+      const res: Record<string, unknown> = {
+        success: true, companyName: "Unknown", financialYear: fyUsed,
+        detectedFormat: detFmt, dataStartRow: 0,
+        isBalanced, balanceDiff: Math.round(Math.abs(drSum - crSum)),
+        grandTotalDr: 0, grandTotalCr: 0,
+        totalNodes: nodes.length, leafCount: lfs.length, leafLedgers: lfs.length,
+        primaryGroups: pgs.length, primaryGroupCount: pgs.length, primaryGroupNames: pgs,
+        bsAccounts: nodes.filter(n => n.bsPlSide === "BS").length,
+        plAccounts: nodes.filter(n => n.bsPlSide === "PL").length,
+        unknownAccounts: nodes.filter(n => n.bsPlSide === "Unknown").length,
+        totalDr: Math.round(drSum), totalCr: Math.round(crSum),
+        batchId: bId, hierarchy: nodes, tagging: null,
+      };
+
+      if (engId || clientId) {
+        // Delete old hierarchy nodes then re-insert for correct tree view
+        if (engId) {
+          await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", engId);
+          const hRows = nodes.map((nd, i) => ({
+            engagement_id: engId,
+            import_batch_id: bId,
+            node_id: nd.nodeId, parent_node_id: nd.parentNodeId,
+            tally_group_name: nd.name,
+            level: nd.level, is_leaf: nd.isLeaf, is_bold: nd.bold,
+            indent_value: nd.indent,
+            opening_balance: nd.opening, txn_debit: nd.txnDebit,
+            txn_credit: nd.txnCredit, closing_balance: nd.closing,
+            primary_group: nd.primaryGroup, bs_pl_side: nd.bsPlSide,
+            normal_balance: nd.normalBal, row_number: i + 1,
+          }));
+          // Insert in batches of 200 to avoid payload limits
+          for (let s = 0; s < hRows.length; s += 200) {
+            await supabase.from("tb_hierarchy_nodes").insert(hRows.slice(s, s + 200));
+          }
+        }
+        await (supabase.from("trial_balance_snapshots") as any).upsert({
+          ...(engId    && { engagement_id: engId }),
+          ...(clientId && { client_id: clientId }),
+          ...(firmId   && { firm_id: firmId }),
+          financial_year: fyUsed, snapshot_data: nodes,
+          is_balanced: isBalanced, grand_total_dr: 0, grand_total_cr: 0,
+          import_format: detFmt, created_at: new Date().toISOString(),
+        });
+      }
+
+      return new Response(JSON.stringify(res), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // ── End XML/JSON path ─────────────────────────────────────────────────
 
     // FM 10: detect XLS vs XLSX from magic bytes
     const isXLS =
