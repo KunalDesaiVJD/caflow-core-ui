@@ -283,8 +283,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter)
       .order("invoice_date", { ascending: false })
-      .order("seq_number", { ascending: false })
-      .order("created_at", { ascending: false });
+      .order("seq_number", { ascending: false });
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
