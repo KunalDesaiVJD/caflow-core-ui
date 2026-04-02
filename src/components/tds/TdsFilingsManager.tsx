@@ -264,21 +264,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
-    // Issue 3: Block 'Filed' if EITHER ack number OR ack file is missing
-    if (newStatus === "Filed") {
-      if (!filing.acknowledgment_number) {
-        toast({ title: "Cannot mark as Filed", description: "Acknowledgment number is required before marking as Filed.", variant: "destructive" });
-        return;
-      }
-      if (!filing.ack_file_url) {
-        toast({ title: "Cannot mark as Filed", description: "ACK file (PDF) must be uploaded before marking as Filed.", variant: "destructive" });
-        return;
-      }
-    }
-
-    // Soft warning for Processed without ack number
-    if (newStatus === "Processed" && !filing.acknowledgment_number) {
-      toast({ title: "Warning", description: "Acknowledgment number is missing for this filing.", variant: "default" });
+    // Issue 5 (CRITICAL OVERRIDE): ACK is COMPLETELY OPTIONAL — never block filing.
+    // Show a non-blocking yellow hint only if BOTH ack number AND ack file are absent.
+    if (newStatus === "Filed" && !filing.acknowledgment_number && !filing.ack_file_url) {
+      toast({ title: "Tip", description: "ACK number / file not uploaded yet — you can add them later.", variant: "default" });
     }
 
     const updatePayload: Record<string, any> = {

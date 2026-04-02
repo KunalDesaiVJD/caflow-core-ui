@@ -158,14 +158,24 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
   return Math.round(tax + cess);
 };
 
+// Issue 7: Correct interest formula per Sec 201(1A) Income Tax Act
+// Due date = 7th of month following deduction. If paid on/before → 0.
+// Otherwise: 1.5%/month × months from deduction month to deposit month (both inclusive).
+// e.g. Entry 25-Jan / Challan 30-Jan → due 7-Feb → 30-Jan ≤ 7-Feb → 0
+//      Entry 05-Feb / Challan 08-Mar, TDS=3200 → due 7-Mar → 08-Mar > 7-Mar → 2 months → ₹96
 const calcAutoInterest = (tdsAmount: number, paymentDate: string | null, depositDate: string | null): number => {
   if (!paymentDate || !depositDate || !tdsAmount) return 0;
-  const payment = new Date(paymentDate);
+  const deduction = new Date(paymentDate);
   const deposit = new Date(depositDate);
-  if (deposit <= payment) return 0;
-  const diffDays = Math.ceil((deposit.getTime() - payment.getTime()) / (1000 * 60 * 60 * 24));
-  const lateMonths = Math.ceil(diffDays / 30);
-  return Math.round(tdsAmount * 0.015 * lateMonths);
+  // Due date: 7th of the month following the deduction month
+  const dueDate = new Date(deduction.getFullYear(), deduction.getMonth() + 1, 7);
+  // Deposited on or before due date → no interest (entry date > challan date is NOT an error)
+  if (deposit <= dueDate) return 0;
+  // Count months from deduction month to deposit month (both months inclusive)
+  const deductionMonth = deduction.getFullYear() * 12 + deduction.getMonth();
+  const depositMonth = deposit.getFullYear() * 12 + deposit.getMonth();
+  const months = Math.max(1, depositMonth - deductionMonth + 1);
+  return Math.round(tdsAmount * 0.015 * months);
 };
 
 // ═══════════════════════════════════════
@@ -213,21 +223,28 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     fetchRates();
   }, [selForm, selFy]);
 
-  // ─── Load Filing ───
+  // ─── Load Filing (Issue 6: try-catch, never crash, empty state on error) ───
   const loadFiling = useCallback(async () => {
     if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
     setLoading(true);
     setFilingLoaded(false);
-    const { data } = await supabase.from("tds_filings").select("*")
-      .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
-    const match = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
-    setFiling(match as TdsFiling || null);
-    if (match) {
-      await fetchChallans((match as TdsFiling).id);
-      await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
-    } else {
-      setChallans([]); setDeductees([]); setPrevEntries([]);
+    try {
+      const { data } = await supabase.from("tds_filings").select("*")
+        .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
+      const match = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
+      setFiling(match as TdsFiling || null);
+      if (match) {
+        await fetchChallans((match as TdsFiling).id);
+        await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+      } else {
+        setChallans([]); setDeductees([]); setPrevEntries([]);
+        setSelectedChallan(null); setCarryForwardChallans([]);
+      }
+    } catch (err: any) {
+      // Issue 6: Never show "Something went wrong" — return empty state
+      setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
       setSelectedChallan(null); setCarryForwardChallans([]);
+      toast({ title: "Could not load filing", description: err?.message || "Please try again.", variant: "destructive" });
     }
     setFilingLoaded(true);
     setLoading(false);
@@ -295,7 +312,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       // Split first challan entries
       const firstAll = grouped[list[0].id] || [];
       const filingId2 = filingId; // current filing id
-      const filingRec = await supabase.from("tds_filings").select("id").eq("id", filingId2).single();
+      const filingRec = await supabase.from("tds_filings").select("id").eq("id", filingId2).maybeSingle(); // Issue 6: maybeSingle never throws
       const currFilingId = filingRec.data?.id || filingId2;
       setPrevEntries(firstAll.filter(d => d.filing_id !== currFilingId));
       setDeductees(firstAll.filter(d => d.filing_id === currFilingId));
@@ -643,7 +660,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const interest = allForChallan.reduce((s, d) => s + (d.interest_amount || 0), 0);
     const surcharge = allForChallan.reduce((s, d) => s + (d.surcharge_amount || 0), 0);
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
-    const applied = tds + interest + surcharge + lateFees;
+    // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount
+    const applied = tds + interest + surcharge;
     return { tds, interest, surcharge, lateFees, applied, count: allForChallan.length };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans]);
 
@@ -749,7 +767,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const selectedChallanBalance = useMemo(() => {
     if (!selectedChallan) return 0;
     const bd = getChallanBreakdownAll(selectedChallan.id);
-    return Math.max(0, (selectedChallan.total_challan_amount || 0) - bd.applied);
+    // Issue 4: allocatable = total - late_fees (late fees excluded from TDS allocation)
+    const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
+    return Math.max(0, allocatable - bd.applied);
   }, [selectedChallan, getChallanBreakdownAll]);
 
   // ─── Render ───
@@ -915,7 +935,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 </Card>
               ) : challans.map(c => {
                 const bd = getChallanBreakdownAll(c.id);
-                const unconsumed = (c.total_challan_amount || 0) - bd.applied;
+                // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
+                const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
+                const unconsumed = allocatable - bd.applied;
                 const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
                 return (
                   <Card key={c.id}
