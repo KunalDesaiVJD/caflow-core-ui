@@ -281,7 +281,10 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       await supabase.rpc("update_overdue_invoices", { p_firm_id: firmId });
     }
 
-    let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter).order("invoice_date", { ascending: false });
+    let iQuery = supabase.from("invoices").select("*").in("document_type", docTypeFilter)
+      .order("invoice_date", { ascending: false })
+      .order("seq_number", { ascending: false })
+      .order("created_at", { ascending: false });
     if (!isSuperadmin && firmId) iQuery = iQuery.eq("firm_id", firmId);
     if (firmFilter !== "all") iQuery = iQuery.eq("firm_id", firmFilter);
     const { data: invData } = await iQuery;
@@ -604,12 +607,28 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       return;
     }
 
-    // Fetch firm logos for all unique firm_ids
+    // Fetch firm logos for all unique firm_ids and convert to base64 for html2canvas
     const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
     const firmLogoMap: Record<string, string> = {};
     if (uniqueFirmIds.length > 0) {
       const { data: firmData } = await supabase.from("firms").select("id, logo_url").in("id", uniqueFirmIds);
-      (firmData || []).forEach(f => { if (f.logo_url) firmLogoMap[f.id] = f.logo_url; });
+      await Promise.all((firmData || []).map(async (f) => {
+        if (!f.logo_url) return;
+        try {
+          const res = await fetch(f.logo_url, { mode: "cors" });
+          if (!res.ok) { firmLogoMap[f.id] = f.logo_url; return; }
+          const blob = await res.blob();
+          const base64 = await new Promise<string>(resolve => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = () => resolve(f.logo_url);
+            reader.readAsDataURL(blob);
+          });
+          firmLogoMap[f.id] = base64;
+        } catch {
+          firmLogoMap[f.id] = f.logo_url;
+        }
+      }));
     }
 
     const zip = new JSZip();

@@ -157,8 +157,8 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
     </style></head><body>
     <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
-    <div style="display:flex;align-items:center;justify-content:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0;line-height:1.2">
-      <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0">${heading}</h1>
+    <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0;line-height:1.2">
+      <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
     </div>
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
@@ -258,6 +258,12 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
   container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
   document.body.appendChild(container);
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const imgs = container.querySelectorAll("img");
+  if (imgs.length > 0) {
+    await Promise.all(Array.from(imgs).map(img =>
+      img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
+    ));
+  }
 
   try {
     const html2pdf = (await import("html2pdf.js")).default;

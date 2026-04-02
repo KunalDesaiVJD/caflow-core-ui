@@ -795,7 +795,15 @@ const NewInvoice = () => {
     const html = generateInvoiceHtml();
     const container = document.createElement("div");
     container.innerHTML = html;
+    container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
     document.body.appendChild(container);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const imgs = container.querySelectorAll("img");
+    if (imgs.length > 0) {
+      await Promise.all(Array.from(imgs).map(img =>
+        img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
+      ));
+    }
     try {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
@@ -811,7 +819,7 @@ const NewInvoice = () => {
     }
   };
 
-  const isLocked = status === "finalized" || status === "sent" || status === "paid" || status === "voided" || status === "converted";
+  const isLocked = status === "sent" || status === "paid" || status === "voided" || status === "converted";
   const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
   // Generate invoice HTML
@@ -888,6 +896,7 @@ const NewInvoice = () => {
 
       <div style="display:flex;justify-content:space-between;margin-bottom:14px">
         <div style="flex:1;max-width:55%">
+          ${showLogo && firm?.logo_url ? `<img src="${firm.logo_url}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
           <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
           ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
           ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
@@ -995,7 +1004,7 @@ const NewInvoice = () => {
           {!isLocked && (
             <>
               <Button variant="outline" size="sm" onClick={() => handleSave()} disabled={saving} className="gap-1">
-                <Save size={14} /> {saving ? "Saving..." : "Save Draft"}
+                <Save size={14} /> {saving ? "Saving..." : status === "finalized" ? "Save" : "Save Draft"}
               </Button>
               <Button size="sm" onClick={() => setFinalizeOpen(true)} className="gap-1"><Lock size={14} /> Finalize</Button>
             </>
@@ -1460,7 +1469,7 @@ const NewInvoice = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Finalize {DOC_TYPE_LABELS[docType]}?</AlertDialogTitle>
-            <AlertDialogDescription>Once finalized, the document cannot be edited.</AlertDialogDescription>
+            <AlertDialogDescription>Once finalized, the document will be marked as finalized. You can still edit it if needed.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
