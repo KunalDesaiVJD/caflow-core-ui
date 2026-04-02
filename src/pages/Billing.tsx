@@ -604,6 +604,14 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       return;
     }
 
+    // Fetch firm logos for all unique firm_ids
+    const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
+    const firmLogoMap: Record<string, string> = {};
+    if (uniqueFirmIds.length > 0) {
+      const { data: firmData } = await supabase.from("firms").select("id, logo_url").in("id", uniqueFirmIds);
+      (firmData || []).forEach(f => { if (f.logo_url) firmLogoMap[f.id] = f.logo_url; });
+    }
+
     const zip = new JSZip();
     for (let i = 0; i < fullInvoices.length; i++) {
       const inv = fullInvoices[i];
@@ -612,7 +620,8 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       toast({ title: `Generating PDF ${i + 1} of ${fullInvoices.length}...` });
 
       try {
-        const pdfBlob = await generateInvoicePdfBlob(inv as any);
+        const invWithLogo = { ...inv, logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null };
+        const pdfBlob = await generateInvoicePdfBlob(invWithLogo as any);
         const filename = invoicePdfFilename(inv.invoice_no, clientName);
         zip.file(filename, pdfBlob);
       } catch (err) {

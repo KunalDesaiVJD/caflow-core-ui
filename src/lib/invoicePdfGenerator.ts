@@ -64,6 +64,7 @@ interface InvoiceRecord {
   remarks_conditions?: string | null;
   bank_details_snapshot?: any | null;
   signatory_name?: string | null;
+  logo_url?: string | null;
   [key: string]: any;
 }
 
@@ -156,12 +157,13 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
     </style></head><body>
     <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
-    <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:4px 0;line-height:1.2">
+    <div style="display:flex;align-items:center;justify-content:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0;line-height:1.2">
       <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0">${heading}</h1>
     </div>
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
+        ${inv.logo_url ? `<img src="${inv.logo_url}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
         <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
         ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5">${firmAddr}</p>` : ""}
         ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
@@ -253,10 +255,9 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
   const html = generateInvoiceHtmlFromRecord(inv);
   const container = document.createElement("div");
   container.innerHTML = html;
-  container.style.position = "absolute";
-  container.style.left = "-9999px";
-  container.style.top = "0";
+  container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
   document.body.appendChild(container);
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
   try {
     const html2pdf = (await import("html2pdf.js")).default;

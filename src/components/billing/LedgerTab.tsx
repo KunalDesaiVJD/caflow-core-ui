@@ -53,6 +53,7 @@ interface LedgerEntry {
   credit_amount: number;
   narration: string;
   client_id: string;
+  firm_id?: string;
 }
 
 async function buildLedgerEntries(
@@ -81,12 +82,13 @@ async function buildLedgerEntries(
       credit_amount: Number(e.credit_amount) || 0,
       narration: e.narration || "",
       client_id: e.client_id,
+      firm_id: e.firm_id || undefined,
     }));
   }
 
   // 2. Fallback: build from invoices + receipts directly
   let invQuery = supabase.from("invoices")
-    .select("id, invoice_no, client_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
+    .select("id, invoice_no, client_id, firm_id, invoice_date, total_amount, document_type, status, tds_section_code, tds_rate, tds_amount")
     .in("client_id", filters.clientIds)
     .in("status", ["finalized", "sent", "overdue", "paid"])
     .gte("invoice_date", start).lte("invoice_date", end)
@@ -105,6 +107,7 @@ async function buildLedgerEntries(
       credit_amount: isCredit ? Number(inv.total_amount) || 0 : 0,
       narration: isCredit ? `Credit note issued — ${inv.invoice_no}` : `Invoice raised — ${inv.invoice_no}`,
       client_id: inv.client_id || "",
+      firm_id: inv.firm_id || undefined,
     });
     // TDS deductible entry — added once invoice TDS columns migration is applied
     if (!isCredit && (inv as any).tds_amount && Number((inv as any).tds_amount) > 0) {
@@ -122,7 +125,7 @@ async function buildLedgerEntries(
   });
 
   let rcptQuery = supabase.from("billing_receipts")
-    .select("id, client_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
+    .select("id, client_id, firm_id, receipt_date, amount_received, payment_mode, tds_amount, gst_tds_amount")
     .in("client_id", filters.clientIds)
     .gte("receipt_date", start).lte("receipt_date", end)
     .order("receipt_date", { ascending: true });
@@ -139,6 +142,7 @@ async function buildLedgerEntries(
       credit_amount: Number(r.amount_received) || 0,
       narration: `Payment received — ${r.payment_mode}`,
       client_id: r.client_id,
+      firm_id: r.firm_id || undefined,
     });
     if (Number(r.tds_amount) > 0) {
       entries.push({
@@ -170,6 +174,20 @@ async function buildLedgerEntries(
   return entries;
 }
 
+async function loadLogoBase64(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(null as any);
+      reader.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
 // ═══════════════════════════════════════
 // CLIENT LEDGER VIEW
 // ═══════════════════════════════════════
@@ -177,7 +195,7 @@ function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
-  const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
@@ -191,7 +209,7 @@ function ClientLedgerView() {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
         supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name"),
-        supabase.from("firms").select("id, name").order("name"),
+        supabase.from("firms").select("id, name, logo_url").order("name"),
       ]);
       setClients(c || []);
       setFirms(f || []);
@@ -203,7 +221,7 @@ function ClientLedgerView() {
     if (!clientId) return;
     setLoading(true);
     try {
-      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: firmId ? [firmId] : [], from: fromDate, to: toDate });
+      const entries = await buildLedgerEntries({ clientIds: [clientId], firmIds: firmId && firmId !== "all" ? [firmId] : [], from: fromDate, to: toDate });
 
       // Load invoice numbers for document_ids
       const docIds = entries.filter(e => e.document_id && (e.entry_type === "invoice" || e.entry_type === "credit_note")).map(e => e.document_id!);
@@ -244,9 +262,10 @@ function ClientLedgerView() {
         else if (e.entry_type === "receipt") narration = "Payment received";
         else if (e.entry_type === "adjustment") narration = "Adjustment";
       }
-      return { ...e, debit, credit, balance, docNo, narration };
+      const firmName = firms.find(f => f.id === e.firm_id)?.name || "";
+      return { ...e, debit, credit, balance, docNo, narration, firmName };
     });
-  }, [entries, invoiceMap]);
+  }, [entries, invoiceMap, firms]);
 
   const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
   const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
@@ -256,7 +275,7 @@ function ClientLedgerView() {
 
   const handleDownloadXlsx = () => {
     const cName = clients.find(c => c.id === clientId)?.name || "Client";
-    const fName = firms.find(f => f.id === firmId)?.name || "";
+    const fName = firmId === "all" ? "All Firms" : (firms.find(f => f.id === firmId)?.name || "");
     const aoa: any[][] = [];
     aoa.push(["CLIENT LEDGER STATEMENT"]);
     aoa.push([`Client: ${cName}`]);
@@ -291,48 +310,83 @@ function ClientLedgerView() {
     const jsPDF = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
     const DARK_BLUE = [26, 58, 92] as [number, number, number];
-    const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
     const cName = clients.find(c => c.id === clientId)?.name || "Client";
-    const fName = firms.find(f => f.id === firmId)?.name || "";
+    const isAllFirms = firmId === "all";
+    const fName = isAllFirms ? "All Firms" : (firms.find(f => f.id === firmId)?.name || "");
+    const selectedFirm = !isAllFirms ? firms.find(f => f.id === firmId) : null;
+    const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
+
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 210, 22, "F");
+
+    let textStartX = 14;
+    if (logoBase64) {
+      try {
+        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
+        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
+        textStartX = 48;
+      } catch { /* ignore logo error */ }
+    }
+
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
-    doc.text("CLIENT LEDGER STATEMENT", 14, 9);
+    doc.text("CLIENT LEDGER STATEMENT", textStartX, 9);
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.text(`Client: ${cName}   |   Firm: ${fName}`, 14, 16);
-    doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 14, 20);
-    const tableRows: any[][] = rows.map(r => [
-      r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-      r.docNo, r.narration,
-      r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-      r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-      r.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
-    ]);
+    doc.text(`Firm: ${fName}   |   Client: ${cName}`, textStartX, 15);
+    doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, textStartX, 20);
+
+    const head = isAllFirms
+      ? [["Firm", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
+      : [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
+
+    const tableRows: any[][] = rows.map(r => {
+      const baseRow = [
+        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+        r.docNo, r.narration,
+        r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+        r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
+        r.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+      ];
+      return isAllFirms ? [r.firmName, ...baseRow] : baseRow;
+    });
+
+    const closingColSpan = isAllFirms ? 4 : 3;
     tableRows.push([
-      { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: "CLOSING BALANCE", colSpan: closingColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
       { content: totalDebit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
       { content: totalCredit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
       { content: closingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
+
+    const colStylesNormal = {
+      0: { cellWidth: 22, halign: "center" as const },
+      1: { cellWidth: 22, halign: "center" as const },
+      2: { cellWidth: 80 },
+      3: { cellWidth: 24, halign: "right" as const },
+      4: { cellWidth: 24, halign: "right" as const },
+      5: { cellWidth: 24, halign: "right" as const },
+    };
+    const colStylesAllFirms = {
+      0: { cellWidth: 28 },
+      1: { cellWidth: 20, halign: "center" as const },
+      2: { cellWidth: 18, halign: "center" as const },
+      3: { cellWidth: 58 },
+      4: { cellWidth: 22, halign: "right" as const },
+      5: { cellWidth: 22, halign: "right" as const },
+      6: { cellWidth: 22, halign: "right" as const },
+    };
+
     autoTable(doc, {
       startY: 26,
-      head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
+      head,
       body: tableRows,
       styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
       headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
       alternateRowStyles: { fillColor: [248, 251, 255] },
-      columnStyles: {
-        0: { cellWidth: 22, halign: "center" },
-        1: { cellWidth: 22, halign: "center" },
-        2: { cellWidth: 80 },
-        3: { cellWidth: 24, halign: "right" },
-        4: { cellWidth: 24, halign: "right" },
-        5: { cellWidth: 24, halign: "right" },
-      },
+      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
         const pageCount = (doc as any).internal.getNumberOfPages();
@@ -357,6 +411,7 @@ function ClientLedgerView() {
         <Select value={firmId} onValueChange={setFirmId}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Select Firm" /></SelectTrigger>
           <SelectContent>
+            <SelectItem value="all">All Firms</SelectItem>
             {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -457,7 +512,7 @@ function GroupLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
-  const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
   const [groupId, setGroupId] = useState("");
   const [firmIds, setFirmIds] = useState<string[]>([]);
   const [fy, setFy] = useState(getCurrentFY());
@@ -471,7 +526,7 @@ function GroupLedgerView() {
     (async () => {
       const [{ data: g }, { data: f }] = await Promise.all([
         supabase.from("client_groups").select("id, name").order("name"),
-        supabase.from("firms").select("id, name").order("name"),
+        supabase.from("firms").select("id, name, logo_url").order("name"),
       ]);
       setGroups(g || []);
       setFirms(f || []);
@@ -601,30 +656,50 @@ function GroupLedgerView() {
     const jsPDF = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
-    const selectedFirmNames = firmIds[0] === "all"
+    const isAllFirms = firmIds[0] === "all" || firmIds.length === 0;
+    const selectedFirmNames = isAllFirms
       ? "All Firms"
       : firms.filter(f => firmIds.includes(f.id)).map(f => f.name).join(", ");
 
-    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    // Load logo for single-firm selection
+    const singleFirm = !isAllFirms && firmIds.length === 1 ? firms.find(f => f.id === firmIds[0]) : null;
+    const logoBase64 = singleFirm?.logo_url ? await loadLogoBase64(singleFirm.logo_url) : null;
 
-    // Corporate header bar
+    // Build firm name lookup map
+    const firmNameMap: Record<string, string> = {};
+    firms.forEach(f => { firmNameMap[f.id] = f.name; });
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const DARK_BLUE = [26, 58, 92] as [number, number, number];
     const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 297, 22, "F");
+
+    let textStartX = 14;
+    if (logoBase64) {
+      try {
+        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
+        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
+        textStartX = 48;
+      } catch { /* ignore logo error */ }
+    }
+
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("GROUP LEDGER STATEMENT", 14, 10);
+    doc.text("GROUP LEDGER STATEMENT", textStartX, 10);
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
-    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, 14, 17);
+    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
+    doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
 
-    // Generation timestamp (right-aligned)
-    const genText = `Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`;
-    doc.text(genText, 297 - 14, 17, { align: "right" });
+    // Table header — add Firm column when all firms
+    const tableHead = isAllFirms
+      ? [["Firm", "Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
+      : [["Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
 
-    // Table
+    const subtotalColSpan = isAllFirms ? 5 : 4;
+
     const tableRows: any[][] = [];
     data.forEach(({ clientName, entries }) => {
       let bal = 0;
@@ -632,7 +707,7 @@ function GroupLedgerView() {
         const d = Number(e.debit_amount) || 0;
         const c = Number(e.credit_amount) || 0;
         bal += d - c;
-        tableRows.push([
+        const rowBase = [
           clientName,
           e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
           getDocNo(e),
@@ -640,56 +715,66 @@ function GroupLedgerView() {
           d > 0 ? d.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
           c > 0 ? c.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
           bal.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
-        ]);
+        ];
+        if (isAllFirms) {
+          tableRows.push([firmNameMap[e.firm_id || ""] || "", ...rowBase]);
+        } else {
+          tableRows.push(rowBase);
+        }
       });
-      // Subtotal
       const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
       const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
       tableRows.push([
-        { content: `Subtotal — ${clientName}`, colSpan: 4, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
+        { content: `Subtotal — ${clientName}`, colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
         { content: subtotalD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
         { content: subtotalC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
         { content: (subtotalD - subtotalC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
       ]);
     });
 
-    // Grand total row
     const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
     const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
     tableRows.push([
-      { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: "GRAND TOTAL", colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
       { content: grandD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
       { content: grandC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
       { content: (grandD - grandC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
 
+    const colStylesNormal = {
+      0: { cellWidth: 40 },
+      1: { cellWidth: 22, halign: "center" as const },
+      2: { cellWidth: 22, halign: "center" as const },
+      3: { cellWidth: 70 },
+      4: { cellWidth: 28, halign: "right" as const },
+      5: { cellWidth: 28, halign: "right" as const },
+      6: { cellWidth: 30, halign: "right" as const },
+    };
+    const colStylesAllFirms = {
+      0: { cellWidth: 30 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 20, halign: "center" as const },
+      3: { cellWidth: 20, halign: "center" as const },
+      4: { cellWidth: 60 },
+      5: { cellWidth: 27, halign: "right" as const },
+      6: { cellWidth: 27, halign: "right" as const },
+      7: { cellWidth: 28, halign: "right" as const },
+    };
+
     autoTable(doc, {
       startY: 26,
-      head: [["Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
+      head: tableHead,
       body: tableRows,
       styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
       headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
       alternateRowStyles: { fillColor: [248, 251, 255] },
-      columnStyles: {
-        0: { cellWidth: 40 },
-        1: { cellWidth: 22, halign: "center" },
-        2: { cellWidth: 22, halign: "center" },
-        3: { cellWidth: 70 },
-        4: { cellWidth: 28, halign: "right" },
-        5: { cellWidth: 28, halign: "right" },
-        6: { cellWidth: 30, halign: "right" },
-      },
+      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
-        // Footer on every page
         const pageCount = (doc as any).internal.getNumberOfPages();
         doc.setFontSize(7);
         doc.setTextColor(120, 130, 145);
-        doc.text(
-          `Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`,
-          148.5, 205, { align: "center" }
-        );
-        // Bottom border line
+        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
         doc.setDrawColor(...DARK_BLUE);
         doc.setLineWidth(0.5);
         doc.line(10, 202, 287, 202);
@@ -853,7 +938,7 @@ function GroupLedgerView() {
 function FirmRevenueLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
@@ -866,7 +951,7 @@ function FirmRevenueLedgerView() {
 
   useEffect(() => {
     (async () => {
-      const { data: f } = await supabase.from("firms").select("id, name").order("name");
+      const { data: f } = await supabase.from("firms").select("id, name, logo_url").order("name");
       setFirms(f || []);
       if (user?.firm_id) setFirmId(user.firm_id);
     })();
@@ -958,16 +1043,29 @@ function FirmRevenueLedgerView() {
     const autoTable = (await import("jspdf-autotable")).default;
     const DARK_BLUE = [26, 58, 92] as [number, number, number];
     const fName = firms.find(f => f.id === firmId)?.name || "Firm";
+    const selectedFirm = firms.find(f => f.id === firmId);
+    const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
+
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 297, 22, "F");
+
+    let textStartX = 14;
+    if (logoBase64) {
+      try {
+        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
+        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
+        textStartX = 48;
+      } catch { /* ignore logo error */ }
+    }
+
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
     doc.setFont("helvetica", "bold");
-    doc.text("FIRM REVENUE LEDGER", 14, 10);
+    doc.text("FIRM REVENUE LEDGER", textStartX, 10);
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.text(`Firm: ${fName}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`, 14, 17);
+    doc.text(`Firm: ${fName}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
     doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
     const totalD = rows.reduce((s, r) => s + r.debit, 0);
     const totalC = rows.reduce((s, r) => s + r.credit, 0);
@@ -992,13 +1090,13 @@ function FirmRevenueLedgerView() {
       headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
       alternateRowStyles: { fillColor: [248, 251, 255] },
       columnStyles: {
-        0: { cellWidth: 22, halign: "center" },
-        1: { cellWidth: 22, halign: "center" },
+        0: { cellWidth: 22, halign: "center" as const },
+        1: { cellWidth: 22, halign: "center" as const },
         2: { cellWidth: 55 },
         3: { cellWidth: 25 },
-        4: { cellWidth: 30, halign: "right" },
-        5: { cellWidth: 30, halign: "right" },
-        6: { cellWidth: 32, halign: "right" },
+        4: { cellWidth: 30, halign: "right" as const },
+        5: { cellWidth: 30, halign: "right" as const },
+        6: { cellWidth: 32, halign: "right" as const },
       },
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
