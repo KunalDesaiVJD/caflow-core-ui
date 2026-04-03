@@ -3227,13 +3227,13 @@ export type Database = {
           status: string | null
           subject: string | null
           subtotal: number | null
+          tds_amount: number | null
+          tds_rate: number | null
+          tds_section_code: string | null
           to_address: string | null
           to_gstin: string | null
           to_name: string | null
           to_pan: string | null
-          tds_amount: number | null
-          tds_rate: number | null
-          tds_section_code: string | null
           total_amount: number | null
           total_cgst: number | null
           total_igst: number | null
@@ -3281,13 +3281,13 @@ export type Database = {
           status?: string | null
           subject?: string | null
           subtotal?: number | null
+          tds_amount?: number | null
+          tds_rate?: number | null
+          tds_section_code?: string | null
           to_address?: string | null
           to_gstin?: string | null
           to_name?: string | null
           to_pan?: string | null
-          tds_amount?: number | null
-          tds_rate?: number | null
-          tds_section_code?: string | null
           total_amount?: number | null
           total_cgst?: number | null
           total_igst?: number | null
@@ -3335,13 +3335,13 @@ export type Database = {
           status?: string | null
           subject?: string | null
           subtotal?: number | null
+          tds_amount?: number | null
+          tds_rate?: number | null
+          tds_section_code?: string | null
           to_address?: string | null
           to_gstin?: string | null
           to_name?: string | null
           to_pan?: string | null
-          tds_amount?: number | null
-          tds_rate?: number | null
-          tds_section_code?: string | null
           total_amount?: number | null
           total_cgst?: number | null
           total_igst?: number | null
@@ -4516,6 +4516,124 @@ export type Database = {
           },
         ]
       }
+      tally_processing_logs: {
+        Row: {
+          created_at: string
+          id: string
+          log_level: string
+          log_message: string
+          upload_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          log_level?: string
+          log_message: string
+          upload_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          log_level?: string
+          log_message?: string
+          upload_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_processing_logs_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "tally_xml_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_tb_rows: {
+        Row: {
+          account_category: string
+          closing_balance_normalized: number
+          closing_balance_raw: number
+          created_at: string
+          credit_normalized: number
+          credit_raw: number
+          debit_normalized: number
+          debit_raw: number
+          display_name: string
+          id: string
+          opening_balance_normalized: number
+          opening_balance_raw: number
+          sign_rule_applied: string | null
+          upload_id: string
+        }
+        Insert: {
+          account_category?: string
+          closing_balance_normalized?: number
+          closing_balance_raw?: number
+          created_at?: string
+          credit_normalized?: number
+          credit_raw?: number
+          debit_normalized?: number
+          debit_raw?: number
+          display_name: string
+          id?: string
+          opening_balance_normalized?: number
+          opening_balance_raw?: number
+          sign_rule_applied?: string | null
+          upload_id: string
+        }
+        Update: {
+          account_category?: string
+          closing_balance_normalized?: number
+          closing_balance_raw?: number
+          created_at?: string
+          credit_normalized?: number
+          credit_raw?: number
+          debit_normalized?: number
+          debit_raw?: number
+          display_name?: string
+          id?: string
+          opening_balance_normalized?: number
+          opening_balance_raw?: number
+          sign_rule_applied?: string | null
+          upload_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_tb_rows_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "tally_xml_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_xml_uploads: {
+        Row: {
+          created_at: string
+          file_name: string
+          id: string
+          parse_status: string
+          raw_xml: string | null
+          total_rows: number
+        }
+        Insert: {
+          created_at?: string
+          file_name: string
+          id?: string
+          parse_status?: string
+          raw_xml?: string | null
+          total_rows?: number
+        }
+        Update: {
+          created_at?: string
+          file_name?: string
+          id?: string
+          parse_status?: string
+          raw_xml?: string | null
+          total_rows?: number
+        }
+        Relationships: []
+      }
       tb_hierarchy_nodes: {
         Row: {
           bs_pl_side: string | null
@@ -4639,15 +4757,10 @@ export type Database = {
           financial_year: string
           firm_id: string
           form_type: string
-          fully_utilized: boolean | null
           id: string
           interest_deposited: number | null
           is_book_entry: boolean | null
-          late_fees_234e: number | null
-          late_fees_used: number | null
           minor_head_of_challan: string | null
-          origin_fy: string | null
-          origin_quarter: string | null
           others_deposited: number | null
           quarter: string
           section_code: string | null
@@ -4671,15 +4784,10 @@ export type Database = {
           financial_year: string
           firm_id: string
           form_type: string
-          fully_utilized?: boolean | null
           id?: string
           interest_deposited?: number | null
           is_book_entry?: boolean | null
-          late_fees_234e?: number | null
-          late_fees_used?: number | null
           minor_head_of_challan?: string | null
-          origin_fy?: string | null
-          origin_quarter?: string | null
           others_deposited?: number | null
           quarter: string
           section_code?: string | null
@@ -4703,15 +4811,10 @@ export type Database = {
           financial_year?: string
           firm_id?: string
           form_type?: string
-          fully_utilized?: boolean | null
           id?: string
           interest_deposited?: number | null
           is_book_entry?: boolean | null
-          late_fees_234e?: number | null
-          late_fees_used?: number | null
           minor_head_of_challan?: string | null
-          origin_fy?: string | null
-          origin_quarter?: string | null
           others_deposited?: number | null
           quarter?: string
           section_code?: string | null
@@ -5145,7 +5248,6 @@ export type Database = {
       }
       tds_filings: {
         Row: {
-          ack_file_url: string | null
           acknowledgment_number: string | null
           approver_id: string | null
           assigned_staff: string | null
@@ -5178,7 +5280,6 @@ export type Database = {
           work_status: string
         }
         Insert: {
-          ack_file_url?: string | null
           acknowledgment_number?: string | null
           approver_id?: string | null
           assigned_staff?: string | null
@@ -5211,7 +5312,6 @@ export type Database = {
           work_status?: string
         }
         Update: {
-          ack_file_url?: string | null
           acknowledgment_number?: string | null
           approver_id?: string | null
           assigned_staff?: string | null
