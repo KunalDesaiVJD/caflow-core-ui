@@ -425,7 +425,7 @@ const FirmSettings = () => {
                   {signatureUrl && <img src={signatureUrl} alt="Signature" className="h-16 object-contain rounded border border-border p-1" />}
                   <input ref={sigRef} type="file" accept="image/*" className="hidden" onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl);
+                    if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl, "signature_url");
                   }} />
                   <Button variant="outline" size="sm" onClick={() => sigRef.current?.click()} disabled={!isAdmin}>
                     <Upload className="h-3 w-3 mr-1" /> Upload Signature
