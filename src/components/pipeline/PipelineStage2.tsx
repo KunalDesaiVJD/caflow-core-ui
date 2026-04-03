@@ -454,21 +454,54 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
       if (error) throw error;
 
-      return (data || []).map((row: any) => ({
-        nodeId: row.node_id,
-        parentNodeId: row.parent_node_id,
-        name: row.tally_group_name,
-        level: row.level || 1,
+      // ── Pass 1: map raw DB values without sign correction yet ──────────────
+      const rawNodes = (data || []).map((row: any) => ({
+        nodeId: row.node_id as string,
+        parentNodeId: (row.parent_node_id ?? null) as string | null,
+        name: row.tally_group_name as string,
+        level: (row.level || 1) as number,
         isLeaf: !!row.is_leaf,
-        opening: row.opening_balance || 0,
-        txnDebit: row.txn_debit || 0,
-        txnCredit: row.txn_credit || 0,
-        closing: row.closing_balance || 0,
-        primaryGroup: row.primary_group || row.tally_group_name,
-        bsPlSide: row.bs_pl_side || 'Unknown',
-        normalBal: row.normal_balance || null,
-        rowNumber: row.row_number || null,
+        opening: (row.opening_balance || 0) as number,
+        txnDebit: (row.txn_debit || 0) as number,
+        txnCredit: (row.txn_credit || 0) as number,
+        closing: (row.closing_balance || 0) as number,
+        primaryGroup: (row.primary_group || row.tally_group_name) as string,
+        bsPlSide: (row.bs_pl_side || 'Unknown') as string,
+        normalBal: (row.normal_balance || null) as string | null,
+        rowNumber: (row.row_number || null) as number | null,
       }));
+
+      // ── Pass 2: build parent-lookup maps for normalBal inheritance ──────────
+      // Leaf nodes (e.g. truck vehicle accounts) often have normalBal = null/Unknown.
+      // Walk up the parent chain to inherit the nearest ancestor's known normalBal.
+      const parentMap = new Map<string, string | null>(rawNodes.map(n => [n.nodeId, n.parentNodeId]));
+      const nbMap     = new Map<string, string | null>(rawNodes.map(n => [n.nodeId, n.normalBal]));
+
+      function resolveNb(nodeId: string | null, depth = 0): string | null {
+        if (!nodeId || depth > 15) return null;
+        const nb = nbMap.get(nodeId);
+        if (nb && nb !== 'Unknown') return nb;
+        return resolveNb(parentMap.get(nodeId) ?? null, depth + 1);
+      }
+
+      // ── Pass 3: apply sign correction using resolved normalBal ──────────────
+      // Tally's Excel export convention:
+      //   - Some Dr-normal accounts (e.g. Fixed Assets) export opening/closing as NEGATIVE
+      //     (Tally shows them on the "Cr" side internally → parseNum returns negative)
+      //   - Other Dr-normal accounts (e.g. Current Assets: cash, bank) export as POSITIVE
+      // Rule: only flip when the stored value is NEGATIVE for a Dr account.
+      //       This safely corrects Fixed Assets leaves without breaking Current Assets.
+      // txnDebit / txnCredit are always stored as positive — never flip those.
+      return rawNodes.map(node => {
+        const resolvedNb = resolveNb(node.nodeId);
+        const flipO = resolvedNb === 'Dr' && node.opening < 0;
+        const flipC = resolvedNb === 'Dr' && node.closing < 0;
+        return {
+          ...node,
+          opening: flipO ? -node.opening : node.opening,
+          closing: flipC ? -node.closing : node.closing,
+        };
+      });
     },
     enabled: !!engagementId,
   });
@@ -823,21 +856,46 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         setTbStatusMsg('Import complete!');
         setTbProgress(100);
 
-        const mappedHierarchy: TbHierarchyNode[] = ((data.hierarchy || []) as any[]).map((row: any) => ({
-          nodeId: row.nodeId,
-          parentNodeId: row.parentNodeId,
-          name: row.name,
-          level: row.level || 1,
+        // ── Pass 1: map edge-function response without sign correction ────────
+        const _rawImport = ((data.hierarchy || []) as any[]).map((row: any) => ({
+          nodeId: row.nodeId as string,
+          parentNodeId: (row.parentNodeId ?? null) as string | null,
+          name: row.name as string,
+          level: (row.level || 1) as number,
           isLeaf: !!row.isLeaf,
-          opening: row.opening || 0,
-          txnDebit: row.txnDebit || 0,
-          txnCredit: row.txnCredit || 0,
-          closing: row.closing || 0,
-          primaryGroup: row.primaryGroup || row.name,
-          bsPlSide: row.bsPlSide || 'Unknown',
-          normalBal: row.normalBal || null,
-          rowNumber: row.rowNumber || null,
+          opening: (row.opening || 0) as number,
+          txnDebit: (row.txnDebit || 0) as number,
+          txnCredit: (row.txnCredit || 0) as number,
+          closing: (row.closing || 0) as number,
+          primaryGroup: (row.primaryGroup || row.name) as string,
+          bsPlSide: (row.bsPlSide || 'Unknown') as string,
+          normalBal: (row.normalBal || null) as string | null,
+          rowNumber: (row.rowNumber || null) as number | null,
         }));
+
+        // ── Pass 2: build parent-lookup maps for normalBal inheritance ────────
+        const _impParentMap = new Map<string, string | null>(_rawImport.map(n => [n.nodeId, n.parentNodeId]));
+        const _impNbMap     = new Map<string, string | null>(_rawImport.map(n => [n.nodeId, n.normalBal]));
+        function _resolveImpNb(nodeId: string | null, depth = 0): string | null {
+          if (!nodeId || depth > 15) return null;
+          const nb = _impNbMap.get(nodeId);
+          if (nb && nb !== 'Unknown') return nb;
+          return _resolveImpNb(_impParentMap.get(nodeId) ?? null, depth + 1);
+        }
+
+        // ── Pass 3: apply sign correction with resolved normalBal ─────────────
+        // Only flip negative Dr-account values — Tally exports some Dr accounts (Fixed Assets)
+        // as negative while others (Current Assets: cash, bank) are already positive.
+        const mappedHierarchy: TbHierarchyNode[] = _rawImport.map(node => {
+          const resolvedNb = _resolveImpNb(node.nodeId);
+          const flipO = resolvedNb === 'Dr' && node.opening < 0;
+          const flipC = resolvedNb === 'Dr' && node.closing < 0;
+          return {
+            ...node,
+            opening: flipO ? -node.opening : node.opening,
+            closing: flipC ? -node.closing : node.closing,
+          };
+        });
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
         setTbHierarchyNodes(mappedHierarchy);
 

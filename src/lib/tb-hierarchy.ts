@@ -83,7 +83,8 @@ const PL_EXPENSE_KEYWORDS = [
 const AGGREGATE_HINTS = [
   "fund", "funds", "capital", "reserve", "surplus", "loan", "liabilities", "liability", "asset", "assets",
   "creditors", "debtors", "duties", "taxes", "provisions", "stock", "inventory", "sales", "purchases",
-  "expenses", "expense", "income", "bank accounts", "cash-in-hand", "current", "sundry", "gst", "tds", "tcs"
+  "expenses", "expense", "income", "bank accounts", "cash-in-hand", "current", "sundry", "gst", "tds", "tcs",
+  "deposits", "deposit", "fixed deposit", "advances", "advance", "investments", "investment"
 ];
 
 const LEDGER_HINT_PATTERNS = [
@@ -427,7 +428,11 @@ function repairOrphanedLeaves(nodes: TbHierarchyNodeLike[]): TbHierarchyNodeLike
     let bestParent: TbHierarchyNodeLike | null = null;
     for (let j = i - 1; j >= 0 && i - j <= 300; j--) {
       const candidate = sorted[j];
-      if (candidate.parentNodeId !== null) continue; // only root groups
+      // Allow non-root aggregate nodes as parents too. When repairOrphanedGroups
+      // runs first it reparents sub-groups (e.g. Deposits, Cash-in-Hand) under a
+      // higher group (e.g. Current Assets), making them non-root. Individual leaf
+      // accounts that belong under those sub-groups (FIXED DEPOSITS under Deposits,
+      // Cash under Cash-in-Hand) must still be able to find them as parents.
       if (!looksLikeAggregateName(candidate.name)) continue; // must look like an accounting group header
       bestParent = candidate;
       break;
@@ -463,14 +468,21 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
     ? [...rawNodes].sort((a, b) => (a.rowNumber ?? 0) - (b.rowNumber ?? 0))
     : rebuildHierarchy(rawNodes);
   // Order matters:
-  // 1. repairOrphanedLeaves FIRST — links individual ledger accounts (e.g. Sundry Debtor
-  //    party names) to their nearest preceding aggregate group (e.g. Sundry Debtors).
-  //    After this pass those accounts are non-root (parentNodeId set), so they are
-  //    EXCLUDED from the sumCl accumulation in step 2.
-  // 2. repairOrphanedGroups SECOND — now the only root nodes are genuine sub-group
-  //    headers (Opening Stock, Loans & Advances, Sundry Debtors, Cash-in-Hand, …),
-  //    so the running sum converges to Current Assets total without early break.
-  const repaired = repairOrphanedGroups(repairOrphanedLeaves(base));
+  // 1. repairOrphanedGroups FIRST — runs on the raw base data where every node is
+  //    still a root (parentNodeId = null for edge-fn-missed nodes). This gives the
+  //    running-sum matcher access to ALL root nodes including leaf nodes with small
+  //    non-zero balances (e.g. "Toll Wallet" 24 376.72) that, if repairOrphanedLeaves
+  //    ran first, would be absorbed into a preceding sub-group (Bank Accounts) and
+  //    become non-root — causing the Current Assets sum to fall short and the match
+  //    to fail. Running groups first lets Current Assets correctly absorb all its
+  //    sub-groups (Deposits, Loans & Advances, Sundry Debtors, Cash-in-Hand, Bank
+  //    Accounts, …) in one pass via the raw closing sum.
+  // 2. repairOrphanedLeaves SECOND — after groups have been linked, links any
+  //    remaining individual leaf accounts (FIXED DEPOSITS, Jayesh Vora, Cash, …)
+  //    to their nearest preceding aggregate group. Because repairOrphanedGroups ran
+  //    first those sub-groups are now non-root, so repairOrphanedLeaves must be
+  //    allowed to pick them as parents regardless of their parentNodeId.
+  const repaired = repairOrphanedLeaves(repairOrphanedGroups(base));
   const activeNodes = repaired.map((node) => ({ ...node }));
   const childrenByParent = new Map<string, TbHierarchyNodeLike[]>();
 
@@ -504,6 +516,22 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
       node.normalBal = section === "bs_liability" || section === "pl_income" ? "Cr" : "Dr";
     }
     if (root) node.primaryGroup = root.name;
+  }
+
+  // ── Sign correction ────────────────────────────────────────────────────────
+  // Tally XML exports Dr-normal accounts (Fixed Assets, vehicles, etc.) with
+  // NEGATIVE opening/closing values.  By this point every leaf node has had its
+  // normalBal resolved (either from the raw data or from the section inference
+  // above).  Flip opening/closing to positive for any Dr-normal leaf that is
+  // currently stored as negative.  txnDebit/txnCredit are always stored as
+  // positive by the edge function, so we never touch those.
+  // This must run BEFORE section totals are computed so sumLeafDescendants
+  // picks up the corrected values.
+  for (const node of activeNodes) {
+    if (!node.isLeaf) continue;
+    if (node.normalBal !== "Dr") continue;
+    if ((node.opening ?? 0) < 0) node.opening = -node.opening;
+    if ((node.closing ?? 0) < 0) node.closing = -node.closing;
   }
 
   const sectionDefs: Array<Pick<TbPresentationSection, "key" | "label" | "subtotalLabel">> = [

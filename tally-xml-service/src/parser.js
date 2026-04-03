@@ -39,10 +39,12 @@ const xmlParserOptions = {
   parseAttributeValue: true,
   parseTagValue: true,
   trimValues: true,
-  // Do not merge arrays — keep structure intact
+  // Ensure repeated sibling elements become arrays (not overwritten)
   isArray: (name) => [
     'DSPROW', 'TALLYMESSAGE', 'COLLECTION', 'ROW', 'LEDGER', 'GROUP',
     'ENTRY', 'TRIALBALROW', 'TBROW', 'LINE',
+    // Strategy 5: Tally TB display export uses DSPACCNAME/DSPACCINFO pairs
+    'DSPACCNAME', 'DSPACCINFO',
   ].includes(name),
 };
 
@@ -117,18 +119,52 @@ function findDspRows(obj, result = []) {
 }
 
 /**
- * Strategy 1: Tally display export (EXPORTDATA > REQUESTDATA > TALLYMESSAGE > COLLECTION > DSPROW)
- * Strategy 2: Tally data export (BODY > DATA > TALLYMESSAGE > COLLECTION > DSPROW)
- * Strategy 3: Flat COLLECTION > DSPROW
- * Strategy 4: Deep search for any node with DSPDISPNAME
+ * Strategy 1: Tally TB display export — DSPACCNAME[] / DSPACCINFO[] parallel arrays
+ *             (most common real-world Tally export — direct ENVELOPE children)
+ *             DSPACCNAME[i].DSPDISPNAME  →  display name
+ *             DSPACCINFO[i].DSPOPAMT.DSPOPAMTA  →  opening balance
+ *             DSPACCINFO[i].DSPDRAMT.DSPDRAMTA  →  debit
+ *             DSPACCINFO[i].DSPCRAMT.DSPCRAMTA  →  credit
+ *             DSPACCINFO[i].DSPCLAMT.DSPCLAMTA  →  closing balance
+ *
+ * Strategy 2: DSPROW-wrapped rows (TALLYMESSAGE > COLLECTION > DSPROW)
+ * Strategy 3: Direct COLLECTION in BODY or REPORTDATA
+ * Strategy 4: TRIALBALANCE / TBDATA container
+ * Strategy 5: Deep search for any node with DSPDISPNAME (last resort)
  *
  * @param {object} parsed - Parsed XML object
- * @returns {object[]} Array of raw row nodes
+ * @returns {object[]} Array of normalised row nodes (all have DSPDISPNAME + amount fields flat)
  */
 function findRowNodes(parsed) {
   const envelope = parsed?.ENVELOPE ?? parsed?.envelope ?? parsed;
 
-  // ── Strategy 1: Standard Tally display export path ──────────────────────
+  // ── Strategy 1: DSPACCNAME[] / DSPACCINFO[] parallel array format ────────
+  // This is the native Tally Trial Balance display export format.
+  // Names and info are separate sibling arrays; zip them by index.
+  try {
+    const nameNodes = [].concat(envelope?.DSPACCNAME ?? []).filter(Boolean);
+    const infoNodes = [].concat(envelope?.DSPACCINFO ?? []).filter(Boolean);
+
+    if (nameNodes.length > 0 && infoNodes.length > 0) {
+      const paired = [];
+      const count = Math.min(nameNodes.length, infoNodes.length);
+      for (let i = 0; i < count; i++) {
+        const nameNode = nameNodes[i];
+        const infoNode = infoNodes[i];
+        // Flatten into a single node the extractor understands
+        paired.push({
+          DSPDISPNAME: nameNode?.DSPDISPNAME ?? '',
+          DSPOPAMTA:   infoNode?.DSPOPAMT?.DSPOPAMTA ?? '',
+          DSPDRAMTA:   infoNode?.DSPDRAMT?.DSPDRAMTA ?? '',
+          DSPCRAMTA:   infoNode?.DSPCRAMT?.DSPCRAMTA ?? '',
+          DSPCLAMTA:   infoNode?.DSPCLAMT?.DSPCLAMTA ?? '',
+        });
+      }
+      if (paired.length > 0) return paired;
+    }
+  } catch (_) {}
+
+  // ── Strategy 2: Standard TALLYMESSAGE > COLLECTION > DSPROW path ─────────
   try {
     const messages = [].concat(
       envelope?.BODY?.EXPORTDATA?.REQUESTDATA?.TALLYMESSAGE ?? [],
@@ -138,32 +174,28 @@ function findRowNodes(parsed) {
 
     let nodes = [];
     for (const msg of messages) {
-      // Check COLLECTION container first (most common)
       const collections = [].concat(msg?.COLLECTION ?? []).filter(Boolean);
       for (const col of collections) {
         const rows = [].concat(col?.DSPROW ?? col?.ROW ?? col?.TRIALBALROW ?? col?.LINE ?? []).filter(Boolean);
         if (rows.length > 0) nodes.push(...rows);
       }
-      // Also check direct DSPROW in message
       const directRows = [].concat(msg?.DSPROW ?? msg?.ROW ?? []).filter(Boolean);
       if (directRows.length > 0) nodes.push(...directRows);
     }
     if (nodes.length > 0) return nodes;
   } catch (_) {}
 
-  // ── Strategy 2: Direct COLLECTION in BODY or REPORTDATA ─────────────────
+  // ── Strategy 3: Direct COLLECTION in BODY or REPORTDATA ─────────────────
   try {
     const body = envelope?.BODY ?? envelope?.REPORTDATA ?? envelope;
     const col = body?.COLLECTION ?? body?.REPORTDATA?.COLLECTION;
     if (col) {
-      const rows = [].concat(
-        col?.DSPROW ?? col?.ROW ?? col?.TRIALBALROW ?? []
-      ).filter(Boolean);
+      const rows = [].concat(col?.DSPROW ?? col?.ROW ?? col?.TRIALBALROW ?? []).filter(Boolean);
       if (rows.length > 0) return rows;
     }
   } catch (_) {}
 
-  // ── Strategy 3: TRIALBALANCE or TBDATA container ─────────────────────────
+  // ── Strategy 4: TRIALBALANCE or TBDATA container ─────────────────────────
   try {
     const tbData =
       envelope?.BODY?.REPORTDATA?.TRIALBALANCE ??
@@ -175,7 +207,7 @@ function findRowNodes(parsed) {
     }
   } catch (_) {}
 
-  // ── Strategy 4: Deep search anywhere in tree (catches all exotic formats) ─
+  // ── Strategy 5: Deep search anywhere in tree (catches all exotic formats) ─
   return findDspRows(parsed);
 }
 

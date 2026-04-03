@@ -840,6 +840,34 @@ serve(async (req) => {
         import_format:   result.detectedFormat,
         created_at:      new Date().toISOString(),
       });
+
+      // ── Also save to tb_hierarchy_nodes so data persists across page reloads ──
+      if (engId) {
+        const batchId = result.batchId;
+        await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", engId);
+        const hRows = nodes.map((nd: any, i: number) => ({
+          engagement_id:    engId,
+          import_batch_id:  batchId,
+          node_id:          nd.nodeId,
+          parent_node_id:   nd.parentNodeId,
+          tally_group_name: nd.name,
+          level:            nd.level,
+          is_leaf:          nd.isLeaf,
+          is_bold:          nd.bold,
+          indent_value:     nd.indent,
+          opening_balance:  nd.opening,
+          txn_debit:        nd.txnDebit,
+          txn_credit:       nd.txnCredit,
+          closing_balance:  nd.closing,
+          primary_group:    nd.primaryGroup,
+          bs_pl_side:       nd.bsPlSide,
+          normal_balance:   nd.normalBal,
+          row_number:       i + 1,
+        }));
+        for (let s = 0; s < hRows.length; s += 200) {
+          await supabase.from("tb_hierarchy_nodes").insert(hRows.slice(s, s + 200));
+        }
+      }
     }
 
     return new Response(JSON.stringify(result), {

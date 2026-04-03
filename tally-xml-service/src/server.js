@@ -87,7 +87,28 @@ app.post('/upload-xml', upload.single('file'), async (req, res) => {
   }
 
   const fileName = req.file.originalname;
-  const rawXml   = req.file.buffer.toString('utf-8');
+
+  // ── Encoding detection — Tally exports XML in UTF-16 LE with BOM ─────────
+  // BOM: FF FE = UTF-16 LE | FE FF = UTF-16 BE | no BOM = assume UTF-8
+  const buf = req.file.buffer;
+  let rawXml;
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    // UTF-16 LE (most common Tally export encoding)
+    rawXml = buf.toString('utf16le');
+    if (rawXml.charCodeAt(0) === 0xFEFF) rawXml = rawXml.slice(1); // strip BOM char
+  } else if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    // UTF-16 BE — swap bytes then decode as LE
+    const swapped = Buffer.alloc(buf.length);
+    for (let i = 0; i + 1 < buf.length; i += 2) {
+      swapped[i] = buf[i + 1];
+      swapped[i + 1] = buf[i];
+    }
+    rawXml = swapped.toString('utf16le');
+    if (rawXml.charCodeAt(0) === 0xFEFF) rawXml = rawXml.slice(1);
+  } else {
+    // UTF-8 / ASCII (no BOM)
+    rawXml = buf.toString('utf-8');
+  }
 
   console.log(`\n─── Upload: ${fileName} (${(rawXml.length / 1024).toFixed(1)} KB) — ID: ${uploadId} ───`);
 
