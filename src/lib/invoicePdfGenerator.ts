@@ -93,6 +93,58 @@ function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normaliseAddressSegments(address: string): string[] {
+  return address
+    .replace(/<br\s*\/?/gi, ",")
+    .replace(/[\n\r]+/g, ",")
+    .split(",")
+    .map(segment => segment.trim())
+    .filter(Boolean)
+    .filter((segment, index, arr) => index === 0 || segment.toLowerCase() !== arr[index - 1].toLowerCase());
+}
+
+function formatFirmAddressHtml(address: string): string {
+  const segments = normaliseAddressSegments(address);
+  if (segments.length === 0) return "";
+
+  const looksLikeVjDesaiAddress = ["ratnakar nine square", "itc narmada", "satellite", "380015"]
+    .every(token => segments.some(segment => segment.toLowerCase().includes(token)));
+
+  let lines: string[];
+  if (looksLikeVjDesaiAddress) {
+    lines = [
+      [segments[0], segments[1]].filter(Boolean).join(", "),
+      [segments[2], segments[3]].filter(Boolean).join(", "),
+      segments.slice(4).join(", "),
+    ].filter(Boolean);
+  } else if (segments.length >= 5) {
+    lines = [
+      segments.slice(0, 2).join(", "),
+      segments.slice(2, 4).join(", "),
+      segments.slice(4).join(", "),
+    ].filter(Boolean);
+  } else {
+    lines = [segments.join(", ")];
+  }
+
+  return lines
+    .map((line, index) => {
+      const cleanLine = escapeHtml(line.replace(/\s+,/g, ",").replace(/,{2,}/g, ",").trim());
+      const suffix = index < lines.length - 1 && !cleanLine.endsWith(",") ? "," : "";
+      return `<span>${cleanLine}${suffix}</span>`;
+    })
+    .join("<br/>");
+}
+
 async function waitForElementRender(element: HTMLElement, label: string) {
   const doc = element.ownerDocument;
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -160,6 +212,39 @@ async function renderElementToCanvas(element: HTMLElement, label: string) {
   return canvas;
 }
 
+function validateCanvasContent(canvas: HTMLCanvasElement, label: string) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error(`[PDF] ${label}: canvas context unavailable for validation`);
+  }
+
+  const step = Math.max(8, Math.floor(Math.min(canvas.width, canvas.height) / 80));
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let sampleCount = 0;
+  let nonWhiteCount = 0;
+
+  for (let y = 0; y < canvas.height; y += step) {
+    for (let x = 0; x < canvas.width; x += step) {
+      const offset = (y * canvas.width + x) * 4;
+      const r = data[offset];
+      const g = data[offset + 1];
+      const b = data[offset + 2];
+      const a = data[offset + 3];
+      sampleCount += 1;
+      if (a > 0 && (r < 245 || g < 245 || b < 245)) {
+        nonWhiteCount += 1;
+      }
+    }
+  }
+
+  const nonWhiteRatio = sampleCount > 0 ? nonWhiteCount / sampleCount : 0;
+  console.log(`[PDF] ${label}: non-white ratio=${nonWhiteRatio.toFixed(4)}`);
+
+  if (nonWhiteRatio < 0.003) {
+    throw new Error(`[PDF] ${label}: rendered canvas appears blank`);
+  }
+}
+
 async function canvasToPdfBlob(canvas: HTMLCanvasElement, label: string) {
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
@@ -199,14 +284,15 @@ async function createRenderIframe(fullHtml: string, label: string) {
   iframe.setAttribute("aria-hidden", "true");
   iframe.setAttribute("sandbox", "allow-same-origin");
   iframe.style.cssText = [
-    "position:fixed",
-    "right:0",
-    "bottom:0",
+    "position:absolute",
+    "left:0",
+    "top:0",
     "width:794px",
     "height:1123px",
     "border:0",
     "pointer-events:none",
-    "opacity:0",
+    "opacity:1",
+    "z-index:-1",
     "background:#ffffff",
   ].join(";");
 
@@ -232,6 +318,7 @@ async function createRenderIframe(fullHtml: string, label: string) {
 
 export async function generatePdfBlobFromElement(element: HTMLElement, label = "Invoice PDF"): Promise<Blob> {
   const canvas = await renderElementToCanvas(element, label);
+  validateCanvasContent(canvas, label);
   return canvasToPdfBlob(canvas, label);
 }
 
@@ -274,6 +361,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const remarksConditions = inv.remarks_conditions || "";
   const bankDetails = inv.bank_details_snapshot || {};
   const logoUrl = resolveInvoiceLogoUrl(inv);
+  const firmAddressHtml = formatFirmAddressHtml(firmAddr);
 
   const items: any[] = Array.isArray(inv.line_items) ? inv.line_items : [];
   const hasGst = !!firmGstin;
@@ -352,7 +440,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
         ${identityMarkup}
-        ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5;max-width:340px">${firmAddr}</p>` : ""}
+        ${firmAddressHtml ? `<p style="margin:1px 0;font-size:11px;line-height:1.5;max-width:340px">${firmAddressHtml}</p>` : ""}
       </div>
       <div style="text-align:right;font-size:11px;min-width:280px">
         <div style="display:flex;justify-content:space-between;gap:20px">

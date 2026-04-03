@@ -221,9 +221,13 @@ serve(async (req) => {
     const sigPartnerICAI = auditFirm.partner_icai_no;
     const sigCity = auditFirm.city || "_____________";
 
-    const kamHtml = (reportSections.key_audit_matters || [])
-      .map((k: { title: string; description: string }) =>
-        `<div class="kam"><h4>${k.title}</h4><p>${k.description}</p></div>`
+    const keyAuditMatters = Array.isArray(reportSections.key_audit_matters)
+      ? reportSections.key_audit_matters as Array<{ title?: string; description?: string }>
+      : [];
+
+    const kamHtml = keyAuditMatters
+      .map((k) =>
+        `<div class="kam"><h4>${k.title || "Key Audit Matter"}</h4><p>${k.description || ""}</p></div>`
       ).join("");
 
     let comparativeHtml = "";

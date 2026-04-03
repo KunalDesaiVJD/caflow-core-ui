@@ -739,6 +739,18 @@ serve(async (req) => {
       }
     }
 
+    const spanEnd = new Array<number>(rawRows.length).fill(-1);
+    for (let i = 0; i < rawRows.length; i++) {
+      if (isGrp[i]) spanEnd[i] = i;
+    }
+    for (let i = 0; i < rawRows.length; i++) {
+      let p = parentIdx[i];
+      while (p !== -1) {
+        spanEnd[p] = Math.max(spanEnd[p], i);
+        p = parentIdx[p];
+      }
+    }
+
     // ── Secondary pass: link orphan non-bold leaves to nearest bold parent ──
     // When value-sum matching fails for zero-balance accounts (e.g. inactive
     // Sundry Debtors with closing=0 but non-zero opening), those accounts
