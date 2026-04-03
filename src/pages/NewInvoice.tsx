@@ -807,6 +807,10 @@ const NewInvoice = () => {
   }, [isEdit, sourceDocumentId]);
 
   const handleDownloadPdf = async () => {
+    if (status === "draft") {
+      toast({ title: "Finalize before downloading", description: "Please finalize this document before downloading the PDF.", variant: "destructive" });
+      return;
+    }
     const fullHtml = generateInvoiceHtml();
     const filename = `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`;
     await downloadPdfFromHtml(fullHtml, filename, `Single invoice ${invoiceNo || "draft"}`);
@@ -863,7 +867,11 @@ const NewInvoice = () => {
           {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : "")}>{status}</Badge>}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> PDF</Button>
+          <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"
+            title={status === "draft" ? "Finalize this document before downloading PDF" : "Download PDF"}>
+            <Download size={14} /> PDF
+            {status === "draft" && <span className="ml-1 text-[10px] text-muted-foreground">(finalize first)</span>}
+          </Button>
           {canConvert && (
             <Button variant="outline" size="sm" onClick={handleConvertToInvoice} className="gap-1"><RefreshCw size={14} /> Convert to Tax Invoice</Button>
           )}

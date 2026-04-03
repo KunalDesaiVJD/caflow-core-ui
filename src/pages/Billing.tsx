@@ -678,11 +678,20 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     toast({ title: `Downloaded ${fullInvoices.length} invoices as PDF` });
   };
 
-  // Bulk download ZIP (selected invoices)
+  // Bulk download ZIP (selected invoices — finalized only)
   const handleBulkDownloadZip = async () => {
     const selected = filtered.filter(inv => selectedIds.has(inv.id));
     if (selected.length === 0) return;
-    await generateZipFromInvoices(selected.map(s => s.id), `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
+    const finalized = selected.filter(inv => inv.effectiveStatus !== "draft");
+    const draftCount = selected.length - finalized.length;
+    if (finalized.length === 0) {
+      toast({ title: "No finalized invoices selected", description: "Please finalize the invoice(s) before downloading.", variant: "destructive" });
+      return;
+    }
+    if (draftCount > 0) {
+      toast({ title: `Skipping ${draftCount} draft invoice(s)`, description: "Only finalized invoices will be downloaded.", variant: "default" });
+    }
+    await generateZipFromInvoices(finalized.map(s => s.id), `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
   };
 
   // Month-wise download
@@ -693,16 +702,17 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     const endDay = new Date(year, month, 0).getDate();
     const endDate = `${year}-${String(month).padStart(2, "0")}-${endDay}`;
 
-    let q = supabase.from("invoices").select("id, invoice_no, client_id, to_name")
+    let q = supabase.from("invoices").select("id, invoice_no, client_id, to_name, status")
       .in("document_type", docTypeFilter)
       .gte("invoice_date", startDate)
-      .lte("invoice_date", endDate);
+      .lte("invoice_date", endDate)
+      .neq("status", "draft"); // Only finalized/sent/paid — never download drafts
     if (dlFirm !== "all") q = q.eq("firm_id", dlFirm);
     else if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
 
     const { data } = await q;
     if (!data || data.length === 0) {
-      toast({ title: "No invoices found for selected month", variant: "destructive" });
+      toast({ title: "No finalized invoices found for selected month", description: "Draft invoices are excluded from downloads.", variant: "destructive" });
       return;
     }
 
@@ -923,11 +933,16 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={async () => {
-              const allIds = filtered.map(inv => inv.id);
-              if (allIds.length === 0) return;
-              await generateZipFromInvoices(allIds, `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
+              const finalizedList = filtered.filter(inv => inv.effectiveStatus !== "draft");
+              if (finalizedList.length === 0) {
+                toast({ title: "No finalized invoices", description: "Please finalize invoice(s) before downloading.", variant: "destructive" });
+                return;
+              }
+              const draftSkipped = filtered.length - finalizedList.length;
+              if (draftSkipped > 0) toast({ title: `Skipping ${draftSkipped} draft(s)`, description: "Only finalized invoices will be downloaded." });
+              await generateZipFromInvoices(finalizedList.map(inv => inv.id), `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
             }}>
-              <Download size={14} className="mr-2" /> Download All ({filtered.length})
+              <Download size={14} className="mr-2" /> Download All ({filtered.filter(i => i.effectiveStatus !== "draft").length} finalized)
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setMonthDownloadOpen(true)}>
               <Archive size={14} className="mr-2" /> Download by Month
