@@ -186,8 +186,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
 
-  // ─── Fetch TB data ───
-  const { data: tbSnapshot } = useQuery({
+  // ─── Fetch TB data (legacy snapshot path) ───
+  const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
     queryKey: ["tb-snapshot-stage3", engagementId],
     queryFn: async () => {
       const { data } = await supabase
@@ -196,6 +196,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         .eq("engagement_id", engagementId)
         .maybeSingle();
       return data as any;
+    },
+    enabled: !!engagementId,
+  });
+
+  // ─── Fetch TB leaf nodes (modern hierarchy path) ───
+  // Modern TB upload stores data in tb_hierarchy_nodes, not trial_balance_snapshots.
+  // We read leaf nodes here to (a) unlock the stage gate and (b) populate tbAccounts.
+  const { data: tbLeafNodes, isLoading: tbLeafLoading } = useQuery({
+    queryKey: ["tb-leaf-nodes-stage3", engagementId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("tb_hierarchy_nodes")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .eq("is_leaf", true);
+      return (data || []) as any[];
     },
     enabled: !!engagementId,
   });
@@ -238,17 +254,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
-  // TB accounts
+  // TB accounts — primary: tbSnapshot normalised_data; fallback: tb_hierarchy_nodes leaf nodes
   const tbAccounts: { account_name: string; account_group: string; debit: number; credit: number; balance: number }[] = useMemo(() => {
-    if (!tbSnapshot?.normalised_data) return [];
-    return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
-      account_name: r.account_name || r.ledger_name || "",
-      account_group: r.account_group || "",
-      debit: r.debit || r.closing_dr || 0,
-      credit: r.credit || r.closing_cr || 0,
-      balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
-    })).filter(a => a.account_name);
-  }, [tbSnapshot]);
+    // Primary path: legacy snapshot with normalised_data
+    if (tbSnapshot?.normalised_data) {
+      return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
+        account_name: r.account_name || r.ledger_name || "",
+        account_group: r.account_group || "",
+        debit: r.debit || r.closing_dr || 0,
+        credit: r.credit || r.closing_cr || 0,
+        balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
+      })).filter(a => a.account_name);
+    }
+    // Fallback path: tb_hierarchy_nodes leaf nodes (modern upload path)
+    if (tbLeafNodes?.length) {
+      return tbLeafNodes.map((n: any) => ({
+        account_name: n.name || "",
+        account_group: n.primary_group || n.group_name || "",
+        debit: n.txn_debit || 0,
+        credit: n.txn_credit || 0,
+        balance: (n.txn_debit || 0) - (n.txn_credit || 0),
+      })).filter(a => a.account_name);
+    }
+    return [];
+  }, [tbSnapshot, tbLeafNodes]);
 
   // Load existing mapping from engagement
   useEffect(() => {
@@ -594,7 +623,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ═══════ RENDER ═══════
-  if (!tbSnapshot) {
+  // Stage gate: TB data available via either path OR Stage 2 explicitly completed
+  const tbDataAvailable = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0;
+  const stage2Complete = (engagement?.pipeline_stage ?? 0) >= 3 ||
+    (engagement?.stage_statuses as any)?.["2"] === "complete";
+
+  if (!tbSnapshotLoading && !tbLeafLoading && !tbDataAvailable && !stage2Complete) {
     return (
       <div className="max-w-4xl">
         <Alert>
