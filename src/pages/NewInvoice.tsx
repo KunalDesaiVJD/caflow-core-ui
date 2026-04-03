@@ -37,6 +37,7 @@ import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
   FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
 } from "lucide-react";
+import { downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 
 // ─── GSTIN State Code Map ───
 const STATE_CODES: Record<string, string> = {
@@ -614,6 +615,12 @@ const NewInvoice = () => {
   const totalGst = useMemo(() => firmHasGst ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst]);
   const grandTotal = totalTaxable + totalGst;
   const tdsAmount = useMemo(() => tdsSectionCode ? Math.round(totalTaxable * tdsRate / 100 * 100) / 100 : 0, [tdsSectionCode, tdsRate, totalTaxable]);
+  const firmLogoUrl = useMemo(() => {
+    const settingsLogo = typeof firm?.settings === "object" && firm?.settings
+      ? (firm.settings as Record<string, any>).logo_url
+      : null;
+    return firm?.logo_url || settingsLogo || "";
+  }, [firm]);
 
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
@@ -792,31 +799,9 @@ const NewInvoice = () => {
   }, [isEdit, sourceDocumentId]);
 
   const handleDownloadPdf = async () => {
-    const html = generateInvoiceHtml();
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
-    document.body.appendChild(container);
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const imgs = container.querySelectorAll("img");
-    if (imgs.length > 0) {
-      await Promise.all(Array.from(imgs).map(img =>
-        img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
-      ));
-    }
-    try {
-      const html2pdf = (await import("html2pdf.js")).default;
-      await html2pdf().set({
-        margin: [10, 10, 20, 10],
-        filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(container).save();
-    } finally {
-      document.body.removeChild(container);
-    }
+    const fullHtml = generateInvoiceHtml();
+    const filename = `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`;
+    await downloadPdfFromHtml(fullHtml, filename, `Single invoice ${invoiceNo || "draft"}`);
   };
 
   const isLocked = status === "sent" || status === "paid" || status === "voided" || status === "converted";
@@ -896,7 +881,7 @@ const NewInvoice = () => {
 
       <div style="display:flex;justify-content:space-between;margin-bottom:14px">
         <div style="flex:1;max-width:55%">
-          ${showLogo && firm?.logo_url ? `<img src="${firm.logo_url}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
+          ${showLogo && firmLogoUrl ? `<img src="${firmLogoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
           <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
           ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
           ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
@@ -981,7 +966,7 @@ const NewInvoice = () => {
       </div>
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
-    firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo,
+    firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo, firmLogoUrl,
     toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal, firmHasGst, firmAddr,
     billingEmail, billingContact, docType, remarksConditions]);
 
