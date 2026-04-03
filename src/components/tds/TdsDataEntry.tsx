@@ -265,7 +265,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
     if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
     const priorFilingIds = priorFilings.map(f => f.id);
-    const { data: priorChallans } = await supabase.from("tds_challans").select("*")
+    const { data: priorChallans } = await supabase.from("tds_challans").select("*" as any)
       .in("filing_id", priorFilingIds).eq("form_type", form).eq("fully_utilized", false).order("deposit_date");
     if (!priorChallans || priorChallans.length === 0) { setCarryForwardChallans([]); return; }
     const challanIds = priorChallans.map(c => c.id);
