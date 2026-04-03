@@ -164,7 +164,7 @@ const FirmSettings = () => {
     setLoading(false);
   }
 
-  async function handleUpload(file: File, path: string, setter: (url: string) => void) {
+  async function handleUpload(file: File, path: string, setter: (url: string) => void, dbField?: string) {
     if (file.size > 5 * 1024 * 1024) {
       toast({ title: "File too large", variant: "destructive" });
       return;
@@ -172,8 +172,20 @@ const FirmSettings = () => {
     try {
       await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
       const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
-      setter(data.publicUrl);
-      toast({ title: "Uploaded" });
+      const publicUrl = data.publicUrl;
+      setter(publicUrl);
+      // Auto-save to database immediately so it persists
+      if (firmId && dbField) {
+        const updatePayload: any = { [dbField]: publicUrl };
+        // Also save into settings.logo_url for backward compat
+        if (dbField === "logo_url") {
+          const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
+          const existingSettings = (current?.settings || {}) as any;
+          updatePayload.settings = { ...existingSettings, logo_url: publicUrl };
+        }
+        await supabase.from("firms").update(updatePayload as any).eq("id", firmId);
+      }
+      toast({ title: "Uploaded & saved" });
     } catch (e: any) {
       toast({ title: "Upload failed", description: e.message, variant: "destructive" });
     }
