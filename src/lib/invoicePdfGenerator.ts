@@ -296,7 +296,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     return `<tr>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
       <td style="border:1px solid #bbb;padding:0;vertical-align:middle;font-size:11px">
-        <div style="display:flex;flex-direction:column;justify-content:center;min-height:38px;padding:8px;line-height:1.4">
+        <div style="display:flex;flex-direction:column;align-items:flex-start;justify-content:center;min-height:38px;padding:8px;line-height:1.4">
           <div>${item.description || ""}</div>
           ${item.description_details ? `<div style="font-size:10px;color:#555;white-space:pre-line">${item.description_details}</div>` : ""}
         </div>
