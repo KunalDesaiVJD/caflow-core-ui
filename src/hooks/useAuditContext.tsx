@@ -28,14 +28,17 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     if (!user?.firm_id && user?.role !== "superadmin") return;
     setLoading(true);
 
-    // Issue 2: Only show clients classified as "Audit" in at least one FY
+    // Issue 2 + 5: Only show clients classified as "Audit" in at least one FY.
+    // client_fy_classifications has no firm_id column; firm scoping is enforced
+    // downstream via clientQuery.eq("firm_id", ...) so no extra filter needed here.
     const { data: auditClassRows } = await supabase
       .from("client_fy_classifications")
       .select("client_id")
       .eq("classification", "Audit");
     const auditClientIds = [...new Set((auditClassRows || []).map((r: any) => r.client_id as string))];
 
-    const engQuery = supabase.from("audit_engagements").select("*");
+    // Issue 5 fix: use `let` so we can reassign after applying firm_id filter
+    let engQuery: any = supabase.from("audit_engagements").select("*");
     // Build the client query — filter to Audit-classified clients only
     let clientQuery: any = supabase
       .from("clients")
@@ -44,7 +47,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .is("deleted_at", null);
 
     if (user?.firm_id) {
-      engQuery.eq("firm_id", user.firm_id);
+      engQuery = engQuery.eq("firm_id", user.firm_id);   // Fix: reassign so filter sticks
       clientQuery = clientQuery.eq("firm_id", user.firm_id);
     }
 
