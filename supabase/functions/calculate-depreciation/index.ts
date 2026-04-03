@@ -101,73 +101,89 @@ Deno.serve(async (req) => {
         let depOnOpen = 0;
         let formulaJson: any = {};
 
-        if (method === 'SLM') {
-          const life = cat.useful_life_years || 1;
-          const annualDep = Math.round(((gbOpen - residual) / life) * 100) / 100;
+        // FIX: When opening gross block is 0 (new asset), skip opening depreciation entirely.
+        // Residual is applied to additions instead.
+        if (gbOpen > 0) {
+          if (method === 'SLM') {
+            const life = cat.useful_life_years || 1;
+            const annualDep = Math.round(((gbOpen - residual) / life) * 100) / 100;
 
-          const rawDep = Math.round(annualDep * (depDaysOpen / FY_DAYS) * 100) / 100;
+            const rawDep = Math.round(annualDep * (depDaysOpen / FY_DAYS) * 100) / 100;
 
-          // Cap: dep cannot exceed (WDV - Residual)
-          const maxDep = Math.max(0, Math.round((wdvOpen - residual) * 100) / 100);
-          const isBalancing = rawDep > maxDep;
-          depOnOpen = Math.min(rawDep, maxDep);
+            // Cap: dep cannot exceed (WDV - Residual)
+            const maxDep = Math.max(0, Math.round((wdvOpen - residual) * 100) / 100);
+            const isBalancing = rawDep > maxDep;
+            depOnOpen = Math.min(rawDep, maxDep);
 
-          const statusLabel = isDisposalYear ? 'disposal_year'
-            : isBalancing ? 'balancing_year'
-            : (isFirstYear || depDaysOpen < FY_DAYS) ? 'pro_rata_year'
-            : 'normal_year';
+            const statusLabel = isDisposalYear ? 'disposal_year'
+              : isBalancing ? 'balancing_year'
+              : (isFirstYear || depDaysOpen < FY_DAYS) ? 'pro_rata_year'
+              : 'normal_year';
 
-          const daysNote = depDaysOpen < FY_DAYS
-            ? ` × (${depDaysOpen} ÷ ${FY_DAYS})` : '';
+            const daysNote = depDaysOpen < FY_DAYS
+              ? ` × (${depDaysOpen} ÷ ${FY_DAYS})` : '';
 
-          formulaJson = {
-            method: 'SLM', status: statusLabel,
-            formula_text: isBalancing
-              ? `Opening WDV ₹${fmtINR(wdvOpen)} − Residual ₹${fmtINR(residual)} = ₹${fmtINR(depOnOpen)} (Balancing Figure)`
-              : `(₹${fmtINR(gbOpen)} − ₹${fmtINR(residual)}) ÷ ${life} yrs = ₹${fmtINR(annualDep)}/yr${daysNote} = ₹${fmtINR(depOnOpen)}`,
-            cost: gbOpen, residual, useful_life_years: life,
-            annual_dep: annualDep, dep_days: depDaysOpen, dep_amount: depOnOpen,
-            is_pro_rata: depDaysOpen < FY_DAYS, is_balancing_year: isBalancing,
-            is_disposal_year: isDisposalYear, wdv_open: wdvOpen,
-            disposal_date: asset.disposal_date || null,
-          };
+            formulaJson = {
+              method: 'SLM', status: statusLabel,
+              formula_text: isBalancing
+                ? `Opening WDV ₹${fmtINR(wdvOpen)} − Residual ₹${fmtINR(residual)} = ₹${fmtINR(depOnOpen)} (Balancing Figure)`
+                : `(₹${fmtINR(gbOpen)} − ₹${fmtINR(residual)}) ÷ ${life} yrs = ₹${fmtINR(annualDep)}/yr${daysNote} = ₹${fmtINR(depOnOpen)}`,
+              cost: gbOpen, residual, useful_life_years: life,
+              annual_dep: annualDep, dep_days: depDaysOpen, dep_amount: depOnOpen,
+              is_pro_rata: depDaysOpen < FY_DAYS, is_balancing_year: isBalancing,
+              is_disposal_year: isDisposalYear, wdv_open: wdvOpen,
+              disposal_date: asset.disposal_date || null,
+            };
 
-        } else {
-          // ── WDV method ─────────────────────────────────────────────
-          const wdvRate = parseFloat(cat.wdv_rate) || 0;
-          if (wdvRate === 0) {
-            errors.push(`${asset.asset_name}: ${cat.name} has no WDV rate`);
-            continue;
+          } else {
+            // ── WDV method ─────────────────────────────────────────────
+            const wdvRate = parseFloat(cat.wdv_rate) || 0;
+            if (wdvRate === 0) {
+              errors.push(`${asset.asset_name}: ${cat.name} has no WDV rate`);
+              continue;
+            }
+
+            const annualDep = Math.round(wdvOpen * (wdvRate / 100) * 100) / 100;
+            const rawDep = Math.round(annualDep * (depDaysOpen / FY_DAYS) * 100) / 100;
+
+            // Cap: dep cannot exceed (WDV - Residual)
+            const maxWDV = Math.max(0, wdvOpen - residual);
+            depOnOpen = Math.min(rawDep, maxWDV);
+
+            const daysNote = depDaysOpen < FY_DAYS
+              ? ` × (${depDaysOpen} ÷ ${FY_DAYS})` : '';
+
+            formulaJson = {
+              method: 'WDV',
+              status: isDisposalYear ? 'disposal_year' : 'normal_year',
+              formula_text:
+                `WDV ₹${fmtINR(wdvOpen)} × ${wdvRate}%${daysNote} = ₹${fmtINR(depOnOpen)}`,
+              wdv_rate: wdvRate, dep_days: depDaysOpen, annual_dep: annualDep,
+              dep_amount: depOnOpen,
+              residual, is_balancing_year: false, wdv_open: wdvOpen,
+              is_pro_rata: depDaysOpen < FY_DAYS,
+              is_disposal_year: isDisposalYear,
+              disposal_date: asset.disposal_date || null,
+            };
           }
-
-          const annualDep = Math.round(wdvOpen * (wdvRate / 100) * 100) / 100;
-          const rawDep = Math.round(annualDep * (depDaysOpen / FY_DAYS) * 100) / 100;
-
-          // Cap: dep cannot exceed (WDV - Residual)
-          const maxWDV = Math.max(0, wdvOpen - residual);
-          depOnOpen = Math.min(rawDep, maxWDV);
-
-          const daysNote = depDaysOpen < FY_DAYS
-            ? ` × (${depDaysOpen} ÷ ${FY_DAYS})` : '';
-
+        } else {
+          // gbOpen == 0: no opening depreciation
+          const statusLabel = isFirstYear ? 'pro_rata_year' : 'normal_year';
           formulaJson = {
-            method: 'WDV',
-            status: isDisposalYear ? 'disposal_year' : 'normal_year',
-            formula_text:
-              `WDV ₹${fmtINR(wdvOpen)} × ${wdvRate}%${daysNote} = ₹${fmtINR(depOnOpen)}`,
-            wdv_rate: wdvRate, dep_days: depDaysOpen, annual_dep: annualDep,
-            dep_amount: depOnOpen,
-            residual, is_balancing_year: false, wdv_open: wdvOpen,
-            is_pro_rata: depDaysOpen < FY_DAYS,
+            method, status: statusLabel,
+            formula_text: 'Opening Gross Block = ₹0.00 — No opening depreciation.',
+            cost: 0, residual, dep_amount: 0, dep_days: 0, wdv_open: 0,
+            is_pro_rata: false, is_balancing_year: false,
             is_disposal_year: isDisposalYear,
-            disposal_date: asset.disposal_date || null,
           };
         }
 
         // ── Additions depreciation ──────────────────────────────────
         let depOnAdd = 0, depDaysAdd = 0;
         if (addns > 0) {
-          const addResidual    = 0;
+          // FIX: When opening block is 0 (new asset), residual must be deducted from additions.
+          // When opening block > 0, residual was already deducted from opening, so additions use full amount.
+          const addResidual = gbOpen <= 0 ? residual : 0;
           if (method === 'SLM') {
             const life      = cat.useful_life_years || 1;
             const addAnnual = Math.round(((addns - addResidual) / life) * 100) / 100;
