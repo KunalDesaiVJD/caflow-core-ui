@@ -608,9 +608,13 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     // Fetch firm logos for all unique firm_ids and convert to base64 for html2canvas
     const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
+    const firmDataCache: Record<string, any> = {};
     const firmLogoMap: Record<string, string> = {};
     if (uniqueFirmIds.length > 0) {
       const { data: firmData } = await supabase.from("firms").select("id, logo_url, settings").in("id", uniqueFirmIds);
+      (firmData || []).forEach((firm: any) => {
+        firmDataCache[firm.id] = firm;
+      });
       await Promise.all((firmData || []).map(async (f) => {
         const resolvedLogoUrl = f.logo_url || ((f.settings as Record<string, any> | null)?.logo_url ?? null);
         if (!resolvedLogoUrl) return;
@@ -645,6 +649,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null,
           firm_settings: sourceFirm ? (sourceFirm.settings as Record<string, any> | null) : null,
         };
+        console.log(`[BulkPDF] Generating ${inv.invoice_no || inv.id} (${i + 1}/${fullInvoices.length})`);
         const pdfBlob = await generateInvoicePdfBlob(invWithLogo as any);
         if (pdfBlob.size < 5000) {
           console.warn(`[BulkPDF] Invoice ${inv.invoice_no} generated suspiciously small PDF (${pdfBlob.size} bytes) — retrying`);
