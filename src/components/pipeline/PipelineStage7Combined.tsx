@@ -21,7 +21,21 @@ export default function PipelineStage7Combined({
 }: Props) {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('notes');
-  const caroApplicable = engagement?.caro_applicable || engagement?.requires_caro || false;
+
+  // ─── Corporate entity check ───
+  // engagement.entity_type values (set at engagement creation): "company" | "llp" | "individual" | "firm" | "trust" | "huf" | "aop"
+  // engagement.clients.entity_type values (set at client creation): "Private Ltd" | "Public Ltd" | "LLP" | "Partnership" | etc.
+  // CARO 2020 applies ONLY to companies (Private/Public Limited). Enforce both entity-type signals
+  // so that even if the caro_applicable flag is misconfigured, non-corporates never see CARO.
+  const engEntityType = (engagement?.entity_type || "").toLowerCase();
+  const clientEntityType = (engagement?.clients?.entity_type || "");
+  const isCorporate =
+    engEntityType === "company" ||
+    clientEntityType === "Private Ltd" ||
+    clientEntityType === "Public Ltd";
+
+  // caroApplicable: must be corporate AND have the explicit applicable flag set
+  const caroApplicable = isCorporate && (engagement?.caro_applicable || engagement?.requires_caro || false);
 
   const markComplete = async () => {
     setSaving(true);
@@ -105,8 +119,11 @@ export default function PipelineStage7Combined({
                 <Shield className="w-12 h-12 mx-auto text-muted-foreground/40" />
                 <h3 className="text-lg font-semibold text-foreground">CARO 2020 is not applicable</h3>
                 <p className="text-sm text-muted-foreground">
-                  CARO applies only to companies. Proceed to Stage 8.
+                  {!isCorporate
+                    ? `CARO 2020 applies only to companies (Private Limited / Public Limited). This engagement is for a ${clientEntityType || engEntityType || "non-corporate"} entity.`
+                    : "CARO has been marked as not applicable for this engagement. You can update this in the engagement settings if required."}
                 </p>
+                <p className="text-xs text-muted-foreground">Proceed to Stage 8.</p>
               </CardContent>
             </Card>
           )}
