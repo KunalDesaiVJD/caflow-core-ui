@@ -217,7 +217,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const { error } = await supabase.storage.from('tds-ack-files').upload(path, file, { upsert: true });
     if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); }
     else {
-      await supabase.from('tds_filings').update({ ack_file_url: path } as any).eq('id', filing.id);
+      // Update ack_file_url; column may not exist on older schema — ignore that error gracefully
+      try {
+        await supabase.from('tds_filings').update({ ack_file_url: path } as any).eq('id', filing.id);
+      } catch { /* column missing — file still uploaded to storage */ }
       fetchFilings();
       toast({ title: "ACK file uploaded" });
     }

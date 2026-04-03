@@ -265,8 +265,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
     if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
     const priorFilingIds = priorFilings.map(f => f.id);
+    // Issue 3 FIX: Do NOT filter by fully_utilized (column may not exist in DB, and the
+    // computed unconsumed check below is the authoritative filter anyway).
     const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
-      .in("filing_id", priorFilingIds).eq("form_type", form).eq("fully_utilized", false).order("deposit_date");
+      .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
     const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
     const challanIds = priorChallans.map(c => c.id);
@@ -1039,31 +1041,71 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <div className="space-y-3">
               {selectedChallan ? (
                 <>
-                  {/* Challan Summary Bar */}
-                  <Card className="bg-muted/30">
-                    <CardContent className="p-3">
-                      <div className="flex flex-wrap gap-4 items-center text-xs">
-                        <span><strong>BSR:</strong> {selectedChallan.bsr_code || "—"}</span>
-                        <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
-                        <span><strong>Total:</strong> ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}</span>
-                        <span><strong>Deductees:</strong> {deductees.length + prevEntries.length}</span>
-                        <div className="flex-1" />
-                        <span className={cn("font-semibold",
-                          Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1
-                            ? "text-emerald-600" : challanDeducteeTds < (selectedChallan.total_challan_amount || 0)
-                            ? "text-amber-600" : "text-destructive")}>
-                          TDS: ₹{challanDeducteeTds.toLocaleString("en-IN")} / ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}
-                          {Math.abs(challanDeducteeTds - (selectedChallan.total_challan_amount || 0)) <= 1
-                            ? <CheckCircle2 size={14} className="inline ml-1" />
-                            : <AlertTriangle size={14} className="inline ml-1" />}
-                        </span>
-                        {/* Issue 7F: Show balance clearly */}
-                        {selectedChallanBalance <= 0 && (
-                          <Badge className="text-[10px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
+                  {/* Issue 1 FIX: Full Challan Details — always visible (read-only when filed) */}
+                  {(() => {
+                    const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
+                    const matchOk = Math.abs(challanDeducteeTds - allocatable) <= 1;
+                    return (
+                      <Card className="bg-muted/30">
+                        <CardContent className="p-3 space-y-2">
+                          {/* Row 1: BSR / Serial / Date / Bank / Section */}
+                          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                            <span><strong>BSR Code:</strong> <span className="font-mono">{selectedChallan.bsr_code || "—"}</span></span>
+                            <span><strong>Serial No:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
+                            <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
+                            <span><strong>Bank:</strong> {selectedChallan.bank_name || "—"}</span>
+                            <span><strong>Section:</strong> {selectedChallan.section_code || "—"}</span>
+                            {selectedChallan.minor_head_of_challan && (
+                              <span><strong>Minor Head:</strong> {selectedChallan.minor_head_of_challan}</span>
+                            )}
+                            {isFilingLocked && (
+                              <Badge variant="secondary" className="text-[9px] gap-1 ml-auto"><Lock size={8} /> Filed — Read Only</Badge>
+                            )}
+                          </div>
+                          {/* Row 2: Amount breakdown */}
+                          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs border-t border-border/40 pt-2">
+                            <span>TDS: <strong>₹{(selectedChallan.total_tax_deposited || 0).toLocaleString("en-IN")}</strong></span>
+                            {(selectedChallan.surcharge_deposited || 0) > 0 && (
+                              <span>Surcharge: <strong>₹{(selectedChallan.surcharge_deposited || 0).toLocaleString("en-IN")}</strong></span>
+                            )}
+                            {(selectedChallan.education_cess_deposited || 0) > 0 && (
+                              <span>Cess: <strong>₹{(selectedChallan.education_cess_deposited || 0).toLocaleString("en-IN")}</strong></span>
+                            )}
+                            {(selectedChallan.interest_deposited || 0) > 0 && (
+                              <span>Interest: <strong>₹{(selectedChallan.interest_deposited || 0).toLocaleString("en-IN")}</strong></span>
+                            )}
+                            {(selectedChallan.others_deposited || 0) > 0 && (
+                              <span>Others: <strong>₹{(selectedChallan.others_deposited || 0).toLocaleString("en-IN")}</strong></span>
+                            )}
+                            {(selectedChallan.late_fees_234e || 0) > 0 && (
+                              <span className="text-amber-700">Late Fees 234E: <strong>₹{(selectedChallan.late_fees_234e || 0).toLocaleString("en-IN")}</strong></span>
+                            )}
+                            <span className="font-semibold">Total Paid: ₹{(selectedChallan.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                            {(selectedChallan.late_fees_234e || 0) > 0 && (
+                              <span className="text-muted-foreground">Allocatable (excl. late fees): ₹{allocatable.toLocaleString("en-IN")}</span>
+                            )}
+                          </div>
+                          {/* Row 3: Applied / Balance */}
+                          <div className="flex flex-wrap gap-4 items-center text-xs border-t border-border/40 pt-2">
+                            <span className="text-muted-foreground">Deductees: <strong>{deductees.length + prevEntries.length}</strong></span>
+                            <div className="flex-1" />
+                            <span className={cn("font-semibold",
+                              matchOk ? "text-emerald-600"
+                                : challanDeducteeTds < allocatable ? "text-amber-600"
+                                : "text-destructive")}>
+                              Applied: ₹{challanDeducteeTds.toLocaleString("en-IN")} / ₹{allocatable.toLocaleString("en-IN")}
+                              {matchOk
+                                ? <CheckCircle2 size={14} className="inline ml-1" />
+                                : <AlertTriangle size={14} className="inline ml-1" />}
+                            </span>
+                            {selectedChallanBalance <= 0 && (
+                              <Badge className="text-[10px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })()}
 
                   {/* Deductee Table */}
                   <Card>

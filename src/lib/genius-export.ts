@@ -132,11 +132,17 @@ export async function generateGeniusExport(
   const quarter = filing.quarter || "Q1";
   const isRevised = filing.return_type === "Correction" ? "Y" : "N";
 
-  const detailSheetName = formType === "24Q" ? "EmployerDetails"
+  // Internal template sheet names (as they appear in the Genius-generated template files)
+  const internalDetailName = formType === "24Q" ? "EmployerDetails"
     : formType === "27EQ" ? "CollectorDetails"
     : "DeductorDetails";
+  // Output sheet names (what Genius Import actually looks for — spaces matter)
+  const detailSheetName = formType === "24Q" ? "Employer Details"
+    : formType === "27EQ" ? "Collector Details"
+    : "Deductor Details";
 
-  let wsDetail = wb.Sheets[detailSheetName];
+  // Read from template using internal name, then we'll rename before saving
+  let wsDetail = wb.Sheets[internalDetailName] || wb.Sheets[detailSheetName];
   if (!wsDetail) {
     wsDetail = XLSX.utils.aoa_to_sheet([]);
     XLSX.utils.book_append_sheet(wb, wsDetail, detailSheetName);
@@ -176,7 +182,8 @@ export async function generateGeniusExport(
     wsDetail["!ref"] = "A1:C40";
   }
 
-  let wsChallan = wb.Sheets["ChallanDetails"];
+  // Read from template (internal name "ChallanDetails"), output as "Challan Details"
+  let wsChallan = wb.Sheets["ChallanDetails"] || wb.Sheets["Challan Details"];
   if (!wsChallan) {
     const headers = [
       "Challan Serial No.", "Section Code", "Income Tax", "Surcharge",
@@ -187,7 +194,7 @@ export async function generateGeniusExport(
       "Interest (As per Deductee Annexure)", "Others (As per Deductee Annexure)",
     ];
     wsChallan = XLSX.utils.aoa_to_sheet([headers]);
-    XLSX.utils.book_append_sheet(wb, wsChallan, "ChallanDetails");
+    XLSX.utils.book_append_sheet(wb, wsChallan, "Challan Details");
   }
 
   const challanRange = XLSX.utils.decode_range(wsChallan["!ref"] || "A1:Q1");
@@ -221,6 +228,12 @@ export async function generateGeniusExport(
 
   wsChallan["!ref"] = `A1:Q${challans.length + 1}`;
 
+  // Genius Import expects "Challan Details" (with space). Rename template sheet if needed.
+  const challanSheetIdx = wb.SheetNames.indexOf("ChallanDetails");
+  if (challanSheetIdx >= 0) wb.SheetNames[challanSheetIdx] = "Challan Details";
+
+  // Annexure sheet: Genius Import expects "Deductee Details" / "Party Details"
+  // Template has "Annex-I_DeducteeDetails" / "Annex-I_PartyDetails"
   const annexSheetName = formType === "27EQ" ? "Annex-I_PartyDetails" : "Annex-I_DeducteeDetails";
   const challanIndexMap = new Map<string, number>();
   challans.forEach((ch, i) => challanIndexMap.set(ch.id, i + 1));
@@ -474,6 +487,20 @@ export async function generateGeniusExport(
 
     wsAnnex["!ref"] = `A1:AG${deductees.length + 1}`;
   }
+
+  // ── Rename template sheet names to Genius Import expected names ──────────────
+  // Genius Import looks for "Deductee Details" / "Party Details" (with spaces).
+  // Templates have "Annex-I_DeducteeDetails" / "Annex-I_PartyDetails" (no space).
+  // Also rename detail sheets (DeductorDetails → Deductor Details, etc.)
+  const nameMap: Record<string, string> = {
+    "Annex-I_DeducteeDetails": "Deductee Details",
+    "Annex-I_PartyDetails": "Party Details",
+    "DeductorDetails": "Deductor Details",
+    "EmployerDetails": "Employer Details",
+    "CollectorDetails": "Collector Details",
+    "ChallanDetails": "Challan Details",
+  };
+  wb.SheetNames = wb.SheetNames.map(n => nameMap[n] ?? n);
 
   const fileName = `Genius_${formType}_${(client.name || "Client").replace(/[^a-zA-Z0-9]/g, "_")}_${filing.financial_year || "FY"}_${quarter}.xls`;
   XLSX.writeFile(wb, fileName, { bookType: "xls" });
