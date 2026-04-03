@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
+import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -317,6 +318,7 @@ function ClientLedgerView() {
     const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
 
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    await ensurePdfUnicodeFont(doc);
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 210, 22, "F");
 
@@ -331,10 +333,10 @@ function ClientLedgerView() {
 
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
-    doc.setFont("helvetica", "bold");
+    setPdfUnicodeFont(doc, "bold");
     doc.text("CLIENT LEDGER STATEMENT", textStartX, 9);
     doc.setFontSize(8);
-    doc.setFont("helvetica", "normal");
+    setPdfUnicodeFont(doc, "normal");
     doc.text(`Firm: ${fName}   |   Client: ${cName}`, textStartX, 15);
     doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, textStartX, 20);
 
@@ -346,9 +348,9 @@ function ClientLedgerView() {
       const baseRow = [
         r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
         r.docNo, r.narration,
-        r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-        r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-        r.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
+        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
+        formatPdfCurrency(r.balance),
       ];
       return isAllFirms ? [r.firmName, ...baseRow] : baseRow;
     });
@@ -356,9 +358,9 @@ function ClientLedgerView() {
     const closingColSpan = isAllFirms ? 4 : 3;
     tableRows.push([
       { content: "CLOSING BALANCE", colSpan: closingColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: totalDebit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: totalCredit.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: closingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(totalDebit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(totalCredit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(closingBalance), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
 
     const colStylesNormal = {
@@ -383,13 +385,14 @@ function ClientLedgerView() {
       startY: 26,
       head,
       body: tableRows,
-      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
       alternateRowStyles: { fillColor: [248, 251, 255] },
       columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
         const pageCount = (doc as any).internal.getNumberOfPages();
+        setPdfUnicodeFont(doc, "normal");
         doc.setFontSize(7); doc.setTextColor(120, 130, 145);
         doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
         doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
@@ -670,6 +673,7 @@ function GroupLedgerView() {
     firms.forEach(f => { firmNameMap[f.id] = f.name; });
 
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    await ensurePdfUnicodeFont(doc);
     const DARK_BLUE = [26, 58, 92] as [number, number, number];
     const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
     doc.setFillColor(...DARK_BLUE);
@@ -686,10 +690,10 @@ function GroupLedgerView() {
 
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
-    doc.setFont("helvetica", "bold");
+    setPdfUnicodeFont(doc, "bold");
     doc.text("GROUP LEDGER STATEMENT", textStartX, 10);
     doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
+    setPdfUnicodeFont(doc, "normal");
     doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
     doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
 
@@ -712,9 +716,9 @@ function GroupLedgerView() {
           e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
           getDocNo(e),
           e.narration || "",
-          d > 0 ? d.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-          c > 0 ? c.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-          bal.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+          d > 0 ? formatPdfCurrency(d) : "—",
+          c > 0 ? formatPdfCurrency(c) : "—",
+          formatPdfCurrency(bal),
         ];
         if (isAllFirms) {
           tableRows.push([firmNameMap[e.firm_id || ""] || "", ...rowBase]);
@@ -726,9 +730,9 @@ function GroupLedgerView() {
       const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
       tableRows.push([
         { content: `Subtotal — ${clientName}`, colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
-        { content: subtotalD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-        { content: subtotalC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-        { content: (subtotalD - subtotalC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency(subtotalD), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency(subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency(subtotalD - subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
       ]);
     });
 
@@ -736,9 +740,9 @@ function GroupLedgerView() {
     const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
     tableRows.push([
       { content: "GRAND TOTAL", colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: grandD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: grandC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: (grandD - grandC).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandD - grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
 
     const colStylesNormal = {
@@ -765,13 +769,14 @@ function GroupLedgerView() {
       startY: 26,
       head: tableHead,
       body: tableRows,
-      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
       alternateRowStyles: { fillColor: [248, 251, 255] },
       columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
         const pageCount = (doc as any).internal.getNumberOfPages();
+        setPdfUnicodeFont(doc, "normal");
         doc.setFontSize(7);
         doc.setTextColor(120, 130, 145);
         doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
@@ -1047,6 +1052,7 @@ function FirmRevenueLedgerView() {
     const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
 
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    await ensurePdfUnicodeFont(doc);
     doc.setFillColor(...DARK_BLUE);
     doc.rect(0, 0, 297, 22, "F");
 
@@ -1061,10 +1067,10 @@ function FirmRevenueLedgerView() {
 
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
-    doc.setFont("helvetica", "bold");
+    setPdfUnicodeFont(doc, "bold");
     doc.text("FIRM REVENUE LEDGER", textStartX, 10);
     doc.setFontSize(8);
-    doc.setFont("helvetica", "normal");
+    setPdfUnicodeFont(doc, "normal");
     doc.text(`Firm: ${fName}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
     doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
     const totalD = rows.reduce((s, r) => s + r.debit, 0);
@@ -1072,22 +1078,22 @@ function FirmRevenueLedgerView() {
     const tableRows: any[][] = rows.map(r => [
       r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
       r.docNo, r.clientName, r.docType,
-      r.debit > 0 ? r.debit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-      r.credit > 0 ? r.credit.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—",
-      r.running.toLocaleString("en-IN", { minimumFractionDigits: 2 }),
+      r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
+      r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
+      formatPdfCurrency(r.running),
     ]);
     tableRows.push([
       { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: totalD.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: totalC.toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: (rows[rows.length - 1]?.running || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 }), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(totalD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(totalC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(rows[rows.length - 1]?.running || 0), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
     autoTable(doc, {
       startY: 26,
       head: [["Date", "Doc No", "Client", "Type", "Debit (₹)", "Credit (₹)", "Running Total (₹)"]],
       body: tableRows,
-      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
       alternateRowStyles: { fillColor: [248, 251, 255] },
       columnStyles: {
         0: { cellWidth: 22, halign: "center" as const },
@@ -1101,6 +1107,7 @@ function FirmRevenueLedgerView() {
       margin: { left: 10, right: 10 },
       didDrawPage: (hookData) => {
         const pageCount = (doc as any).internal.getNumberOfPages();
+        setPdfUnicodeFont(doc, "normal");
         doc.setFontSize(7); doc.setTextColor(120, 130, 145);
         doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
         doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);

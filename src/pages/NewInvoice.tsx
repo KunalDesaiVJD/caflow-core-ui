@@ -37,7 +37,7 @@ import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
   FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
 } from "lucide-react";
-import { downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
+import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 
 // ─── GSTIN State Code Map ───
 const STATE_CODES: Record<string, string> = {
@@ -306,10 +306,13 @@ const NewInvoice = () => {
       const { data } = await supabase.from("firms").select("id, name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings").order("name");
       const firms = (data || []) as Firm[];
       setFirmsList(firms);
-      if (user?.firm_id) setSelectedFirmId(user.firm_id);
-      else if (firms.length > 0) setSelectedFirmId(firms[0].id);
+      // Don't override selectedFirmId in edit mode — it will be set from the invoice record
+      if (!isEdit) {
+        if (user?.firm_id) setSelectedFirmId(user.firm_id);
+        else if (firms.length > 0) setSelectedFirmId(firms[0].id);
+      }
     })();
-  }, [user?.firm_id]);
+  }, [user?.firm_id, isEdit]);
 
   useEffect(() => {
     if (!selectedFirmId) return;
@@ -626,7 +629,12 @@ const NewInvoice = () => {
   const firmAddr = firm?.address as any;
   const firmAddressLines = useMemo(() => {
     if (!firmAddr) return [];
-    const rawLines = [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean);
+    const addrLine = firmAddr.line || firmAddr.line1 || "";
+    const cityName = firmAddr.city || "";
+    // Avoid duplicating city if already present in address line
+    const cityAlreadyInAddress = cityName && addrLine.toLowerCase().includes(cityName.toLowerCase());
+    const cityPinPart = cityAlreadyInAddress ? "" : [cityName, firmAddr.pincode].filter(Boolean).join(" \u2013 ");
+    const rawLines = [addrLine, firmAddr.line2, cityPinPart].filter(Boolean);
     return balanceAddressLines(rawLines);
   }, [firmAddr]);
   const firmFullAddress = firmAddressLines.join(", ");
@@ -810,164 +818,37 @@ const NewInvoice = () => {
   // Generate invoice HTML
   const generateInvoiceHtml = useCallback(() => {
     const validItems = lineItems.filter(li => li.description.trim());
-    const heading = DOC_TYPE_HEADINGS[docType];
-
-    const thGst = firmHasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
-
-    const itemRows = validItems.map((item, i) => {
-      const gstCol = firmHasGst
-        ? `<td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent}%</td>`
-        : "";
-      const itemTotal = firmHasGst ? item.total : item.taxable_value;
-      return `
-      <tr>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;vertical-align:middle;font-size:11px">
-          ${item.description}
-          ${item.description_details ? `<div style="font-size:10px;color:#555;margin-top:2px;white-space:pre-line">${item.description_details}</div>` : ""}
-        </td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity).toFixed(2)}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.rate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${item.taxable_value.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        ${gstCol}
-        <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${itemTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-      </tr>`;
-    }).join("");
-
-    const colSpan = firmHasGst ? 5 : 4;
-    const totalRow = `
-      <tr style="background:#f0f0f0;font-weight:700">
-        <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        ${firmHasGst ? `<td style="border:1px solid #bbb;padding:8px;vertical-align:middle"></td>` : ""}
-        <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-      </tr>`;
-
-    const halfGst = totalGst / 2;
-    let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">\u20B9${totalTaxable.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
-    if (firmHasGst) {
-      if (isIntraState) {
-        totalsSummary += `
-          <tr><td style="padding:3px 8px;vertical-align:middle">CGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
-          <tr><td style="padding:3px 8px;vertical-align:middle">SGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${halfGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
-      } else {
-        totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">IGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">\u20B9${totalGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`;
-      }
-      totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">Round Off</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${(Math.round(grandTotal) - grandTotal) >= 0 ? "+" : ""}\u20B9${(Math.round(grandTotal) - grandTotal).toFixed(2)}</td></tr>`;
-    }
-    totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">\u20B9${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>`;
-
-    const pdfAddressLines = balanceAddressLines(
-      firmAddr ? [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean) : []
-    );
-
-    const docLabel = heading === "TAX INVOICE" ? "Invoice" : heading.charAt(0) + heading.slice(1).toLowerCase();
-
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${heading} ${invoiceNo}</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
-        table { width: 100%; border-collapse: collapse; }
-        td, th { vertical-align: middle !important; }
-        @media print { @page { size: A4; margin: 20mm 15mm 20mm 15mm; } body { margin: 0; padding: 0; } }
-        @media screen { body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; } }
-      </style></head><body>
-      <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
-
-      <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:4px 0;line-height:1.2">
-        <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0">${heading}</h1>
-      </div>
-
-      <div style="display:flex;justify-content:space-between;margin-bottom:14px">
-        <div style="flex:1;max-width:55%">
-          ${showLogo && firmLogoUrl ? `<img src="${firmLogoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
-          <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
-          ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
-          ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
-        </div>
-        <div style="text-align:right;font-size:11px;min-width:280px">
-          <div style="display:flex;justify-content:space-between;gap:20px">
-            <div style="text-align:left">
-              ${firmGstin ? `<p style="margin:2px 0"><strong>GSTIN:</strong> ${firmGstin}</p>` : ""}
-              ${firm?.pan ? `<p style="margin:2px 0"><strong>PAN:</strong> ${firm.pan}</p>` : ""}
-              ${msmeNo ? `<p style="margin:2px 0"><strong>MSME/Udyam No:</strong> ${msmeNo}</p>` : ""}
-              ${billingEmail ? `<p style="margin:2px 0"><strong>Email:</strong> ${billingEmail}</p>` : ""}
-              ${billingContact ? `<p style="margin:2px 0"><strong>Contact No:</strong> ${billingContact}</p>` : ""}
-            </div>
-            <div style="text-align:right">
-              <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? format(new Date(invoiceDate), "dd/MM/yyyy") : "\u2014"}</p>
-              <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
-              ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div style="border:1px solid #bbb;margin-bottom:12px;padding:10px">
-        <p style="font-size:10px;font-weight:700;color:#666;text-transform:uppercase;margin:0 0 4px">Bill To</p>
-        <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
-        ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
-        ${toGstin ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
-      </div>
-
-      <table>
-        <thead>
-          <tr style="background:#e2e8f0">
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;width:30px;vertical-align:middle">#</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">HSN/SAC</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Quantity</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (\u20B9)</th>
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (\u20B9)</th>
-            ${thGst}
-            <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (\u20B9)</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${itemRows}
-          ${totalRow}
-        </tbody>
-      </table>
-
-      <div style="display:flex;justify-content:flex-end;margin-top:10px">
-        <table style="width:320px;font-size:12px">${totalsSummary}</table>
-      </div>
-
-      <div style="margin:8px 0;padding:6px 8px;background:#f9f9f9;border:1px solid #ddd;font-size:11px">
-        <strong>Amount in words:</strong> ${numberToWords(Math.round(grandTotal))}
-      </div>
-
-      ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd;page-break-inside:avoid;overflow:hidden">
-        <strong>Remarks / Terms & Conditions:</strong><br/>
-        <span style="white-space:pre-line;word-wrap:break-word;overflow-wrap:break-word">${remarksConditions}</span>
-      </div>` : ""}
-
-      <div style="display:flex;justify-content:space-between;margin-top:16px">
-        <div style="border:1px solid #bbb;padding:10px;font-size:11px;min-width:300px">
-          <p style="font-weight:700;margin:0 0 4px;font-size:12px">Bank Details:</p>
-          ${bankDetails?.account_number || bankDetails?.account_no ? `<p style="margin:2px 0"><strong>Account No:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>` : ""}
-          ${bankDetails?.ifsc ? `<p style="margin:2px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>` : ""}
-          ${bankDetails?.bank_name ? `<p style="margin:2px 0"><strong>Bank:</strong> ${bankDetails.bank_name}</p>` : ""}
-          ${bankDetails?.branch ? `<p style="margin:2px 0"><strong>Branch:</strong> ${bankDetails.branch}</p>` : ""}
-        </div>
-        <div style="text-align:right;padding-top:8px">
-          <p style="margin:0;font-size:12px;font-weight:600">For ${firmName.toUpperCase()}</p>
-          <div style="height:50px"></div>
-          <p style="margin:0;font-size:11px;border-top:1px solid #333;padding-top:4px">Authorised Signatory</p>
-        </div>
-      </div>
-
-      <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
-        <p style="font-weight:700;margin:0 0 4px">Terms & Conditions:</p>
-        <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
-      </div>
-
-      </div>
-    </body></html>`;
+    return buildInvoiceHtml({
+      invoice_no: invoiceNo,
+      invoice_date: invoiceDate,
+      document_type: docType,
+      from_firm_name: firmName,
+      from_gstin: firmGstin,
+      from_pan: firm?.pan || "",
+      from_address: firmFullAddress,
+      from_email: billingEmail,
+      from_phone: billingContact,
+      to_name: toName,
+      to_gstin: toGstin,
+      to_address: toAddress,
+      place_of_supply: placeOfSupply,
+      is_intra_state: isIntraState,
+      line_items: validItems,
+      amount: totalTaxable,
+      subtotal: totalTaxable,
+      gst_amount: totalGst,
+      total_amount: grandTotal,
+      reference_no: referenceNo || null,
+      remarks_conditions: remarksConditions || null,
+      bank_details_snapshot: bankDetails,
+      signatory_name: firmName,
+      logo_url: firmLogoUrl,
+      show_logo: showLogo,
+      firm_settings: typeof firm?.settings === "object" ? firm.settings : null,
+    });
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
-    firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo, firmLogoUrl,
-    toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal, firmHasGst, firmAddr,
+    firm, firmName, firmFullAddress, firmGstin, bankDetails, showLogo, firmLogoUrl,
+    toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal,
     billingEmail, billingContact, docType, remarksConditions]);
 
   if (loading) return <div className="p-6"><Skeleton className="h-[400px] w-full" /></div>;
@@ -1040,7 +921,7 @@ const NewInvoice = () => {
               <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md mt-2">
                 <p className="font-medium text-foreground">{firmName}</p>
                 {firmAddressLines.map((line, i) => <p key={i}>{line}</p>)}
-                {placeOfSupply && <p className="text-xs">Place of Supply: {placeOfSupply}</p>}
+                {/* Place of Supply removed from invoice display */}
               </div>
             )}
             <div className="flex items-center gap-2 mt-2">

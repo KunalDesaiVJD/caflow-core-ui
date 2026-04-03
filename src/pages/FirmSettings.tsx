@@ -164,7 +164,7 @@ const FirmSettings = () => {
     setLoading(false);
   }
 
-  async function handleUpload(file: File, path: string, setter: (url: string) => void) {
+  async function handleUpload(file: File, path: string, setter: (url: string) => void, dbField?: string) {
     if (file.size > 5 * 1024 * 1024) {
       toast({ title: "File too large", variant: "destructive" });
       return;
@@ -172,8 +172,20 @@ const FirmSettings = () => {
     try {
       await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
       const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
-      setter(data.publicUrl);
-      toast({ title: "Uploaded" });
+      const publicUrl = data.publicUrl;
+      setter(publicUrl);
+      // Auto-save to database immediately so it persists
+      if (firmId && dbField) {
+        const updatePayload: any = { [dbField]: publicUrl };
+        // Also save into settings.logo_url for backward compat
+        if (dbField === "logo_url") {
+          const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
+          const existingSettings = (current?.settings || {}) as any;
+          updatePayload.settings = { ...existingSettings, logo_url: publicUrl };
+        }
+        await supabase.from("firms").update(updatePayload as any).eq("id", firmId);
+      }
+      toast({ title: "Uploaded & saved" });
     } catch (e: any) {
       toast({ title: "Upload failed", description: e.message, variant: "destructive" });
     }
@@ -401,7 +413,7 @@ const FirmSettings = () => {
                   {logoUrl && <img src={logoUrl} alt="Logo" className="h-16 object-contain rounded border border-border p-1" />}
                   <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/logo`, setLogoUrl);
+                    if (f && firmId) handleUpload(f, `${firmId}/logo`, setLogoUrl, "logo_url");
                   }} />
                   <Button variant="outline" size="sm" onClick={() => logoRef.current?.click()} disabled={!isAdmin}>
                     <Upload className="h-3 w-3 mr-1" /> Upload Logo
@@ -413,7 +425,7 @@ const FirmSettings = () => {
                   {signatureUrl && <img src={signatureUrl} alt="Signature" className="h-16 object-contain rounded border border-border p-1" />}
                   <input ref={sigRef} type="file" accept="image/*" className="hidden" onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl);
+                    if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl, "signature_url");
                   }} />
                   <Button variant="outline" size="sm" onClick={() => sigRef.current?.click()} disabled={!isAdmin}>
                     <Upload className="h-3 w-3 mr-1" /> Upload Signature
@@ -425,7 +437,7 @@ const FirmSettings = () => {
                   {letterheadUrl && <img src={letterheadUrl} alt="Letterhead" className="h-16 object-contain rounded border border-border p-1" />}
                   <input ref={lhRef} type="file" accept="image/*" className="hidden" onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl);
+                    if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl, "letterhead_url");
                   }} />
                   <Button variant="outline" size="sm" onClick={() => lhRef.current?.click()} disabled={!isAdmin}>
                     <Upload className="h-3 w-3 mr-1" /> Upload Letterhead
