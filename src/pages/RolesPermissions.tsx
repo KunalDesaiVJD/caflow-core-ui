@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Shield, RotateCcw, Loader2, Save, Clock } from "lucide-react";
+import { Shield, RotateCcw, Loader2, Save, Clock, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 
@@ -246,11 +246,27 @@ const RolesPermissions = () => {
     toast({ title: `${ROLE_LABELS[resetRole]} permissions reset to defaults` });
   }
 
-  if (loading) {
+  // Wait for permissions context to finish loading before checking access
+  if (permissionsLoading || loading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-[400px] w-full" />
+      </div>
+    );
+  }
+
+  // Access denied — user cannot view Settings module at all
+  if (!isSuperadmin && !canViewSettings) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+        <Lock className="h-12 w-12 text-muted-foreground/40" />
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Access Denied</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            You don&apos;t have permission to view Roles &amp; Permissions.
+          </p>
+        </div>
       </div>
     );
   }
@@ -260,28 +276,52 @@ const RolesPermissions = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground flex items-center gap-2">
-            <Shield className="h-6 w-6" /> Roles & Permissions
+            <Shield className="h-6 w-6" /> Roles &amp; Permissions
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">Configure module access for each role in your firm.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {canEdit
+              ? "Configure module access for each role in your firm."
+              : "View-only. Contact your firm admin to change permissions."}
+          </p>
         </div>
-        {canEdit && (
-          <Button onClick={saveAll} disabled={saving || !dirty}>
-            {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-            Save Changes
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {!canEdit && (
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <Lock className="h-3 w-3" /> Read-only
+            </Badge>
+          )}
+          {canEdit && (
+            <Button onClick={saveAll} disabled={saving || !dirty}>
+              {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+              Save Changes
+            </Button>
+          )}
+        </div>
       </div>
 
-      {isSuperadmin && firmsList.length > 0 && (
-        <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
-          <SelectTrigger className="w-64"><SelectValue placeholder="Select firm" /></SelectTrigger>
-          <SelectContent>
-            {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      {isSuperadmin && (
+        <div className="flex items-center gap-3">
+          <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder={firmsList.length === 0 ? "Loading firms…" : "Select a firm"} />
+            </SelectTrigger>
+            <SelectContent>
+              {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {!selectedFirmId && <p className="text-sm text-muted-foreground">Select a firm to view its permission matrix</p>}
+        </div>
       )}
 
-      <Card>
+      {/* Show empty state when superadmin hasn't selected a firm yet */}
+      {!firmId && isSuperadmin && (
+        <Card className="p-12 text-center">
+          <Shield className="h-10 w-10 mx-auto text-muted-foreground/30 mb-3" />
+          <p className="text-sm text-muted-foreground">Select a firm above to configure its role permissions.</p>
+        </Card>
+      )}
+
+      {firmId && <Card>
         <CardContent className="p-0">
           <div className="overflow-auto max-h-[70vh]">
             <table className="w-full text-sm">
@@ -350,7 +390,7 @@ const RolesPermissions = () => {
             </table>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Reset Confirmation */}
       <AlertDialog open={!!resetRole} onOpenChange={() => setResetRole(null)}>
