@@ -181,7 +181,9 @@ Deno.serve(async (req) => {
         // ── Additions depreciation ──────────────────────────────────
         let depOnAdd = 0, depDaysAdd = 0;
         if (addns > 0) {
-          const addResidual    = 0;
+          // FIX: When opening block is 0 (new asset), residual must be deducted from additions.
+          // When opening block > 0, residual was already deducted from opening, so additions use full amount.
+          const addResidual = gbOpen <= 0 ? residual : 0;
           if (method === 'SLM') {
             const life      = cat.useful_life_years || 1;
             const addAnnual = Math.round(((addns - addResidual) / life) * 100) / 100;
