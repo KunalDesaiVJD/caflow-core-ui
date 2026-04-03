@@ -29,7 +29,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText,
 } from "lucide-react";
 
 // ─── Types ───
@@ -265,9 +265,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
     if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
     const priorFilingIds = priorFilings.map(f => f.id);
-    const { data: priorChallans } = await supabase.from("tds_challans").select("*")
+    const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
       .in("filing_id", priorFilingIds).eq("form_type", form).eq("fully_utilized", false).order("deposit_date");
-    if (!priorChallans || priorChallans.length === 0) { setCarryForwardChallans([]); return; }
+    const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
+    if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
     const challanIds = priorChallans.map(c => c.id);
     const { data: allDeds } = await supabase.from("tds_deductees").select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
       .in("challan_id", challanIds);
@@ -296,7 +297,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const fetchChallans = async (filingId: string) => {
     const { data } = await supabase.from("tds_challans").select("*")
       .eq("filing_id", filingId).order("deposit_date", { ascending: true });
-    const list = (data || []) as Challan[];
+    const list = (data as unknown as Challan[]) || [];
     setChallans(list);
     if (list.length > 0) {
       const challanIds = list.map(c => c.id);

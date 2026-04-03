@@ -640,11 +640,19 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       try {
         const invWithLogo = { ...inv, logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null };
         const pdfBlob = await generateInvoicePdfBlob(invWithLogo as any);
-        const filename = invoicePdfFilename(inv.invoice_no, clientName);
-        zip.file(filename, pdfBlob);
+        if (pdfBlob.size < 5000) {
+          console.warn(`[BulkPDF] Invoice ${inv.invoice_no} generated suspiciously small PDF (${pdfBlob.size} bytes) — retrying`);
+          // Retry once with extra delay
+          await new Promise(r => setTimeout(r, 300));
+          const retryBlob = await generateInvoicePdfBlob(invWithLogo as any);
+          const filename = invoicePdfFilename(inv.invoice_no, clientName);
+          zip.file(filename, retryBlob);
+        } else {
+          const filename = invoicePdfFilename(inv.invoice_no, clientName);
+          zip.file(filename, pdfBlob);
+        }
       } catch (err) {
-        console.error("PDF generation failed for", inv.invoice_no, err);
-        // Skip failed ones
+        console.error("[BulkPDF] PDF generation failed for", inv.invoice_no, err);
       }
     }
 

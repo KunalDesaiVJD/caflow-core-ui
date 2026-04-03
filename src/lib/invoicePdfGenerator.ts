@@ -255,9 +255,17 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
   const html = generateInvoiceHtmlFromRecord(inv);
   const container = document.createElement("div");
   container.innerHTML = html;
-  container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
+  // CRITICAL: Do NOT use opacity:0 — html2canvas captures transparent content as blank.
+  // Position off-screen instead so element stays "visible" to the renderer.
+  container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;pointer-events:none;z-index:-9999;";
   document.body.appendChild(container);
+
+  // Wait for layout + paint
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  // Small extra delay to ensure complex HTML fully paints
+  await new Promise(r => setTimeout(r, 100));
+
+  // Wait for images to load
   const imgs = container.querySelectorAll("img");
   if (imgs.length > 0) {
     await Promise.all(Array.from(imgs).map(img =>
@@ -265,15 +273,29 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
     ));
   }
 
+  // Debug: log container dimensions
+  const rect = container.getBoundingClientRect();
+  console.log(`[PDF] Container dimensions: ${rect.width}x${rect.height}, children: ${container.childElementCount}`);
+
+  if (rect.height < 10) {
+    console.warn("[PDF] Container height is suspiciously small — content may not have rendered");
+  }
+
   try {
     const html2pdf = (await import("html2pdf.js")).default;
     const blob: Blob = await html2pdf().set({
       margin: [10, 10, 20, 10],
       image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
     }).from(container).outputPdf('blob');
+
+    console.log(`[PDF] Generated blob size: ${blob.size} bytes`);
+    if (blob.size < 5000) {
+      console.warn("[PDF] Generated PDF is suspiciously small — may be blank");
+    }
+
     return blob;
   } finally {
     document.body.removeChild(container);

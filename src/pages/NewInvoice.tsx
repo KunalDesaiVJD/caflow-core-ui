@@ -795,22 +795,26 @@ const NewInvoice = () => {
     const html = generateInvoiceHtml();
     const container = document.createElement("div");
     container.innerHTML = html;
-    container.style.cssText = "position:absolute;top:0;left:0;width:794px;opacity:0;pointer-events:none;z-index:-9999;";
+    // CRITICAL: Do NOT use opacity:0 — html2canvas renders transparent content as blank PDF.
+    container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;pointer-events:none;z-index:-9999;";
     document.body.appendChild(container);
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise(r => setTimeout(r, 100));
     const imgs = container.querySelectorAll("img");
     if (imgs.length > 0) {
       await Promise.all(Array.from(imgs).map(img =>
         img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
       ));
     }
+    const rect = container.getBoundingClientRect();
+    console.log(`[PDF] Single export container: ${rect.width}x${rect.height}`);
     try {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
         margin: [10, 10, 20, 10],
         filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
       }).from(container).save();
