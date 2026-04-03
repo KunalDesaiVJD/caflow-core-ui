@@ -437,7 +437,7 @@ const FirmSettings = () => {
                   {letterheadUrl && <img src={letterheadUrl} alt="Letterhead" className="h-16 object-contain rounded border border-border p-1" />}
                   <input ref={lhRef} type="file" accept="image/*" className="hidden" onChange={e => {
                     const f = e.target.files?.[0];
-                    if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl);
+                    if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl, "letterhead_url");
                   }} />
                   <Button variant="outline" size="sm" onClick={() => lhRef.current?.click()} disabled={!isAdmin}>
                     <Upload className="h-3 w-3 mr-1" /> Upload Letterhead
