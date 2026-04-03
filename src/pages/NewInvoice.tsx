@@ -793,33 +793,58 @@ const NewInvoice = () => {
 
   const handleDownloadPdf = async () => {
     const html = generateInvoiceHtml();
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    // CRITICAL: Do NOT use opacity:0 — html2canvas renders transparent content as blank PDF.
-    container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;pointer-events:none;z-index:-9999;";
-    document.body.appendChild(container);
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    await new Promise(r => setTimeout(r, 100));
-    const imgs = container.querySelectorAll("img");
-    if (imgs.length > 0) {
-      await Promise.all(Array.from(imgs).map(img =>
-        img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
-      ));
-    }
-    const rect = container.getBoundingClientRect();
-    console.log(`[PDF] Single export container: ${rect.width}x${rect.height}`);
+
+    // Use an iframe so html2canvas renders in a clean, isolated viewport at (0,0)
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = "position:fixed;left:0;top:0;width:794px;height:1200px;opacity:0.01;pointer-events:none;z-index:-9999;border:none;";
+    document.body.appendChild(iframe);
+
     try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!iframeDoc) throw new Error("[PDF] Could not access iframe document");
+
+      iframeDoc.open();
+      iframeDoc.write(html);
+      iframeDoc.close();
+
+      // Wait for content to fully render
+      await new Promise(r => setTimeout(r, 600));
+      await document.fonts.ready;
+
+      // Wait for images
+      const imgs = iframeDoc.querySelectorAll("img");
+      if (imgs.length > 0) {
+        await Promise.all(Array.from(imgs).map(img =>
+          img.complete ? Promise.resolve() : new Promise<void>(r => {
+            img.onload = () => r(); img.onerror = () => r();
+            setTimeout(r, 3000);
+          })
+        ));
+      }
+
+      const target = iframeDoc.body;
+      const rect = target.getBoundingClientRect();
+      console.log(`[PDF] Single export iframe body: ${rect.width}x${rect.height}, content length: ${target.innerHTML.length}`);
+
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
         margin: [10, 10, 20, 10],
         filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: "#ffffff",
+          logging: false,
+          width: 794,
+          windowWidth: 794,
+        },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(container).save();
+      }).from(target).save();
     } finally {
-      document.body.removeChild(container);
+      document.body.removeChild(iframe);
     }
   };
 
