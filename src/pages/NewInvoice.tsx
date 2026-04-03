@@ -913,7 +913,7 @@ const NewInvoice = () => {
               <div className="text-sm space-y-1 text-muted-foreground bg-muted/30 p-3 rounded-md mt-2">
                 <p className="font-medium text-foreground">{firmName}</p>
                 {firmAddressLines.map((line, i) => <p key={i}>{line}</p>)}
-                {placeOfSupply && <p className="text-xs">Place of Supply: {placeOfSupply}</p>}
+                {/* Place of Supply removed from invoice display */}
               </div>
             )}
             <div className="flex items-center gap-2 mt-2">

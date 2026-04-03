@@ -285,7 +285,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
   const identityMarkup = logoUrl
-    ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:2px;display:block" crossorigin="anonymous" />`
+    ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:0;display:block" crossorigin="anonymous" />`
     : `<p style="font-weight:800;font-size:14px;margin:0 0 2px">${firmName.toUpperCase()}</p>`;
 
   const itemRows = items.map((item: any, i: number) => {
