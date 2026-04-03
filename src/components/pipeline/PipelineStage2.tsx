@@ -638,14 +638,15 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       return;
     }
 
-    if (existingTb && (existingTb as any).is_validated) {
+    if (existingTb) {
       const tb = existingTb as any;
-      setTbResult({
+      // Use prev || ... so we don't overwrite a richer tbResult already set from hierarchy nodes
+      setTbResult((prev) => prev || {
         totalAccounts: (tb.normalised_data as any[])?.length || 0,
         debitTotal: tb.debit_total || 0,
         creditTotal: tb.credit_total || 0,
         difference: tb.difference || 0,
-        isValid: tb.validation_status === "valid",
+        isValid: tb.validation_status === "valid" || !!tb.is_validated,
         preview: ((tb.normalised_data as any[]) || []).slice(0, 20),
       });
       setTbStep(5);
@@ -2449,42 +2450,44 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 </Card>
               )}
 
-              {/* View Toggle */}
-              {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <div className='flex items-center gap-2 flex-wrap'>
-                  <Button
-                    variant={tbViewMode === 'tree' ? 'default' : 'outline'}
-                    size='sm'
-                    className='text-xs gap-1'
-                    onClick={() => setTbViewMode('tree')}
-                  >
-                    <ChevronDown size={14} /> Hierarchy Tree
-                  </Button>
-                  <Button
-                    variant={tbViewMode === 'flat' ? 'default' : 'outline'}
-                    size='sm'
-                    className='text-xs gap-1'
-                    onClick={() => setTbViewMode('flat')}
-                  >
-                    <Table2 size={14} /> Flat Preview
-                  </Button>
-                  {/* Spacer */}
-                  <div className='flex-1' />
-                  {/* Delete & Re-upload button */}
-                  <Button
-                    variant='outline'
-                    size='sm'
-                    className='text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground'
-                    onClick={handleDeleteTb}
-                    disabled={deletingTb}
-                  >
-                    {deletingTb
-                      ? <><Loader2 size={13} className='animate-spin' /> Deleting...</>
-                      : <><X size={13} /> Delete TB &amp; Re-upload</>
-                    }
-                  </Button>
-                </div>
-              )}
+              {/* View Toggle + Delete row — Delete always shown at step 5; tree/flat only when hierarchy exists */}
+              <div className='flex items-center gap-2 flex-wrap'>
+                {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
+                  <>
+                    <Button
+                      variant={tbViewMode === 'tree' ? 'default' : 'outline'}
+                      size='sm'
+                      className='text-xs gap-1'
+                      onClick={() => setTbViewMode('tree')}
+                    >
+                      <ChevronDown size={14} /> Hierarchy Tree
+                    </Button>
+                    <Button
+                      variant={tbViewMode === 'flat' ? 'default' : 'outline'}
+                      size='sm'
+                      className='text-xs gap-1'
+                      onClick={() => setTbViewMode('flat')}
+                    >
+                      <Table2 size={14} /> Flat Preview
+                    </Button>
+                  </>
+                )}
+                {/* Spacer */}
+                <div className='flex-1' />
+                {/* Delete & Re-upload button — always visible at step 5 regardless of hierarchy state */}
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='text-xs gap-1 border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground'
+                  onClick={handleDeleteTb}
+                  disabled={deletingTb}
+                >
+                  {deletingTb
+                    ? <><Loader2 size={13} className='animate-spin' /> Deleting...</>
+                    : <><X size={13} /> Delete TB &amp; Re-upload</>
+                  }
+                </Button>
+              </div>
 
               {/* Hierarchy Tree View */}
               {tbViewMode === "tree" && tbPresentation && (
