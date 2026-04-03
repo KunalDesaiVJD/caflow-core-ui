@@ -65,6 +65,10 @@ interface InvoiceRecord {
   bank_details_snapshot?: any | null;
   signatory_name?: string | null;
   logo_url?: string | null;
+  show_logo?: boolean | null;
+  firm_settings?: {
+    logo_url?: string | null;
+  } | null;
   [key: string]: any;
 }
 
@@ -74,6 +78,181 @@ const DOC_HEADINGS: Record<string, string> = {
   quotation: "QUOTATION",
   proforma: "PROFORMA INVOICE",
 };
+
+function resolveInvoiceLogoUrl(inv: InvoiceRecord): string {
+  if (inv.show_logo === false) return "";
+  return inv.logo_url || inv.firm_settings?.logo_url || "";
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function waitForElementRender(element: HTMLElement, label: string) {
+  const doc = element.ownerDocument;
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await new Promise(resolve => setTimeout(resolve, 450));
+
+  try {
+    if ("fonts" in doc && doc.fonts) {
+      await doc.fonts.ready;
+    }
+  } catch {
+    // ignore font readiness issues
+  }
+
+  const images = Array.from(element.querySelectorAll("img"));
+  await Promise.all(images.map(img => new Promise<void>(resolve => {
+    if (img.complete && img.naturalWidth > 0) {
+      resolve();
+      return;
+    }
+
+    const done = () => resolve();
+    img.addEventListener("load", done, { once: true });
+    img.addEventListener("error", () => {
+      console.warn(`[PDF] ${label}: image failed to load`, img.getAttribute("src"));
+      resolve();
+    }, { once: true });
+    setTimeout(resolve, 4000);
+  })));
+}
+
+async function renderElementToCanvas(element: HTMLElement, label: string) {
+  const html2canvas = (await import("html2canvas")).default;
+  await waitForElementRender(element, label);
+
+  const contentLength = element.innerHTML.trim().length;
+  const width = Math.max(element.scrollWidth, element.clientWidth, 794);
+  const height = Math.max(element.scrollHeight, element.clientHeight, 1123);
+
+  console.log(`[PDF] ${label}: element found=${!!element}, content=${contentLength}, size=${width}x${height}`);
+
+  if (!contentLength || width <= 0 || height <= 0) {
+    throw new Error(`[PDF] ${label}: export target is empty or has invalid dimensions`);
+  }
+
+  const canvas = await html2canvas(element, {
+    scale: 2,
+    useCORS: true,
+    allowTaint: true,
+    backgroundColor: "#ffffff",
+    logging: false,
+    width,
+    height,
+    windowWidth: width,
+    windowHeight: height,
+    scrollX: 0,
+    scrollY: 0,
+  });
+
+  console.log(`[PDF] ${label}: canvas=${canvas.width}x${canvas.height}`);
+
+  if (!canvas.width || !canvas.height) {
+    throw new Error(`[PDF] ${label}: html2canvas returned an empty canvas`);
+  }
+
+  return canvas;
+}
+
+async function canvasToPdfBlob(canvas: HTMLCanvasElement, label: string) {
+  const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  const printableWidth = pageWidth - margin * 2;
+  const printableHeight = pageHeight - margin * 2;
+  const imageHeight = (canvas.height * printableWidth) / canvas.width;
+  const imageData = canvas.toDataURL("image/png", 1);
+
+  let heightLeft = imageHeight;
+  let position = margin;
+
+  pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
+  heightLeft -= printableHeight;
+
+  while (heightLeft > 0) {
+    position = margin - (imageHeight - heightLeft);
+    pdf.addPage();
+    pdf.addImage(imageData, "PNG", margin, position, printableWidth, imageHeight, undefined, "FAST");
+    heightLeft -= printableHeight;
+  }
+
+  const blob = pdf.output("blob");
+  console.log(`[PDF] ${label}: blob size=${blob.size}`);
+
+  if (blob.size < 5000) {
+    throw new Error(`[PDF] ${label}: generated PDF blob is suspiciously small (${blob.size} bytes)`);
+  }
+
+  return blob;
+}
+
+async function createRenderIframe(fullHtml: string, label: string) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.setAttribute("sandbox", "allow-same-origin");
+  iframe.style.cssText = [
+    "position:fixed",
+    "right:0",
+    "bottom:0",
+    "width:794px",
+    "height:1123px",
+    "border:0",
+    "pointer-events:none",
+    "opacity:0",
+    "background:#ffffff",
+  ].join(";");
+
+  document.body.appendChild(iframe);
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(`[PDF] ${label}: iframe load timed out`)), 6000);
+    iframe.onload = () => {
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    iframe.srcdoc = fullHtml;
+  });
+
+  const doc = iframe.contentDocument;
+  if (!doc?.body) {
+    iframe.remove();
+    throw new Error(`[PDF] ${label}: iframe document not available`);
+  }
+
+  return { iframe, body: doc.body };
+}
+
+export async function generatePdfBlobFromElement(element: HTMLElement, label = "Invoice PDF"): Promise<Blob> {
+  const canvas = await renderElementToCanvas(element, label);
+  return canvasToPdfBlob(canvas, label);
+}
+
+export async function generatePdfBlobFromHtml(fullHtml: string, label = "Invoice PDF"): Promise<Blob> {
+  const { iframe, body } = await createRenderIframe(fullHtml, label);
+
+  try {
+    return await generatePdfBlobFromElement(body, label);
+  } finally {
+    iframe.remove();
+  }
+}
+
+export async function downloadPdfFromHtml(fullHtml: string, filename: string, label = filename) {
+  const blob = await generatePdfBlobFromHtml(fullHtml, label);
+  downloadBlob(blob, filename);
+}
+
+export function downloadPdfBlob(blob: Blob, filename: string) {
+  downloadBlob(blob, filename);
+}
 
 function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
   const docType = inv.document_type || "invoice";
@@ -94,6 +273,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
   const isIntraState = inv.is_intra_state !== false;
   const remarksConditions = inv.remarks_conditions || "";
   const bankDetails = inv.bank_details_snapshot || {};
+  const logoUrl = resolveInvoiceLogoUrl(inv);
 
   const items: any[] = Array.isArray(inv.line_items) ? inv.line_items : [];
   const hasGst = !!firmGstin;
@@ -151,9 +331,11 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${heading} ${invoiceNo}</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; background: #ffffff; }
       table { width: 100%; border-collapse: collapse; }
       td, th { vertical-align: middle !important; }
+      @media print { @page { size: A4; margin: 20mm 15mm 20mm 15mm; } body { margin: 0; padding: 0; } }
+      @media screen { body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; } }
     </style></head><body>
     <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
 
@@ -163,7 +345,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
-        ${inv.logo_url ? `<img src="${inv.logo_url}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
+        ${logoUrl ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
         <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
         ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5">${firmAddr}</p>` : ""}
         ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
@@ -253,105 +435,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
  */
 export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> {
   const fullHtml = generateInvoiceHtmlFromRecord(inv);
-
-  // Extract the body content from the full HTML document string.
-  // The generated HTML is a full <!DOCTYPE> document but we need just the inner content
-  // to inject into a div (since innerHTML strips html/head/body tags).
-  // Also extract the <style> block to apply it properly.
-  const styleMatch = fullHtml.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
-  const styleContent = styleMatch ? styleMatch[1] : '';
-  const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
-
-  // Create a wrapper div that sits in the document at position (0,0)
-  // VISIBLE to html2canvas but behind everything visually.
-  // KEY: Do NOT use position:fixed (clips to viewport) or left:-9999px (off-canvas).
-  const wrapper = document.createElement("div");
-  wrapper.id = "__pdf_export_wrapper__";
-  wrapper.style.cssText = [
-    "position:absolute",
-    "left:0",
-    "top:0",
-    "width:794px",
-    "z-index:-1",
-    "pointer-events:none",
-    "background:#ffffff",
-    "overflow:visible",
-  ].join(";");
-
-  // Inject scoped styles + content
-  const styleEl = document.createElement("style");
-  styleEl.textContent = `
-    #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
-    #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
-    #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
-    #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
-  `;
-  wrapper.appendChild(styleEl);
-
-  const contentDiv = document.createElement("div");
-  contentDiv.innerHTML = bodyContent;
-  wrapper.appendChild(contentDiv);
-
-  document.body.appendChild(wrapper);
-
-  // Wait for layout + paint + fonts
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  await new Promise(r => setTimeout(r, 500));
-
-  try {
-    await document.fonts.ready;
-  } catch (e) {
-    // fonts.ready not supported in all browsers
-  }
-
-  // Wait for images to load
-  const imgs = wrapper.querySelectorAll("img");
-  if (imgs.length > 0) {
-    await Promise.all(Array.from(imgs).map(img =>
-      img.complete ? Promise.resolve() : new Promise<void>(r => {
-        img.onload = () => r();
-        img.onerror = () => r();
-        setTimeout(r, 3000); // max 3s per image
-      })
-    ));
-  }
-
-  // Debug: verify the content rendered
-  const rect = wrapper.getBoundingClientRect();
-  console.log(`[PDF] Export wrapper: ${rect.width}x${rect.height}, innerHTML length: ${wrapper.innerHTML.length}`);
-
-  if (rect.height < 50) {
-    console.error("[PDF] Export wrapper height is too small — content may not have rendered");
-  }
-
-  try {
-    const html2pdf = (await import("html2pdf.js")).default;
-    const blob: Blob = await html2pdf().set({
-      margin: [10, 10, 20, 10],
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: "#ffffff",
-        logging: false,
-        width: 794,
-        windowWidth: 794,
-      },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-    }).from(wrapper).outputPdf('blob');
-
-    console.log(`[PDF] Generated blob size: ${blob.size} bytes`);
-    if (blob.size < 5000) {
-      console.warn("[PDF] WARNING: Generated PDF may be blank (size < 5KB)");
-    }
-
-    return blob;
-  } finally {
-    document.body.removeChild(wrapper);
-  }
+  return generatePdfBlobFromHtml(fullHtml, `Bulk invoice ${inv.invoice_no || "draft"}`);
 }
 
 /**

@@ -608,24 +608,29 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     // Fetch firm logos for all unique firm_ids and convert to base64 for html2canvas
     const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
+    const firmDataCache: Record<string, any> = {};
     const firmLogoMap: Record<string, string> = {};
     if (uniqueFirmIds.length > 0) {
-      const { data: firmData } = await supabase.from("firms").select("id, logo_url").in("id", uniqueFirmIds);
+      const { data: firmData } = await supabase.from("firms").select("id, logo_url, settings").in("id", uniqueFirmIds);
+      (firmData || []).forEach((firm: any) => {
+        firmDataCache[firm.id] = firm;
+      });
       await Promise.all((firmData || []).map(async (f) => {
-        if (!f.logo_url) return;
+        const resolvedLogoUrl = f.logo_url || ((f.settings as Record<string, any> | null)?.logo_url ?? null);
+        if (!resolvedLogoUrl) return;
         try {
-          const res = await fetch(f.logo_url, { mode: "cors" });
-          if (!res.ok) { firmLogoMap[f.id] = f.logo_url; return; }
+          const res = await fetch(resolvedLogoUrl, { mode: "cors" });
+          if (!res.ok) { firmLogoMap[f.id] = resolvedLogoUrl; return; }
           const blob = await res.blob();
           const base64 = await new Promise<string>(resolve => {
             const reader = new FileReader();
             reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = () => resolve(f.logo_url);
+            reader.onerror = () => resolve(resolvedLogoUrl);
             reader.readAsDataURL(blob);
           });
           firmLogoMap[f.id] = base64;
         } catch {
-          firmLogoMap[f.id] = f.logo_url;
+          firmLogoMap[f.id] = resolvedLogoUrl;
         }
       }));
     }
@@ -638,7 +643,13 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       toast({ title: `Generating PDF ${i + 1} of ${fullInvoices.length}...` });
 
       try {
-        const invWithLogo = { ...inv, logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null };
+        const sourceFirm = inv.firm_id ? (firmDataCache[inv.firm_id] || null) : null;
+        const invWithLogo = {
+          ...inv,
+          logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null,
+          firm_settings: sourceFirm ? (sourceFirm.settings as Record<string, any> | null) : null,
+        };
+        console.log(`[BulkPDF] Generating ${inv.invoice_no || inv.id} (${i + 1}/${fullInvoices.length})`);
         const pdfBlob = await generateInvoicePdfBlob(invWithLogo as any);
         if (pdfBlob.size < 5000) {
           console.warn(`[BulkPDF] Invoice ${inv.invoice_no} generated suspiciously small PDF (${pdfBlob.size} bytes) — retrying`);
