@@ -277,20 +277,22 @@ export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive,
             <Input value={data.business_nature} onChange={(e) => set("business_nature", e.target.value)} placeholder="e.g. Manufacturing of textiles" />
           </div>
 
-          {/* CIN */}
-          <div className="space-y-1.5">
-            <Label>CIN</Label>
-            <Input
-              value={data.cin}
-              onChange={(e) => set("cin", e.target.value.toUpperCase())}
-              placeholder="21-character Company Identification Number"
-              maxLength={21}
-            />
-            {errors.cin && <p className="text-xs text-destructive">{errors.cin}</p>}
-            {needsCIN && !errors.cin && (
-              <p className="text-xs text-muted-foreground">CIN is expected for {entityType} entities</p>
-            )}
-          </div>
+          {/* CIN — only for Private Ltd / Public Ltd */}
+          {needsCIN && (
+            <div className="space-y-1.5">
+              <Label>CIN</Label>
+              <Input
+                value={data.cin}
+                onChange={(e) => set("cin", e.target.value.toUpperCase())}
+                placeholder="21-character Company Identification Number"
+                maxLength={21}
+              />
+              {errors.cin && <p className="text-xs text-destructive">{errors.cin}</p>}
+              {!errors.cin && (
+                <p className="text-xs text-muted-foreground">CIN is expected for {entityType} entities</p>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
