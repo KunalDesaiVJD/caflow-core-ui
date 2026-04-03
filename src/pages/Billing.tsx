@@ -605,17 +605,18 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       toast({ title: "No invoices found", variant: "destructive" });
       return;
     }
+    console.log(`[BulkPDF] Loaded ${fullInvoices.length} invoice records for ZIP generation`);
 
     // Fetch firm logos for all unique firm_ids and convert to base64 for html2canvas
     const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
     const firmDataCache: Record<string, any> = {};
     const firmLogoMap: Record<string, string> = {};
     if (uniqueFirmIds.length > 0) {
-      const { data: firmData } = await supabase.from("firms").select("id, logo_url, settings").in("id", uniqueFirmIds);
+      const { data: firmData } = await supabase.from("firms").select("id, name, display_name, address, gstin, pan, email, phone, logo_url, settings").in("id", uniqueFirmIds);
       (firmData || []).forEach((firm: any) => {
         firmDataCache[firm.id] = firm;
       });
-      await Promise.all((firmData || []).map(async (f) => {
+      await Promise.all((firmData || []).map(async (f: any) => {
         const resolvedLogoUrl = f.logo_url || ((f.settings as Record<string, any> | null)?.logo_url ?? null);
         if (!resolvedLogoUrl) return;
         try {
@@ -635,7 +636,34 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       }));
     }
 
+    // Helper: reconstruct firm address exactly like single-invoice path
+    const buildFirmAddress = (firm: any): string => {
+      if (!firm?.address) return "";
+      const addr = firm.address as any;
+      const addrLine = addr.line || addr.line1 || "";
+      const cityName = addr.city || "";
+      const cityAlreadyInAddress = cityName && addrLine.toLowerCase().includes(cityName.toLowerCase());
+      const cityPinPart = cityAlreadyInAddress ? "" : [cityName, addr.pincode].filter(Boolean).join(" \u2013 ");
+      const rawLines = [addrLine, addr.line2, cityPinPart].filter(Boolean);
+      // balanceAddressLines logic inline
+      const balanced = (() => {
+        if (rawLines.length < 2) return rawLines;
+        const firstTwo = rawLines.slice(0, -1);
+        const lastLine = rawLines[rawLines.length - 1];
+        if (firstTwo.length === 1) {
+          const words = firstTwo[0].split(/\s+/);
+          if (words.length > 6) {
+            const mid = Math.ceil(words.length / 2);
+            return [words.slice(0, mid).join(" "), words.slice(mid).join(" "), lastLine];
+          }
+        }
+        return rawLines;
+      })();
+      return balanced.join(", ");
+    };
+
     const zip = new JSZip();
+    let successCount = 0;
     for (let i = 0; i < fullInvoices.length; i++) {
       const inv = fullInvoices[i];
       const clientName = clientMap[inv.client_id || ""]?.name || inv.to_name || "Unknown";
@@ -644,10 +672,22 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
       try {
         const sourceFirm = inv.firm_id ? (firmDataCache[inv.firm_id] || null) : null;
+        // Reconstruct address from firm data (same as single-invoice path) to ensure consistency
+        const firmAddress = sourceFirm ? buildFirmAddress(sourceFirm) : null;
+        const firmSettings = sourceFirm ? (sourceFirm.settings as Record<string, any> | null) : null;
+        const billingEmail = firmSettings?.billing_email || sourceFirm?.email || "";
+        const billingContact = firmSettings?.billing_contact || sourceFirm?.phone || "";
         const invWithLogo = {
           ...inv,
+          // Override with current firm data to match single-invoice rendering
+          from_firm_name: inv.from_firm_name || sourceFirm?.display_name || sourceFirm?.name || "",
+          from_address: firmAddress || inv.from_address || "",
+          from_gstin: inv.from_gstin || sourceFirm?.gstin || "",
+          from_pan: inv.from_pan || sourceFirm?.pan || "",
+          from_email: inv.from_email || billingEmail,
+          from_phone: inv.from_phone || billingContact,
           logo_url: inv.firm_id ? (firmLogoMap[inv.firm_id] || null) : null,
-          firm_settings: sourceFirm ? (sourceFirm.settings as Record<string, any> | null) : null,
+          firm_settings: firmSettings,
         };
         console.log(`[BulkPDF] Generating ${inv.invoice_no || inv.id} (${i + 1}/${fullInvoices.length})`);
         const pdfBlob = await generateInvoicePdfBlob(invWithLogo as any);
@@ -658,13 +698,23 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           const retryBlob = await generateInvoicePdfBlob(invWithLogo as any);
           const filename = invoicePdfFilename(inv.invoice_no, clientName);
           zip.file(filename, retryBlob);
+          successCount++;
+          console.log(`[BulkPDF] Added ${filename} after retry (${retryBlob.size} bytes)`);
         } else {
           const filename = invoicePdfFilename(inv.invoice_no, clientName);
           zip.file(filename, pdfBlob);
+          successCount++;
+          console.log(`[BulkPDF] Added ${filename} (${pdfBlob.size} bytes)`);
         }
       } catch (err) {
         console.error("[BulkPDF] PDF generation failed for", inv.invoice_no, err);
       }
+    }
+
+    if (successCount === 0) {
+      setBulkZipProgress({ current: 0, total: 0, active: false });
+      toast({ title: "PDF generation failed for all selected invoices", variant: "destructive" });
+      return;
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
@@ -675,7 +725,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     a.click();
     URL.revokeObjectURL(url);
     setBulkZipProgress({ current: 0, total: 0, active: false });
-    toast({ title: `Downloaded ${fullInvoices.length} invoices as PDF` });
+    toast({ title: `Downloaded ${successCount} invoices as PDF` });
   };
 
   // Bulk download ZIP (selected invoices — finalized only)
