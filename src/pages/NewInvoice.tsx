@@ -306,10 +306,13 @@ const NewInvoice = () => {
       const { data } = await supabase.from("firms").select("id, name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings").order("name");
       const firms = (data || []) as Firm[];
       setFirmsList(firms);
-      if (user?.firm_id) setSelectedFirmId(user.firm_id);
-      else if (firms.length > 0) setSelectedFirmId(firms[0].id);
+      // Don't override selectedFirmId in edit mode — it will be set from the invoice record
+      if (!isEdit) {
+        if (user?.firm_id) setSelectedFirmId(user.firm_id);
+        else if (firms.length > 0) setSelectedFirmId(firms[0].id);
+      }
     })();
-  }, [user?.firm_id]);
+  }, [user?.firm_id, isEdit]);
 
   useEffect(() => {
     if (!selectedFirmId) return;
@@ -626,7 +629,12 @@ const NewInvoice = () => {
   const firmAddr = firm?.address as any;
   const firmAddressLines = useMemo(() => {
     if (!firmAddr) return [];
-    const rawLines = [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean);
+    const addrLine = firmAddr.line || firmAddr.line1 || "";
+    const cityName = firmAddr.city || "";
+    // Avoid duplicating city if already present in address line
+    const cityAlreadyInAddress = cityName && addrLine.toLowerCase().includes(cityName.toLowerCase());
+    const cityPinPart = cityAlreadyInAddress ? "" : [cityName, firmAddr.pincode].filter(Boolean).join(" \u2013 ");
+    const rawLines = [addrLine, firmAddr.line2, cityPinPart].filter(Boolean);
     return balanceAddressLines(rawLines);
   }, [firmAddr]);
   const firmFullAddress = firmAddressLines.join(", ");
