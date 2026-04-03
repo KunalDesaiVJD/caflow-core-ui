@@ -93,9 +93,11 @@ const GROUP_NAME_HINTS = [
   "duties & taxes","bank accounts","bank balances","bank od",
   // Standard Tally single-child sub-group names that should never be de-grouped
   "cash-in-hand","cash in hand",
+  "deposits","deposit","fixed deposit",
   "deposits (asset)","deposits (assets)",
   "opening stock","closing stock",
   "secured loans","unsecured loans",
+  "advances","advance",
 ];
 
 function looksLikeGroupName(name: string): boolean {
@@ -572,6 +574,24 @@ serve(async (req) => {
       if (engId || clientId) {
         // Delete old hierarchy nodes then re-insert for correct tree view
         if (engId) {
+          // Ensure a batch record exists in ledger_import_batches before inserting
+          // tb_hierarchy_nodes (FK constraint requires it)
+          await supabase.from("ledger_import_batches").upsert({
+            id: bId,
+            engagement_id: engId,
+            ...(firmId && { firm_id: firmId }),
+            original_filename: fnLower,
+            import_type: "trial_balance",
+            processing_status: "complete",
+            status: "complete",
+            total_rows: nodes.length,
+            leaf_rows: lfs.length,
+            processed_rows: nodes.length,
+            row_count: nodes.length,
+            error_log: [],
+            imported_at: new Date().toISOString(),
+          }, { onConflict: "id" });
+
           await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", engId);
           const hRows = nodes.map((nd, i) => ({
             engagement_id: engId,
@@ -844,6 +864,23 @@ serve(async (req) => {
       // ── Also save to tb_hierarchy_nodes so data persists across page reloads ──
       if (engId) {
         const batchId = result.batchId;
+        // Ensure a batch record exists (FK constraint on tb_hierarchy_nodes)
+        await supabase.from("ledger_import_batches").upsert({
+          id: batchId,
+          engagement_id: engId,
+          ...(firmId && { firm_id: firmId }),
+          original_filename: fileName || "file",
+          import_type: "trial_balance",
+          processing_status: "complete",
+          status: "complete",
+          total_rows: nodes.length,
+          leaf_rows: nodes.filter((n: any) => n.isLeaf).length,
+          processed_rows: nodes.length,
+          row_count: nodes.length,
+          error_log: [],
+          imported_at: new Date().toISOString(),
+        }, { onConflict: "id" });
+
         await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", engId);
         const hRows = nodes.map((nd: any, i: number) => ({
           engagement_id:    engId,

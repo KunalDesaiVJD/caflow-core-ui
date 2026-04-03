@@ -484,6 +484,42 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   //    allowed to pick them as parents regardless of their parentNodeId.
   const repaired = repairOrphanedLeaves(repairOrphanedGroups(base));
   const activeNodes = repaired.map((node) => ({ ...node }));
+
+  // ── Fix: promote mis-classified aggregate leaf sub-groups ─────────────────
+  // The edge function's FM-13 pass sometimes incorrectly demotes a Tally
+  // sub-group (e.g. "FIXED DEPOSITS") from a group to a leaf when that sub-group
+  // has exactly one child with the same closing value. Detected pattern:
+  //   • A leaf node L with looksLikeAggregateName() = true
+  //   • A sibling leaf S where |S.closing| ≈ |L.closing| and S is not aggregate-named
+  // Fix: promote L to non-leaf and re-parent S under L so the sub-group is
+  //      nested correctly and group totals reconcile.
+  {
+    const siblingsByParent = new Map<string | null, TbHierarchyNodeLike[]>();
+    for (const nd of activeNodes) {
+      const key = nd.parentNodeId ?? null;
+      const arr = siblingsByParent.get(key) ?? [];
+      arr.push(nd);
+      siblingsByParent.set(key, arr);
+    }
+    for (const nd of activeNodes) {
+      if (!nd.isLeaf) continue;
+      if (!looksLikeAggregateName(nd.name)) continue;
+      const siblings = (siblingsByParent.get(nd.parentNodeId ?? null) ?? [])
+        .filter(s => s.nodeId !== nd.nodeId);
+      const candidates = siblings.filter(
+        s => s.isLeaf &&
+             !looksLikeAggregateName(s.name) &&
+             Math.abs(Math.abs(s.closing) - Math.abs(nd.closing)) < 1,
+      );
+      if (candidates.length > 0) {
+        nd.isLeaf = false; // promote to group
+        for (const child of candidates) {
+          child.parentNodeId = nd.nodeId; // re-parent under promoted group
+        }
+      }
+    }
+  }
+
   const childrenByParent = new Map<string, TbHierarchyNodeLike[]>();
 
   for (const node of activeNodes) {
