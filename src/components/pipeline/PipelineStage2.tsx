@@ -319,6 +319,56 @@ function TbTreeRow({ node, allNodes, depth = 0 }:
   );
 }
 
+// ─── Prior Period TB: full-column comparison builder ───
+function buildComparativeResultFromLeaves(
+  priorLeaves: any[],
+  currentLeaves: any[],
+  priorFY: string,
+) {
+  const priorMap = new Map<string, any>();
+  for (const n of priorLeaves) priorMap.set(String(n.name).toLowerCase().trim(), n);
+
+  const verificationRows: any[] = [];
+  let matched = 0, mismatched = 0;
+
+  for (const cur of currentLeaves) {
+    const key   = (cur.name || "").toLowerCase().trim();
+    const prior = priorMap.get(key);
+    if (!prior) continue;
+
+    const pyClosing  = prior.closing  || 0;
+    const cyOpening  = cur.opening    || 0;
+    const openingVar = cyOpening - pyClosing;
+    const closingVar = (cur.closing   || 0) - pyClosing;
+    const isMismatch = Math.abs(openingVar) >= 1;
+    // significant = opening variance > 10 % of prior closing OR > ₹ 10,000
+    const significantVar = Math.abs(openingVar) > Math.max(Math.abs(pyClosing) * 0.1, 10000);
+
+    if (isMismatch) mismatched++; else matched++;
+
+    verificationRows.push({
+      name:        cur.name,
+      group:       cur.primaryGroup  || prior.primaryGroup  || "",
+      bsPlSide:    cur.bsPlSide      || prior.bsPlSide      || "",
+      pyOpening:   prior.opening     || 0,
+      pyTxnDebit:  prior.txnDebit    || 0,
+      pyTxnCredit: prior.txnCredit   || 0,
+      pyClosing,
+      cyOpening,
+      cyTxnDebit:  cur.txnDebit      || 0,
+      cyTxnCredit: cur.txnCredit     || 0,
+      cyClosing:   cur.closing       || 0,
+      openingVar,
+      closingVar,
+      isMismatch,
+      significantVar,
+    });
+  }
+
+  verificationRows.sort((a, b) => Math.abs(b.openingVar) - Math.abs(a.openingVar));
+  return { verificationRows, matched, mismatched, total: matched + mismatched, priorFY };
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -368,6 +418,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const [comparativeResult, setComparativeResult] = useState<any>(null);
   const [comparativeProcessing, setComparativeProcessing] = useState(false);
   const comparativeFileRef = useRef<HTMLInputElement>(null);
+  const [deletingPriorTb, setDeletingPriorTb] = useState(false);
+  const [showDeletePriorConfirm, setShowDeletePriorConfirm] = useState(false);
   const [deletingTb, setDeletingTb] = useState(false);
   const [tbStatusMsg, setTbStatusMsg] = useState('');
   const [aiClassifying, setAiClassifying] = useState(false);
@@ -522,6 +574,29 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     enabled: !!engagementId && showFlagged,
   });
 
+  // ─── Stored Prior Period TB nodes ───
+  const { data: storedPriorTbNodes = [], refetch: refetchPriorTb } = useQuery({
+    queryKey: ["prior-tb-hierarchy-nodes", engagementId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("tb_hierarchy_nodes")
+        .select("tally_group_name, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
+        .eq("engagement_id", `${engagementId}_prior`)
+        .eq("is_leaf", true)
+        .order("tally_group_name");
+      return (data || []).map((row: any) => ({
+        name:        row.tally_group_name  as string,
+        opening:     (row.opening_balance  || 0) as number,
+        txnDebit:    (row.txn_debit        || 0) as number,
+        txnCredit:   (row.txn_credit       || 0) as number,
+        closing:     (row.closing_balance  || 0) as number,
+        primaryGroup:(row.primary_group    || "") as string,
+        bsPlSide:    (row.bs_pl_side       || "") as string,
+      }));
+    },
+    enabled: !!engagementId,
+  });
+
   // ─── Ledger import batches ───
   const { data: ledgerBatches } = useQuery({
     queryKey: ["ledger-batches", engagementId],
@@ -576,6 +651,17 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       setTbStep(5);
     }
   }, [existingTb, tbPresentation]);
+
+  // ─── Auto-rebuild comparative result from stored prior TB on load ───
+  useEffect(() => {
+    if (!storedPriorTbNodes || storedPriorTbNodes.length === 0) return;
+    const currentLeaves = (tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter(n => n.isLeaf);
+    if (currentLeaves.length === 0) return;
+    const fy = engagement?.financial_year || "2024-25";
+    const [startY, endY] = fy.split("-");
+    const priorFY = `${parseInt(startY) - 1}-${(parseInt(endY) - 1).toString().padStart(2, "0")}`;
+    setComparativeResult(buildComparativeResultFromLeaves(storedPriorTbNodes, currentLeaves, priorFY));
+  }, [storedPriorTbNodes, tbHierarchyNodes, storedTbHierarchy]);
 
   // ─── Replace confirmation state ───
   const [showReplaceDialog, setShowReplaceDialog] = useState(false);
@@ -1621,38 +1707,50 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       if (error) throw new Error(error.message || "Prior year parse error");
       if (!data?.success) throw new Error(data?.error || "Prior year parse failed");
 
-      const priorLeaves: any[] = (data.hierarchy || []).filter((n: any) => n.isLeaf);
+      // Map all fields from the edge-function hierarchy response
+      const priorLeaves: any[] = (data.hierarchy || [])
+        .filter((n: any) => n.isLeaf)
+        .map((n: any) => ({
+          name:        n.name         || "",
+          opening:     n.opening      || 0,
+          txnDebit:    n.txnDebit     || n.debit  || 0,
+          txnCredit:   n.txnCredit    || n.credit || 0,
+          closing:     n.closing      || 0,
+          primaryGroup:n.primaryGroup || n.group  || "",
+          bsPlSide:    n.bsPlSide     || n.bs_pl_side || "",
+        }));
+
       const currentLeaves = (tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter(n => n.isLeaf);
-      const priorClosingMap = new Map<string, number>();
-      for (const n of priorLeaves) {
-        priorClosingMap.set(String(n.name).toLowerCase().trim(), n.closing || 0);
-      }
-
-      const verificationRows: any[] = [];
-      let matched = 0, mismatched = 0;
-      for (const n of currentLeaves) {
-        const key = n.name.toLowerCase().trim();
-        const pyClosing = priorClosingMap.get(key);
-        if (pyClosing === undefined) continue;
-        const cyOpening = n.opening || 0;
-        const diff = Math.abs(Math.abs(cyOpening) - Math.abs(pyClosing));
-        if (diff < 1) matched++; else mismatched++;
-        verificationRows.push({ name: n.name, pyClosing, cyOpening, diff: diff < 1 ? 0 : diff });
-      }
-      verificationRows.sort((a: any, b: any) => b.diff - a.diff);
-
-      setComparativeResult({
-        verificationRows: verificationRows.slice(0, 100),
-        matched,
-        mismatched,
-        total: matched + mismatched,
-        priorFY,
-      });
-      toast.success(`Prior year TB imported. ${mismatched} opening balance mismatches found.`);
+      const result = buildComparativeResultFromLeaves(priorLeaves, currentLeaves, priorFY);
+      setComparativeResult(result);
+      setComparativeFile(null);
+      setShowComparativeTb(false);
+      refetchPriorTb();
+      toast.success(`Prior year TB imported. ${result.mismatched} opening balance mismatches found.`);
     } catch (err: any) {
       toast.error(err.message || "Prior year import failed");
     } finally {
       setComparativeProcessing(false);
+    }
+  };
+
+  // ─── Delete Prior Period TB ───
+  const handleDeletePriorTb = async () => {
+    setDeletingPriorTb(true);
+    try {
+      const priorEngId = `${engagementId}_prior`;
+      await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", priorEngId);
+      await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", priorEngId);
+      setComparativeResult(null);
+      setComparativeFile(null);
+      setShowComparativeTb(false);
+      setShowDeletePriorConfirm(false);
+      await refetchPriorTb();
+      toast.success("Prior year TB deleted successfully");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete prior year TB");
+    } finally {
+      setDeletingPriorTb(false);
     }
   };
 
@@ -2513,25 +2611,58 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               {/* ─── Comparative / Prior Period TB ─── */}
               <Card>
                 <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <CardTitle className="text-sm flex items-center gap-2">
                       <CalendarDays size={14} /> Comparative / Prior Period TB
+                      {comparativeResult && (
+                        <Badge className="bg-primary/10 text-primary text-[10px] ml-1">
+                          {comparativeResult.priorFY} loaded
+                        </Badge>
+                      )}
                     </CardTitle>
-                    <Button variant="ghost" size="sm" onClick={() => setShowComparativeTb(!showComparativeTb)}>
-                      {showComparativeTb ? "Hide" : "Add Prior Year TB"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {comparativeResult && !showComparativeTb && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={() => setShowDeletePriorConfirm(true)}
+                            disabled={deletingPriorTb}
+                          >
+                            {deletingPriorTb
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <X size={12} />}
+                            Delete
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={() => setShowComparativeTb(true)}
+                          >
+                            <RefreshCw size={12} /> Re-upload
+                          </Button>
+                        </>
+                      )}
+                      {!comparativeResult && (
+                        <Button variant="ghost" size="sm" onClick={() => setShowComparativeTb(!showComparativeTb)}>
+                          {showComparativeTb ? "Hide" : "Add Prior Year TB"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
+
+                {/* Upload form — shown when no result yet, or when Re-upload clicked */}
                 {showComparativeTb && (
                   <CardContent className="space-y-4">
                     <Alert className="py-2">
                       <AlertDescription className="text-xs">
-                        Upload the previous year's Trial Balance to enable:
-                        opening balance verification, comparative financial statements,
-                        and year-on-year scrutiny rules.
+                        Upload the previous year's Trial Balance to enable opening balance
+                        verification, comparative financial statements, and year-on-year scrutiny rules.
                       </AlertDescription>
                     </Alert>
-
                     <div
                       className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/30"
                       onClick={() => comparativeFileRef.current?.click()}
@@ -2540,62 +2671,119 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                       <p className="text-sm text-muted-foreground">
                         {comparativeFile ? comparativeFile.name : "Upload Prior Year TB (Excel or PDF)"}
                       </p>
-                      <input ref={comparativeFileRef} type="file" className="hidden"
+                      <input
+                        ref={comparativeFileRef}
+                        type="file"
+                        className="hidden"
                         accept=".xlsx,.xls,.pdf"
-                        onChange={e => setComparativeFile(e.target.files?.[0] || null)} />
+                        onChange={e => setComparativeFile(e.target.files?.[0] || null)}
+                      />
                     </div>
-
                     {comparativeFile && (
                       <Button size="sm" onClick={handleComparativeImport} disabled={comparativeProcessing} className="w-full gap-1">
                         {comparativeProcessing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
                         Import Prior Year TB
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full text-xs"
+                      onClick={() => { setShowComparativeTb(false); setComparativeFile(null); }}
+                    >
+                      Cancel
+                    </Button>
+                  </CardContent>
+                )}
 
-                    {comparativeResult && (
-                      <div className="space-y-2">
-                        <h4 className="text-sm font-semibold">Opening Balance Verification</h4>
-                        <p className="text-xs text-muted-foreground">
-                          Comparing current year opening balances against prior year closing balances.
-                          Mismatches indicate regrouping or data entry errors.
-                        </p>
-                        <div className="border rounded-lg overflow-auto max-h-64">
-                          <table className="w-full text-xs">
-                            <thead className="bg-muted">
-                              <tr>
-                                <th className="text-left p-2">Ledger Name</th>
-                                <th className="text-right p-2">Prior Year Closing</th>
-                                <th className="text-right p-2">Current Year Opening</th>
-                                <th className="text-right p-2">Difference</th>
-                                <th className="text-center p-2">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {comparativeResult.verificationRows.map((row: any, i: number) => (
-                                <tr key={i} className={cn("border-t", row.diff !== 0 && "bg-destructive/5")}>
-                                  <td className="p-2">{row.name}</td>
-                                  <td className="p-2 text-right font-mono">{row.pyClosing?.toLocaleString("en-IN")}</td>
-                                  <td className="p-2 text-right font-mono">{row.cyOpening?.toLocaleString("en-IN")}</td>
-                                  <td className={cn("p-2 text-right font-mono", row.diff !== 0 ? "text-destructive font-bold" : "text-primary")}>
-                                    {row.diff !== 0 ? `₹${Math.abs(row.diff).toLocaleString("en-IN")}` : "✓"}
-                                  </td>
-                                  <td className="p-2 text-center">
-                                    <Badge className={row.diff === 0 ? "bg-primary/10 text-primary text-[9px]" : "bg-destructive/10 text-destructive text-[9px]"}>
-                                      {row.diff === 0 ? "Match" : "Mismatch"}
-                                    </Badge>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="flex gap-4 text-xs">
-                          <span className="text-primary">✓ Matched: {comparativeResult.matched}</span>
-                          <span className="text-destructive">✗ Mismatched: {comparativeResult.mismatched}</span>
-                          <span className="text-muted-foreground">Total compared: {comparativeResult.total}</span>
-                        </div>
-                      </div>
-                    )}
+                {/* Full-column comparison table — shown after data is loaded */}
+                {comparativeResult && !showComparativeTb && (
+                  <CardContent className="space-y-3 pt-0">
+                    <div className="flex gap-4 text-xs flex-wrap">
+                      <span className="text-primary font-medium">✓ Matched: {comparativeResult.matched}</span>
+                      <span className="text-destructive font-medium">✗ Mismatched: {comparativeResult.mismatched}</span>
+                      <span className="text-muted-foreground">Total compared: {comparativeResult.total}</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Opening variance = CY Opening − PY Closing.{" "}
+                      <span className="text-amber-600 font-medium">Amber</span> = significant variance (&gt;10% or &gt;₹10,000).{" "}
+                      <span className="text-destructive font-medium">Red</span> = any mismatch ≥ ₹1.
+                    </p>
+                    <div className="border rounded-lg overflow-auto max-h-72">
+                      <table className="w-full text-xs min-w-[1000px]">
+                        <thead className="bg-muted sticky top-0">
+                          <tr>
+                            <th className="text-left p-2 min-w-[160px]">Account Name</th>
+                            <th className="text-left p-2 min-w-[100px]">Group</th>
+                            <th className="text-right p-2 min-w-[90px]">PY Opening</th>
+                            <th className="text-right p-2 min-w-[80px]">PY Txn Dr</th>
+                            <th className="text-right p-2 min-w-[80px]">PY Txn Cr</th>
+                            <th className="text-right p-2 min-w-[90px]">PY Closing</th>
+                            <th className="text-right p-2 min-w-[90px]">CY Opening</th>
+                            <th className="text-right p-2 min-w-[100px] font-bold text-foreground">Opening Var</th>
+                            <th className="text-right p-2 min-w-[80px]">CY Txn Dr</th>
+                            <th className="text-right p-2 min-w-[80px]">CY Txn Cr</th>
+                            <th className="text-right p-2 min-w-[90px]">CY Closing</th>
+                            <th className="text-right p-2 min-w-[90px]">Closing Var</th>
+                            <th className="text-center p-2 min-w-[70px]">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {comparativeResult.verificationRows.map((row: any, i: number) => (
+                            <tr
+                              key={i}
+                              className={cn(
+                                "border-t",
+                                row.significantVar
+                                  ? "bg-amber-50 dark:bg-amber-950/20"
+                                  : row.isMismatch
+                                  ? "bg-destructive/5"
+                                  : ""
+                              )}
+                            >
+                              <td className="p-2 font-medium">{row.name}</td>
+                              <td className="p-2 text-muted-foreground text-[11px]">{row.group}</td>
+                              <td className="p-2 text-right font-mono">{(row.pyOpening || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono text-muted-foreground">{(row.pyTxnDebit || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono text-muted-foreground">{(row.pyTxnCredit || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono">{(row.pyClosing || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono">{(row.cyOpening || 0).toLocaleString("en-IN")}</td>
+                              <td className={cn("p-2 text-right font-mono font-semibold",
+                                row.significantVar
+                                  ? "text-amber-600"
+                                  : row.isMismatch
+                                  ? "text-destructive"
+                                  : "text-primary"
+                              )}>
+                                {row.openingVar !== 0
+                                  ? (row.openingVar > 0 ? "+" : "") + row.openingVar.toLocaleString("en-IN")
+                                  : "✓"}
+                              </td>
+                              <td className="p-2 text-right font-mono text-muted-foreground">{(row.cyTxnDebit || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono text-muted-foreground">{(row.cyTxnCredit || 0).toLocaleString("en-IN")}</td>
+                              <td className="p-2 text-right font-mono">{(row.cyClosing || 0).toLocaleString("en-IN")}</td>
+                              <td className={cn("p-2 text-right font-mono",
+                                Math.abs(row.closingVar || 0) >= 1
+                                  ? "text-amber-600 font-medium"
+                                  : "text-muted-foreground"
+                              )}>
+                                {(row.closingVar || 0) !== 0
+                                  ? (row.closingVar > 0 ? "+" : "") + row.closingVar.toLocaleString("en-IN")
+                                  : "—"}
+                              </td>
+                              <td className="p-2 text-center">
+                                <Badge className={row.isMismatch
+                                  ? "bg-destructive/10 text-destructive text-[9px]"
+                                  : "bg-primary/10 text-primary text-[9px]"
+                                }>
+                                  {row.isMismatch ? "Mismatch" : "Match"}
+                                </Badge>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </CardContent>
                 )}
               </Card>
@@ -3093,6 +3281,26 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
             <Button variant="outline" onClick={() => setTbShowOverride(false)}>Cancel</Button>
             <Button onClick={handleTbOverride} disabled={!tbOverrideJustification.trim()}>
               Override & Proceed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Prior Period TB Confirmation */}
+      <Dialog open={showDeletePriorConfirm} onOpenChange={setShowDeletePriorConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Prior Year Trial Balance?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently remove the prior year TB data for this engagement.
+            The comparison table will be cleared. You can re-upload at any time.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeletePriorConfirm(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeletePriorTb} disabled={deletingPriorTb}>
+              {deletingPriorTb ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+              Delete Prior Year TB
             </Button>
           </DialogFooter>
         </DialogContent>
