@@ -171,6 +171,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [overrideReason, setOverrideReason] = useState("");
   const [overrideAmount, setOverrideAmount] = useState("");
 
+  // ─── Ledger Reclassify state ───
+  const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
+  const [reclassifyCode, setReclassifyCode] = useState<string>("");
+
   // ─── COA Mapping state ───
   // mapping: { [accountName]: { code, noteRef, scheduleRef, confidence } }
   const [coaMapping, setCoaMapping] = useState<Record<string, {
@@ -362,6 +366,74 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     setCoaMapping(newMapping);
     if (count > 0) toast.success(`Mapped ${count} similar accounts`);
     else toast.info("No similar unmapped accounts found");
+  };
+
+  // ═══════ RECLASSIFY LEDGER ═══════
+  const reclassifyAccount = async () => {
+    if (!reclassifyDialog || !reclassifyCode) return;
+    const { accountName } = reclassifyDialog;
+    const lineItem = LEAF_ITEMS.find(i => i.code === reclassifyCode);
+    if (!lineItem) return;
+
+    const newEntry = {
+      code: reclassifyCode,
+      noteRef: lineItem.noteRef,
+      scheduleRef: lineItem.scheduleRef || "",
+      confidence: "manual",
+    };
+    const newMapping = { ...coaMapping, [accountName]: newEntry };
+    setCoaMapping(newMapping);
+    // Auto-save to DB so the override survives page refresh
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: newMapping } as any).eq("id", engagementId);
+      toast.success(`Reclassified "${accountName}" → ${lineItem.name}`);
+    } catch (e: any) {
+      toast.error("Saved locally, failed to persist: " + e.message);
+    }
+    setReclassifyDialog(null);
+    setReclassifyCode("");
+  };
+
+  const resetToAuto = async (accountName: string) => {
+    const acct = tbAccounts.find(a => a.account_name === accountName);
+    if (!acct) return;
+    const name = acct.account_name.toLowerCase();
+    let bestMatch: { code: string; confidence: string } | null = null;
+    for (const rule of AUTO_MAP_RULES) {
+      if (rule.keywords.some(kw => name.includes(kw))) {
+        if (!bestMatch || confidenceRank(rule.confidence) > confidenceRank(bestMatch.confidence)) {
+          bestMatch = { code: rule.code, confidence: rule.confidence };
+        }
+      }
+    }
+
+    let newMapping: typeof coaMapping;
+    if (bestMatch) {
+      const lineItem = LEAF_ITEMS.find(i => i.code === bestMatch!.code);
+      newMapping = {
+        ...coaMapping,
+        [accountName]: {
+          code: bestMatch.code,
+          noteRef: lineItem?.noteRef || null,
+          scheduleRef: lineItem?.scheduleRef || "",
+          confidence: bestMatch.confidence,
+        },
+      };
+      toast.success(`Reset "${accountName}" → auto: ${lineItem?.name || bestMatch.code}`);
+    } else {
+      const updated = { ...coaMapping };
+      delete updated[accountName];
+      newMapping = updated;
+      toast.info(`Cleared "${accountName}" — no auto-mapping found`);
+    }
+    setCoaMapping(newMapping);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: newMapping } as any).eq("id", engagementId);
+    } catch (e: any) {
+      toast.error("Failed to persist reset: " + e.message);
+    }
+    setReclassifyDialog(null);
+    setReclassifyCode("");
   };
 
   // ═══════ COMPUTED FS AMOUNTS ═══════
@@ -615,6 +687,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   {filteredAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
+                    const isManualOverride = mapping?.confidence === "manual";
                     const lineItem = mapping ? LEAF_ITEMS.find(i => i.code === mapping.code) : null;
                     return (
                       <div
@@ -623,6 +696,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         className={cn(
                           "px-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors",
                           isSelected && "bg-primary/10 border-l-2 border-l-primary",
+                          !isSelected && isManualOverride && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
                           !mapping && "bg-destructive/5"
                         )}
                       >
@@ -631,21 +705,36 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             <p className="font-medium truncate">{acct.account_name}</p>
                             <p className="text-[10px] text-muted-foreground">{acct.account_group}</p>
                           </div>
-                          <div className="text-right shrink-0 ml-2">
-                            <p className={cn("font-mono text-[11px]", acct.balance >= 0 ? "text-foreground" : "text-destructive")}>
-                              ₹{Math.abs(acct.balance).toLocaleString("en-IN")}
-                            </p>
-                            {acct.balance < 0 && <span className="text-[9px] text-destructive">Cr</span>}
+                          <div className="flex items-center gap-1 shrink-0 ml-2">
+                            <div className="text-right">
+                              <p className={cn("font-mono text-[11px]", acct.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                ₹{Math.abs(acct.balance).toLocaleString("en-IN")}
+                              </p>
+                              {acct.balance < 0 && <span className="text-[9px] text-destructive">Cr</span>}
+                            </div>
+                            <button
+                              title="Reclassify ledger"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setReclassifyDialog({ accountName: acct.account_name });
+                                setReclassifyCode(mapping?.code || "");
+                              }}
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground ml-1"
+                            >
+                              <Pencil size={10} />
+                            </button>
                           </div>
                         </div>
                         {mapping ? (
                           <div className="flex items-center gap-1 mt-1">
                             <Badge variant="outline" className={cn("text-[8px] px-1",
-                              mapping.confidence === "high" ? "border-primary/40 text-primary" :
-                              mapping.confidence === "medium" ? "border-muted-foreground/40" :
-                              "border-destructive/40 text-destructive"
+                              isManualOverride
+                                ? "border-violet-400 text-violet-600 dark:text-violet-400"
+                                : mapping.confidence === "high" ? "border-primary/40 text-primary"
+                                : mapping.confidence === "medium" ? "border-muted-foreground/40"
+                                : "border-destructive/40 text-destructive"
                             )}>
-                              {mapping.confidence}
+                              {isManualOverride ? "✎ manual" : mapping.confidence}
                             </Badge>
                             <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
                             {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
@@ -908,6 +997,99 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Reclassify Ledger Dialog */}
+      <Dialog
+        open={!!reclassifyDialog}
+        onOpenChange={() => { setReclassifyDialog(null); setReclassifyCode(""); }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Reclassify Ledger Head</DialogTitle>
+          </DialogHeader>
+          {reclassifyDialog && (() => {
+            const currentMapping = coaMapping[reclassifyDialog.accountName];
+            const currentLineItem = currentMapping ? LEAF_ITEMS.find(i => i.code === currentMapping.code) : null;
+            const newLineItem = reclassifyCode ? LEAF_ITEMS.find(i => i.code === reclassifyCode) : null;
+            return (
+              <div className="space-y-4 py-1">
+                <div>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Account</p>
+                  <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Current FS Line Item</p>
+                    <p className="text-xs bg-muted rounded px-2 py-1.5 text-muted-foreground">
+                      {currentLineItem?.name || "— Unmapped —"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Current Note No.</p>
+                    <p className="text-xs bg-muted rounded px-2 py-1.5 text-muted-foreground">
+                      {currentMapping?.noteRef ? `Note ${currentMapping.noteRef}` : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">New FS Line Item <span className="text-destructive">*</span></Label>
+                  <Select value={reclassifyCode} onValueChange={setReclassifyCode}>
+                    <SelectTrigger className="h-8 text-xs mt-1">
+                      <SelectValue placeholder="Select FS Line Item…" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {LEAF_ITEMS.map(item => (
+                        <SelectItem key={item.code} value={item.code} className="text-xs">
+                          {item.noteRef ? `[N${item.noteRef}] ` : ""}{item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {newLineItem && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">New FS Line Item</p>
+                      <p className="text-xs bg-primary/5 rounded px-2 py-1.5 font-medium text-primary">{newLineItem.name}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">New Note No.</p>
+                      <p className="text-xs bg-primary/5 rounded px-2 py-1.5 font-medium text-primary">
+                        {newLineItem.noteRef ? `Note ${newLineItem.noteRef}` : "—"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
+            {coaMapping[reclassifyDialog?.accountName || ""]?.confidence === "manual" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1 text-xs"
+                onClick={() => resetToAuto(reclassifyDialog!.accountName)}
+              >
+                <RefreshCw size={12} /> Reset to Auto
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setReclassifyDialog(null); setReclassifyCode(""); }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" disabled={!reclassifyCode} onClick={reclassifyAccount} className="gap-1">
+              <Pencil size={12} /> Save Reclassification
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Manual Override Dialog */}
       <Dialog open={!!overrideDialog} onOpenChange={() => setOverrideDialog(null)}>
