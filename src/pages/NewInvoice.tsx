@@ -792,34 +792,72 @@ const NewInvoice = () => {
   }, [isEdit, sourceDocumentId]);
 
   const handleDownloadPdf = async () => {
-    const html = generateInvoiceHtml();
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    // CRITICAL: Do NOT use opacity:0 — html2canvas renders transparent content as blank PDF.
-    container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;pointer-events:none;z-index:-9999;";
-    document.body.appendChild(container);
+    const fullHtml = generateInvoiceHtml();
+
+    // Extract body content from full HTML document
+    const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
+
+    // Create wrapper at position (0,0) — visible to html2canvas but behind page content
+    const wrapper = document.createElement("div");
+    wrapper.id = "__pdf_export_wrapper__";
+    wrapper.style.cssText = [
+      "position:absolute", "left:0", "top:0", "width:794px",
+      "z-index:-1", "pointer-events:none", "background:#ffffff", "overflow:visible",
+    ].join(";");
+
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `
+      #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
+      #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
+      #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
+      #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
+    `;
+    wrapper.appendChild(styleEl);
+
+    const contentDiv = document.createElement("div");
+    contentDiv.innerHTML = bodyContent;
+    wrapper.appendChild(contentDiv);
+
+    document.body.appendChild(wrapper);
+
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    await new Promise(r => setTimeout(r, 100));
-    const imgs = container.querySelectorAll("img");
+    await new Promise(r => setTimeout(r, 500));
+    try { await document.fonts.ready; } catch (e) {}
+
+    const imgs = wrapper.querySelectorAll("img");
     if (imgs.length > 0) {
       await Promise.all(Array.from(imgs).map(img =>
-        img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
+        img.complete ? Promise.resolve() : new Promise<void>(r => {
+          img.onload = () => r(); img.onerror = () => r();
+          setTimeout(r, 3000);
+        })
       ));
     }
-    const rect = container.getBoundingClientRect();
-    console.log(`[PDF] Single export container: ${rect.width}x${rect.height}`);
+
+    const rect = wrapper.getBoundingClientRect();
+    console.log(`[PDF] Single export wrapper: ${rect.width}x${rect.height}, content: ${wrapper.innerHTML.length}`);
+
     try {
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
         margin: [10, 10, 20, 10],
         filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: "#ffffff",
+          logging: false,
+          width: 794,
+          windowWidth: 794,
+        },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(container).save();
+      }).from(wrapper).save();
     } finally {
-      document.body.removeChild(container);
+      document.body.removeChild(wrapper);
     }
   };
 

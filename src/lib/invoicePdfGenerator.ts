@@ -252,33 +252,77 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
  * Generate a PDF Blob from an invoice database record
  */
 export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> {
-  const html = generateInvoiceHtmlFromRecord(inv);
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  // CRITICAL: Do NOT use opacity:0 — html2canvas captures transparent content as blank.
-  // Position off-screen instead so element stays "visible" to the renderer.
-  container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;pointer-events:none;z-index:-9999;";
-  document.body.appendChild(container);
+  const fullHtml = generateInvoiceHtmlFromRecord(inv);
 
-  // Wait for layout + paint
+  // Extract the body content from the full HTML document string.
+  // The generated HTML is a full <!DOCTYPE> document but we need just the inner content
+  // to inject into a div (since innerHTML strips html/head/body tags).
+  // Also extract the <style> block to apply it properly.
+  const styleMatch = fullHtml.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+  const styleContent = styleMatch ? styleMatch[1] : '';
+  const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
+
+  // Create a wrapper div that sits in the document at position (0,0)
+  // VISIBLE to html2canvas but behind everything visually.
+  // KEY: Do NOT use position:fixed (clips to viewport) or left:-9999px (off-canvas).
+  const wrapper = document.createElement("div");
+  wrapper.id = "__pdf_export_wrapper__";
+  wrapper.style.cssText = [
+    "position:absolute",
+    "left:0",
+    "top:0",
+    "width:794px",
+    "z-index:-1",
+    "pointer-events:none",
+    "background:#ffffff",
+    "overflow:visible",
+  ].join(";");
+
+  // Inject scoped styles + content
+  const styleEl = document.createElement("style");
+  styleEl.textContent = `
+    #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
+    #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
+    #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
+    #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
+  `;
+  wrapper.appendChild(styleEl);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.innerHTML = bodyContent;
+  wrapper.appendChild(contentDiv);
+
+  document.body.appendChild(wrapper);
+
+  // Wait for layout + paint + fonts
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  // Small extra delay to ensure complex HTML fully paints
-  await new Promise(r => setTimeout(r, 100));
+  await new Promise(r => setTimeout(r, 500));
+
+  try {
+    await document.fonts.ready;
+  } catch (e) {
+    // fonts.ready not supported in all browsers
+  }
 
   // Wait for images to load
-  const imgs = container.querySelectorAll("img");
+  const imgs = wrapper.querySelectorAll("img");
   if (imgs.length > 0) {
     await Promise.all(Array.from(imgs).map(img =>
-      img.complete ? Promise.resolve() : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); })
+      img.complete ? Promise.resolve() : new Promise<void>(r => {
+        img.onload = () => r();
+        img.onerror = () => r();
+        setTimeout(r, 3000); // max 3s per image
+      })
     ));
   }
 
-  // Debug: log container dimensions
-  const rect = container.getBoundingClientRect();
-  console.log(`[PDF] Container dimensions: ${rect.width}x${rect.height}, children: ${container.childElementCount}`);
+  // Debug: verify the content rendered
+  const rect = wrapper.getBoundingClientRect();
+  console.log(`[PDF] Export wrapper: ${rect.width}x${rect.height}, innerHTML length: ${wrapper.innerHTML.length}`);
 
-  if (rect.height < 10) {
-    console.warn("[PDF] Container height is suspiciously small — content may not have rendered");
+  if (rect.height < 50) {
+    console.error("[PDF] Export wrapper height is too small — content may not have rendered");
   }
 
   try {
@@ -286,19 +330,27 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
     const blob: Blob = await html2pdf().set({
       margin: [10, 10, 20, 10],
       image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, logging: false },
+      html2canvas: {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+        width: 794,
+        windowWidth: 794,
+      },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-    }).from(container).outputPdf('blob');
+    }).from(wrapper).outputPdf('blob');
 
     console.log(`[PDF] Generated blob size: ${blob.size} bytes`);
     if (blob.size < 5000) {
-      console.warn("[PDF] Generated PDF is suspiciously small — may be blank");
+      console.warn("[PDF] WARNING: Generated PDF may be blank (size < 5KB)");
     }
 
     return blob;
   } finally {
-    document.body.removeChild(container);
+    document.body.removeChild(wrapper);
   }
 }
 
