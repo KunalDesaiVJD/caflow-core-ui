@@ -254,7 +254,7 @@ export function downloadPdfBlob(blob: Blob, filename: string) {
   downloadBlob(blob, filename);
 }
 
-function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
+export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const docType = inv.document_type || "invoice";
   const heading = DOC_HEADINGS[docType] || "TAX INVOICE";
   const firmName = inv.from_firm_name || "Firm";
@@ -284,6 +284,10 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
 
   const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
+  const identityMarkup = logoUrl
+    ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />`
+    : `<p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>`;
+
   const itemRows = items.map((item: any, i: number) => {
     const gstCol = hasGst
       ? `<td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent || 0}%</td>`
@@ -291,9 +295,11 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
     const itemTotal = hasGst ? (item.total || item.taxable_value || 0) : (item.taxable_value || item.rate || 0);
     return `<tr>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
-      <td style="border:1px solid #bbb;padding:6px 8px;vertical-align:middle;font-size:11px">
-        ${item.description || ""}
-        ${item.description_details ? `<div style="font-size:10px;color:#555;margin-top:2px;white-space:pre-line">${item.description_details}</div>` : ""}
+      <td style="border:1px solid #bbb;padding:0;vertical-align:middle;font-size:11px">
+        <div style="display:flex;flex-direction:column;justify-content:center;min-height:38px;padding:8px;line-height:1.4">
+          <div>${item.description || ""}</div>
+          ${item.description_details ? `<div style="font-size:10px;color:#555;white-space:pre-line">${item.description_details}</div>` : ""}
+        </div>
       </td>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code || ""}</td>
       <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity || 1).toFixed(2)}</td>
@@ -337,7 +343,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
       @media print { @page { size: A4; margin: 20mm 15mm 20mm 15mm; } body { margin: 0; padding: 0; } }
       @media screen { body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; } }
     </style></head><body>
-    <div style="border:2px solid #7ba4d9;padding:16px;margin:0">
+      <div style="padding:0;margin:0">
 
     <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0;line-height:1.2">
       <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
@@ -345,8 +351,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
-        ${logoUrl ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
-        <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
+        ${identityMarkup}
         ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5">${firmAddr}</p>` : ""}
         ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
       </div>
@@ -434,7 +439,7 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
  * Generate a PDF Blob from an invoice database record
  */
 export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> {
-  const fullHtml = generateInvoiceHtmlFromRecord(inv);
+  const fullHtml = buildInvoiceHtml(inv);
   return generatePdfBlobFromHtml(fullHtml, `Bulk invoice ${inv.invoice_no || "draft"}`);
 }
 
