@@ -792,40 +792,53 @@ const NewInvoice = () => {
   }, [isEdit, sourceDocumentId]);
 
   const handleDownloadPdf = async () => {
-    const html = generateInvoiceHtml();
+    const fullHtml = generateInvoiceHtml();
 
-    // Use an iframe so html2canvas renders in a clean, isolated viewport at (0,0)
-    const iframe = document.createElement("iframe");
-    iframe.style.cssText = "position:fixed;left:0;top:0;width:794px;height:1200px;opacity:0.01;pointer-events:none;z-index:-9999;border:none;";
-    document.body.appendChild(iframe);
+    // Extract body content from full HTML document
+    const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
+
+    // Create wrapper at position (0,0) — visible to html2canvas but behind page content
+    const wrapper = document.createElement("div");
+    wrapper.id = "__pdf_export_wrapper__";
+    wrapper.style.cssText = [
+      "position:absolute", "left:0", "top:0", "width:794px",
+      "z-index:-1", "pointer-events:none", "background:#ffffff", "overflow:visible",
+    ].join(";");
+
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `
+      #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
+      #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
+      #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
+      #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
+    `;
+    wrapper.appendChild(styleEl);
+
+    const contentDiv = document.createElement("div");
+    contentDiv.innerHTML = bodyContent;
+    wrapper.appendChild(contentDiv);
+
+    document.body.appendChild(wrapper);
+
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise(r => setTimeout(r, 500));
+    try { await document.fonts.ready; } catch (e) {}
+
+    const imgs = wrapper.querySelectorAll("img");
+    if (imgs.length > 0) {
+      await Promise.all(Array.from(imgs).map(img =>
+        img.complete ? Promise.resolve() : new Promise<void>(r => {
+          img.onload = () => r(); img.onerror = () => r();
+          setTimeout(r, 3000);
+        })
+      ));
+    }
+
+    const rect = wrapper.getBoundingClientRect();
+    console.log(`[PDF] Single export wrapper: ${rect.width}x${rect.height}, content: ${wrapper.innerHTML.length}`);
 
     try {
-      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (!iframeDoc) throw new Error("[PDF] Could not access iframe document");
-
-      iframeDoc.open();
-      iframeDoc.write(html);
-      iframeDoc.close();
-
-      // Wait for content to fully render
-      await new Promise(r => setTimeout(r, 600));
-      await document.fonts.ready;
-
-      // Wait for images
-      const imgs = iframeDoc.querySelectorAll("img");
-      if (imgs.length > 0) {
-        await Promise.all(Array.from(imgs).map(img =>
-          img.complete ? Promise.resolve() : new Promise<void>(r => {
-            img.onload = () => r(); img.onerror = () => r();
-            setTimeout(r, 3000);
-          })
-        ));
-      }
-
-      const target = iframeDoc.body;
-      const rect = target.getBoundingClientRect();
-      console.log(`[PDF] Single export iframe body: ${rect.width}x${rect.height}, content length: ${target.innerHTML.length}`);
-
       const html2pdf = (await import("html2pdf.js")).default;
       await html2pdf().set({
         margin: [10, 10, 20, 10],
@@ -842,9 +855,9 @@ const NewInvoice = () => {
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(target).save();
+      }).from(wrapper).save();
     } finally {
-      document.body.removeChild(iframe);
+      document.body.removeChild(wrapper);
     }
   };
 
