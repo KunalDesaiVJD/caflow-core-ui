@@ -285,7 +285,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
   const thGst = hasGst ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>` : "";
 
   const identityMarkup = logoUrl
-    ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:2px;display:block" crossorigin="anonymous" />`
+    ? `<img src="${logoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:0;display:block" crossorigin="anonymous" />`
     : `<p style="font-weight:800;font-size:14px;margin:0 0 2px">${firmName.toUpperCase()}</p>`;
 
   const itemRows = items.map((item: any, i: number) => {
@@ -352,8 +352,7 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">
       <div style="flex:1;max-width:55%">
         ${identityMarkup}
-        ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5">${firmAddr}</p>` : ""}
-        ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
+        ${firmAddr ? `<p style="margin:1px 0;font-size:11px;line-height:1.5;max-width:340px">${firmAddr}</p>` : ""}
       </div>
       <div style="text-align:right;font-size:11px;min-width:280px">
         <div style="display:flex;justify-content:space-between;gap:20px">
