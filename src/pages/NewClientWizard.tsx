@@ -8,7 +8,8 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft, Save, Building2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import confetti from "canvas-confetti";
 import { StepBasicInfo, type BasicInfoData } from "@/components/client-wizard/StepBasicInfo";
 import { StepAdvancedInfo, type AdvancedInfoData, defaultAdvancedInfo } from "@/components/client-wizard/StepAdvancedInfo";
@@ -50,6 +51,10 @@ const NewClientWizard = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const { toast } = useToast();
   const { user } = useAuth();
+  const isSuperadmin = user?.role === "superadmin";
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
+  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
 
   const isEditMode = Boolean(clientId);
   const [draftId, setDraftId] = useState<string | null>(clientId || null);
@@ -95,17 +100,28 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
+  // Load firms list for superadmin
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
+      setFirmsList(data || []);
+      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+    });
+  }, [isSuperadmin]);
+
   // Create draft client on wizard open (create mode only)
   useEffect(() => {
     if (isEditMode || draftId) return;
     const createDraft = async () => {
+      if (!effectiveFirmId) return; // Wait for superadmin to select a firm
       const { data: authData } = await supabase.auth.getUser();
       if (!authData.user?.id) return;
+      // TODO: Supabase RLS policy needs superadmin bypass for clients insert
       const { data: draft, error } = await supabase
         .from("clients")
         .insert({
           name: null,
-          firm_id: user?.firm_id || null,
+          firm_id: effectiveFirmId,
           user_id: authData.user.id,
           is_draft: true,
         } as any)
@@ -118,7 +134,7 @@ const NewClientWizard = () => {
       }
     };
     createDraft();
-  }, [isEditMode, user?.firm_id]);
+  }, [isEditMode, effectiveFirmId]);
 
 
   useEffect(() => {
@@ -371,7 +387,8 @@ const NewClientWizard = () => {
   };
 
   const saveServiceBillingData = async (targetClientId: string) => {
-    const firmId = user?.firm_id;
+    // TODO: Supabase RLS policy needs superadmin bypass for billing_reminders insert
+    const firmId = effectiveFirmId;
     if (!firmId) return;
 
     // Save active individual services
@@ -532,7 +549,7 @@ const NewClientWizard = () => {
 
       const payload = {
         ...buildClientPayload(),
-        firm_id: user?.firm_id || null,
+        firm_id: effectiveFirmId,
         user_id: authUserId,
       };
 
@@ -637,6 +654,26 @@ const NewClientWizard = () => {
             ? "Update client sections independently using tabs."
             : "Onboarding wizard — complete all steps to set up the client."}
         </p>
+        {/* Firm selector for superadmin in create mode */}
+        {isSuperadmin && !isEditMode && (
+          <div className="flex items-center gap-2 mt-3">
+            <Building2 className="h-4 w-4 text-muted-foreground" />
+            <Select
+              value={selectedFirmId || ""}
+              onValueChange={(v) => { setSelectedFirmId(v); setDraftId(null); }}
+            >
+              <SelectTrigger className="w-64">
+                <SelectValue placeholder={firmsList.length === 0 ? "Loading firms…" : "Select a firm"} />
+              </SelectTrigger>
+              <SelectContent>
+                {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {!selectedFirmId && (
+              <p className="text-xs text-muted-foreground">Select a firm to begin client onboarding</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Edit mode: Tab navigation | Create mode: Progress bar */}

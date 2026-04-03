@@ -150,7 +150,8 @@ export default function AuditPipeline() {
       const { data } = await supabase
         .from("audit_engagements")
         .select("id, client_id, financial_year, audit_type, pipeline_stage, stage_statuses, final_locked, status, entity_type, clients(name)")
-        .eq("firm_id", user!.firm_id!)
+        // TODO: Supabase RLS policy needs superadmin bypass; guarded by enabled: !!user?.firm_id
+        .eq("firm_id", user?.firm_id ?? "")
         .order("financial_year", { ascending: false });
       return (data || []) as any[];
     },
@@ -183,7 +184,8 @@ export default function AuditPipeline() {
   const { data: firmUsers } = useQuery({
     queryKey: ["firm-users", user?.firm_id],
     queryFn: async () => {
-      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user!.firm_id!).eq("is_active", true);
+      // TODO: Supabase RLS policy needs superadmin bypass; guarded by enabled: !!user?.firm_id
+      const { data } = await supabase.from("users").select("id, name, role").eq("firm_id", user?.firm_id ?? "").eq("is_active", true);
       return data || [];
     },
     enabled: !!user?.firm_id,
@@ -346,7 +348,8 @@ export default function AuditPipeline() {
         .from("audit_engagements")
         .select("id")
         .eq("client_id", form1A.client_id)
-        .eq("firm_id", user!.firm_id!)
+        // TODO: Supabase RLS policy needs superadmin bypass for audit_engagements
+        .eq("firm_id", user?.firm_id ?? "")
         .eq("financial_year", form1A.financial_year)
         .eq("audit_type", form1A.audit_type)
         .eq("audit_period_type", form1A.audit_period_type)
@@ -358,7 +361,8 @@ export default function AuditPipeline() {
 
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
-        firm_id: user!.firm_id!,
+        // TODO: Supabase RLS policy needs superadmin bypass for audit_engagements insert
+        firm_id: user?.firm_id ?? "",
         financial_year: form1A.financial_year,
         audit_type: form1A.audit_type,
         entity_type: form1A.entity_type,

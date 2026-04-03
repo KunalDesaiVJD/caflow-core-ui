@@ -46,6 +46,10 @@ const Clients = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
+  const isSuperadmin = user?.role === "superadmin";
+  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
+  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -100,6 +104,15 @@ const Clients = () => {
   useEffect(() => { fetchData(); }, []);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
+
+  // Load firms list for superadmin
+  useEffect(() => {
+    if (!isSuperadmin) return;
+    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
+      setFirmsList(data || []);
+      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+    });
+  }, [isSuperadmin]);
 
   const handleDeleteClient = async () => {
     if (!deleteClient) return;
@@ -211,7 +224,8 @@ const Clients = () => {
           pan: pan || null,
           entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
           gstin,
-          firm_id: user?.firm_id || null,
+          // TODO: Supabase RLS policy needs superadmin bypass for clients insert
+          firm_id: effectiveFirmId,
           user_id: user?.id || null,
           is_draft: false,
         } as any).select("id").single();
