@@ -252,47 +252,80 @@ function generateInvoiceHtmlFromRecord(inv: InvoiceRecord): string {
  * Generate a PDF Blob from an invoice database record
  */
 export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> {
-  const html = generateInvoiceHtmlFromRecord(inv);
+  const fullHtml = generateInvoiceHtmlFromRecord(inv);
 
-  // ── Create an isolated iframe so styles don't leak and html2canvas
-  //    renders the content at (0,0) inside a clean viewport. ──
-  const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;left:0;top:0;width:794px;height:1200px;opacity:0.01;pointer-events:none;z-index:-9999;border:none;";
-  document.body.appendChild(iframe);
+  // Extract the body content from the full HTML document string.
+  // The generated HTML is a full <!DOCTYPE> document but we need just the inner content
+  // to inject into a div (since innerHTML strips html/head/body tags).
+  // Also extract the <style> block to apply it properly.
+  const styleMatch = fullHtml.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+  const styleContent = styleMatch ? styleMatch[1] : '';
+  const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
+
+  // Create a wrapper div that sits in the document at position (0,0)
+  // VISIBLE to html2canvas but behind everything visually.
+  // KEY: Do NOT use position:fixed (clips to viewport) or left:-9999px (off-canvas).
+  const wrapper = document.createElement("div");
+  wrapper.id = "__pdf_export_wrapper__";
+  wrapper.style.cssText = [
+    "position:absolute",
+    "left:0",
+    "top:0",
+    "width:794px",
+    "z-index:-1",
+    "pointer-events:none",
+    "background:#ffffff",
+    "overflow:visible",
+  ].join(";");
+
+  // Inject scoped styles + content
+  const styleEl = document.createElement("style");
+  styleEl.textContent = `
+    #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
+    #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
+    #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
+    #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
+  `;
+  wrapper.appendChild(styleEl);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.innerHTML = bodyContent;
+  wrapper.appendChild(contentDiv);
+
+  document.body.appendChild(wrapper);
+
+  // Wait for layout + paint + fonts
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 500));
 
   try {
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!iframeDoc) throw new Error("[PDF] Could not access iframe document");
-
-    iframeDoc.open();
-    iframeDoc.write(html);
-    iframeDoc.close();
-
-    // Wait for iframe content to fully render
-    await new Promise(r => setTimeout(r, 600));
     await document.fonts.ready;
+  } catch (e) {
+    // fonts.ready not supported in all browsers
+  }
 
-    // Wait for images inside iframe
-    const imgs = iframeDoc.querySelectorAll("img");
-    if (imgs.length > 0) {
-      await Promise.all(Array.from(imgs).map(img =>
-        img.complete ? Promise.resolve() : new Promise<void>(r => {
-          img.onload = () => r(); img.onerror = () => r();
-          setTimeout(r, 3000); // max 3s per image
-        })
-      ));
-    }
+  // Wait for images to load
+  const imgs = wrapper.querySelectorAll("img");
+  if (imgs.length > 0) {
+    await Promise.all(Array.from(imgs).map(img =>
+      img.complete ? Promise.resolve() : new Promise<void>(r => {
+        img.onload = () => r();
+        img.onerror = () => r();
+        setTimeout(r, 3000); // max 3s per image
+      })
+    ));
+  }
 
-    // The target element is the iframe's body (or its first child div)
-    const target = iframeDoc.body;
-    const rect = target.getBoundingClientRect();
-    console.log(`[PDF] iframe body dimensions: ${rect.width}x${rect.height}, innerHTML length: ${target.innerHTML.length}`);
+  // Debug: verify the content rendered
+  const rect = wrapper.getBoundingClientRect();
+  console.log(`[PDF] Export wrapper: ${rect.width}x${rect.height}, innerHTML length: ${wrapper.innerHTML.length}`);
 
-    if (rect.height < 10 || target.innerHTML.length < 100) {
-      console.error("[PDF] iframe content did not render — aborting");
-      throw new Error("PDF content failed to render in iframe");
-    }
+  if (rect.height < 50) {
+    console.error("[PDF] Export wrapper height is too small — content may not have rendered");
+  }
 
+  try {
     const html2pdf = (await import("html2pdf.js")).default;
     const blob: Blob = await html2pdf().set({
       margin: [10, 10, 20, 10],
@@ -308,16 +341,16 @@ export async function generateInvoicePdfBlob(inv: InvoiceRecord): Promise<Blob> 
       },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-    }).from(target).outputPdf('blob');
+    }).from(wrapper).outputPdf('blob');
 
     console.log(`[PDF] Generated blob size: ${blob.size} bytes`);
     if (blob.size < 5000) {
-      console.warn("[PDF] Generated PDF is suspiciously small — may be blank");
+      console.warn("[PDF] WARNING: Generated PDF may be blank (size < 5KB)");
     }
 
     return blob;
   } finally {
-    document.body.removeChild(iframe);
+    document.body.removeChild(wrapper);
   }
 }
 
