@@ -138,7 +138,7 @@ function formatFirmAddressHtml(address: string): string {
 
   return lines
     .map((line, index) => {
-      const cleanLine = escapeHtml(line.replace(/\s+,/g, ",").replace(/,{2,}/g, ",").trim());
+      const cleanLine = escapeHtml(line.replace(/\s+,/g, ",").replace(/,{2,}/g, ",").replace(/\s*[–—]\s*/g, " - ").trim());
       const suffix = index < lines.length - 1 && !cleanLine.endsWith(",") ? "," : "";
       return `<span>${cleanLine}${suffix}</span>`;
     })
