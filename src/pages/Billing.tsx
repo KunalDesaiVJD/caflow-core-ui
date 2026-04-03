@@ -605,6 +605,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       toast({ title: "No invoices found", variant: "destructive" });
       return;
     }
+    console.log(`[BulkPDF] Loaded ${fullInvoices.length} invoice records for ZIP generation`);
 
     // Fetch firm logos for all unique firm_ids and convert to base64 for html2canvas
     const uniqueFirmIds = [...new Set(fullInvoices.map(inv => inv.firm_id).filter(Boolean))];
@@ -636,6 +637,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     }
 
     const zip = new JSZip();
+    let successCount = 0;
     for (let i = 0; i < fullInvoices.length; i++) {
       const inv = fullInvoices[i];
       const clientName = clientMap[inv.client_id || ""]?.name || inv.to_name || "Unknown";
@@ -658,13 +660,23 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           const retryBlob = await generateInvoicePdfBlob(invWithLogo as any);
           const filename = invoicePdfFilename(inv.invoice_no, clientName);
           zip.file(filename, retryBlob);
+          successCount++;
+          console.log(`[BulkPDF] Added ${filename} after retry (${retryBlob.size} bytes)`);
         } else {
           const filename = invoicePdfFilename(inv.invoice_no, clientName);
           zip.file(filename, pdfBlob);
+          successCount++;
+          console.log(`[BulkPDF] Added ${filename} (${pdfBlob.size} bytes)`);
         }
       } catch (err) {
         console.error("[BulkPDF] PDF generation failed for", inv.invoice_no, err);
       }
+    }
+
+    if (successCount === 0) {
+      setBulkZipProgress({ current: 0, total: 0, active: false });
+      toast({ title: "PDF generation failed for all selected invoices", variant: "destructive" });
+      return;
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
@@ -675,7 +687,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     a.click();
     URL.revokeObjectURL(url);
     setBulkZipProgress({ current: 0, total: 0, active: false });
-    toast({ title: `Downloaded ${fullInvoices.length} invoices as PDF` });
+    toast({ title: `Downloaded ${successCount} invoices as PDF` });
   };
 
   // Bulk download ZIP (selected invoices)
