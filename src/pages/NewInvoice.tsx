@@ -37,6 +37,7 @@ import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
   FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
 } from "lucide-react";
+import { downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 
 // ─── GSTIN State Code Map ───
 const STATE_CODES: Record<string, string> = {
@@ -614,6 +615,12 @@ const NewInvoice = () => {
   const totalGst = useMemo(() => firmHasGst ? items.reduce((s, li) => s + li.gst_amount, 0) : 0, [items, firmHasGst]);
   const grandTotal = totalTaxable + totalGst;
   const tdsAmount = useMemo(() => tdsSectionCode ? Math.round(totalTaxable * tdsRate / 100 * 100) / 100 : 0, [tdsSectionCode, tdsRate, totalTaxable]);
+  const firmLogoUrl = useMemo(() => {
+    const settingsLogo = typeof firm?.settings === "object" && firm?.settings
+      ? (firm.settings as Record<string, any>).logo_url
+      : null;
+    return firm?.logo_url || settingsLogo || "";
+  }, [firm]);
 
   const firmName = firm?.display_name || firm?.name || "";
   const firmAddr = firm?.address as any;
@@ -793,72 +800,8 @@ const NewInvoice = () => {
 
   const handleDownloadPdf = async () => {
     const fullHtml = generateInvoiceHtml();
-
-    // Extract body content from full HTML document
-    const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    const bodyContent = bodyMatch ? bodyMatch[1] : fullHtml;
-
-    // Create wrapper at position (0,0) — visible to html2canvas but behind page content
-    const wrapper = document.createElement("div");
-    wrapper.id = "__pdf_export_wrapper__";
-    wrapper.style.cssText = [
-      "position:absolute", "left:0", "top:0", "width:794px",
-      "z-index:-1", "pointer-events:none", "background:#ffffff", "overflow:visible",
-    ].join(";");
-
-    const styleEl = document.createElement("style");
-    styleEl.textContent = `
-      #__pdf_export_wrapper__ { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; }
-      #__pdf_export_wrapper__ * { margin: 0; padding: 0; box-sizing: border-box; }
-      #__pdf_export_wrapper__ table { width: 100%; border-collapse: collapse; }
-      #__pdf_export_wrapper__ td, #__pdf_export_wrapper__ th { vertical-align: middle !important; }
-    `;
-    wrapper.appendChild(styleEl);
-
-    const contentDiv = document.createElement("div");
-    contentDiv.innerHTML = bodyContent;
-    wrapper.appendChild(contentDiv);
-
-    document.body.appendChild(wrapper);
-
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    await new Promise(r => setTimeout(r, 500));
-    try { await document.fonts.ready; } catch (e) {}
-
-    const imgs = wrapper.querySelectorAll("img");
-    if (imgs.length > 0) {
-      await Promise.all(Array.from(imgs).map(img =>
-        img.complete ? Promise.resolve() : new Promise<void>(r => {
-          img.onload = () => r(); img.onerror = () => r();
-          setTimeout(r, 3000);
-        })
-      ));
-    }
-
-    const rect = wrapper.getBoundingClientRect();
-    console.log(`[PDF] Single export wrapper: ${rect.width}x${rect.height}, content: ${wrapper.innerHTML.length}`);
-
-    try {
-      const html2pdf = (await import("html2pdf.js")).default;
-      await html2pdf().set({
-        margin: [10, 10, 20, 10],
-        filename: `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-          backgroundColor: "#ffffff",
-          logging: false,
-          width: 794,
-          windowWidth: 794,
-        },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      }).from(wrapper).save();
-    } finally {
-      document.body.removeChild(wrapper);
-    }
+    const filename = `${DOC_TYPE_LABELS[docType].replace(/ /g, "_")}_${invoiceNo?.replace(/\//g, "-") || "draft"}.pdf`;
+    await downloadPdfFromHtml(fullHtml, filename, `Single invoice ${invoiceNo || "draft"}`);
   };
 
   const isLocked = status === "sent" || status === "paid" || status === "voided" || status === "converted";
@@ -938,7 +881,7 @@ const NewInvoice = () => {
 
       <div style="display:flex;justify-content:space-between;margin-bottom:14px">
         <div style="flex:1;max-width:55%">
-          ${showLogo && firm?.logo_url ? `<img src="${firm.logo_url}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
+          ${showLogo && firmLogoUrl ? `<img src="${firmLogoUrl}" style="max-height:64px;max-width:200px;object-fit:contain;margin-bottom:8px;display:block" crossorigin="anonymous" />` : ""}
           <p style="font-weight:800;font-size:14px;margin:0 0 4px">${firmName.toUpperCase()}</p>
           ${pdfAddressLines.map(line => `<p style="margin:1px 0;font-size:11px;line-height:1.5">${line}</p>`).join("")}
           ${placeOfSupply ? `<p style="margin:6px 0 0;font-size:11px"><strong>Place of Supply:</strong> ${placeOfSupply}</p>` : ""}
@@ -1023,7 +966,7 @@ const NewInvoice = () => {
       </div>
     </body></html>`;
   }, [lineItems, invoiceNo, invoiceDate, referenceNo, placeOfSupply, isIntraState,
-    firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo,
+    firm, firmName, firmAddressLines, firmFullAddress, firmGstin, bankDetails, msmeNo, showLogo, firmLogoUrl,
     toName, toGstin, toAddress, totalTaxable, totalGst, grandTotal, firmHasGst, firmAddr,
     billingEmail, billingContact, docType, remarksConditions]);
 
