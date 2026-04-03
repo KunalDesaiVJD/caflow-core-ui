@@ -28,16 +28,36 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     if (!user?.firm_id && user?.role !== "superadmin") return;
     setLoading(true);
 
+    // Issue 2: Only show clients classified as "Audit" in at least one FY
+    const { data: auditClassRows } = await supabase
+      .from("client_fy_classifications")
+      .select("client_id")
+      .eq("classification", "Audit");
+    const auditClientIds = [...new Set((auditClassRows || []).map((r: any) => r.client_id as string))];
+
     const engQuery = supabase.from("audit_engagements").select("*");
-    const clientQuery = supabase.from("clients").select("id, name, entity_type, statutory_audit_applicable, tax_audit_type").eq("is_draft", false).is("deleted_at", null);
+    // Build the client query — filter to Audit-classified clients only
+    let clientQuery: any = supabase
+      .from("clients")
+      .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+      .eq("is_draft", false)
+      .is("deleted_at", null);
 
     if (user?.firm_id) {
       engQuery.eq("firm_id", user.firm_id);
-      clientQuery.eq("firm_id", user.firm_id);
+      clientQuery = clientQuery.eq("firm_id", user.firm_id);
+    }
+
+    // Apply the Audit classification filter
+    if (auditClientIds.length > 0) {
+      clientQuery = clientQuery.in("id", auditClientIds);
+    } else {
+      // No audit-classified clients exist yet — show empty list
+      clientQuery = clientQuery.in("id", ["00000000-0000-0000-0000-000000000000"]); // returns empty safely
     }
 
     const [engRes, clientRes] = await Promise.all([engQuery, clientQuery]);
-    const clientMap = new Map((clientRes.data || []).map(c => [c.id, c]));
+    const clientMap = new Map((clientRes.data || []).map((c: any) => [c.id, c]));
     setClients(clientRes.data || []);
 
     const mapped = (engRes.data || []).map((e: any) => ({

@@ -210,13 +210,14 @@ export default function AuditIntelligence() {
   };
 
   // ─── Edit Engagement ───
-  const openEditDialog = () => {
-    if (!selectedEngagement) return;
+  const openEditDialog = (eng?: any) => {
+    const target = eng || selectedEngagement;
+    if (!target) return;
     setEngForm({
-      client_id: selectedEngagement.client_id || "",
-      financial_year: selectedEngagement.financial_year || "2024-25",
-      audit_type: selectedEngagement.audit_type || "statutory",
-      entity_type: selectedEngagement.entity_type || "company",
+      client_id: target.client_id || "",
+      financial_year: target.financial_year || "2024-25",
+      audit_type: target.audit_type || "statutory",
+      entity_type: target.entity_type || target.client_entity_type || "",
     });
     setShowEditDialog(true);
   };
@@ -581,26 +582,44 @@ export default function AuditIntelligence() {
                   <Badge variant="secondary">{engagements.filter(e => e.status !== "archived").length}</Badge>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-2 max-h-[300px] overflow-y-auto">
+              <CardContent className="space-y-1 max-h-[300px] overflow-y-auto">
                 {engagements.filter(e => e.status !== "archived").slice(0, 10).map(e => (
-                  <button
+                  <div
                     key={e.id}
-                    onClick={() => setSelectedEngagementId(e.id)}
                     className={cn(
-                      "w-full flex items-center justify-between p-2.5 rounded-md text-left transition-colors text-sm",
+                      "group flex items-center gap-1 p-2 rounded-md transition-colors text-sm",
                       e.id === selectedEngagementId
                         ? "bg-primary/10 border border-primary/20"
                         : "hover:bg-muted border border-transparent"
                     )}
                   >
-                    <div>
+                    <button
+                      className="flex-1 text-left"
+                      onClick={() => setSelectedEngagementId(e.id)}
+                    >
                       <p className="font-medium text-foreground">{e.client_name}</p>
                       <p className="text-xs text-muted-foreground">{e.audit_type} — FY {e.financial_year}</p>
-                    </div>
-                    <Badge variant={e.final_locked ? "default" : "outline"} className="capitalize text-[10px]">
+                    </button>
+                    <Badge variant={e.final_locked ? "default" : "outline"} className="capitalize text-[10px] shrink-0">
                       {e.final_locked ? "Completed" : e.status || "planning"}
                     </Badge>
-                  </button>
+                    <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <Button
+                        variant="ghost" size="icon" className="h-6 w-6"
+                        title="Edit engagement"
+                        onClick={() => { setSelectedEngagementId(e.id); openEditDialog(e); }}
+                      >
+                        <Pencil size={11} />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive"
+                        title="Archive engagement"
+                        onClick={() => { setSelectedEngagementId(e.id); setShowDeleteDialog(true); }}
+                      >
+                        <Trash2 size={11} />
+                      </Button>
+                    </div>
+                  </div>
                 ))}
                 {engagements.length === 0 && (
                   <p className="text-sm text-muted-foreground text-center py-4">No engagements yet</p>
@@ -621,7 +640,10 @@ export default function AuditIntelligence() {
           <div className="space-y-4">
             <div>
               <Label>Client *</Label>
-              <Select value={engForm.client_id} onValueChange={v => setEngForm(f => ({ ...f, client_id: v }))}>
+              <Select value={engForm.client_id} onValueChange={v => {
+                const client = clients.find(c => c.id === v);
+                setEngForm(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
+              }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -644,10 +666,10 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Entity Type</Label>
-              <Select value={engForm.entity_type} onValueChange={v => setEngForm(f => ({ ...f, entity_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ENTITY_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {engForm.entity_type || (engForm.client_id ? "Not set on client profile" : "Select a client first")}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Auto-fetched from client profile (read-only)</p>
             </div>
           </div>
           <DialogFooter>

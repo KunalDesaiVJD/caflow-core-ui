@@ -189,6 +189,20 @@ export default function AuditPipeline() {
     enabled: !!user?.firm_id,
   });
 
+  // ─── Audit firms (for engagement creation) ───
+  const { data: auditFirmsForEng } = useQuery({
+    queryKey: ["audit-firms-eng", user?.firm_id, user?.role],
+    queryFn: async () => {
+      let query = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
+      if (user?.role !== "superadmin" && user?.firm_id) {
+        query = query.eq("firm_id", user.firm_id) as typeof query;
+      }
+      const { data } = await query;
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+
   // ─── Selected engagement detail ───
   const { data: engagement, refetch: refetchEng } = useQuery({
     queryKey: ["audit-engagement-detail", selectedEngId],
@@ -237,7 +251,7 @@ export default function AuditPipeline() {
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
   const [planning, setPlanning] = useState({
@@ -256,6 +270,7 @@ export default function AuditPipeline() {
       period_label: engagement.period_label || "",
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
+      audit_firm_id: engagement.audit_firm_id || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -277,11 +292,21 @@ export default function AuditPipeline() {
     }
   }, [engagement]);
 
-  // Auto-determine flags
+  // Auto-set entity_type when client is selected in creation dialog
+  useEffect(() => {
+    if (!form1A.client_id || !eligibleClients) return;
+    const client = eligibleClients.find(c => c.id === form1A.client_id);
+    if (client?.entity_type) {
+      setForm1A(f => ({ ...f, entity_type: client.entity_type! }));
+    }
+  }, [form1A.client_id, eligibleClients]);
+
+  // Auto-determine flags — handle both legacy values ("company","llp") and raw client values ("Private Ltd","LLP",etc.)
   const autoFlags = useMemo(() => {
-    const et = form1A.entity_type;
+    const et = (form1A.entity_type || "").toLowerCase().trim();
     const at = form1A.audit_type;
-    const isCompany = et === "company";
+    const isCompany = ["company", "private ltd", "public ltd"].includes(et);
+    const isLLP = ["llp"].includes(et);
     const isStatutory = at === "statutory" || at === "both";
     const isTaxAudit = at === "tax_audit" || at === "both";
     const turnover = parseFloat(questionnaire.turnover_cy || "0");
@@ -291,7 +316,7 @@ export default function AuditPipeline() {
       requires_3ca: questionnaire.audited_under_other_act === "yes",
       requires_3cb: !isCompany && isTaxAudit && questionnaire.audited_under_other_act !== "yes",
       requires_3cd: isTaxAudit,
-      requires_cash_flow: isCompany || (et === "llp" && turnover > 4000000),
+      requires_cash_flow: isCompany || (isLLP && turnover > 4000000),
       schedule_iii_division: questionnaire.ind_as_applicable === "yes" ? "div_ii" : "div_i",
     };
   }, [form1A.entity_type, form1A.audit_type, questionnaire]);
@@ -299,7 +324,7 @@ export default function AuditPipeline() {
   const setQ = (key: string, val: string) => setQuestionnaire(q => ({ ...q, [key]: val }));
 
   // ─── Validation ───
-  const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type;
+  const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
 
   const blockAFields = ["constitution_confirmed", "registered_address", "agm_dates", "board_changes", "regulatory_actions"];
   const blockBFields = ["turnover_cy", "turnover_py", "total_assets", "has_inventory", "capital_transactions", "long_term_borrowings", "director_loans"];
@@ -339,6 +364,7 @@ export default function AuditPipeline() {
         entity_type: form1A.entity_type,
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
+        audit_firm_id: form1A.audit_firm_id || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -373,6 +399,7 @@ export default function AuditPipeline() {
       entity_type: form1A.entity_type,
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
+      audit_firm_id: form1A.audit_firm_id || null,
       questionnaire_answers: questionnaire,
       stage_statuses: newStatuses,
       pipeline_stage: complete ? 2 : 1,
@@ -517,6 +544,21 @@ export default function AuditPipeline() {
                     <Select value={form1A.audit_type} onValueChange={v => setForm1A(f => ({ ...f, audit_type: v }))}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div>
+                  <Label>Audit Firm *</Label>
+                  {engagement ? (
+                    <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                      {(auditFirmsForEng || []).find(f => f.id === form1A.audit_firm_id)?.name || form1A.audit_firm_id || "—"}
+                    </div>
+                  ) : (
+                    <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+                      <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
+                      <SelectContent>
+                        {(auditFirmsForEng || []).map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+                      </SelectContent>
                     </Select>
                   )}
                 </div>
@@ -739,8 +781,26 @@ export default function AuditPipeline() {
           </DialogHeader>
           <div className="grid gap-4">
             <div>
+              <Label>Audit Firm <span className="text-destructive">*</span></Label>
+              <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
+                <SelectContent>
+                  {(auditFirmsForEng || []).length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit firms found. Add one in Settings → Audit Firms.</div>
+                  ) : (
+                    (auditFirmsForEng || []).map(f => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>Client *</Label>
-              <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
+              <Select value={form1A.client_id} onValueChange={v => {
+                const client = (eligibleClients || []).find(c => c.id === v);
+                setForm1A(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
+              }}>
                 <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
                   {(eligibleClients || []).length === 0 ? (
@@ -771,15 +831,15 @@ export default function AuditPipeline() {
             </div>
             <div>
               <Label>Entity Type</Label>
-              <Select value={form1A.entity_type} onValueChange={v => setForm1A(f => ({ ...f, entity_type: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{ENTITY_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
-              </Select>
+              <div className="flex items-center h-10 px-3 rounded-md border border-input bg-muted/50 text-sm text-foreground">
+                {form1A.entity_type || (form1A.client_id ? "Not set on client profile" : "Select a client first")}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Auto-fetched from client profile (read-only)</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewEng(false)}>Cancel</Button>
-            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id}>Create</Button>
+            <Button onClick={() => createEngagement.mutate()} disabled={!form1A.client_id || !form1A.audit_firm_id}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
