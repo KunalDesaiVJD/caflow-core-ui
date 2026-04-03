@@ -343,9 +343,9 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       @media print { @page { size: A4; margin: 20mm 15mm 20mm 15mm; } body { margin: 0; padding: 0; } }
       @media screen { body { padding: 20mm 15mm; max-width: 210mm; margin: 0 auto; } }
     </style></head><body>
-      <div style="padding:0;margin:0">
+      <div style="border:1px solid #bbb;padding:12px 14px">
 
-    <div style="text-align:center;margin-bottom:16px;border:1.5px solid #7ba4d9;padding:6px 0;line-height:1.2">
+    <div style="text-align:center;margin-bottom:16px;padding:6px 0;line-height:1.2">
       <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
     </div>
 
