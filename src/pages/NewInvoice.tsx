@@ -626,7 +626,12 @@ const NewInvoice = () => {
   const firmAddr = firm?.address as any;
   const firmAddressLines = useMemo(() => {
     if (!firmAddr) return [];
-    const rawLines = [firmAddr.line || firmAddr.line1, firmAddr.line2, [firmAddr.city, firmAddr.pincode].filter(Boolean).join(" \u2013 ")].filter(Boolean);
+    const addrLine = firmAddr.line || firmAddr.line1 || "";
+    const cityName = firmAddr.city || "";
+    // Avoid duplicating city if already present in address line
+    const cityAlreadyInAddress = cityName && addrLine.toLowerCase().includes(cityName.toLowerCase());
+    const cityPinPart = cityAlreadyInAddress ? "" : [cityName, firmAddr.pincode].filter(Boolean).join(" \u2013 ");
+    const rawLines = [addrLine, firmAddr.line2, cityPinPart].filter(Boolean);
     return balanceAddressLines(rawLines);
   }, [firmAddr]);
   const firmFullAddress = firmAddressLines.join(", ");
