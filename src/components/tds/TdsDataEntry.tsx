@@ -296,7 +296,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const fetchChallans = async (filingId: string) => {
     const { data } = await supabase.from("tds_challans").select("*")
       .eq("filing_id", filingId).order("deposit_date", { ascending: true });
-    const list = (data || []) as Challan[];
+    const list = (data as unknown as Challan[]) || [];
     setChallans(list);
     if (list.length > 0) {
       const challanIds = list.map(c => c.id);
