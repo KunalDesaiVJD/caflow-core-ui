@@ -172,21 +172,7 @@ export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive,
           </div>
         </div>
 
-        {/* Audit Firm — only when "Audit" */}
-        {data.classification === "Audit" && (
-          <div className="space-y-1.5">
-            <Label>Audit Firm <span className="text-destructive">*</span></Label>
-            <Select value={data.audit_firm_id} onValueChange={(v) => set("audit_firm_id", v)}>
-              <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
-              <SelectContent>
-                {auditFirms.map((f) => (
-                  <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {errors.audit_firm_id && <p className="text-xs text-destructive">{errors.audit_firm_id}</p>}
-          </div>
-        )}
+        {/* Audit Firm removed — managed in Audit Engagement */}
 
         {/* Responsible Person — "Non-Audit" or "Partner in Audited Firm" */}
         {(data.classification === "Non-Audit" || data.classification === "Partner in Audited Firm") && (

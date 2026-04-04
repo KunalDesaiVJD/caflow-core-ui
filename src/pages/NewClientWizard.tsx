@@ -323,9 +323,6 @@ const NewClientWizard = () => {
     const errors: Record<string, string> = {};
     if (!advancedInfo.financial_year) errors.financial_year = "Financial year is required";
     if (!advancedInfo.classification) errors.classification = "Classification is required";
-    if (advancedInfo.classification === "Audit" && !advancedInfo.audit_firm_id) {
-      errors.audit_firm_id = "Audit firm is required when classification is Audit";
-    }
     const needsCIN = basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd";
     if (needsCIN && advancedInfo.cin && advancedInfo.cin.length !== 21) {
       errors.cin = "CIN must be exactly 21 characters for companies";
