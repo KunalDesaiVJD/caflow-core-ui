@@ -537,21 +537,31 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       }
 
       // ── Pass 3: apply sign correction using resolved normalBal ──────────────
-      // Tally's Excel export convention:
-      //   - Some Dr-normal accounts (e.g. Fixed Assets) export opening/closing as NEGATIVE
-      //     (Tally shows them on the "Cr" side internally → parseNum returns negative)
-      //   - Other Dr-normal accounts (e.g. Current Assets: cash, bank) export as POSITIVE
-      // Rule: only flip when the stored value is NEGATIVE for a Dr account.
-      //       This safely corrects Fixed Assets leaves without breaking Current Assets.
+      // Tally XML convention: Dr-normal accounts (Assets, Purchases, Direct/Indirect
+      // Expenses) store Dr balances as NEGATIVE and Cr balances as POSITIVE.
+      // Detection: if ANY Dr-normal leaf has a negative stored value we are working
+      // with Tally XML sign convention → fully invert ALL Dr-normal values so that:
+      //   • stored negative (= Dr balance)  →  + positive on assets/expenses side
+      //   • stored positive (= genuine Cr)  →  − negative on assets/expenses side
+      //     (credit-balance ledgers are kept without normalisation and appear as
+      //      negative deductions within their section instead of inflating the total)
+      // For Excel imports (all values already unsigned/positive) no negative Dr-normal
+      // values exist → detection = false → only the defensive flip of negatives runs.
       // txnDebit / txnCredit are always stored as positive — never flip those.
+      const _drLeaves = rawNodes.filter(n => n.isLeaf && resolveNb(n.nodeId) === 'Dr');
+      const _isXml = _drLeaves.some(n => n.closing < 0 || n.opening < 0);
       return rawNodes.map(node => {
         const resolvedNb = resolveNb(node.nodeId);
-        const flipO = resolvedNb === 'Dr' && node.opening < 0;
-        const flipC = resolvedNb === 'Dr' && node.closing < 0;
+        if (resolvedNb !== 'Dr') return node;
+        if (_isXml) {
+          // Full inversion: Dr-stored-negative → positive; Cr-stored-positive → negative
+          return { ...node, opening: -(node.opening), closing: -(node.closing) };
+        }
+        // Excel / already-unsigned: only correct values that arrived negative
         return {
           ...node,
-          opening: flipO ? -node.opening : node.opening,
-          closing: flipC ? -node.closing : node.closing,
+          opening: node.opening < 0 ? -node.opening : node.opening,
+          closing: node.closing < 0 ? -node.closing : node.closing,
         };
       });
     },
@@ -971,16 +981,23 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         }
 
         // ── Pass 3: apply sign correction with resolved normalBal ─────────────
-        // Only flip negative Dr-account values — Tally exports some Dr accounts (Fixed Assets)
-        // as negative while others (Current Assets: cash, bank) are already positive.
+        // Tally XML convention: Dr-normal accounts store Dr balances as NEGATIVE,
+        // Cr balances as POSITIVE. Full inversion for XML data so genuine
+        // credit-balance ledgers appear as NEGATIVE on assets/expenses side.
+        const _impDrLeaves = _rawImport.filter(n => n.isLeaf && _resolveImpNb(n.nodeId) === 'Dr');
+        const _isXmlImp = _impDrLeaves.some(n => n.closing < 0 || n.opening < 0);
         const mappedHierarchy: TbHierarchyNode[] = _rawImport.map(node => {
           const resolvedNb = _resolveImpNb(node.nodeId);
-          const flipO = resolvedNb === 'Dr' && node.opening < 0;
-          const flipC = resolvedNb === 'Dr' && node.closing < 0;
+          if (resolvedNb !== 'Dr') return node;
+          if (_isXmlImp) {
+            // Full inversion: Dr-stored-negative → positive; Cr-stored-positive → negative
+            return { ...node, opening: -(node.opening), closing: -(node.closing) };
+          }
+          // Excel / already-unsigned: only correct values that arrived negative
           return {
             ...node,
-            opening: flipO ? -node.opening : node.opening,
-            closing: flipC ? -node.closing : node.closing,
+            opening: node.opening < 0 ? -node.opening : node.opening,
+            closing: node.closing < 0 ? -node.closing : node.closing,
           };
         });
         const leafPreview = mappedHierarchy.filter((n) => n.isLeaf).slice(0, 20);
