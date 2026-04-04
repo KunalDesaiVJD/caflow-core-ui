@@ -302,8 +302,6 @@ const FirmSettings = () => {
             </Button>
           )}
         </div>
-        )}
-
         <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
