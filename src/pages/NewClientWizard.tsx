@@ -647,26 +647,6 @@ const NewClientWizard = () => {
             ? "Update client sections independently using tabs."
             : "Onboarding wizard — complete all steps to set up the client."}
         </p>
-        {/* Firm selector for superadmin in create mode */}
-        {isSuperadmin && !isEditMode && (
-          <div className="flex items-center gap-2 mt-3">
-            <Building2 className="h-4 w-4 text-muted-foreground" />
-            <Select
-              value={selectedFirmId || ""}
-              onValueChange={(v) => { setSelectedFirmId(v); setDraftId(null); }}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder={firmsList.length === 0 ? "Loading firms…" : "Select a firm"} />
-              </SelectTrigger>
-              <SelectContent>
-                {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {!selectedFirmId && (
-              <p className="text-xs text-muted-foreground">Select a firm to begin client onboarding</p>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Edit mode: Tab navigation | Create mode: Progress bar */}
