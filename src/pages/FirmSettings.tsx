@@ -251,7 +251,31 @@ const FirmSettings = () => {
     }
   }
 
-  if (loading) {
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDeleteFirm() {
+    if (!firmId || !isAdmin) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from("firms").delete().eq("id", firmId);
+      if (error) throw error;
+      toast({ title: "Firm deleted successfully" });
+      setDeleteConfirmOpen(false);
+      setSelectedFirmId(null);
+      setFirmId(null);
+      await loadFirmsList();
+      if (firmsList.length > 1) {
+        const remaining = firmsList.filter(f => f.id !== firmId);
+        if (remaining.length > 0) setSelectedFirmId(remaining[0].id);
+      }
+    } catch (e: any) {
+      toast({ title: "Error deleting firm", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   }
 
