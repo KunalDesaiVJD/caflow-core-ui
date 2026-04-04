@@ -460,7 +460,7 @@ const FirmSettings = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Logo */}
+               {/* Logo */}
                 <div className="space-y-2">
                   <Label>Firm Logo</Label>
                   {logoUrl && <img src={logoUrl} alt="Logo" className="h-16 object-contain rounded border border-border p-1" />}
@@ -468,9 +468,24 @@ const FirmSettings = () => {
                     const f = e.target.files?.[0];
                     if (f && firmId) handleUpload(f, `${firmId}/logo`, setLogoUrl, "logo_url");
                   }} />
-                  <Button variant="outline" size="sm" onClick={() => logoRef.current?.click()} disabled={!isAdmin}>
-                    <Upload className="h-3 w-3 mr-1" /> Upload Logo
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => logoRef.current?.click()} disabled={!isAdmin}>
+                      <Upload className="h-3 w-3 mr-1" /> Upload Logo
+                    </Button>
+                    {logoUrl && (
+                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
+                        if (!firmId) return;
+                        const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
+                        const existingSettings = (current?.settings || {}) as any;
+                        delete existingSettings.logo_url;
+                        await supabase.from("firms").update({ logo_url: null, settings: existingSettings } as any).eq("id", firmId);
+                        setLogoUrl("");
+                        toast({ title: "Logo removed" });
+                      }}>
+                        <Trash2 className="h-3 w-3 mr-1" /> Remove
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 {/* Signature */}
                 <div className="space-y-2">
@@ -480,9 +495,21 @@ const FirmSettings = () => {
                     const f = e.target.files?.[0];
                     if (f && firmId) handleUpload(f, `${firmId}/signature`, setSignatureUrl, "signature_url");
                   }} />
-                  <Button variant="outline" size="sm" onClick={() => sigRef.current?.click()} disabled={!isAdmin}>
-                    <Upload className="h-3 w-3 mr-1" /> Upload Signature
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => sigRef.current?.click()} disabled={!isAdmin}>
+                      <Upload className="h-3 w-3 mr-1" /> Upload Signature
+                    </Button>
+                    {signatureUrl && (
+                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
+                        if (!firmId) return;
+                        await supabase.from("firms").update({ signature_url: null } as any).eq("id", firmId);
+                        setSignatureUrl("");
+                        toast({ title: "Signature removed" });
+                      }}>
+                        <Trash2 className="h-3 w-3 mr-1" /> Remove
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 {/* Letterhead */}
                 <div className="space-y-2">
@@ -492,9 +519,21 @@ const FirmSettings = () => {
                     const f = e.target.files?.[0];
                     if (f && firmId) handleUpload(f, `${firmId}/letterhead`, setLetterheadUrl, "letterhead_url");
                   }} />
-                  <Button variant="outline" size="sm" onClick={() => lhRef.current?.click()} disabled={!isAdmin}>
-                    <Upload className="h-3 w-3 mr-1" /> Upload Letterhead
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => lhRef.current?.click()} disabled={!isAdmin}>
+                      <Upload className="h-3 w-3 mr-1" /> Upload Letterhead
+                    </Button>
+                    {letterheadUrl && (
+                      <Button variant="destructive" size="sm" disabled={!isAdmin} onClick={async () => {
+                        if (!firmId) return;
+                        await supabase.from("firms").update({ letterhead_url: null } as any).eq("id", firmId);
+                        setLetterheadUrl("");
+                        toast({ title: "Letterhead removed" });
+                      }}>
+                        <Trash2 className="h-3 w-3 mr-1" /> Remove
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">

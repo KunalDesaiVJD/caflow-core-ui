@@ -79,9 +79,9 @@ const DOC_HEADINGS: Record<string, string> = {
   proforma: "PROFORMA INVOICE",
 };
 
-function resolveInvoiceLogoUrl(inv: InvoiceRecord): string {
-  if (inv.show_logo === false) return "";
-  return inv.logo_url || inv.firm_settings?.logo_url || "";
+function resolveInvoiceLogoUrl(_inv: InvoiceRecord): string {
+  // Logo removed from invoices per user request — always show firm name text instead
+  return "";
 }
 
 function downloadBlob(blob: Blob, filename: string) {
