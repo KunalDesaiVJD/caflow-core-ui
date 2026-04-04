@@ -8,8 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Save, Building2 } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowLeft, Save } from "lucide-react";
 import confetti from "canvas-confetti";
 import { StepBasicInfo, type BasicInfoData } from "@/components/client-wizard/StepBasicInfo";
 import { StepAdvancedInfo, type AdvancedInfoData, defaultAdvancedInfo } from "@/components/client-wizard/StepAdvancedInfo";
@@ -52,9 +51,9 @@ const NewClientWizard = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
-  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
-  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
+  // All clients go under V J Desai & Co.
+  const VJ_DESAI_FIRM_ID = "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+  const effectiveFirmId = VJ_DESAI_FIRM_ID;
 
   const isEditMode = Boolean(clientId);
   const [draftId, setDraftId] = useState<string | null>(clientId || null);
@@ -100,14 +99,7 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
-  // Load firms list for superadmin
-  useEffect(() => {
-    if (!isSuperadmin) return;
-    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
-      setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
-    });
-  }, [isSuperadmin]);
+  // Firm selector removed — all clients go under V J Desai & Co.
 
   // Create draft client on wizard open (create mode only)
   useEffect(() => {
@@ -330,9 +322,6 @@ const NewClientWizard = () => {
     const errors: Record<string, string> = {};
     if (!advancedInfo.financial_year) errors.financial_year = "Financial year is required";
     if (!advancedInfo.classification) errors.classification = "Classification is required";
-    if (advancedInfo.classification === "Audit" && !advancedInfo.audit_firm_id) {
-      errors.audit_firm_id = "Audit firm is required when classification is Audit";
-    }
     const needsCIN = basicInfo.entity_type === "Private Ltd" || basicInfo.entity_type === "Public Ltd";
     if (needsCIN && advancedInfo.cin && advancedInfo.cin.length !== 21) {
       errors.cin = "CIN must be exactly 21 characters for companies";
@@ -654,26 +643,6 @@ const NewClientWizard = () => {
             ? "Update client sections independently using tabs."
             : "Onboarding wizard — complete all steps to set up the client."}
         </p>
-        {/* Firm selector for superadmin in create mode */}
-        {isSuperadmin && !isEditMode && (
-          <div className="flex items-center gap-2 mt-3">
-            <Building2 className="h-4 w-4 text-muted-foreground" />
-            <Select
-              value={selectedFirmId || ""}
-              onValueChange={(v) => { setSelectedFirmId(v); setDraftId(null); }}
-            >
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder={firmsList.length === 0 ? "Loading firms…" : "Select a firm"} />
-              </SelectTrigger>
-              <SelectContent>
-                {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {!selectedFirmId && (
-              <p className="text-xs text-muted-foreground">Select a firm to begin client onboarding</p>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Edit mode: Tab navigation | Create mode: Progress bar */}

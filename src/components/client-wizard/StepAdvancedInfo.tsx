@@ -99,32 +99,10 @@ interface Props {
 export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive, errors }: Props) => {
   const { user } = useAuth();
 
-  const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
 
   const set = <K extends keyof AdvancedInfoData>(key: K, val: AdvancedInfoData[K]) =>
     onChange({ ...data, [key]: val });
-
-  /* Load audit firms — Issue 3 Fix:
-     - Filter by user's firm_id so partners only see their own firm's audit firms
-     - Use .neq("active", false) to include rows where active = NULL (not explicitly deactivated)
-  */
-  useEffect(() => {
-    if (data.classification !== "Audit") return;
-    const load = async () => {
-      let query = supabase
-        .from("audit_firms")
-        .select("id, name")
-        .neq("active", false)
-        .order("name");
-      if (user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id) as typeof query;
-      }
-      const { data: firms } = await query;
-      if (firms) setAuditFirms(firms);
-    };
-    load();
-  }, [data.classification, user?.firm_id]);
 
   /* Load users for responsible person */
   useEffect(() => {
@@ -194,21 +172,7 @@ export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive,
           </div>
         </div>
 
-        {/* Audit Firm — only when "Audit" */}
-        {data.classification === "Audit" && (
-          <div className="space-y-1.5">
-            <Label>Audit Firm <span className="text-destructive">*</span></Label>
-            <Select value={data.audit_firm_id} onValueChange={(v) => set("audit_firm_id", v)}>
-              <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
-              <SelectContent>
-                {auditFirms.map((f) => (
-                  <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {errors.audit_firm_id && <p className="text-xs text-destructive">{errors.audit_firm_id}</p>}
-          </div>
-        )}
+        {/* Audit Firm removed — managed in Audit Engagement */}
 
         {/* Responsible Person — "Non-Audit" or "Partner in Audited Firm" */}
         {(data.classification === "Non-Audit" || data.classification === "Partner in Audited Firm") && (
