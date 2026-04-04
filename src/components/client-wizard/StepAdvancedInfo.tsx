@@ -99,32 +99,10 @@ interface Props {
 export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive, errors }: Props) => {
   const { user } = useAuth();
 
-  const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
 
   const set = <K extends keyof AdvancedInfoData>(key: K, val: AdvancedInfoData[K]) =>
     onChange({ ...data, [key]: val });
-
-  /* Load audit firms — Issue 3 Fix:
-     - Filter by user's firm_id so partners only see their own firm's audit firms
-     - Use .neq("active", false) to include rows where active = NULL (not explicitly deactivated)
-  */
-  useEffect(() => {
-    if (data.classification !== "Audit") return;
-    const load = async () => {
-      let query = supabase
-        .from("audit_firms")
-        .select("id, name")
-        .neq("active", false)
-        .order("name");
-      if (user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id) as typeof query;
-      }
-      const { data: firms } = await query;
-      if (firms) setAuditFirms(firms);
-    };
-    load();
-  }, [data.classification, user?.firm_id]);
 
   /* Load users for responsible person */
   useEffect(() => {
