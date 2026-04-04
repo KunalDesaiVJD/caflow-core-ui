@@ -52,9 +52,9 @@ const NewClientWizard = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
-  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
-  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
+  // All clients go under V J Desai & Co.
+  const VJ_DESAI_FIRM_ID = "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+  const effectiveFirmId = VJ_DESAI_FIRM_ID;
 
   const isEditMode = Boolean(clientId);
   const [draftId, setDraftId] = useState<string | null>(clientId || null);
