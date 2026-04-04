@@ -65,13 +65,16 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     const clientMap = new Map((clientRes.data || []).map((c: any) => [c.id, c]));
     setClients(clientRes.data || []);
 
-    const mapped = (engRes.data || []).map((e: any) => ({
-      ...e,
-      stage_statuses: (e.stage_statuses || {}) as Record<string, string>,
-      // Prefer the direct join; fall back to clientMap (audit-only list); then "Unknown"
-      client_name: ((e as any).clients as any)?.name || clientMap.get(e.client_id)?.name || "Unknown",
-      client_entity_type: ((e as any).clients as any)?.entity_type || clientMap.get(e.client_id)?.entity_type || "",
-    }));
+    const mapped = (engRes.data || []).map((e: any) => {
+      const joined = e.clients as Record<string, any> | null;
+      const fallback = clientMap.get(e.client_id) as Record<string, any> | undefined;
+      return {
+        ...e,
+        stage_statuses: (e.stage_statuses || {}) as Record<string, string>,
+        client_name: joined?.name || fallback?.name || "Unknown",
+        client_entity_type: joined?.entity_type || fallback?.entity_type || "",
+      };
+    });
     setEngagements(mapped);
 
     if (mapped.length > 0 && !selectedEngagementId) {
