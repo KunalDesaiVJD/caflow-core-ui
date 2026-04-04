@@ -100,14 +100,7 @@ const NewClientWizard = () => {
     }
   }, [advancedInfo.financial_year]);
 
-  // Load firms list for superadmin
-  useEffect(() => {
-    if (!isSuperadmin) return;
-    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
-      setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
-    });
-  }, [isSuperadmin]);
+  // Firm selector removed — all clients go under V J Desai & Co.
 
   // Create draft client on wizard open (create mode only)
   useEffect(() => {
