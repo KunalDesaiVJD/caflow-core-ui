@@ -38,7 +38,9 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     const auditClientIds = [...new Set((auditClassRows || []).map((r: any) => r.client_id as string))];
 
     // Issue 5 fix: use `let` so we can reassign after applying firm_id filter
-    let engQuery: any = supabase.from("audit_engagements").select("*");
+    // Also select clients(name,entity_type) directly so client_name is always resolved
+    // even when the client is not in the audit-classification list
+    let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
     // Build the client query — filter to Audit-classified clients only
     let clientQuery: any = supabase
       .from("clients")
@@ -66,8 +68,9 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     const mapped = (engRes.data || []).map((e: any) => ({
       ...e,
       stage_statuses: (e.stage_statuses || {}) as Record<string, string>,
-      client_name: clientMap.get(e.client_id)?.name || "Unknown",
-      client_entity_type: clientMap.get(e.client_id)?.entity_type || "",
+      // Prefer the direct join; fall back to clientMap (audit-only list); then "Unknown"
+      client_name: e.clients?.name || clientMap.get(e.client_id)?.name || "Unknown",
+      client_entity_type: e.clients?.entity_type || clientMap.get(e.client_id)?.entity_type || "",
     }));
     setEngagements(mapped);
 

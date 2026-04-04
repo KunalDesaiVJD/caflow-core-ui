@@ -623,6 +623,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   };
 
   // ═══════ RENDER ═══════
+  // Guard: engagement prop may be undefined while parent is loading a new engagement
+  if (!engagement) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   // Stage gate: TB data available via either path OR Stage 2 explicitly completed
   const tbDataAvailable = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0;
   const stage2Complete = (engagement?.pipeline_stage ?? 0) >= 3 ||
