@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; $cmd = $d.tool_input.command; if ($cmd -match 'git commit|git merge') { Set-Location 'C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main'; $branch = git rev-parse --abbrev-ref HEAD 2>$null; if ($branch) { git push origin $branch 2>&1 | Out-Null } }\" 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "Pushing to GitHub..."
+          }
+        ]
+      }
+    ]
+  }
+}
