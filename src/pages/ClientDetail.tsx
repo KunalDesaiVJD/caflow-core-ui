@@ -209,7 +209,7 @@ const ClientDetail = () => {
       const [clientRes, profileRes, catRes, csRes, staffRes] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId!).single(),
         supabase.from("client_profiles").select("audit_questions").eq("client_id", clientId!).limit(1),
-        supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active").eq("is_active", true).order("name"),
+        supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active, firm_id").eq("is_active", true).order("name"),
         supabase.from("client_services").select("*").eq("client_id", clientId!),
         supabase.from("users").select("id, name").order("name"),
       ]);
@@ -233,7 +233,13 @@ const ClientDetail = () => {
       }
 
       if (profileRes.data?.[0]) setBankingData(profileRes.data[0]);
-      setServiceCategories((catRes.data || []) as any as ServiceCategory[]);
+      // Filter service categories to only show current client's firm to avoid duplicates
+      const clientFirmId = c?.firm_id;
+      const allCats = (catRes.data || []) as any[];
+      const filteredCats = clientFirmId
+        ? allCats.filter((cat: any) => cat.firm_id === clientFirmId || !cat.firm_id)
+        : allCats;
+      setServiceCategories(filteredCats as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
       setStaffList((staffRes.data || []) as any[]);
       setItrWorkGroups(wgData);

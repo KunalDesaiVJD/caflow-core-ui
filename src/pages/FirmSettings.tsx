@@ -4,6 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -247,6 +251,31 @@ const FirmSettings = () => {
     }
   }
 
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDeleteFirm() {
+    if (!firmId || !isAdmin) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from("firms").delete().eq("id", firmId);
+      if (error) throw error;
+      toast({ title: "Firm deleted successfully" });
+      setDeleteConfirmOpen(false);
+      setSelectedFirmId(null);
+      setFirmId(null);
+      await loadFirmsList();
+      if (firmsList.length > 1) {
+        const remaining = firmsList.filter(f => f.id !== firmId);
+        if (remaining.length > 0) setSelectedFirmId(remaining[0].id);
+      }
+    } catch (e: any) {
+      toast({ title: "Error deleting firm", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   }
@@ -260,12 +289,36 @@ const FirmSettings = () => {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Complete firm profile, audit registration, and billing.</p>
         </div>
-        {isAdmin && (
-          <Button onClick={save} disabled={saving}>
-            {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-            Save All
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <Button variant="destructive" size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={deleting}>
+              <Trash2 className="h-4 w-4 mr-1" /> Delete Firm
+            </Button>
+          )}
+          {isAdmin && (
+            <Button onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+              Save All
+            </Button>
+          )}
+        </div>
+        <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Firm</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete <strong>{name}</strong>? This action cannot be undone. All associated data (clients, invoices, engagements) may become orphaned.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleDeleteFirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleting}>
+                {deleting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Delete Permanently
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       {user?.role === "superadmin" && firmsList.length > 1 && (
