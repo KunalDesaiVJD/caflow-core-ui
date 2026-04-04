@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,16 +18,12 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Building, Bell, Shield, Users, BookOpen, CreditCard,
-  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink, Upload, Image,
+  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Types ───
 interface FirmSettings {
-  logo_url?: string;
-  signature_url?: string;
-  gstin?: string;
-  address?: string;
   notification_prefs?: Record<string, { whatsapp: boolean; email: boolean; wati_template_id?: string }>;
   billing?: {
     gst_rate?: number;
@@ -73,21 +69,10 @@ const SettingsPage = () => {
   const { toast } = useToast();
   const isAdmin = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
 
-  // ─── Firm Profile State ───
-  const [firmName, setFirmName] = useState("");
-  const [icaiReg, setIcaiReg] = useState("");
-  const [gstin, setGstin] = useState("");
-  const [address, setAddress] = useState("");
-  const [logoUrl, setLogoUrl] = useState("");
-  const [signatureUrl, setSignatureUrl] = useState("");
+  // ─── Firm State (shared — needed for notification and billing saves) ───
   const [firmLoading, setFirmLoading] = useState(true);
-  const [firmSaving, setFirmSaving] = useState(false);
   const [firmId, setFirmId] = useState<string | null>(null);
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
-  const [logoUploading, setLogoUploading] = useState(false);
-  const [sigUploading, setSigUploading] = useState(false);
-  const logoInputRef = useRef<HTMLInputElement>(null);
-  const sigInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Notification State ───
   const [notifPrefs, setNotifPrefs] = useState<Record<string, { whatsapp: boolean; email: boolean; wati_template_id?: string }>>({});
@@ -136,15 +121,9 @@ const SettingsPage = () => {
 
   async function loadFirmData(id: string) {
     setFirmLoading(true);
-    const { data } = await supabase.from("firms").select("*").eq("id", id).single();
+    const { data } = await supabase.from("firms").select("settings").eq("id", id).single();
     if (data) {
-      setFirmName(data.name || "");
-      setIcaiReg(data.icai_reg_no || "");
       const settings = (data.settings || {}) as FirmSettings;
-      setGstin(settings.gstin || "");
-      setAddress(settings.address || "");
-      setLogoUrl(settings.logo_url || "");
-      setSignatureUrl(settings.signature_url || "");
       setNotifPrefs(settings.notification_prefs || {});
       if (settings.billing) {
         setBilling(prev => ({ ...prev, ...settings.billing }));
@@ -162,52 +141,6 @@ const SettingsPage = () => {
   async function loadFirmsList() {
     const { data } = await supabase.from("firms").select("id, name").order("name");
     setFirmsList(data || []);
-  }
-
-  const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml"];
-  const MAX_FILE_SIZE = 5 * 1024 * 1024;
-
-  async function handleFileUpload(file: File, path: string, setter: (url: string) => void, setUploading: (v: boolean) => void) {
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      toast({ title: "Invalid file type", description: "Please upload PNG, JPG, or SVG under 5MB.", variant: "destructive" });
-      return;
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast({ title: "File too large", description: "Maximum file size is 5MB.", variant: "destructive" });
-      return;
-    }
-    setUploading(true);
-    try {
-      const { error } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
-      if (error) throw error;
-      const { data } = supabase.storage.from("firm-assets").getPublicUrl(path);
-      setter(data.publicUrl);
-      toast({ title: "File uploaded successfully" });
-    } catch (e: any) {
-      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function saveFirmProfile() {
-    if (!firmId || !isAdmin) return;
-    setFirmSaving(true);
-    try {
-      const { data: current } = await supabase.from("firms").select("settings").eq("id", firmId).single();
-      const existingSettings = (current?.settings || {}) as FirmSettings;
-      const { error } = await supabase.from("firms").update({
-        name: firmName,
-        icai_reg_no: icaiReg,
-        settings: { ...existingSettings, gstin, address, logo_url: logoUrl, signature_url: signatureUrl },
-      } as any).eq("id", firmId);
-      if (error) throw error;
-      toast({ title: "Firm profile saved" });
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-      setFirmSaving(false);
-    }
   }
 
   async function saveNotificationPrefs() {
@@ -376,9 +309,8 @@ const SettingsPage = () => {
         <p className="text-muted-foreground">Firm settings, team management, and preferences.</p>
       </div>
 
-      <Tabs defaultValue="firm-profile" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6">
-          <TabsTrigger value="firm-profile" className="text-xs">Firm Profile</TabsTrigger>
+      <Tabs defaultValue="notifications" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="team" className="text-xs">Team</TabsTrigger>
           <TabsTrigger value="notifications" className="text-xs">Notifications</TabsTrigger>
           <TabsTrigger value="scrutiny-rules" className="text-xs">Scrutiny Rules</TabsTrigger>
@@ -386,111 +318,7 @@ const SettingsPage = () => {
           <TabsTrigger value="billing" className="text-xs">Billing</TabsTrigger>
         </TabsList>
 
-        {/* ─── TAB 1: Firm Profile ─── */}
-        <TabsContent value="firm-profile">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" /> Firm Profile</CardTitle>
-              <CardDescription>Update your firm's details and branding.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Firm Selector for Superadmin */}
-              {user?.role === "superadmin" && firmsList.length > 1 && (
-                <div className="space-y-2">
-                  <Label>Select Firm</Label>
-                  <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
-                    <SelectTrigger><SelectValue placeholder="Select firm" /></SelectTrigger>
-                    <SelectContent>
-                      {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Firm Name</Label>
-                  <Input value={firmName} onChange={e => setFirmName(e.target.value)} disabled={!isAdmin} />
-                </div>
-                <div className="space-y-2">
-                  <Label>ICAI Registration Number</Label>
-                  <Input value={icaiReg} onChange={e => setIcaiReg(e.target.value)} disabled={!isAdmin} />
-                </div>
-                <div className="space-y-2">
-                  <Label>GSTIN</Label>
-                  <Input value={gstin} onChange={e => setGstin(e.target.value)} disabled={!isAdmin} placeholder="22AAAAA0000A1Z5" />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Registered Address</Label>
-                <Textarea value={address} onChange={e => setAddress(e.target.value)} disabled={!isAdmin} rows={3} />
-              </div>
-
-              {/* Logo Upload */}
-              <div className="space-y-2">
-                <Label>Firm Logo</Label>
-                {logoUrl && (
-                  <div className="flex items-center gap-4 mb-2">
-                    <img src={logoUrl} alt="Firm Logo" className="h-16 object-contain rounded border border-border p-1" />
-                  </div>
-                )}
-                <input
-                  ref={logoInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.svg"
-                  className="hidden"
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (file && firmId) handleFileUpload(file, `logos/${firmId}.png`, setLogoUrl, setLogoUploading);
-                    e.target.value = "";
-                  }}
-                />
-                {isAdmin && (
-                  <Button variant="outline" onClick={() => logoInputRef.current?.click()} disabled={logoUploading} className="gap-2">
-                    {logoUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                    {logoUrl ? "Replace Logo" : "Upload Logo"}
-                  </Button>
-                )}
-                <p className="text-xs text-muted-foreground">Supported: PNG, JPG, SVG. Max 5MB.</p>
-              </div>
-
-              {/* Signature Upload */}
-              <div className="space-y-2">
-                <Label>Signature Image (for letterhead)</Label>
-                {signatureUrl && (
-                  <div className="flex items-center gap-4 mb-2">
-                    <img src={signatureUrl} alt="Signature" className="h-12 object-contain rounded border border-border p-1" />
-                  </div>
-                )}
-                <input
-                  ref={sigInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.svg"
-                  className="hidden"
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (file && firmId) handleFileUpload(file, `signatures/${firmId}.png`, setSignatureUrl, setSigUploading);
-                    e.target.value = "";
-                  }}
-                />
-                {isAdmin && (
-                  <Button variant="outline" onClick={() => sigInputRef.current?.click()} disabled={sigUploading} className="gap-2">
-                    {sigUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                    {signatureUrl ? "Replace Signature" : "Upload Signature"}
-                  </Button>
-                )}
-                <p className="text-xs text-muted-foreground">Supported: PNG, JPG, SVG. Max 5MB.</p>
-              </div>
-
-              {isAdmin && (
-                <Button onClick={saveFirmProfile} disabled={firmSaving}>
-                  {firmSaving ? "Saving…" : "Save Firm Profile"}
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ─── TAB 2: Team ─── */}
+        {/* ─── TAB 1: Team ─── */}
         <TabsContent value="team">
           <Card>
             <CardHeader>
