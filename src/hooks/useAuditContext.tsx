@@ -69,8 +69,8 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       ...e,
       stage_statuses: (e.stage_statuses || {}) as Record<string, string>,
       // Prefer the direct join; fall back to clientMap (audit-only list); then "Unknown"
-      client_name: e.clients?.name || clientMap.get(e.client_id)?.name || "Unknown",
-      client_entity_type: e.clients?.entity_type || clientMap.get(e.client_id)?.entity_type || "",
+      client_name: (e.clients as any)?.name || clientMap.get(e.client_id)?.name || "Unknown",
+      client_entity_type: (e.clients as any)?.entity_type || clientMap.get(e.client_id)?.entity_type || "",
     }));
     setEngagements(mapped);
 

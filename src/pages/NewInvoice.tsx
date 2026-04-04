@@ -932,10 +932,7 @@ const NewInvoice = () => {
                 {/* Place of Supply removed from invoice display */}
               </div>
             )}
-            <div className="flex items-center gap-2 mt-2">
-              <Switch checked={showLogo} onCheckedChange={setShowLogo} disabled={isLocked} />
-              <Label className="text-xs">Show Logo</Label>
-            </div>
+            {/* Show Logo toggle removed per user request */}
           </div>
 
           <Separator />
