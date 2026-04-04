@@ -555,19 +555,43 @@ export function buildTbPresentationModel(rawNodes: TbHierarchyNodeLike[]): TbPre
   }
 
   // ── Sign correction ────────────────────────────────────────────────────────
-  // Tally XML exports Dr-normal accounts (Fixed Assets, vehicles, etc.) with
-  // NEGATIVE opening/closing values.  By this point every leaf node has had its
-  // normalBal resolved (either from the raw data or from the section inference
-  // above).  Flip opening/closing to positive for any Dr-normal leaf that is
-  // currently stored as negative.  txnDebit/txnCredit are always stored as
-  // positive by the edge function, so we never touch those.
-  // This must run BEFORE section totals are computed so sumLeafDescendants
-  // picks up the corrected values.
+  // Tally XML convention: Dr-normal accounts (Assets, Purchases, Direct/Indirect
+  // Expenses) are stored with NEGATIVE opening/closing values for a normal Dr balance.
+  // A POSITIVE closing value for a Dr-normal account therefore indicates a genuine
+  // credit balance (e.g. a debtor who has over-advanced, contra-expense credit, etc.).
+  //
+  // Detection: if ANY Dr-normal leaf arrives with a negative closing or opening we
+  // are working with Tally XML sign convention and must apply a full sign inversion:
+  //   • stored negative (= Dr balance)  →  + positive shown on assets/expenses side
+  //   • stored positive (= genuine Cr)  →  − negative shown on assets/expenses side
+  //     (credit-balance ledgers are left as-is without sign normalisation and appear
+  //      as negative deductions within their respective section — they are NOT flipped
+  //      to positive, which would incorrectly inflate the assets/expenses total)
+  //
+  // For Excel imports (all values already unsigned/positive) the detection falls back
+  // to the original defensive flip that only corrects already-negative values.
+  //
+  // txnDebit/txnCredit are always stored as positive by the edge function — not touched.
+  // This must run BEFORE section totals so sumLeafDescendants picks up corrected values.
+  const _drNormalLeaves = activeNodes.filter(n => n.isLeaf && n.normalBal === "Dr");
+  const _isXmlSignConvention = _drNormalLeaves.some(
+    n => (n.closing ?? 0) < 0 || (n.opening ?? 0) < 0,
+  );
+
   for (const node of activeNodes) {
     if (!node.isLeaf) continue;
     if (node.normalBal !== "Dr") continue;
-    if ((node.opening ?? 0) < 0) node.opening = -node.opening;
-    if ((node.closing ?? 0) < 0) node.closing = -node.closing;
+    if (_isXmlSignConvention) {
+      // Full inversion for XML data:
+      //   negative stored value (Dr balance) → positive on assets/expenses side
+      //   positive stored value (genuine Cr)  → negative on assets/expenses side
+      node.opening = -(node.opening ?? 0);
+      node.closing = -(node.closing ?? 0);
+    } else {
+      // Excel / already-unsigned data: only correct values that arrived negative
+      if ((node.opening ?? 0) < 0) node.opening = -node.opening;
+      if ((node.closing ?? 0) < 0) node.closing = -node.closing;
+    }
   }
 
   const sectionDefs: Array<Pick<TbPresentationSection, "key" | "label" | "subtotalLabel">> = [
