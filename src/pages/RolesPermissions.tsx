@@ -131,13 +131,26 @@ const RolesPermissions = () => {
     }
 
     // Fill missing with defaults
+    const missingRows: any[] = [];
     for (const role of ALL_ROLES) {
       if (!g[role]) g[role] = {};
       for (const mod of ALL_MODULES) {
         if (!g[role][mod]) {
           const def = DEFAULT_PERMISSIONS[role]?.[mod] || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
           g[role][mod] = { firm_id: firmId!, role, module: mod, ...def };
+          // Fix (Issue 6): Seed missing rows so future saves are UPDATEs not INSERTs.
+          // INSERTs were silently discarded by RLS when the session variable set by
+          // set_user_context had not yet been initialised (async race condition).
+          missingRows.push({ firm_id: firmId!, role, module: mod, ...def });
         }
+      }
+    }
+    // Seed all missing defaults to DB (best-effort; errors are ignored)
+    if (missingRows.length > 0) {
+      for (let i = 0; i < missingRows.length; i += 50) {
+        await supabase
+          .from("role_permissions")
+          .upsert(missingRows.slice(i, i + 50), { onConflict: "firm_id,role,module", ignoreDuplicates: true });
       }
     }
 

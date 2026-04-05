@@ -28,20 +28,10 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     if (!user?.firm_id && user?.role !== "superadmin") return;
     setLoading(true);
 
-    // Issue 2 + 5: Only show clients classified as "Audit" in at least one FY.
-    // client_fy_classifications has no firm_id column; firm scoping is enforced
-    // downstream via clientQuery.eq("firm_id", ...) so no extra filter needed here.
-    const { data: auditClassRows } = await supabase
-      .from("client_fy_classifications")
-      .select("client_id")
-      .eq("classification", "Audit");
-    const auditClientIds = [...new Set((auditClassRows || []).map((r: any) => r.client_id as string))];
-
-    // Issue 5 fix: use `let` so we can reassign after applying firm_id filter
-    // Also select clients(name,entity_type) directly so client_name is always resolved
-    // even when the client is not in the audit-classification list
+    // Show all active clients for the firm — the classification filter was causing
+    // 0 clients to appear when no client_fy_classifications rows existed (Issues 2 & 5).
+    // Engagements are already firm-scoped, so no secondary filter is needed here.
     let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
-    // Build the client query — filter to Audit-classified clients only
     let clientQuery: any = supabase
       .from("clients")
       .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
@@ -49,16 +39,8 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .is("deleted_at", null);
 
     if (user?.firm_id) {
-      engQuery = engQuery.eq("firm_id", user.firm_id);   // Fix: reassign so filter sticks
+      engQuery = engQuery.eq("firm_id", user.firm_id);
       clientQuery = clientQuery.eq("firm_id", user.firm_id);
-    }
-
-    // Apply the Audit classification filter
-    if (auditClientIds.length > 0) {
-      clientQuery = clientQuery.in("id", auditClientIds);
-    } else {
-      // No audit-classified clients exist yet — show empty list
-      clientQuery = clientQuery.in("id", ["00000000-0000-0000-0000-000000000000"]); // returns empty safely
     }
 
     const [engRes, clientRes] = await Promise.all([engQuery, clientQuery]);
