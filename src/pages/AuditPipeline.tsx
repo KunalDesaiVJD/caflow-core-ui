@@ -343,13 +343,13 @@ export default function AuditPipeline() {
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
+      const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
       // Check for duplicate engagement
       const { data: existing } = await supabase
         .from("audit_engagements")
         .select("id")
         .eq("client_id", form1A.client_id)
-        // TODO: Supabase RLS policy needs superadmin bypass for audit_engagements
-        .eq("firm_id", user?.firm_id ?? "")
+        .eq("firm_id", effectiveFirmId)
         .eq("financial_year", form1A.financial_year)
         .eq("audit_type", form1A.audit_type)
         .eq("audit_period_type", form1A.audit_period_type)
