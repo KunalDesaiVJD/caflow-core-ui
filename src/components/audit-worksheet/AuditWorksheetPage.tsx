@@ -139,12 +139,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           <TabsContent value="int_master" className="mt-3">
             <InternalAuditMaster
               data={data}
-              master={master}
-              setMaster={setMaster}
-              patchMaster={patchMaster}
-              saveMaster={saveMaster}
-              masterSaving={masterSaving}
-              masterLoaded={masterLoaded}
+              engagementId={engagementId}
             />
           </TabsContent>
         )}
