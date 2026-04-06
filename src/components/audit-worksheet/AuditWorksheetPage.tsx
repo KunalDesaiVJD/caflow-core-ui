@@ -86,7 +86,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
         <ExportButtons
           data={data}
           master={master}
-          worksheetItems={worksheetItems}
+          worksheetItems={[]}
           specialAttentionItems={[]}
           checklistItems={checklistItems}
         />
