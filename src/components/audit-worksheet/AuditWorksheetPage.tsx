@@ -33,10 +33,8 @@ interface Props {
 export default function AuditWorksheetPage({ engagementId }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
-  const {
-    master, masterLoaded,
-    getItemsBySheet, updateItem, addItem, deleteItem,
-  } = useWorksheetStorage(engagementId, data.engagement?.firm_id);
+  const { master, masterLoaded } =
+    useWorksheetStorage(engagementId, data.engagement?.firm_id);
 
   // Determine which tabs to show
   const auditType = data.auditType;
@@ -54,8 +52,6 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
     : "worksheet";
 
   const [activeTab, setActiveTab] = useState(defaultTab);
-
-  const checklistItems = getItemsBySheet("checklist");
 
   if (data.loading && !masterLoaded) {
     return (
@@ -88,7 +84,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           master={master}
           worksheetItems={[]}
           specialAttentionItems={[]}
-          checklistItems={checklistItems}
+          checklistItems={[]}
         />
       </div>
 
@@ -170,10 +166,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
         {/* ── Sheet 6: Checklist ── */}
         <TabsContent value="checklist" className="mt-3">
           <Checklist
-            items={checklistItems}
-            updateItem={updateItem}
-            addItem={addItem}
-            deleteItem={deleteItem}
+            data={data}
+            engagementId={engagementId}
           />
         </TabsContent>
       </Tabs>
