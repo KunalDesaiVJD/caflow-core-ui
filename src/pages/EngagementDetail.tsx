@@ -12,7 +12,7 @@ import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
-import { CheckCircle, Circle, AlertTriangle, Pencil } from "lucide-react";
+import { CheckCircle, Circle, AlertTriangle, Pencil, ClipboardList } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
 const TAB_MAP: Record<string, string> = {
@@ -125,6 +125,14 @@ export default function EngagementDetail() {
             {engagement.status || "Planning"}
           </Badge>
           <Badge variant="secondary" className="text-xs capitalize">{engagement.audit_type || "Statutory"}</Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-xs h-7 ml-auto"
+            onClick={() => navigate(`/audit/${engagementId}/worksheet`)}
+          >
+            <ClipboardList size={13} /> Audit Worksheet
+          </Button>
         </div>
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
           {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}

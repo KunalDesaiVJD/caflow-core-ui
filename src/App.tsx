@@ -65,6 +65,7 @@ import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
 import AuditMasterConfig from "./pages/AuditMasterConfig";
+import AuditWorksheetPageWrapper from "./pages/AuditWorksheetPageWrapper";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -177,6 +178,7 @@ const App = () => (
               <Route path="/audit/report" element={<AuditReportEngine />} />
               <Route path="/audit/notes" element={<NotesToAccounts />} />
               <Route path="/audit/:clientId/report" element={<AuditReportEngine />} />
+              <Route path="/audit/:engagementId/worksheet" element={<AuditWorksheetPageWrapper />} />
               <Route path="/audit/:engagementId/detail" element={<EngagementDetail />} />
               <Route path="/audit/:engagementId" element={<EngagementDetail />} />
               <Route path="/audit-intelligence" element={<Navigate to="/audit" replace />} />

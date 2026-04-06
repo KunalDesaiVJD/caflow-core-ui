@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import AuditWorksheetModule from "@/components/pipeline/AuditWorksheetModule";
+import AuditWorksheetPage from "@/components/audit-worksheet/AuditWorksheetPage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -135,10 +135,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
 
         {/* ═══ AUDIT SHEET — Full Worksheet Module ═══ */}
         <TabsContent value="audit_sheet">
-          <AuditWorksheetModule
-            engagementId={engagementId}
-            engagement={engagement}
-          />
+          <AuditWorksheetPage engagementId={engagementId} />
         </TabsContent>
 
         {/* ═══ WORKPAPERS ═══ */}
