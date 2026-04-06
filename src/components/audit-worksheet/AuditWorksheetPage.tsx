@@ -34,7 +34,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
   const {
-    master, setMaster, saveMaster, masterSaving, masterLoaded,
+    master, masterLoaded,
     getItemsBySheet, updateItem, addItem, deleteItem,
   } = useWorksheetStorage(engagementId, data.engagement?.firm_id);
 
@@ -162,11 +162,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
         {/* ── Sheet 5: Query Sheet ── */}
         <TabsContent value="queries" className="mt-3">
           <QuerySheet
+            data={data}
             engagementId={engagementId}
-            master={master}
-            setMaster={setMaster}
-            saveMaster={saveMaster}
-            masterSaving={masterSaving}
           />
         </TabsContent>
 
