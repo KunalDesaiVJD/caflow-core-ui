@@ -79,7 +79,8 @@ export interface AuditWorksheetData {
   fyEndDate:     string;   // "2025-03-31"
   prevFyStart:   string;   // "2023-04-01"
   prevFyEnd:     string;   // "2024-03-31"
-  isCorporate:   boolean;  // Pvt Ltd / Public Ltd / company / LLP (Req #3)
+  isCorporate:           boolean;  // Pvt Ltd / Public Ltd / company / LLP
+  isPrivateOrPublicLtd:  boolean;  // STRICT: only Pvt Ltd / Public Ltd (Req #3 — Special Attention tab gate)
 
   loading: boolean;
   error:   string | null;
@@ -195,13 +196,25 @@ export function useAuditWorksheetData(engagementId: string): AuditWorksheetData 
   const { start: fyStart, end: fyEnd }     = deriveFyDates(fy);
   const { start: prevStart, end: prevEnd } = prevFyDates(fy);
 
-  // isCorporate: entity is a company / LLP that needs corporate-specific checks (Req #3)
+  // isCorporate: broad check — company / LLP for things like CARO, Notes to Accounts
   const isCorporate =
     engEntity    === "company" ||
     engEntity    === "llp"     ||
-    clientEntity === "Private Ltd" ||
-    clientEntity === "Public Ltd"  ||
+    clientEntity === "Private Ltd"     ||
+    clientEntity === "Public Ltd"      ||
+    clientEntity === "Private Limited" ||
+    clientEntity === "Public Limited"  ||
     clientEntity === "LLP";
+
+  // isPrivateOrPublicLtd: STRICT check — ONLY Pvt Ltd / Public Ltd
+  // Used to gate the Special Attention tab (Req #3).
+  // LLP, Partnership, Proprietorship, Individual → tab is HIDDEN entirely.
+  const isPrivateOrPublicLtd =
+    engEntity    === "company"         ||
+    clientEntity === "Private Ltd"     ||
+    clientEntity === "Public Ltd"      ||
+    clientEntity === "Private Limited" ||
+    clientEntity === "Public Limited";
 
   const firmName =
     firm?.display_name || firm?.name ||
@@ -228,6 +241,7 @@ export function useAuditWorksheetData(engagementId: string): AuditWorksheetData 
     prevFyStart:    prevStart,
     prevFyEnd:      prevEnd,
     isCorporate,
+    isPrivateOrPublicLtd,
 
     loading: engLoading || clientLoading,
     error:   engError ? String(engError) : null,

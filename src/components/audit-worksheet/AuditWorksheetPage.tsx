@@ -35,19 +35,21 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
   const {
-    master, setMaster, patchMaster, saveMaster, masterSaving, masterLoaded,
-    allItems, getItemsBySheet, updateItem, addItem, deleteItem,
+    master, setMaster, saveMaster, masterSaving, masterLoaded,
+    getItemsBySheet, updateItem, addItem, deleteItem,
   } = useWorksheetStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
 
   // Determine which tabs to show
-  const auditType   = data.auditType;
-  const isCorporate = data.isCorporate;
+  const auditType = data.auditType;
 
-  const showTaxMaster  = auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
-  const showIntMaster  = auditType === "internal";
-  const showSpecial    = isCorporate;
+  const showTaxMaster = auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
+  const showIntMaster = auditType === "internal";
+
+  // Req #3: Special Attention tab HIDDEN (not just disabled) for LLP / Partnership / Proprietorship.
+  // Only Private Ltd / Public Ltd / company engagement type trigger it.
+  const showSpecial = data.isPrivateOrPublicLtd;
 
   // Default first tab
   const defaultTab = showTaxMaster ? "tax_master"
@@ -56,9 +58,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
 
   const [activeTab, setActiveTab] = useState(defaultTab);
 
-  const worksheetItems      = getItemsBySheet("worksheet");
-  const specialAttentionItems = getItemsBySheet("special_attention");
-  const checklistItems      = getItemsBySheet("checklist");
+  const worksheetItems = getItemsBySheet("worksheet");
+  const checklistItems = getItemsBySheet("checklist");
 
   if (data.loading && !masterLoaded) {
     return (
@@ -90,7 +91,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           data={data}
           master={master}
           worksheetItems={worksheetItems}
-          specialAttentionItems={specialAttentionItems}
+          specialAttentionItems={[]}
           checklistItems={checklistItems}
         />
       </div>
@@ -148,10 +149,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
         {showSpecial && (
           <TabsContent value="special" className="mt-3">
             <SpecialAttention
-              items={specialAttentionItems}
-              updateItem={updateItem}
-              addItem={addItem}
-              deleteItem={deleteItem}
+              data={data}
+              engagementId={engagementId}
             />
           </TabsContent>
         )}
