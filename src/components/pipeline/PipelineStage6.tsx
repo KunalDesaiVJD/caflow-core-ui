@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import AuditWorksheetModule from "@/components/pipeline/AuditWorksheetModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -132,29 +133,12 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
           </TabsTrigger>
         </TabsList>
 
-        {/* ═══ AUDIT SHEET — Under Development ═══ */}
+        {/* ═══ AUDIT SHEET — Full Worksheet Module ═══ */}
         <TabsContent value="audit_sheet">
-          <Card className="border-dashed border-2 border-primary/30">
-            <CardContent className="p-12 text-center space-y-4">
-              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                <ClipboardCheck className="w-8 h-8 text-primary" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-foreground">Audit Sheet</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Our firm's standardised audit working paper template
-                </p>
-              </div>
-              <Badge variant="secondary" className="text-sm px-4 py-1">
-                🚧 Under Development — Coming Soon
-              </Badge>
-              <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                The audit sheet will be customised to your firm's format.
-                It will include: engagement details, materiality computation,
-                scope of audit, key findings summary, audit observations, and conclusion.
-              </p>
-            </CardContent>
-          </Card>
+          <AuditWorksheetModule
+            engagementId={engagementId}
+            engagement={engagement}
+          />
         </TabsContent>
 
         {/* ═══ WORKPAPERS ═══ */}
