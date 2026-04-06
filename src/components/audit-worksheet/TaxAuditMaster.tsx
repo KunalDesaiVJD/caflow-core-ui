@@ -1,193 +1,671 @@
 /**
  * TaxAuditMaster — Sheet 1
+ *
+ * Exact replica of the Excel Tax Audit Master sheet.
  * Shown when audit_type = "tax_audit" | "both" | "statutory"
- * Auto-populates from engagement data on first load.
+ *
+ * Fields (in order):
+ *  1.  Name of Client           — auto-fetch (read-only)
+ *  2.  Proprietor/Partner Name  — free text
+ *  3.  Address                  — auto-fetch (read-only)
+ *  4.  PAN No.                  — auto-fetch (read-only)
+ *  5.  Birth / Regi. Date       — auto-fetch (read-only)
+ *  6.  Contact Nos.             — 2-col: Accountant+Mobile  |  Bank A/c+Branch
+ *  7.  Previous Year Details    — 2 checkboxes
+ *  8.  Books of Accounts        — 8 checkboxes in 2 cols + Others text
+ *  9.  Stock Quantity Records   — YES/NO + textarea if YES
+ * 10.  Dates Audit Conducted    — FROM / TO date pickers
+ * 11.  GST Details              — YES/NO + ID + Password if YES
+ * 12.  Payments to Relatives    — YES/NO
+ * 13.  Secured/Unsecured Loan   — YES/NO
+ * 14.  Deduction Details        — YES/NO
+ * 15.  Audit Report Prepared By — employee dropdown
+ * 16.  Return Prepared By       — employee dropdown
+ * 17.  3CD Prepared By          — employee dropdown
+ * 18.  Signed Copy Received     — date
+ * 19.  Management Repr. Letter  — date
+ * 20.  Appointment Letter       — date
+ *
+ * Footer: A/c Path | Report Path | Prepared By | Verified By | Reviewed By
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Save, Loader2, Wand2 } from "lucide-react";
-import type { WsMaster } from "./hooks/useWorksheetStorage";
+import { Save, Loader2, Wand2, Eye, EyeOff, Building2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+import { useTaxMasterStorage } from "./hooks/useTaxMasterStorage";
+import { useEmployeeDropdown }  from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 interface Props {
-  data: AuditWorksheetData;
-  master: WsMaster;
-  setMaster: (field: keyof WsMaster, value: any) => void;
-  patchMaster: (patch: Partial<WsMaster>) => void;
-  saveMaster: (silent?: boolean) => Promise<boolean>;
-  masterSaving: boolean;
-  masterLoaded: boolean;
+  data: AuditWorksheetData;     // from useAuditWorksheetData
+  engagementId: string;
 }
 
-const ENTITY_TYPES = ["Individual", "HUF", "Firm", "LLP", "Private Ltd", "Public Ltd", "Trust", "AOP/BOI", "Other"];
-const ACCOUNTING_METHODS = ["Mercantile", "Cash", "Hybrid"];
-const SECTIONS = ["44AB(a)", "44AB(b)", "44AB(c)", "44AB(d)", "44AB(e)", "44AD", "44ADA", "44AE"];
-const FORM_TYPES = ["3CB", "3CA", "3CD"];
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-export default function TaxAuditMaster({
-  data, master, setMaster, patchMaster, saveMaster, masterSaving, masterLoaded,
-}: Props) {
+/** "2024-25" → "2024-2025" */
+function expandFY(fy: string): string {
+  const m = fy.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return fy;
+  const y = parseInt(m[1]);
+  return `${y}-${y + 1}`;
+}
 
-  // Auto-populate on first load when master fields are blank
-  useEffect(() => {
-    if (!masterLoaded) return;
-    if (master.tax_client_name) return; // already populated
-    if (!data.clientName) return;
-
-    patchMaster({
-      tax_client_name:       data.clientName,
-      tax_address:           data.clientAddress,
-      tax_pan:               data.pan,
-      tax_cin:               data.cin,
-      tax_gstin:             data.gstin,
-      tax_entity_type:       data.entityType,
-      tax_financial_year:    data.financialYear,
-      tax_period_from:       data.fyStartDate,
-      tax_period_to:         data.fyEndDate,
-      tax_prev_year_from:    data.prevFyStart,
-      tax_prev_year_to:      data.prevFyEnd,
-      tax_auditor_firm:      data.auditFirm?.name     || data.firmName,
-      tax_auditor_address:   data.auditFirm?.address
-                               ? `${data.auditFirm.address}${data.auditFirm.city ? ", " + data.auditFirm.city : ""}`
-                               : "",
-      tax_icai_reg:          data.firm?.icai_firm_reg_no || data.auditFirm?.icai_reg_no || "",
-      tax_partner_name:      data.auditFirm?.partner_name || "",
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric",
     });
-  }, [masterLoaded, data.clientName]);
+  } catch {
+    return iso;
+  }
+}
 
-  const f = (
-    id: keyof WsMaster,
-    label: string,
-    type: "text" | "date" | "number" = "text",
-    half = false
-  ) => (
-    <div className={half ? "" : "col-span-2 md:col-span-1"}>
-      <Label htmlFor={id} className="text-xs">{label}</Label>
-      <Input
-        id={id}
-        type={type}
-        value={(master[id] as string) || ""}
-        onChange={e => setMaster(id, e.target.value)}
-        className="h-8 text-sm"
-      />
+// ─── Sub-components ─────────────────────────────────────────────────────────
+
+/** Read-only display cell (auto-fetched from DB) */
+function ReadOnlyField({
+  label, value, className,
+}: {
+  label: string; value: string; className?: string;
+}) {
+  return (
+    <div className={cn("space-y-0.5", className)}>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">{label}</p>
+      <p className="text-sm font-medium text-foreground bg-muted/40 rounded px-2 py-1.5 min-h-[32px] border border-dashed border-border/50">
+        {value || <span className="text-muted-foreground/60 italic text-xs">—</span>}
+      </p>
     </div>
   );
+}
 
-  const ta = (id: keyof WsMaster, label: string, rows = 2) => (
-    <div className="col-span-2">
-      <Label htmlFor={id} className="text-xs">{label}</Label>
-      <Textarea
-        id={id}
-        rows={rows}
-        value={(master[id] as string) || ""}
-        onChange={e => setMaster(id, e.target.value)}
-        className="text-sm"
-      />
+/** Section header row */
+function SectionHeader({ label, no }: { label: string; no: number }) {
+  return (
+    <div className="flex items-center gap-2 mt-1 mb-2">
+      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-primary-foreground text-[11px] font-bold flex items-center justify-center">
+        {no}
+      </span>
+      <p className="text-[13px] font-semibold text-foreground">{label}</p>
+      <div className="flex-1 h-px bg-border" />
     </div>
   );
+}
 
-  const sel = (id: keyof WsMaster, label: string, options: string[]) => (
-    <div>
+/** YES / NO select */
+function YesNo({
+  value, onChange,
+}: {
+  value: "yes" | "no" | ""; onChange: (v: "yes" | "no") => void;
+}) {
+  return (
+    <Select value={value} onValueChange={v => onChange(v as "yes" | "no")}>
+      <SelectTrigger className="h-8 text-sm w-28">
+        <SelectValue placeholder="Select…" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="yes">Yes</SelectItem>
+        <SelectItem value="no">No</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Employee searchable dropdown */
+function EmpSelect({
+  label,
+  value,
+  onChange,
+  employees,
+}: {
+  label: string;
+  value: string;
+  onChange: (id: string, name: string) => void;
+  employees: { id: string; name: string | null; role: string | null }[];
+}) {
+  return (
+    <div className="space-y-0.5">
       <Label className="text-xs">{label}</Label>
-      <Select value={(master[id] as string) || ""} onValueChange={v => setMaster(id, v)}>
-        <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+      <Select
+        value={value || ""}
+        onValueChange={id => {
+          const emp = employees.find(e => e.id === id);
+          onChange(id, emp?.name || "");
+        }}
+      >
+        <SelectTrigger className="h-8 text-sm">
+          <SelectValue placeholder="— Select team member —" />
+        </SelectTrigger>
         <SelectContent>
-          {options.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+          <SelectItem value="">— Unassigned —</SelectItem>
+          {employees.map(e => (
+            <SelectItem key={e.id} value={e.id}>
+              {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
     </div>
   );
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
+export default function TaxAuditMaster({ data, engagementId }: Props) {
+  const { data: m, setField, patchFields, manualSave, saving, loaded } =
+    useTaxMasterStorage(engagementId, data.engagement?.firm_id);
+
+  const { employees } = useEmployeeDropdown();
+  const [showGstPwd, setShowGstPwd] = useState(false);
+
+  // Auto-populate free-text fields from engagement on first load
+  // (Read-only fields are always taken live from `data`)
+  useEffect(() => {
+    if (!loaded || !data.clientName) return;
+    // Only auto-fill if all are blank (first open)
+    if (m.audit_date_from || m.proprietor_partner_name) return;
+
+    patchFields({
+      audit_date_from: data.fyStartDate,
+      audit_date_to:   data.fyEndDate,
+    });
+  }, [loaded, data.clientName]);
+
+  const fyExpanded = expandFY(data.financialYear);
+
+  // ── Checkbox helper ─────────────────────────────────────────────────────
+  function chk<K extends keyof typeof m>(field: K) {
+    return (
+      <Checkbox
+        id={field as string}
+        checked={!!(m[field])}
+        onCheckedChange={v => setField(field, !!v as any)}
+      />
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm text-foreground">Tax Audit Master Sheet</h3>
+    <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
+      {/* ══════════ HEADER ══════════ */}
+      <div className="bg-primary text-primary-foreground px-6 py-4 space-y-1">
+        <div className="flex items-center gap-2">
+          <Building2 size={18} />
+          <h2 className="text-lg font-bold tracking-wide">
+            {data.firmName || "CA Firm"}
+          </h2>
+        </div>
+        <p className="text-sm font-semibold opacity-90 tracking-widest uppercase">
+          Tax Audit — Year {fyExpanded || data.financialYear}
+        </p>
+      </div>
+
+      {/* ══════════ TOOLBAR ══════════ */}
+      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="text-xs">
+            {data.auditTypeLabel}
+          </Badge>
+          {data.isCorporate && (
+            <Badge className="text-xs bg-blue-100 text-blue-700">Corporate</Badge>
+          )}
+        </div>
         <div className="flex gap-2">
           <Button
             variant="ghost"
             size="sm"
-            className="gap-1 text-blue-600 hover:bg-blue-50 text-xs"
-            onClick={() => {
-              // Re-trigger auto-populate
-              patchMaster({
-                tax_client_name:    data.clientName,
-                tax_address:        data.clientAddress,
-                tax_pan:            data.pan,
-                tax_cin:            data.cin,
-                tax_gstin:          data.gstin,
-                tax_entity_type:    data.entityType,
-                tax_financial_year: data.financialYear,
-                tax_period_from:    data.fyStartDate,
-                tax_period_to:      data.fyEndDate,
-                tax_prev_year_from: data.prevFyStart,
-                tax_prev_year_to:   data.prevFyEnd,
-                tax_auditor_firm:   data.auditFirm?.name || data.firmName,
-                tax_icai_reg:       data.firm?.icai_firm_reg_no || data.auditFirm?.icai_reg_no || "",
-                tax_partner_name:   data.auditFirm?.partner_name || "",
-              });
-            }}
+            className="gap-1 text-blue-600 hover:bg-blue-50 text-xs h-7"
+            onClick={() =>
+              patchFields({
+                audit_date_from: data.fyStartDate,
+                audit_date_to:   data.fyEndDate,
+              })
+            }
           >
-            <Wand2 size={13} /> Auto-fill from engagement
+            <Wand2 size={13} /> Auto-fill dates
           </Button>
-          <Button size="sm" className="gap-1 h-8" onClick={() => saveMaster()} disabled={masterSaving}>
-            {masterSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+          <Button
+            size="sm"
+            className="gap-1 h-7 text-xs"
+            onClick={manualSave}
+            disabled={saving}
+          >
+            {saving
+              ? <Loader2 size={13} className="animate-spin" />
+              : <Save size={13} />
+            }
             Save
           </Button>
         </div>
       </div>
 
-      {/* ── Client Details ── */}
-      <Card>
-        <CardHeader className="py-3 px-4">
-          <CardTitle className="text-sm">Client Details</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 pb-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {f("tax_client_name",  "Name of Assessee")}
-            {sel("tax_entity_type", "Entity Type", ENTITY_TYPES)}
-            {f("tax_pan",          "PAN")}
-            {f("tax_cin",          "CIN (if applicable)")}
-            {f("tax_gstin",        "GSTIN")}
-            {f("tax_financial_year","Financial Year (e.g. 2024-25)")}
-            {f("tax_period_from",  "Previous Year From", "date")}
-            {f("tax_period_to",    "Previous Year To",   "date")}
-            {f("tax_prev_year_from","Prev-Prev Year From","date")}
-            {f("tax_prev_year_to",  "Prev-Prev Year To",  "date")}
-            {f("tax_turnover",     "Turnover / Gross Receipts (₹)", "number")}
-            {sel("tax_accounting_method","Accounting Method", ACCOUNTING_METHODS)}
-            {ta("tax_address",     "Registered Address")}
-            {ta("tax_remarks",     "Remarks / Notes")}
-          </div>
-        </CardContent>
-      </Card>
+      {/* ══════════ FORM BODY ══════════ */}
+      <div className="px-4 py-4 space-y-5">
 
-      <Separator />
+        {/* ── 1. Name of Client ── */}
+        <SectionHeader no={1} label="Name of Client" />
+        <ReadOnlyField label="Client / Assessee Name" value={data.clientName} />
 
-      {/* ── Audit Details ── */}
-      <Card>
-        <CardHeader className="py-3 px-4">
-          <CardTitle className="text-sm">Audit Details</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 pb-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {sel("tax_section",    "Section Under Which Audit Required", SECTIONS)}
-            {sel("tax_form_type",  "Form Type", FORM_TYPES)}
-            {f("tax_auditor_firm", "Name of Auditor / Firm")}
-            {f("tax_icai_reg",     "ICAI Registration No.")}
-            {f("tax_partner_name", "Partner / Proprietor Name")}
-            {f("tax_partner_icai", "Partner Membership No.")}
-            {f("tax_udin",         "UDIN")}
-            {ta("tax_auditor_address","Auditor Address")}
+        {/* ── 2. Proprietor / Partner Name ── */}
+        <SectionHeader no={2} label="Proprietor / Partner Name" />
+        <div className="space-y-0.5">
+          <Label htmlFor="prop_name" className="text-xs">Name</Label>
+          <Input
+            id="prop_name"
+            className="h-8 text-sm max-w-sm"
+            value={m.proprietor_partner_name}
+            onChange={e => setField("proprietor_partner_name", e.target.value)}
+            placeholder="Enter proprietor / partner name…"
+          />
+        </div>
+
+        {/* ── 3. Address ── */}
+        <SectionHeader no={3} label="Address" />
+        <ReadOnlyField
+          label="Registered / Correspondence Address"
+          value={data.clientAddress}
+        />
+
+        {/* ── 4. PAN No. ── */}
+        <SectionHeader no={4} label="PAN No." />
+        <ReadOnlyField label="PAN" value={data.pan} />
+
+        {/* ── 5. Birth Date / Regi. Date ── */}
+        <SectionHeader no={5} label="Birth Date / Registration Date" />
+        <ReadOnlyField
+          label="Date of Birth / Incorporation"
+          value={fmtDate(data.client?.date_of_incorporation)}
+        />
+
+        {/* ── 6. Contact Nos. ── */}
+        <SectionHeader no={6} label="Contact Nos." />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border rounded-lg p-3 bg-muted/20">
+          {/* Left */}
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wide">
+              Accountant / CA Contact
+            </p>
+            <div className="space-y-0.5">
+              <Label htmlFor="acc_name" className="text-xs">Accountant Name</Label>
+              <Input
+                id="acc_name"
+                className="h-8 text-sm"
+                value={m.accountant_name}
+                onChange={e => setField("accountant_name", e.target.value)}
+                placeholder="Name…"
+              />
+            </div>
+            <div className="space-y-0.5">
+              <Label htmlFor="mobile" className="text-xs">Mobile No. (10 digits)</Label>
+              <Input
+                id="mobile"
+                className="h-8 text-sm font-mono"
+                maxLength={10}
+                value={m.mobile_no}
+                onChange={e => {
+                  const v = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  setField("mobile_no", v);
+                }}
+                placeholder="9876543210"
+              />
+              {m.mobile_no && m.mobile_no.length !== 10 && (
+                <p className="text-[10px] text-red-500">Must be exactly 10 digits</p>
+              )}
+            </div>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Right */}
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wide">
+              Bank Details
+            </p>
+            <div className="space-y-0.5">
+              <Label htmlFor="bank_ac" className="text-xs">Bank A/c No.</Label>
+              <Input
+                id="bank_ac"
+                className="h-8 text-sm font-mono"
+                value={m.bank_ac_no}
+                onChange={e => setField("bank_ac_no", e.target.value)}
+                placeholder="Account number…"
+              />
+            </div>
+            <div className="space-y-0.5">
+              <Label htmlFor="bank_branch" className="text-xs">Bank &amp; Branch</Label>
+              <Input
+                id="bank_branch"
+                className="h-8 text-sm"
+                value={m.bank_branch}
+                onChange={e => setField("bank_branch", e.target.value)}
+                placeholder="e.g. SBI, Main Branch, Mumbai"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ── 7. Previous Years Details ── */}
+        <SectionHeader no={7} label="Previous Years Details (Documents Obtained)" />
+        <div className="flex flex-col gap-2 pl-2">
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            {chk("prev_moa_aoa_deed")}
+            <span>MOA / AOA / Partnership Deed (if first year or any change)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            {chk("prev_it_return")}
+            <span>Previous Year IT Return, Audit Report &amp; Balance Sheet</span>
+          </label>
+        </div>
+
+        {/* ── 8. Books of Accounts ── */}
+        <SectionHeader no={8} label="Books of Accounts Verified" />
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 pl-2 border rounded-lg p-3 bg-muted/20">
+          {/* Left column */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_cash_book")} <span>Cash Book</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_bank_book")} <span>Bank Book</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_journal_register")} <span>Journal Register</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_general_ledger")} <span>General Ledger</span>
+            </label>
+          </div>
+          {/* Right column */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_purchase")} <span>Purchase Book</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_sales_book")} <span>Sales Book</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_stock_register")} <span>Stock Register</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              {chk("books_others")} <span>Others</span>
+            </label>
+          </div>
+          {/* Others specify */}
+          {m.books_others && (
+            <div className="col-span-2 mt-1">
+              <Input
+                className="h-8 text-sm"
+                placeholder="Specify other books…"
+                value={m.books_others_text}
+                onChange={e => setField("books_others_text", e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* ── 9. Stock Quantity Records ── */}
+        <SectionHeader no={9} label="Stock Quantity Records Maintained" />
+        <div className="flex flex-wrap items-start gap-4">
+          <YesNo
+            value={m.stock_qty_records}
+            onChange={v => setField("stock_qty_records", v)}
+          />
+          {m.stock_qty_records === "yes" && (
+            <div className="flex-1 min-w-[200px] space-y-0.5">
+              <Label className="text-xs">Details of stock records</Label>
+              <Textarea
+                rows={2}
+                className="text-sm"
+                placeholder="Describe stock records maintained…"
+                value={m.stock_qty_details}
+                onChange={e => setField("stock_qty_details", e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* ── 10. Dates Audit Conducted ── */}
+        <SectionHeader no={10} label="Dates Audit Conducted" />
+        <div className="flex flex-wrap gap-6">
+          <div className="space-y-0.5">
+            <Label htmlFor="audit_from" className="text-xs">From</Label>
+            <Input
+              id="audit_from"
+              type="date"
+              className="h-8 text-sm w-40"
+              value={m.audit_date_from}
+              onChange={e => setField("audit_date_from", e.target.value)}
+            />
+          </div>
+          <div className="space-y-0.5">
+            <Label htmlFor="audit_to" className="text-xs">To</Label>
+            <Input
+              id="audit_to"
+              type="date"
+              className="h-8 text-sm w-40"
+              value={m.audit_date_to}
+              onChange={e => setField("audit_date_to", e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* ── 11. GST Details ── */}
+        <SectionHeader no={11} label="GST Registered?" />
+        <div className="flex flex-wrap items-start gap-4">
+          <YesNo
+            value={m.gst_details}
+            onChange={v => setField("gst_details", v)}
+          />
+          {m.gst_details === "yes" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1 min-w-[300px]">
+              <div className="space-y-0.5">
+                <Label className="text-xs">GST ID / Username</Label>
+                <Input
+                  className="h-8 text-sm font-mono"
+                  value={m.gst_id}
+                  onChange={e => setField("gst_id", e.target.value)}
+                  placeholder="GST username / ID…"
+                />
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-xs">GST Password</Label>
+                <div className="flex gap-1">
+                  <Input
+                    className="h-8 text-sm font-mono flex-1"
+                    type={showGstPwd ? "text" : "password"}
+                    value={m.gst_password}
+                    onChange={e => setField("gst_password", e.target.value)}
+                    placeholder="Password…"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    onClick={() => setShowGstPwd(v => !v)}
+                  >
+                    {showGstPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* Show fetched GSTINs from client */}
+          {data.gstin && (
+            <div className="w-full">
+              <p className="text-[11px] text-muted-foreground">
+                Registered GSTINs on file: <span className="font-mono font-medium">{data.gstin}</span>
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── 12. Payments to Relatives ── */}
+        <SectionHeader no={12} label="Payments to Relatives / Specified Persons" />
+        <YesNo
+          value={m.payments_to_relatives}
+          onChange={v => setField("payments_to_relatives", v)}
+        />
+
+        {/* ── 13. Secured / Unsecured Loans ── */}
+        <SectionHeader no={13} label="Secured / Unsecured Loan Taken or Given" />
+        <YesNo
+          value={m.secured_unsecured_loan}
+          onChange={v => setField("secured_unsecured_loan", v)}
+        />
+
+        {/* ── 14. Deduction Details ── */}
+        <SectionHeader no={14} label="Deduction Details (80C, 80D, etc.)" />
+        <YesNo
+          value={m.deduction_details}
+          onChange={v => setField("deduction_details", v)}
+        />
+
+        <Separator />
+
+        {/* ── 15–17. Assignment ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <SectionHeader no={15} label="Audit Report Prepared By" />
+            <EmpSelect
+              label=""
+              value={m.audit_report_prepared_by_id}
+              onChange={(id, name) => patchFields({
+                audit_report_prepared_by_id:   id,
+                audit_report_prepared_by_name: name,
+              })}
+              employees={employees}
+            />
+          </div>
+          <div>
+            <SectionHeader no={16} label="IT Return Prepared By" />
+            <EmpSelect
+              label=""
+              value={m.return_prepared_by_id}
+              onChange={(id, name) => patchFields({
+                return_prepared_by_id:   id,
+                return_prepared_by_name: name,
+              })}
+              employees={employees}
+            />
+          </div>
+          <div>
+            <SectionHeader no={17} label="3CD Prepared By" />
+            <EmpSelect
+              label=""
+              value={m.cd_prepared_by_id}
+              onChange={(id, name) => patchFields({
+                cd_prepared_by_id:   id,
+                cd_prepared_by_name: name,
+              })}
+              employees={employees}
+            />
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* ── 18–20. Dates ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <SectionHeader no={18} label="Signed Copy Received" />
+            <Input
+              type="date"
+              className="h-8 text-sm"
+              value={m.signed_copy_received}
+              onChange={e => setField("signed_copy_received", e.target.value)}
+            />
+          </div>
+          <div>
+            <SectionHeader no={19} label="Management Representation Letter" />
+            <Input
+              type="date"
+              className="h-8 text-sm"
+              value={m.management_repr_letter}
+              onChange={e => setField("management_repr_letter", e.target.value)}
+            />
+          </div>
+          <div>
+            <SectionHeader no={20} label="Appointment Letter" />
+            <Input
+              type="date"
+              className="h-8 text-sm"
+              value={m.appointment_letter}
+              onChange={e => setField("appointment_letter", e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ══════════ FOOTER ══════════ */}
+      <div className="bg-muted/30 border-t px-4 py-4 space-y-4">
+        <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+          Footer — Paths &amp; Sign-off
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-0.5">
+            <Label className="text-xs">A/c (Tally) File Path</Label>
+            <Input
+              className="h-8 text-sm font-mono"
+              placeholder="e.g. D:\Tally\2024-25\ClientName.xml"
+              value={m.ac_path}
+              onChange={e => setField("ac_path", e.target.value)}
+            />
+          </div>
+          <div className="space-y-0.5">
+            <Label className="text-xs">Report / Working File Path</Label>
+            <Input
+              className="h-8 text-sm font-mono"
+              placeholder="e.g. D:\Reports\2024-25\TaxAudit.xlsx"
+              value={m.report_path}
+              onChange={e => setField("report_path", e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <EmpSelect
+            label="Prepared By"
+            value={m.footer_prepared_by_id}
+            onChange={(id, name) => patchFields({
+              footer_prepared_by_id:   id,
+              footer_prepared_by_name: name,
+            })}
+            employees={employees}
+          />
+          <EmpSelect
+            label="Verified By"
+            value={m.footer_verified_by_id}
+            onChange={(id, name) => patchFields({
+              footer_verified_by_id:   id,
+              footer_verified_by_name: name,
+            })}
+            employees={employees}
+          />
+          <EmpSelect
+            label="Reviewed By (Partner)"
+            value={m.footer_reviewed_by_id}
+            onChange={(id, name) => patchFields({
+              footer_reviewed_by_id:   id,
+              footer_reviewed_by_name: name,
+            })}
+            employees={employees}
+          />
+        </div>
+
+        {/* Saving indicator */}
+        {saving && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <Loader2 size={11} className="animate-spin" /> Auto-saving…
+          </p>
+        )}
+      </div>
     </div>
   );
 }
