@@ -1,287 +1,332 @@
 /**
- * Worksheet — Sheet 4
- * Audit work tracking sheet with employee assignment (Req #4).
+ * Worksheet — Sheet 4 "AUDIT WORK SHEET"
+ *
+ * 9 book-category rows, each with:
+ *   • Extent of Check  — free text "MM/YY TO MM/YY"  (rows 1-3, 5-7)
+ *                        OR  "AS ON" + date picker    (rows 4, 8, 9)
+ *   • Date             — date picker (when work was done)
+ *   • Checked By       — employee dropdown
+ *   • Notes            — 2-3 sub-row textarea for additional remarks
+ *
+ * Special row 8: Opening Balances
+ *   — has sub-note "(Check With Previous Year Physical Audit Report Copy)"
+ *   — immediately followed by a Closing Balances row (same structure)
+ *
+ * Header: '{auditTypeLabel} — YEAR {financialYear}'
+ *         'Name of Client: {clientName}'
+ *         'AUDIT WORK SHEET'
  */
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Trash2, User } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { WsItem } from "./hooks/useWorksheetStorage";
-import type { Employee } from "./hooks/useEmployeeDropdown";
+import { Button }    from "@/components/ui/button";
+import { Input }     from "@/components/ui/input";
+import { Textarea }  from "@/components/ui/textarea";
+import { Badge }     from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Save, Loader2, ClipboardList } from "lucide-react";
 
-interface Props {
-  items: WsItem[];
-  employees: Employee[];
-  updateItem: (id: string, updates: Partial<WsItem>) => Promise<void>;
-  addItem: (sheetType: WsItem["sheet_type"], overrides?: Partial<WsItem>) => Promise<void>;
-  deleteItem: (id: string) => Promise<void>;
+import { useWorksheetSheetStorage } from "./hooks/useWorksheetSheetStorage";
+import { useEmployeeDropdown }       from "./hooks/useEmployeeDropdown";
+import type { AuditWorksheetData }   from "./hooks/useAuditWorksheetData";
+
+// ─── Row definitions ─────────────────────────────────────────────────────────
+
+type ExtentType = "range" | "as_on";
+
+interface RowDef {
+  id:          string;
+  sr:          string;
+  label:       string;
+  extentType:  ExtentType;
+  subNote?:    string;       // note shown inside the row (italic text)
+  isSubRow?:   boolean;      // styling for closing-balances sub-row
+  optional?:   boolean;
 }
 
-const STATUS_OPTS  = ["pending", "in_progress", "done", "na"];
-const PRIORITY_OPTS = ["high", "normal", "low"];
-
-const STATUS_CLASS: Record<string, string> = {
-  pending:     "bg-slate-100 text-slate-600",
-  in_progress: "bg-amber-100 text-amber-700",
-  done:        "bg-green-100 text-green-700",
-  na:          "bg-muted text-muted-foreground",
-};
-
-const AREAS = [
-  "Revenue & Sales", "Purchases & Expenses", "Fixed Assets & Depreciation",
-  "Debtors & Receivables", "Creditors & Payables", "Loans & Borrowings",
-  "Inventory / Stock", "Cash & Bank", "Investments", "Capital & Reserves",
-  "Payroll & PF/ESI", "TDS Compliance", "GST Compliance",
-  "Related Party Transactions", "Contingent Liabilities", "Other",
+const WORKSHEET_ROWS: RowDef[] = [
+  { id: "purchase",         sr: "1", label: "PURCHASE REGISTER",     extentType: "range" },
+  { id: "sales",            sr: "2", label: "SALES REGISTER",        extentType: "range" },
+  { id: "cash_book",        sr: "3", label: "CASH BOOK",             extentType: "range" },
+  { id: "bank_book",        sr: "4", label: "BANK BOOK",             extentType: "as_on" },
+  { id: "journal",          sr: "5", label: "JOURNAL",               extentType: "range" },
+  { id: "expenses",         sr: "6", label: "EXPENSES / SAL / WAGES",extentType: "range" },
+  { id: "contra",           sr: "7", label: "CONTRA",                extentType: "range" },
+  {
+    id: "opening_balances", sr: "8", label: "OPENING BALANCES",      extentType: "as_on",
+    subNote: "(Check With Previous Year Physical Audit Report Copy)",
+  },
+  {
+    id: "closing_balances", sr: "↳", label: "CLOSING BALANCES",     extentType: "as_on",
+    isSubRow: true,
+  },
+  {
+    id: "others",           sr: "9", label: "OTHERS",                extentType: "as_on",
+    optional: true,
+  },
 ];
 
-export default function Worksheet({ items, employees, updateItem, addItem, deleteItem }: Props) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft]         = useState<Partial<WsItem>>({});
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  const startEdit = (item: WsItem) => {
-    setEditingId(item.id);
-    setDraft({
-      particulars:   item.particulars,
-      work_done:     item.work_done,
-      remarks:       item.remarks,
-      assigned_to:   item.assigned_to,
-      assigned_name: item.assigned_name,
-      status:        item.status,
-      priority:      item.priority,
-      due_date:      item.due_date,
-    });
-  };
+function expandFY(fy: string): string {
+  const m = fy.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return fy;
+  const y = parseInt(m[1]);
+  return `${y}-${y + 1}`;
+}
 
-  const saveEdit = async (id: string) => {
-    await updateItem(id, draft);
-    setEditingId(null);
-    setDraft({});
-  };
+// ─── Employee dropdown ────────────────────────────────────────────────────────
+
+function EmpSelect({
+  value, onChange, employees,
+}: {
+  value:     string;
+  onChange:  (id: string, name: string) => void;
+  employees: { id: string; name: string | null; role: string | null }[];
+}) {
+  return (
+    <Select
+      value={value || ""}
+      onValueChange={id => {
+        const emp = employees.find(e => e.id === id);
+        onChange(id, emp?.name || "");
+      }}
+    >
+      <SelectTrigger className="h-7 text-xs w-full min-w-[115px]">
+        <SelectValue placeholder="Assign…" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="">— Unassigned —</SelectItem>
+        {employees.map(e => (
+          <SelectItem key={e.id} value={e.id}>
+            {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+interface Props {
+  data:         AuditWorksheetData;
+  engagementId: string;
+}
+
+export default function Worksheet({ data, engagementId }: Props) {
+  const { getRow, setRowField, patchRow, manualSave, saving } =
+    useWorksheetSheetStorage(engagementId, data.engagement?.firm_id);
+
+  const { employees } = useEmployeeDropdown();
+
+  const fyExpanded = expandFY(data.financialYear);
+
+  // Count how many rows have a checked-by assigned
+  const assignedCount = WORKSHEET_ROWS.filter(r => {
+    const rs = getRow(r.id);
+    return !!rs.checked_by_id;
+  }).length;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="font-semibold text-sm">Audit Work Sheet</h3>
-          <p className="text-xs text-muted-foreground">
-            Track audit tasks, assign team members, and monitor progress
-          </p>
+    <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
+
+      {/* ══════════ PAGE HEADER ══════════ */}
+      <div className="bg-teal-700 text-white px-6 py-4 space-y-0.5">
+        <div className="flex items-center gap-2">
+          <ClipboardList size={18} />
+          <span className="text-base font-semibold tracking-wide">
+            {data.firmName || "CA Firm"}
+          </span>
+        </div>
+        <p className="text-[13px] font-bold opacity-95 tracking-widest uppercase">
+          {data.auditTypeLabel} — Year {fyExpanded || data.financialYear}
+        </p>
+      </div>
+
+      {/* Sub-header */}
+      <div className="border-b bg-muted/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-6 items-center text-sm">
+          <div>
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mr-1.5">
+              Name of Client:
+            </span>
+            <span className="font-semibold text-foreground">{data.clientName || "—"}</span>
+          </div>
+          <Badge className="bg-teal-100 text-teal-800 text-xs">
+            AUDIT WORK SHEET
+          </Badge>
+          <Badge variant="outline" className="text-xs">
+            {assignedCount}/{WORKSHEET_ROWS.length} rows assigned
+          </Badge>
         </div>
         <Button
           size="sm"
-          className="gap-1 h-8"
-          onClick={() => addItem("worksheet")}
+          className="gap-1 h-7 text-xs bg-teal-700 hover:bg-teal-800"
+          onClick={manualSave}
+          disabled={saving}
         >
-          <Plus size={13} /> Add Row
+          {saving
+            ? <Loader2 size={12} className="animate-spin" />
+            : <Save size={12} />
+          }
+          Save
         </Button>
       </div>
 
-      <div className="border rounded-lg overflow-auto bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/50">
-              <TableHead className="w-10 text-center">#</TableHead>
-              <TableHead className="min-w-[200px]">Area / Particulars</TableHead>
-              <TableHead className="min-w-[160px]">Work Done</TableHead>
-              <TableHead className="min-w-[130px]">Remarks</TableHead>
-              <TableHead className="min-w-[140px]">Assigned To</TableHead>
-              <TableHead className="w-[105px]">Status</TableHead>
-              <TableHead className="w-[110px]">Due Date</TableHead>
-              <TableHead className="w-12 text-center">Done</TableHead>
-              <TableHead className="w-20 text-center">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground py-8 text-sm">
-                  No worksheet rows yet. Click "Add Row" to start.
-                </TableCell>
-              </TableRow>
-            )}
-            {items.map(item => {
-              const isEditing = editingId === item.id;
+      {/* ══════════ TABLE ══════════ */}
+      <div className="overflow-auto">
+        <table className="w-full text-sm border-collapse min-w-[720px]">
+          <thead>
+            <tr className="bg-teal-700 text-white text-[11px] uppercase tracking-wide">
+              <th className="border border-teal-600 px-2 py-2.5 text-center w-12">Sr.</th>
+              <th className="border border-teal-600 px-3 py-2.5 text-left min-w-[180px]">Name of Books</th>
+              <th className="border border-teal-600 px-3 py-2.5 text-left min-w-[200px]">Extent of Check</th>
+              <th className="border border-teal-600 px-2 py-2.5 text-center min-w-[130px]">Date</th>
+              <th className="border border-teal-600 px-2 py-2.5 text-center min-w-[140px]">Checked By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {WORKSHEET_ROWS.map(row => {
+              const rs = getRow(row.id);
+
               return (
-                <TableRow key={item.id} className={cn(item.is_done && "opacity-55")}>
-                  <TableCell className="text-center text-xs font-mono">{item.sr_no}</TableCell>
-
-                  {/* Particulars */}
-                  <TableCell>
-                    {isEditing ? (
-                      <Select
-                        value={draft.particulars ?? ""}
-                        onValueChange={v => setDraft(p => ({ ...p, particulars: v }))}
-                      >
-                        <SelectTrigger className="h-7 text-xs min-w-[180px]">
-                          <SelectValue placeholder="Select area..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {AREAS.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-                          <SelectItem value="__custom__">Custom…</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span className="text-sm">{item.particulars || "—"}</span>
+                <>
+                  {/* ── Main Row ── */}
+                  <tr
+                    key={row.id}
+                    className={cn(
+                      "align-top hover:bg-muted/10 transition-colors",
+                      row.isSubRow && "bg-teal-50/40"
                     )}
-                    {isEditing && (draft.particulars === "__custom__" || (!AREAS.includes(draft.particulars || "") && draft.particulars)) && (
-                      <Input
-                        className="mt-1 h-7 text-xs"
-                        placeholder="Enter custom area…"
-                        value={draft.particulars === "__custom__" ? "" : draft.particulars ?? ""}
-                        onChange={e => setDraft(p => ({ ...p, particulars: e.target.value }))}
-                      />
-                    )}
-                  </TableCell>
+                  >
+                    {/* Sr.No */}
+                    <td className="border border-border px-2 py-2 text-center align-middle">
+                      <span className={cn(
+                        "text-xs font-mono",
+                        row.isSubRow
+                          ? "text-teal-600 font-bold"
+                          : "text-muted-foreground"
+                      )}>
+                        {row.sr}
+                      </span>
+                    </td>
 
-                  {/* Work Done */}
-                  <TableCell>
-                    {isEditing ? (
-                      <Textarea
-                        rows={2}
-                        className="text-xs"
-                        value={draft.work_done ?? ""}
-                        onChange={e => setDraft(p => ({ ...p, work_done: e.target.value }))}
-                      />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">{item.work_done || "—"}</span>
-                    )}
-                  </TableCell>
-
-                  {/* Remarks */}
-                  <TableCell>
-                    {isEditing ? (
-                      <Textarea
-                        rows={2}
-                        className="text-xs"
-                        value={draft.remarks ?? ""}
-                        onChange={e => setDraft(p => ({ ...p, remarks: e.target.value }))}
-                      />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">{item.remarks || "—"}</span>
-                    )}
-                  </TableCell>
-
-                  {/* Assigned To */}
-                  <TableCell>
-                    {isEditing ? (
-                      <Select
-                        value={draft.assigned_to ?? ""}
-                        onValueChange={v => {
-                          const emp = employees.find(e => e.id === v);
-                          setDraft(p => ({
-                            ...p,
-                            assigned_to:   v || null,
-                            assigned_name: emp?.name || "",
-                          }));
-                        }}
-                      >
-                        <SelectTrigger className="h-7 text-xs min-w-[120px]">
-                          <SelectValue placeholder="Assign…" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="">— Unassigned —</SelectItem>
-                          {employees.map(e => (
-                            <SelectItem key={e.id} value={e.id}>
-                              {e.name}{e.role ? ` (${e.role})` : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : item.assigned_name ? (
-                      <div className="flex items-center gap-1 text-xs">
-                        <User size={11} className="text-muted-foreground" />
-                        {item.assigned_name}
+                    {/* Name of Books */}
+                    <td className="border border-border px-3 py-2 align-middle">
+                      <div className="space-y-0.5">
+                        <p className={cn(
+                          "font-semibold text-xs uppercase tracking-wide",
+                          row.isSubRow ? "text-teal-700 pl-2" : "text-foreground"
+                        )}>
+                          {row.isSubRow && "↳ "}{row.label}
+                          {row.optional && (
+                            <span className="ml-1 text-[10px] font-normal normal-case text-muted-foreground">
+                              (optional)
+                            </span>
+                          )}
+                        </p>
+                        {row.subNote && (
+                          <p className="text-[10px] text-amber-700 italic font-medium">
+                            {row.subNote}
+                          </p>
+                        )}
                       </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
+                    </td>
 
-                  {/* Status */}
-                  <TableCell>
-                    {isEditing ? (
-                      <Select
-                        value={draft.status ?? item.status}
-                        onValueChange={v => setDraft(p => ({ ...p, status: v }))}
-                      >
-                        <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {STATUS_OPTS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Badge className={cn("text-[10px] px-1.5 py-0", STATUS_CLASS[item.status] || "")}>
-                        {item.status}
-                      </Badge>
-                    )}
-                  </TableCell>
+                    {/* Extent of Check */}
+                    <td className="border border-border px-2 py-2 align-middle">
+                      {row.extentType === "range" ? (
+                        <Input
+                          className="h-7 text-xs font-mono w-full"
+                          placeholder="MM/YY  TO  MM/YY"
+                          value={rs.extent_text}
+                          onChange={e => setRowField(row.id, "extent_text", e.target.value)}
+                        />
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-semibold text-muted-foreground whitespace-nowrap flex-shrink-0">
+                            AS ON
+                          </span>
+                          <Input
+                            type="date"
+                            className="h-7 text-xs flex-1 min-w-[110px]"
+                            value={rs.extent_date}
+                            onChange={e => setRowField(row.id, "extent_date", e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </td>
 
-                  {/* Due Date */}
-                  <TableCell>
-                    {isEditing ? (
+                    {/* Date */}
+                    <td className="border border-border px-2 py-2 align-middle">
                       <Input
                         type="date"
-                        className="h-7 text-xs"
-                        value={draft.due_date ?? ""}
-                        onChange={e => setDraft(p => ({ ...p, due_date: e.target.value }))}
+                        className="h-7 text-xs w-full"
+                        value={rs.date}
+                        onChange={e => setRowField(row.id, "date", e.target.value)}
                       />
-                    ) : (
-                      <span className="text-xs">{item.due_date || "—"}</span>
-                    )}
-                  </TableCell>
+                    </td>
 
-                  {/* Done toggle */}
-                  <TableCell className="text-center">
-                    <Checkbox
-                      checked={item.is_done}
-                      onCheckedChange={v => updateItem(item.id, { is_done: !!v })}
-                    />
-                  </TableCell>
+                    {/* Checked By */}
+                    <td className="border border-border px-2 py-2 align-middle">
+                      <EmpSelect
+                        value={rs.checked_by_id}
+                        onChange={(id, name) =>
+                          patchRow(row.id, { checked_by_id: id, checked_by_name: name })
+                        }
+                        employees={employees}
+                      />
+                      {rs.checked_by_name && (
+                        <p className="text-[10px] text-teal-700 mt-0.5 font-medium truncate">
+                          ✓ {rs.checked_by_name}
+                        </p>
+                      )}
+                    </td>
+                  </tr>
 
-                  {/* Actions */}
-                  <TableCell className="text-center">
-                    {isEditing ? (
-                      <div className="flex gap-1 justify-center">
-                        <Button size="sm" className="h-6 px-2 text-xs" onClick={() => saveEdit(item.id)}>
-                          Save
-                        </Button>
-                        <Button
-                          size="sm" variant="ghost" className="h-6 px-2 text-xs"
-                          onClick={() => { setEditingId(null); setDraft({}); }}
-                        >
-                          ✕
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex gap-1 justify-center">
-                        <Button
-                          size="sm" variant="ghost" className="h-6 px-2 text-xs"
-                          onClick={() => startEdit(item)}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm" variant="ghost"
-                          className="h-6 px-2 text-red-500 hover:text-red-700"
-                          onClick={() => deleteItem(item.id)}
-                        >
-                          <Trash2 size={12} />
-                        </Button>
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
+                  {/* ── Notes Sub-row ── */}
+                  <tr
+                    key={`${row.id}_notes`}
+                    className="bg-muted/5"
+                  >
+                    <td className="border-x border-b border-border/40 px-1 py-0.5 text-center">
+                      <span className="text-[9px] text-muted-foreground/50">↳</span>
+                    </td>
+                    <td
+                      colSpan={4}
+                      className="border-x border-b border-border/40 px-3 py-1"
+                    >
+                      <Textarea
+                        rows={2}
+                        className={cn(
+                          "text-xs resize-none bg-transparent border-none shadow-none focus-visible:ring-0 p-0",
+                          "placeholder:text-muted-foreground/40 text-muted-foreground"
+                        )}
+                        placeholder="Notes / additional remarks for this book…"
+                        value={rs.notes}
+                        onChange={e => setRowField(row.id, "notes", e.target.value)}
+                      />
+                    </td>
+                  </tr>
+                </>
               );
             })}
-          </TableBody>
-        </Table>
+          </tbody>
+        </table>
+      </div>
+
+      {/* ══════════ FOOTER ══════════ */}
+      <div className="border-t bg-muted/20 px-4 py-2 flex items-center justify-between">
+        <p className="text-[11px] text-muted-foreground">
+          {assignedCount === WORKSHEET_ROWS.length
+            ? "✓ All books assigned to team members"
+            : `${WORKSHEET_ROWS.length - assignedCount} book(s) not yet assigned`
+          }
+        </p>
+        {saving && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <Loader2 size={11} className="animate-spin" /> Auto-saving…
+          </p>
+        )}
       </div>
     </div>
   );

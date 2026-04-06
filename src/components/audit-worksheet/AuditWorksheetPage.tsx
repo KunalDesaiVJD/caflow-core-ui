@@ -25,7 +25,6 @@ import Checklist            from "./Checklist";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 import { useWorksheetStorage }   from "./hooks/useWorksheetStorage";
-import { useEmployeeDropdown }   from "./hooks/useEmployeeDropdown";
 
 interface Props {
   engagementId: string;
@@ -38,8 +37,6 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
     master, setMaster, saveMaster, masterSaving, masterLoaded,
     getItemsBySheet, updateItem, addItem, deleteItem,
   } = useWorksheetStorage(engagementId, data.engagement?.firm_id);
-
-  const { employees } = useEmployeeDropdown();
 
   // Determine which tabs to show
   const auditType = data.auditType;
@@ -58,7 +55,6 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
 
   const [activeTab, setActiveTab] = useState(defaultTab);
 
-  const worksheetItems = getItemsBySheet("worksheet");
   const checklistItems = getItemsBySheet("checklist");
 
   if (data.loading && !masterLoaded) {
@@ -158,11 +154,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
         {/* ── Sheet 4: Worksheet ── */}
         <TabsContent value="worksheet" className="mt-3">
           <Worksheet
-            items={worksheetItems}
-            employees={employees}
-            updateItem={updateItem}
-            addItem={addItem}
-            deleteItem={deleteItem}
+            data={data}
+            engagementId={engagementId}
           />
         </TabsContent>
 
