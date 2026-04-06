@@ -175,7 +175,10 @@ export default function EngagementDetail() {
           <TabsTrigger value="risk">Risk Assessment</TabsTrigger>
           <TabsTrigger value="programme">Audit Programme</TabsTrigger>
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
-          {engagement.caro_applicable && <TabsTrigger value="caro">CARO</TabsTrigger>}
+          {/* Fix (Issue 12): Show CARO tab for all corporate entities — don't gate on caro_applicable flag */}
+          {(engagement.entity_type === "company" || engagement.clients?.entity_type === "Private Ltd" || engagement.clients?.entity_type === "Public Ltd") && (
+            <TabsTrigger value="caro">CARO</TabsTrigger>
+          )}
           <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
           <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
@@ -206,7 +209,7 @@ export default function EngagementDetail() {
           />
         </TabsContent>
 
-        {engagement.caro_applicable && (
+        {(engagement.entity_type === "company" || engagement.clients?.entity_type === "Private Ltd" || engagement.clients?.entity_type === "Public Ltd") && (
           <TabsContent value="caro">
             <EngagementCARO
               engagement={engagement}

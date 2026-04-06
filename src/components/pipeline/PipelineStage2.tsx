@@ -585,23 +585,27 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   });
 
   // ─── Stored Prior Period TB nodes ───
+  // Fix (Issue 8): Read from audit_engagements.prior_year_tb_snapshot instead of
+  // tb_hierarchy_nodes with a fake "${engagementId}_prior" engagement_id — that
+  // approach violated the UUID FK constraint on ledger_import_batches and
+  // tb_hierarchy_nodes, so prior-year data was never actually persisted to the DB.
   const { data: storedPriorTbNodes = [], refetch: refetchPriorTb } = useQuery({
     queryKey: ["prior-tb-hierarchy-nodes", engagementId],
     queryFn: async () => {
       const { data } = await supabase
-        .from("tb_hierarchy_nodes")
-        .select("tally_group_name, opening_balance, txn_debit, txn_credit, closing_balance, primary_group, bs_pl_side")
-        .eq("engagement_id", `${engagementId}_prior`)
-        .eq("is_leaf", true)
-        .order("tally_group_name");
-      return (data || []).map((row: any) => ({
-        name:        row.tally_group_name  as string,
-        opening:     (row.opening_balance  || 0) as number,
-        txnDebit:    (row.txn_debit        || 0) as number,
-        txnCredit:   (row.txn_credit       || 0) as number,
-        closing:     (row.closing_balance  || 0) as number,
-        primaryGroup:(row.primary_group    || "") as string,
-        bsPlSide:    (row.bs_pl_side       || "") as string,
+        .from("audit_engagements")
+        .select("prior_year_tb_snapshot")
+        .eq("id", engagementId)
+        .maybeSingle();
+      const snapshot: any[] = (data as any)?.prior_year_tb_snapshot || [];
+      return snapshot.map((row: any) => ({
+        name:        (row.name         || "") as string,
+        opening:     (row.opening      || 0)  as number,
+        txnDebit:    (row.txnDebit     || 0)  as number,
+        txnCredit:   (row.txnCredit    || 0)  as number,
+        closing:     (row.closing      || 0)  as number,
+        primaryGroup:(row.primaryGroup || "") as string,
+        bsPlSide:    (row.bsPlSide     || "") as string,
       }));
     },
     enabled: !!engagementId,
@@ -1740,6 +1744,17 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
       const currentLeaves = (tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy).filter(n => n.isLeaf);
       const result = buildComparativeResultFromLeaves(priorLeaves, currentLeaves, priorFY);
+
+      // Fix (Issue 8): Persist prior-year leaf nodes to audit_engagements.prior_year_tb_snapshot
+      // instead of trying to use "${engagementId}_prior" as a UUID FK (which violates the FK constraint).
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({
+          prior_year_tb_snapshot: priorLeaves,
+          prior_year_tb_imported_at: new Date().toISOString(),
+        })
+        .eq("id", engagementId);
+
       setComparativeResult(result);
       setComparativeFile(null);
       setShowComparativeTb(false);
@@ -1756,9 +1771,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const handleDeletePriorTb = async () => {
     setDeletingPriorTb(true);
     try {
-      const priorEngId = `${engagementId}_prior`;
-      await supabase.from("tb_hierarchy_nodes").delete().eq("engagement_id", priorEngId);
-      await supabase.from("trial_balance_snapshots").delete().eq("engagement_id", priorEngId);
+      // Fix (Issue 8): Clear the prior_year_tb_snapshot column instead of deleting
+      // non-existent rows with a fake UUID engagement_id.
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({ prior_year_tb_snapshot: [], prior_year_tb_imported_at: null })
+        .eq("id", engagementId);
       setComparativeResult(null);
       setComparativeFile(null);
       setShowComparativeTb(false);
@@ -2943,7 +2961,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             </td>
                             {/* Editable Standard Head */}
                             <td className="p-1">
-                              {row.alreadyMapped || row.skipped ? (
+                              {row.skipped ? (
                                 <span className="text-muted-foreground px-1">{row.customHead || row.suggestedHead || "—"}</span>
                               ) : (
                                 <input
@@ -2962,7 +2980,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             </td>
                             {/* Account Group */}
                             <td className="p-1">
-                              {row.alreadyMapped || row.skipped ? (
+                              {row.skipped ? (
                                 <span className="text-muted-foreground px-1">{row.customGroup || "—"}</span>
                               ) : (
                                 <input
@@ -2976,7 +2994,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             </td>
                             {/* BS/PL */}
                             <td className="p-1 text-center">
-                              {row.alreadyMapped || row.skipped ? (
+                              {row.skipped ? (
                                 <Badge variant="outline" className="text-[9px]">{row.customBsPl || "BS"}</Badge>
                               ) : (
                                 <select
@@ -2993,6 +3011,8 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             <td className="p-2 text-center">
                               {row.alreadyMapped ? (
                                 <Badge className="text-[9px] bg-primary/10 text-primary">Saved</Badge>
+                              ) : row.accepted && row.confidence === "high" ? (
+                                <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">High</Badge>
                               ) : row.confidence === "high" ? (
                                 <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">High</Badge>
                               ) : row.confidence === "medium" ? (
@@ -3006,7 +3026,16 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             {/* Actions */}
                             <td className="p-1 text-center">
                               {row.alreadyMapped ? (
-                                <span className="text-[10px] text-primary font-medium">✓ Mapped</span>
+                                // Fix (Issue 9): Allow re-editing already-mapped ledgers
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 px-2 text-[10px] gap-0.5 text-primary"
+                                  title="Click to edit this mapping"
+                                  onClick={() => setCoaMappingRows(prev => prev.map((r, i) => i === idx ? { ...r, alreadyMapped: false, accepted: true } : r))}
+                                >
+                                  ✓ Edit
+                                </Button>
                               ) : row.skipped ? (
                                 <Button
                                   size="sm"

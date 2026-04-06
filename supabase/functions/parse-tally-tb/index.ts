@@ -239,6 +239,9 @@ function cellNum(ws:XLSX.WorkSheet, r:number, c:number): number {
 interface TBRow {
   idx: number; rowNum: number; name: string;
   opening: number; txnDebit: number; txnCredit: number; closing: number;
+  // Tally XML hierarchy hints (null when parsing Excel/JSON)
+  xmlLevel: number | null;
+  xmlIsLeaf: boolean | null;
 }
 interface HierarchyNode {
   nodeId: string; parentNodeId: string|null;
@@ -246,6 +249,9 @@ interface HierarchyNode {
   primaryGroup: string; bsPlSide: string; normalBal: string;
   opening: number; txnDebit: number; txnCredit: number; closing: number;
   rowNumber: number;
+  // Carry through XML hints so they can be stored in the DB
+  xmlLevel: number | null;
+  xmlIsLeaf: boolean | null;
 }
 
 // ── FM 8: Hierarchy detection by value matching ───────────────────────────
@@ -381,8 +387,22 @@ function parseTallyXmlRows(buf: Uint8Array): TBRow[] {
   let idx = 0;
 
   while ((m = pairRe.exec(xmlStr)) !== null) {
-    const name = unesc(tagVal(m[1], "DSPDISPNAME"));
+    const nameBlock = m[1];
+    const name = unesc(tagVal(nameBlock, "DSPDISPNAME"));
     if (!name) continue;
+
+    // ── Read explicit hierarchy hints ────────────────────────────────────────
+    // DSPACCNAMELEVEL: integer level (1 = top group, 2 = sub-group, 3+ = ledger)
+    // DSPACCACCISLEAF: "Yes" = ledger (leaf), "No" = group/sub-group
+    // These tags are present in all modern Tally XML exports.  When absent (old
+    // Tally versions), the values fall back to null and the sum-match algorithm
+    // is used as before.
+    const levelRaw  = tagVal(nameBlock, "DSPACCNAMELEVEL");
+    const isLeafRaw = tagVal(nameBlock, "DSPACCACCISLEAF");
+
+    const xmlLevel  = levelRaw ? parseInt(levelRaw, 10) : null;
+    const xmlIsLeaf = isLeafRaw ? isLeafRaw.trim().toLowerCase() === "yes" : null;
+    // ─────────────────────────────────────────────────────────────────────────
 
     const info      = m[2];
     const opening   = parseNum(tagVal(info, "DSPOPAMTA"));
@@ -393,9 +413,11 @@ function parseTallyXmlRows(buf: Uint8Array): TBRow[] {
     rows.push({
       idx, rowNum: idx + 1, name,
       opening,
-      txnDebit:  Math.abs(debitRaw), // normalise to positive
+      txnDebit:  Math.abs(debitRaw), // normalise debit to positive (sign corrected later per leaf/group)
       txnCredit: credit,
       closing,
+      xmlLevel,
+      xmlIsLeaf,
     });
     idx++;
   }
@@ -420,6 +442,8 @@ function parseJsonRows(buf: Uint8Array): TBRow[] {
         txnDebit:   parseNum(item.debit      ?? item.txn_debit       ?? item.dr ?? 0),
         txnCredit:  parseNum(item.credit     ?? item.txn_credit      ?? item.cr ?? 0),
         closing:    parseNum(item.closing    ?? item.closing_balance ?? item.cl ?? 0),
+        xmlLevel:   null,
+        xmlIsLeaf:  null,
       }))
       .filter((r: TBRow) => r.name);
     if (rows.length === 0) throw new Error("No data entries found in JSON array");
@@ -437,6 +461,8 @@ function parseJsonRows(buf: Uint8Array): TBRow[] {
         txnDebit:   parseNum(item.txnDebit   ?? item.txn_debit       ?? 0),
         txnCredit:  parseNum(item.txnCredit  ?? item.txn_credit      ?? 0),
         closing:    parseNum(item.closing    ?? item.closing_balance  ?? 0),
+        xmlLevel:   null,
+        xmlIsLeaf:  null,
       }))
       .filter((r: TBRow) => r.name);
     if (rows.length === 0) throw new Error("No data entries in JSON hierarchy array");
@@ -446,11 +472,83 @@ function parseJsonRows(buf: Uint8Array): TBRow[] {
   throw new Error("Unrecognised JSON format. Expected an array of TB rows or { hierarchy: [...] }.");
 }
 
+// ── XML path: build nodes from level hints (deterministic) ────────────────
+// Uses DSPACCNAMELEVEL to assign parent–child without sum-matching.
+function buildNodesFromXmlLevels(rawRows: TBRow[]): HierarchyNode[] {
+  const nodeIds = rawRows.map((_, i) => `N${String(i + 1).padStart(4, "0")}`);
+  const parentIdxArr = new Array<number>(rawRows.length).fill(-1);
+  // stack holds index of open groups
+  const stack: number[] = [];
+
+  for (let i = 0; i < rawRows.length; i++) {
+    const level = rawRows[i].xmlLevel ?? 1;
+    // Pop stack until top has a smaller level
+    while (stack.length > 0) {
+      const topLevel = rawRows[stack[stack.length - 1]].xmlLevel ?? 1;
+      if (topLevel < level) break;
+      stack.pop();
+    }
+    if (stack.length > 0) {
+      parentIdxArr[i] = stack[stack.length - 1];
+    }
+    // Push if this is a group (not a leaf)
+    if (rawRows[i].xmlIsLeaf === false || rawRows[i].xmlIsLeaf === null) {
+      stack.push(i);
+    }
+  }
+
+  const getPG = (i: number): string => {
+    let c = i;
+    while (parentIdxArr[c] !== -1) c = parentIdxArr[c];
+    return rawRows[c].name;
+  };
+
+  return rawRows.map((row, idx) => ({
+    nodeId:       nodeIds[idx],
+    parentNodeId: parentIdxArr[idx] !== -1 ? nodeIds[parentIdxArr[idx]] : null,
+    level:        row.xmlLevel ?? 1,
+    name:         row.name,
+    indent:       Math.max(0, (row.xmlLevel ?? 1) - 1),
+    bold:         row.xmlIsLeaf === false,
+    isLeaf:       row.xmlIsLeaf === true,
+    primaryGroup: getPG(idx),
+    bsPlSide:     detectBsPlSide(getPG(idx)),
+    normalBal:    detectNormalBal(getPG(idx)),
+    opening:      row.opening, txnDebit: row.txnDebit,
+    txnCredit:    row.txnCredit, closing: row.closing, rowNumber: row.rowNum,
+    xmlLevel:     row.xmlLevel,
+    xmlIsLeaf:    row.xmlIsLeaf,
+  }));
+}
+
 // ── Shared: build nodes from rawRows (no bold override) ───────────────────
 function buildNodesFromRows(
   rawRows: TBRow[],
 ): { nodes: HierarchyNode[]; isBalanced: boolean; drSum: number; crSum: number } {
   if (rawRows.length === 0) throw new Error("No data rows to process");
+
+  // ── XML fast path: use explicit level hints when available ───────────────
+  const hasXmlHints = rawRows.some(r => r.xmlLevel !== null);
+  if (hasXmlHints) {
+    const nodes = buildNodesFromXmlLevels(rawRows);
+    // P&L post-process
+    for (const nd of nodes) {
+      const lo = nd.name.toLowerCase();
+      if (lo.includes("profit") && lo.includes("loss")) {
+        nd.primaryGroup = "Profit & Loss"; nd.bsPlSide = "BS"; nd.normalBal = "Cr";
+      }
+    }
+    const lfs = nodes.filter(n => n.isLeaf);
+    let drSum = 0, crSum = 0;
+    for (const n of lfs) {
+      const s = n.closing !== 0
+        ? (n.normalBal === "Cr" ? -Math.abs(n.closing) : Math.abs(n.closing))
+        : (n.txnDebit - n.txnCredit);
+      if (s >= 0) drSum += s; else crSum += Math.abs(s);
+    }
+    return { nodes, isBalanced: Math.abs(drSum - crSum) < 5.0, drSum, crSum };
+  }
+  // ── Excel/JSON fallback: heuristic sum-match ─────────────────────────────
 
   const { isGrp: iGR, parentIdx: pIR } = buildHierarchy(rawRows);
   const iG = [...iGR], pIdx = [...pIR];
@@ -473,6 +571,7 @@ function buildNodesFromRows(
       normalBal: detectNormalBal(getPG(idx)),
       opening: row.opening, txnDebit: row.txnDebit,
       txnCredit: row.txnCredit, closing: row.closing, rowNumber: row.rowNum,
+      xmlLevel: null, xmlIsLeaf: null,
     };
   });
 
@@ -703,6 +802,8 @@ serve(async (req) => {
         txnDebit:  cellNum(ws, r, cols.d),
         txnCredit: cellNum(ws, r, cols.c),
         closing:   cellNum(ws, r, cols.cl),
+        xmlLevel:  null,  // Excel imports have no Tally level hints
+        xmlIsLeaf: null,
       });
     }
 

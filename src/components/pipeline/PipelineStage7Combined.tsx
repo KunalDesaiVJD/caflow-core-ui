@@ -34,8 +34,12 @@ export default function PipelineStage7Combined({
     clientEntityType === "Private Ltd" ||
     clientEntityType === "Public Ltd";
 
-  // caroApplicable: must be corporate AND have the explicit applicable flag set
-  const caroApplicable = isCorporate && (engagement?.caro_applicable || engagement?.requires_caro || false);
+  // caroApplicable: applies to ALL corporate entities (Private Ltd / Public Ltd).
+  // Fix (Issue 12): Removed the caro_applicable / requires_caro flag requirement —
+  // most engagements never had that flag set to true, so CARO never showed even for
+  // companies. The entity-type gate is the correct enforcement — CARO 2020 is
+  // mandatory for all companies. Firms can mark individual clauses as N/A inside.
+  const caroApplicable = isCorporate;
 
   const markComplete = async () => {
     setSaving(true);
