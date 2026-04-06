@@ -361,8 +361,7 @@ export default function AuditPipeline() {
 
       const { data, error } = await supabase.from("audit_engagements").insert({
         client_id: form1A.client_id,
-        // TODO: Supabase RLS policy needs superadmin bypass for audit_engagements insert
-        firm_id: user?.firm_id ?? "",
+        firm_id: effectiveFirmId,
         financial_year: form1A.financial_year,
         audit_type: form1A.audit_type,
         entity_type: form1A.entity_type,
