@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -22,7 +22,8 @@ import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
-  CalendarDays, Sparkles, Link2, SkipForward, Check, Save, Clock
+  CalendarDays, Sparkles, Link2, SkipForward, Check, Save, Clock,
+  Pencil, RotateCcw
 } from "lucide-react";
 import { buildTbPresentationModel, type TbPresentationModel, type TbSectionType } from "@/lib/tb-hierarchy";
 import coaMasterDataJson from "@/data/coa-master-data.json";
@@ -485,9 +486,16 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
   // ─── TB Ledger Mapping Corrections State (Issue 9) ───
   // nodeId → { primaryGroup, bsPlSide } for user-overridden mappings
-  const [tbNodeEdits, setTbNodeEdits]       = useState<Record<string, { primaryGroup: string; bsPlSide: string }>>({});
+  const [tbNodeEdits, setTbNodeEdits]       = useState<Record<string, { primaryGroup: string; bsPlSide: string; origGroup?: string; origBsPl?: string }>>({});
   const [tbCorrectionsSaving, setTbCorrectionsSaving] = useState(false);
   const [showTbCorrections, setShowTbCorrections]     = useState(true);
+
+  // ─── TB Node Edit Dialog State ───
+  const [tbEditNode, setTbEditNode] = useState<TbHierarchyNode | null>(null);
+  const [tbEditNewGroup, setTbEditNewGroup] = useState("");
+  const [tbEditNewBsPl, setTbEditNewBsPl] = useState("");
+  const [tbSavedOverrides, setTbSavedOverrides] = useState<Record<string, { origGroup: string; origBsPl: string; newGroup: string; newBsPl: string; accountName: string; overriddenAt: string }>>({});
+  const [resetingNodeId, setResetingNodeId] = useState<string | null>(null);
 
   // ─── COA Mapping State ───
   const [coaMappingRows, setCoaMappingRows] = useState<CoaMappingRow[]>([]);
@@ -661,6 +669,23 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     enabled: !!engagementId,
   });
 
+  // ─── Load saved TB node overrides from audit_engagements ───
+  const { data: _engOverrides, refetch: refetchOverrides } = useQuery({
+    queryKey: ["tb-node-overrides", engagementId],
+    queryFn: async () => {
+      const { data } = await (supabase as any)
+        .from("audit_engagements")
+        .select("tb_node_overrides")
+        .eq("id", engagementId)
+        .maybeSingle();
+      return (data?.tb_node_overrides as Record<string, any>) || {};
+    },
+    enabled: !!engagementId,
+  });
+  useEffect(() => {
+    if (_engOverrides) setTbSavedOverrides(_engOverrides);
+  }, [_engOverrides]);
+
   // ─── Ledger import batches ───
   const { data: ledgerBatches } = useQuery({
     queryKey: ["ledger-batches", engagementId],
@@ -674,6 +699,16 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     },
     enabled: !!engagementId,
   });
+
+  // ─── Lookup map: account name → leaf node (for preview table edit icons) ───
+  const nodeByName = useMemo(() => {
+    const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+    const map = new Map<string, TbHierarchyNode>();
+    src.filter(n => n.isLeaf).forEach(n => {
+      if (n.name?.trim()) map.set(n.name.trim().toLowerCase(), n);
+    });
+    return map;
+  }, [tbHierarchyNodes, storedTbHierarchy]);
 
   // Load existing TB result if available
   const tbPresentation: TbPresentationModel | null = useMemo(() => {
@@ -1854,27 +1889,51 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     }
   };
 
-  // ─── Save Ledger Mapping Corrections (Issue 9) ───
-  // Applies user-overridden primaryGroup / bsPlSide to tb_hierarchy_nodes in DB
-  // and syncs in-memory nodes so the tree / comparative views update immediately.
+  // ─── Save Ledger Mapping Corrections ───
   const saveTbCorrections = async () => {
     const changedNodeIds = Object.keys(tbNodeEdits);
     if (changedNodeIds.length === 0) return;
     setTbCorrectionsSaving(true);
     try {
+      const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+
       for (const nodeId of changedNodeIds) {
         const edit = tbNodeEdits[nodeId];
         const { error } = await supabase
           .from("tb_hierarchy_nodes")
-          .update({
-            primary_group: edit.primaryGroup,
-            bs_pl_side:    edit.bsPlSide,
-          })
+          .update({ primary_group: edit.primaryGroup, bs_pl_side: edit.bsPlSide })
           .eq("node_id", nodeId)
           .eq("engagement_id", engagementId);
         if (error) throw error;
       }
-      // Sync in-memory states so the tree re-renders without a full page reload
+
+      // Build updated overrides record
+      const newOverrides = { ...tbSavedOverrides };
+      for (const nodeId of changedNodeIds) {
+        const edit = tbNodeEdits[nodeId];
+        const node = src.find(n => n.nodeId === nodeId);
+        if (!node) continue;
+        const origGroup = edit.origGroup ?? node.primaryGroup ?? "";
+        const origBsPl  = edit.origBsPl  ?? node.bsPlSide    ?? "";
+        // If changed from original, record override; if same as original, remove override
+        if (edit.primaryGroup !== origGroup || edit.bsPlSide !== origBsPl) {
+          newOverrides[nodeId] = {
+            origGroup, origBsPl,
+            newGroup: edit.primaryGroup, newBsPl: edit.bsPlSide,
+            accountName: node.name,
+            overriddenAt: new Date().toISOString(),
+          };
+        } else {
+          delete newOverrides[nodeId];
+        }
+      }
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({ tb_node_overrides: newOverrides })
+        .eq("id", engagementId);
+      setTbSavedOverrides(newOverrides);
+
+      // Sync in-memory states so tree/comparative views update immediately
       const applyEdits = (nodes: TbHierarchyNode[]) =>
         nodes.map(n => {
           const ed = tbNodeEdits[n.nodeId];
@@ -1882,12 +1941,72 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         });
       setTbHierarchyNodes(prev => applyEdits(prev));
       queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      refetchOverrides();
       setTbNodeEdits({});
       toast.success(`${changedNodeIds.length} ledger mapping(s) corrected and saved.`);
     } catch (err: any) {
       toast.error(err.message || "Failed to save ledger corrections");
     } finally {
       setTbCorrectionsSaving(false);
+    }
+  };
+
+  // ─── Open edit dialog for a specific node ───
+  const openTbNodeEdit = (node: TbHierarchyNode) => {
+    const pending = tbNodeEdits[node.nodeId];
+    setTbEditNode(node);
+    setTbEditNewGroup(pending?.primaryGroup ?? node.primaryGroup ?? "");
+    setTbEditNewBsPl(pending?.bsPlSide    ?? node.bsPlSide    ?? "");
+  };
+
+  // ─── Apply edits from dialog (queues into tbNodeEdits for save) ───
+  const applyNodeEditFromDialog = () => {
+    if (!tbEditNode) return;
+    const origGroup = tbSavedOverrides[tbEditNode.nodeId]?.origGroup ?? tbEditNode.primaryGroup ?? "";
+    const origBsPl  = tbSavedOverrides[tbEditNode.nodeId]?.origBsPl  ?? tbEditNode.bsPlSide    ?? "";
+    setTbNodeEdits(prev => ({
+      ...prev,
+      [tbEditNode.nodeId]: {
+        primaryGroup: tbEditNewGroup,
+        bsPlSide:     tbEditNewBsPl,
+        origGroup:    prev[tbEditNode.nodeId]?.origGroup ?? origGroup,
+        origBsPl:     prev[tbEditNode.nodeId]?.origBsPl  ?? origBsPl,
+      },
+    }));
+    setTbEditNode(null);
+  };
+
+  // ─── Reset a specific node to its original (pre-override) classification ───
+  const resetNodeToOriginal = async (nodeId: string) => {
+    const override = tbSavedOverrides[nodeId];
+    if (!override) return;
+    setResetingNodeId(nodeId);
+    try {
+      const { error } = await supabase
+        .from("tb_hierarchy_nodes")
+        .update({ primary_group: override.origGroup, bs_pl_side: override.origBsPl })
+        .eq("node_id", nodeId)
+        .eq("engagement_id", engagementId);
+      if (error) throw error;
+
+      const newOverrides = { ...tbSavedOverrides };
+      delete newOverrides[nodeId];
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({ tb_node_overrides: newOverrides })
+        .eq("id", engagementId);
+      setTbSavedOverrides(newOverrides);
+      setTbHierarchyNodes(prev =>
+        prev.map(n => n.nodeId === nodeId
+          ? { ...n, primaryGroup: override.origGroup, bsPlSide: override.origBsPl }
+          : n)
+      );
+      queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      toast.success(`"${override.accountName}" reverted to original: ${override.origGroup}`);
+    } catch (err: any) {
+      toast.error(err.message || "Reset failed");
+    } finally {
+      setResetingNodeId(null);
     }
   };
 
@@ -2697,17 +2816,55 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             <TableHead>Group</TableHead>
                             <TableHead className="text-right">Debit</TableHead>
                             <TableHead className="text-right">Credit</TableHead>
+                            <TableHead className="text-center w-10"></TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {tbResult.preview.map((row: any, i: number) => (
-                            <TableRow key={i}>
-                              <TableCell className="text-xs">{row.account_name || row.ledger_name}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{row.account_group}</TableCell>
+                          {tbResult.preview.map((row: any, i: number) => {
+                            const acctName = row.account_name || row.ledger_name || "";
+                            const matchedNode = nodeByName.get(acctName.trim().toLowerCase());
+                            const pendingEdit = matchedNode ? tbNodeEdits[matchedNode.nodeId] : null;
+                            const savedOverride = matchedNode ? tbSavedOverrides[matchedNode.nodeId] : null;
+                            const isReclassified = !!(pendingEdit || savedOverride);
+                            const displayGroup = pendingEdit?.primaryGroup ?? matchedNode?.primaryGroup ?? row.account_group;
+                            return (
+                            <TableRow key={i} className={cn(isReclassified ? "bg-amber-50/60 dark:bg-amber-950/20" : "")}>
+                              <TableCell className="text-xs">
+                                <span>{acctName}</span>
+                                {isReclassified && (
+                                  <Badge className="ml-1.5 text-[9px] bg-amber-100 text-amber-700 border-amber-200 px-1">
+                                    Reclassified
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {displayGroup}
+                                {savedOverride && (
+                                  <span className="block text-[9px] text-amber-600/80 leading-tight">
+                                    was: {savedOverride.origGroup}
+                                  </span>
+                                )}
+                              </TableCell>
                               <TableCell className="text-xs text-right">{(row.debit || row.closing_dr || 0).toLocaleString("en-IN")}</TableCell>
                               <TableCell className="text-xs text-right">{(row.credit || row.closing_cr || 0).toLocaleString("en-IN")}</TableCell>
+                              <TableCell className="text-center">
+                                {matchedNode ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-muted-foreground hover:text-primary"
+                                    title={savedOverride ? `Reclassified: ${savedOverride.origGroup} → ${savedOverride.newGroup}` : "Edit classification"}
+                                    onClick={() => openTbNodeEdit(matchedNode)}
+                                  >
+                                    <Pencil size={11} />
+                                  </Button>
+                                ) : (
+                                  <span className="text-[9px] text-muted-foreground/40">—</span>
+                                )}
+                              </TableCell>
                             </TableRow>
-                          ))}
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
@@ -2730,17 +2887,55 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                             <TableHead>Group</TableHead>
                             <TableHead className="text-right">Debit</TableHead>
                             <TableHead className="text-right">Credit</TableHead>
+                            <TableHead className="text-center w-10"></TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {tbResult.preview.map((row: any, i: number) => (
-                            <TableRow key={i}>
-                              <TableCell className="text-xs">{row.account_name || row.ledger_name}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{row.account_group}</TableCell>
+                          {tbResult.preview.map((row: any, i: number) => {
+                            const acctName = row.account_name || row.ledger_name || "";
+                            const matchedNode = nodeByName.get(acctName.trim().toLowerCase());
+                            const pendingEdit = matchedNode ? tbNodeEdits[matchedNode.nodeId] : null;
+                            const savedOverride = matchedNode ? tbSavedOverrides[matchedNode.nodeId] : null;
+                            const isReclassified = !!(pendingEdit || savedOverride);
+                            const displayGroup = pendingEdit?.primaryGroup ?? matchedNode?.primaryGroup ?? row.account_group;
+                            return (
+                            <TableRow key={i} className={cn(isReclassified ? "bg-amber-50/60 dark:bg-amber-950/20" : "")}>
+                              <TableCell className="text-xs">
+                                <span>{acctName}</span>
+                                {isReclassified && (
+                                  <Badge className="ml-1.5 text-[9px] bg-amber-100 text-amber-700 border-amber-200 px-1">
+                                    Reclassified
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {displayGroup}
+                                {savedOverride && (
+                                  <span className="block text-[9px] text-amber-600/80 leading-tight">
+                                    was: {savedOverride.origGroup}
+                                  </span>
+                                )}
+                              </TableCell>
                               <TableCell className="text-xs text-right">{(row.debit || row.closing_dr || 0).toLocaleString("en-IN")}</TableCell>
                               <TableCell className="text-xs text-right">{(row.credit || row.closing_cr || 0).toLocaleString("en-IN")}</TableCell>
+                              <TableCell className="text-center">
+                                {matchedNode ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-muted-foreground hover:text-primary"
+                                    title={savedOverride ? `Reclassified: ${savedOverride.origGroup} → ${savedOverride.newGroup}` : "Edit classification"}
+                                    onClick={() => openTbNodeEdit(matchedNode)}
+                                  >
+                                    <Pencil size={11} />
+                                  </Button>
+                                ) : (
+                                  <span className="text-[9px] text-muted-foreground/40">—</span>
+                                )}
+                              </TableCell>
                             </TableRow>
-                          ))}
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
@@ -2805,6 +3000,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                                 <th className="border border-border px-2 py-2 text-right w-28">Closing Bal</th>
                                 <th className="border border-border px-2 py-2 text-center w-40">BS / PL Side</th>
                                 <th className="border border-border px-2 py-2 text-left">Primary Group</th>
+                                <th className="border border-border px-2 py-2 text-center w-10"></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2817,10 +3013,22 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                                 return (
                                   <tr
                                     key={node.nodeId}
-                                    className={isDirty ? "bg-amber-50/60" : "hover:bg-muted/10"}
+                                    className={isDirty ? "bg-amber-50/60" : tbSavedOverrides[node.nodeId] ? "bg-amber-50/30 dark:bg-amber-950/10" : "hover:bg-muted/10"}
                                   >
                                     <td className="border border-border px-3 py-1.5 font-medium">
-                                      {node.name}
+                                      <div className="flex items-center gap-1.5">
+                                        {node.name}
+                                        {tbSavedOverrides[node.nodeId] && !isDirty && (
+                                          <Badge className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0">
+                                            Reclassified
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      {tbSavedOverrides[node.nodeId] && !isDirty && (
+                                        <p className="text-[9px] text-amber-600/80 leading-tight">
+                                          was: {tbSavedOverrides[node.nodeId].origGroup} / {tbSavedOverrides[node.nodeId].origBsPl}
+                                        </p>
+                                      )}
                                     </td>
                                     <td className="border border-border px-2 py-1.5 text-right font-mono text-muted-foreground">
                                       {node.closing.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
@@ -2869,6 +3077,22 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                                           <SelectItem value="Unknown" className="text-xs text-muted-foreground">Unknown / Unclassified</SelectItem>
                                         </SelectContent>
                                       </Select>
+                                    </td>
+                                    <td className="border border-border px-2 py-1.5 text-center w-10">
+                                      {tbSavedOverrides[node.nodeId] && !isDirty && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 text-destructive/60 hover:text-destructive"
+                                          title="Reset to original classification"
+                                          onClick={() => resetNodeToOriginal(node.nodeId)}
+                                          disabled={resetingNodeId === node.nodeId}
+                                        >
+                                          {resetingNodeId === node.nodeId
+                                            ? <Loader2 size={10} className="animate-spin" />
+                                            : <RotateCcw size={10} />}
+                                        </Button>
+                                      )}
                                     </td>
                                   </tr>
                                 );
@@ -3653,6 +3877,92 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ─── TB Node Edit / Reclassify Dialog ─── */}
+      {tbEditNode && (() => {
+        const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+        const allGroups = [...new Set(src.filter(n => !n.isLeaf && n.name?.trim()).map(n => n.name))].sort();
+        const allBsPl   = ["BS Assets", "BS Liabilities", "BS Equity", "P&L Income", "P&L Expenses", "Unknown"];
+        const savedOv   = tbSavedOverrides[tbEditNode.nodeId];
+        return (
+        <Dialog open={!!tbEditNode} onOpenChange={() => setTbEditNode(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Reclassify Ledger Account</DialogTitle>
+              <DialogDescription>
+                Change the group or BS/PL classification for this account.
+                Original Debit/Credit amounts are never changed.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {/* Read-only account info */}
+              <div className="bg-muted/30 rounded-md p-3 space-y-1 text-sm">
+                <p className="font-semibold text-foreground">{tbEditNode.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  Txn Dr: {(tbEditNode.txnDebit || 0).toLocaleString("en-IN")} &nbsp;|&nbsp;
+                  Txn Cr: {(tbEditNode.txnCredit || 0).toLocaleString("en-IN")} &nbsp;|&nbsp;
+                  Closing: {(tbEditNode.closing || 0).toLocaleString("en-IN")}
+                </p>
+                {savedOv && (
+                  <p className="text-xs text-amber-600">
+                    ⚠ Previously reclassified from: <span className="font-medium">{savedOv.origGroup}</span>
+                  </p>
+                )}
+              </div>
+              {/* BS/PL Side */}
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold">BS / PL Side</Label>
+                <Select value={tbEditNewBsPl} onValueChange={setTbEditNewBsPl}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select side..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allBsPl.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {/* Primary Group */}
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold">Primary Group</Label>
+                <Select value={tbEditNewGroup} onValueChange={setTbEditNewGroup}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select group..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    {allGroups.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Current: {tbEditNode.primaryGroup || "—"} / {tbEditNode.bsPlSide || "—"}
+                </p>
+              </div>
+            </div>
+            <DialogFooter className="gap-2 flex-wrap">
+              {savedOv && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive border-destructive/30 hover:bg-destructive/5 text-xs"
+                  onClick={() => { resetNodeToOriginal(tbEditNode!.nodeId); setTbEditNode(null); }}
+                  disabled={resetingNodeId === tbEditNode.nodeId}
+                >
+                  {resetingNodeId === tbEditNode.nodeId
+                    ? <Loader2 size={12} className="animate-spin mr-1" />
+                    : <RotateCcw size={12} className="mr-1" />}
+                  Reset to Original
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => setTbEditNode(null)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={applyNodeEditFromDialog} disabled={!tbEditNewGroup && !tbEditNewBsPl}>
+                Apply Change
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        );
+      })()}
 
       {/* Delete Prior Period TB Confirmation */}
       <Dialog open={showDeletePriorConfirm} onOpenChange={setShowDeletePriorConfirm}>
