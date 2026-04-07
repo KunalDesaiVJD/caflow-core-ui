@@ -77,13 +77,12 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Prop
     setNotes(initial);
   }, [engagement.notes_to_accounts, client?.id]);
 
-  // Mark auto-available based on TB data
+  // Mark auto-available based on TB data.
+  // Fix (Issue 12): notes 3-8, 11-12 are NOT in STANDARD_NOTES (they jump from 2 → 29).
+  // When TB is present, ALL notes in STANDARD_NOTES benefit from AI drafting.
   useEffect(() => {
     if (hasTB) {
-      setNotes(prev => prev.map(n => ({
-        ...n,
-        autoAvailable: [2, 3, 4, 5, 6, 7, 8, 11, 12].includes(n.num),
-      })));
+      setNotes(prev => prev.map(n => ({ ...n, autoAvailable: true })));
     }
   }, [hasTB]);
 

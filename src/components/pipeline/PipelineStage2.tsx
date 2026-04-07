@@ -22,7 +22,7 @@ import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
-  CalendarDays, Sparkles, Link2, SkipForward, Check
+  CalendarDays, Sparkles, Link2, SkipForward, Check, Save
 } from "lucide-react";
 import { buildTbPresentationModel, type TbPresentationModel, type TbSectionType } from "@/lib/tb-hierarchy";
 import coaMasterDataJson from "@/data/coa-master-data.json";
@@ -440,6 +440,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     sectionTotals: { key: string; label: string; closing: number }[];
     isBalanced: boolean; discrepancy: number;
   } | null>(null);
+
+  // ─── TB Ledger Mapping Corrections State (Issue 9) ───
+  // nodeId → { primaryGroup, bsPlSide } for user-overridden mappings
+  const [tbNodeEdits, setTbNodeEdits]       = useState<Record<string, { primaryGroup: string; bsPlSide: string }>>({});
+  const [tbCorrectionsSaving, setTbCorrectionsSaving] = useState(false);
+  const [showTbCorrections, setShowTbCorrections]     = useState(false);
 
   // ─── COA Mapping State ───
   const [coaMappingRows, setCoaMappingRows] = useState<CoaMappingRow[]>([]);
@@ -1715,9 +1721,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       const [startY, endY] = fy.split("-");
       const priorFY = `${parseInt(startY) - 1}-${(parseInt(endY) - 1).toString().padStart(2, "0")}`;
 
+      // Fix (Issue 8): do NOT pass engagementId for prior-year parses.
+      // The edge function writes to tb_hierarchy_nodes using engagementId as FK.
+      // A fake "${engagementId}_prior" UUID violates that FK constraint and the
+      // INSERT fails.  Instead we only use the returned hierarchy to build the
+      // comparative result in memory and then persist it ourselves via
+      // prior_year_tb_snapshot on audit_engagements.
       const { data, error } = await supabase.functions.invoke("parse-tally-tb", {
         body: {
-          engagementId: `${engagementId}_prior`,
           firmId: user?.firm_id,
           fileBase64: base64,
           fileName: comparativeFile.name,
@@ -1787,6 +1798,43 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       toast.error(err.message || "Failed to delete prior year TB");
     } finally {
       setDeletingPriorTb(false);
+    }
+  };
+
+  // ─── Save Ledger Mapping Corrections (Issue 9) ───
+  // Applies user-overridden primaryGroup / bsPlSide to tb_hierarchy_nodes in DB
+  // and syncs in-memory nodes so the tree / comparative views update immediately.
+  const saveTbCorrections = async () => {
+    const changedNodeIds = Object.keys(tbNodeEdits);
+    if (changedNodeIds.length === 0) return;
+    setTbCorrectionsSaving(true);
+    try {
+      for (const nodeId of changedNodeIds) {
+        const edit = tbNodeEdits[nodeId];
+        const { error } = await supabase
+          .from("tb_hierarchy_nodes")
+          .update({
+            primary_group: edit.primaryGroup,
+            bs_pl_side:    edit.bsPlSide,
+          })
+          .eq("node_id", nodeId)
+          .eq("engagement_id", engagementId);
+        if (error) throw error;
+      }
+      // Sync in-memory states so the tree re-renders without a full page reload
+      const applyEdits = (nodes: TbHierarchyNode[]) =>
+        nodes.map(n => {
+          const ed = tbNodeEdits[n.nodeId];
+          return ed ? { ...n, primaryGroup: ed.primaryGroup, bsPlSide: ed.bsPlSide } : n;
+        });
+      setTbHierarchyNodes(prev => applyEdits(prev));
+      queryClient.invalidateQueries({ queryKey: ["tb-hierarchy-nodes", engagementId] });
+      setTbNodeEdits({});
+      toast.success(`${changedNodeIds.length} ledger mapping(s) corrected and saved.`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save ledger corrections");
+    } finally {
+      setTbCorrectionsSaving(false);
     }
   };
 
@@ -2646,6 +2694,139 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   </CardContent>
                 </Card>
               )}
+              {/* ─── Ledger Mapping Corrections (Issue 9) ─── */}
+              {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        Correct Ledger Mappings
+                        {Object.keys(tbNodeEdits).length > 0 && (
+                          <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                            {Object.keys(tbNodeEdits).length} unsaved change(s)
+                          </Badge>
+                        )}
+                      </CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => setShowTbCorrections(p => !p)}
+                        >
+                          {showTbCorrections ? "Hide" : "Show / Edit"}
+                        </Button>
+                        {Object.keys(tbNodeEdits).length > 0 && (
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs gap-1 bg-primary"
+                            onClick={saveTbCorrections}
+                            disabled={tbCorrectionsSaving}
+                          >
+                            {tbCorrectionsSaving
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Save size={12} />}
+                            Save Corrections
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  {showTbCorrections && (() => {
+                    const src = tbHierarchyNodes.length > 0 ? tbHierarchyNodes : storedTbHierarchy;
+                    const leafNodes = src.filter(n => n.isLeaf);
+                    // Filter out empty-string names — Radix Select.Item forbids value=""
+                    const allGroups = [...new Set(src.filter(n => !n.isLeaf && n.name?.trim()).map(n => n.name))].sort();
+                    return (
+                      <CardContent className="p-0">
+                        <p className="text-[11px] text-muted-foreground px-4 pt-2 pb-1">
+                          Correct the Primary Group and BS/PL classification of individual ledger accounts here. Changes are saved to the database.
+                        </p>
+                        <div className="max-h-[400px] overflow-auto">
+                          <table className="w-full text-xs border-collapse min-w-[760px]">
+                            <thead className="sticky top-0 bg-muted/80 text-[10px] uppercase tracking-wide">
+                              <tr>
+                                <th className="border border-border px-3 py-2 text-left">Ledger Name</th>
+                                <th className="border border-border px-2 py-2 text-right w-28">Closing Bal</th>
+                                <th className="border border-border px-2 py-2 text-center w-40">BS / PL Side</th>
+                                <th className="border border-border px-2 py-2 text-left">Primary Group</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {leafNodes.map(node => {
+                                const edit = tbNodeEdits[node.nodeId];
+                                // Guard: Radix Select.Item requires non-empty value strings
+                                const currentGroup  = (edit?.primaryGroup ?? node.primaryGroup) || "Unknown";
+                                const currentBsPl   = (edit?.bsPlSide    ?? node.bsPlSide)    || "Unknown";
+                                const isDirty       = !!edit;
+                                return (
+                                  <tr
+                                    key={node.nodeId}
+                                    className={isDirty ? "bg-amber-50/60" : "hover:bg-muted/10"}
+                                  >
+                                    <td className="border border-border px-3 py-1.5 font-medium">
+                                      {node.name}
+                                    </td>
+                                    <td className="border border-border px-2 py-1.5 text-right font-mono text-muted-foreground">
+                                      {node.closing.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                                    </td>
+                                    <td className="border border-border px-2 py-1.5">
+                                      <Select
+                                        value={currentBsPl}
+                                        onValueChange={val =>
+                                          setTbNodeEdits(prev => ({
+                                            ...prev,
+                                            [node.nodeId]: { primaryGroup: currentGroup, bsPlSide: val },
+                                          }))
+                                        }
+                                      >
+                                        <SelectTrigger className="h-6 text-xs w-full">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="BS">Balance Sheet (BS)</SelectItem>
+                                          <SelectItem value="PL">Profit & Loss (PL)</SelectItem>
+                                          <SelectItem value="Unknown">Unknown</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </td>
+                                    <td className="border border-border px-2 py-1.5">
+                                      <Select
+                                        value={currentGroup}
+                                        onValueChange={val =>
+                                          setTbNodeEdits(prev => ({
+                                            ...prev,
+                                            [node.nodeId]: { primaryGroup: val, bsPlSide: currentBsPl },
+                                          }))
+                                        }
+                                      >
+                                        <SelectTrigger className="h-6 text-xs w-full">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent className="max-h-52">
+                                          {allGroups.map(g => (
+                                            <SelectItem key={g} value={g} className="text-xs">{g}</SelectItem>
+                                          ))}
+                                          {/* keep the current value even if not in the list */}
+                                          {!allGroups.includes(currentGroup) && currentGroup && currentGroup !== "Unknown" && (
+                                            <SelectItem value={currentGroup} className="text-xs">{currentGroup}</SelectItem>
+                                          )}
+                                          <SelectItem value="Unknown" className="text-xs text-muted-foreground">Unknown / Unclassified</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </CardContent>
+                    );
+                  })()}
+                </Card>
+              )}
+
               {/* ─── Comparative / Prior Period TB ─── */}
               <Card>
                 <CardHeader className="pb-2">

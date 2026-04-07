@@ -242,17 +242,18 @@ function EmpSelect({
 }) {
   return (
     <Select
-      value={value || ""}
+      value={value || "__none__"}
       onValueChange={id => {
-        const emp = employees.find(e => e.id === id);
-        onChange(id, emp?.name || "");
+        const realId = id === "__none__" ? "" : id;
+        const emp = employees.find(e => e.id === realId);
+        onChange(realId, emp?.name || "");
       }}
     >
       <SelectTrigger className="h-7 text-xs min-w-[110px]">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="">—</SelectItem>
+        <SelectItem value="__none__">—</SelectItem>
         {employees.map(e => (
           <SelectItem key={e.id} value={e.id}>
             {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
@@ -469,14 +470,14 @@ export default function SpecialAttention({ data, engagementId }: Props) {
                   {/* Query Y/N */}
                   <td className="border border-border px-2 py-1.5 text-center align-top">
                     <Select
-                      value={rs.query}
-                      onValueChange={v => setRowField(row.id, "query", v)}
+                      value={rs.query || "__none__"}
+                      onValueChange={v => setRowField(row.id, "query", v === "__none__" ? "" : v)}
                     >
                       <SelectTrigger className="h-7 text-xs w-20 mx-auto">
                         <SelectValue placeholder="—" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">—</SelectItem>
+                        <SelectItem value="__none__">—</SelectItem>
                         <SelectItem value="yes">Yes</SelectItem>
                         <SelectItem value="no">No</SelectItem>
                       </SelectContent>

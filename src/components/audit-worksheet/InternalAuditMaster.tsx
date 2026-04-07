@@ -101,17 +101,18 @@ function EmpSelect({
     <div className="space-y-0.5">
       {label && <Label className="text-xs">{label}</Label>}
       <Select
-        value={value || ""}
+        value={value || "__none__"}
         onValueChange={id => {
-          const emp = employees.find(e => e.id === id);
-          onChange(id, emp?.name || "");
+          const realId = id === "__none__" ? "" : id;
+          const emp = employees.find(e => e.id === realId);
+          onChange(realId, emp?.name || "");
         }}
       >
         <SelectTrigger className="h-8 text-sm">
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="">— Unassigned —</SelectItem>
+          <SelectItem value="__none__">— Unassigned —</SelectItem>
           {employees.map(e => (
             <SelectItem key={e.id} value={e.id}>
               {e.name || "—"}{e.role ? ` · ${e.role}` : ""}

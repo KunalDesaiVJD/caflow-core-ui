@@ -16,6 +16,7 @@
  *         'Name of Client: {clientName}'
  *         'AUDIT WORK SHEET'
  */
+import React from "react";
 import { cn } from "@/lib/utils";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -84,17 +85,18 @@ function EmpSelect({
 }) {
   return (
     <Select
-      value={value || ""}
+      value={value || "__none__"}
       onValueChange={id => {
-        const emp = employees.find(e => e.id === id);
-        onChange(id, emp?.name || "");
+        const realId = id === "__none__" ? "" : id;
+        const emp = employees.find(e => e.id === realId);
+        onChange(realId, emp?.name || "");
       }}
     >
       <SelectTrigger className="h-7 text-xs w-full min-w-[115px]">
         <SelectValue placeholder="Assign…" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="">— Unassigned —</SelectItem>
+        <SelectItem value="__none__">— Unassigned —</SelectItem>
         {employees.map(e => (
           <SelectItem key={e.id} value={e.id}>
             {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
@@ -189,10 +191,9 @@ export default function Worksheet({ data, engagementId }: Props) {
               const rs = getRow(row.id);
 
               return (
-                <>
+                <React.Fragment key={row.id}>
                   {/* ── Main Row ── */}
                   <tr
-                    key={row.id}
                     className={cn(
                       "align-top hover:bg-muted/10 transition-colors",
                       row.isSubRow && "bg-teal-50/40"
@@ -307,7 +308,7 @@ export default function Worksheet({ data, engagementId }: Props) {
                       />
                     </td>
                   </tr>
-                </>
+                </React.Fragment>
               );
             })}
           </tbody>

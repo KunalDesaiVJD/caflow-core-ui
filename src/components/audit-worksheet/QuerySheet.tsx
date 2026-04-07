@@ -48,7 +48,7 @@ function CorrectionSelect({
   onChange: (v: string) => void;
 }) {
   return (
-    <Select value={value || ""} onValueChange={onChange}>
+    <Select value={value || "__pending__"} onValueChange={v => onChange(v === "__pending__" ? "" : v)}>
       <SelectTrigger
         className={cn(
           "h-7 text-xs w-full min-w-[90px]",
@@ -60,7 +60,7 @@ function CorrectionSelect({
         <SelectValue placeholder="Select…" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="">— Pending —</SelectItem>
+        <SelectItem value="__pending__">— Pending —</SelectItem>
         <SelectItem value="Yes">✓ Yes</SelectItem>
         <SelectItem value="No">✗ No</SelectItem>
       </SelectContent>
