@@ -19,6 +19,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 /* ───────────── notes that apply ONLY to corporate (company) entities ───────────── */
 const CORPORATE_ONLY_NOTE_KEYS = new Set(["note_1", "note_34", "note_42"]);
 
+/* ───────────── Note 1 for non-corporate: "Entity Information" ───────────── */
+const NC_NOTE_1 = { key: "note_nc_1", num: 1, title: "Entity Information" };
+
 /* ───────────── constants (fallback) ───────────── */
 const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string; corporateOnly?: boolean }[] = [
   { key: "note_1", num: 1, title: "Corporate Information", corporateOnly: true },
@@ -150,26 +153,32 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
   const engagementId = engagementIdProp || sp.get("engagementId") || "";
   const { user } = useAuth();
   const [recordId, setRecordId] = useState("");
-  // Default active note: for non-corporate start at note_2 since note_1 is corporate-only
-  const [activeNote, setActiveNote] = useState(isCorporate ? "note_1" : "note_2");
+  // Default active note: corporate starts at note_1; non-corporate starts at note_nc_1 (Entity Information)
+  const [activeNote, setActiveNote] = useState(isCorporate ? "note_1" : "note_nc_1");
   const [saving, setSaving] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [rolledFromFy, setRolledFromFy] = useState("");
   const [showPrint, setShowPrint] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
+  const [clientData, setClientData] = useState<{
+    name?: string; cin?: string; registered_office?: string; business_activity?: string;
+    entity_type?: string; date_of_incorporation?: string; pan?: string;
+  } | null>(null);
 
   // Dynamic note list: fetched from note_templates master, fallback to hardcoded
-  // For non-corporate entities, exclude corporate-only notes
+  // Non-corporate: prepend "Entity Information" (note_nc_1), exclude corporate-only notes
   const baseNoteList = isCorporate
     ? NOTE_LIST_FALLBACK
-    : NOTE_LIST_FALLBACK.filter(nl => !nl.corporateOnly);
+    : [NC_NOTE_1, ...NOTE_LIST_FALLBACK.filter(nl => !nl.corporateOnly)];
   const [NOTE_LIST, setNOTE_LIST] = useState(baseNoteList);
 
-  const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, isCorporate ? true : !nl.corporateOnly]))
-  );
+  const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() => {
+    const base = Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, isCorporate ? true : !nl.corporateOnly]));
+    if (!isCorporate) base[NC_NOTE_1.key] = true; // Entity Information always selected for non-corporate
+    return base;
+  });
 
+  const [noteNc1, setNoteNc1] = useState<any>({});
   const [note1, setNote1] = useState<any>({});
   const [note2, setNote2] = useState<any>({});
   const [note29, setNote29] = useState<any>({});
@@ -191,6 +200,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
   const [note45, setNote45] = useState<any>({ text: "The figures for the corresponding previous year have been regrouped/ reclassified, wherever considered necessary, to make them comparable with current years classification." });
 
   const stateMap: Record<string, [any, (v: any) => void]> = {
+    note_nc_1: [noteNc1, setNoteNc1],
     note_1: [note1, setNote1], note_2: [note2, setNote2],
     note_29: [note29, setNote29], note_30: [note30, setNote30], note_31: [note31, setNote31],
     note_32: [note32, setNote32], note_33: [note33, setNote33], note_34: [note34, setNote34],
@@ -206,7 +216,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
     (async () => {
       const { data: eng } = await supabase.from("audit_engagements").select("client_id").eq("id", engagementId).single();
       if (eng?.client_id) {
-        const { data: cl } = await supabase.from("clients").select("name, cin, registered_office, business_activity").eq("id", eng.client_id).single();
+        const { data: cl } = await supabase.from("clients").select("name, cin, registered_office, business_activity, entity_type, date_of_incorporation, pan").eq("id", eng.client_id).single();
         if (cl) setClientData(cl as any);
       }
     })();
@@ -221,11 +231,19 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
         (templates as any[]).forEach((t: any) => titleMap.set(t.note_number, t.note_title));
         setNOTE_LIST(prev => {
           const updated = prev.map(nl => {
+            // note_nc_1 is non-corporate only; don't override its title from master templates
+            if (nl.key === "note_nc_1") return nl;
             const masterTitle = titleMap.get(typeof nl.num === "string" ? parseInt(nl.num) : nl.num);
             return masterTitle ? { ...nl, title: masterTitle } : nl;
           });
-          // For non-corporate, ensure corporate-only notes are excluded even after template reload
-          return isCorporate ? updated : updated.filter(nl => !CORPORATE_ONLY_NOTE_KEYS.has(nl.key));
+          // For non-corporate, ensure corporate-only notes are excluded and note_nc_1 stays first
+          if (!isCorporate) {
+            const filtered = updated.filter(nl => !CORPORATE_ONLY_NOTE_KEYS.has(nl.key));
+            // Ensure note_nc_1 is present at front
+            if (!filtered.find(nl => nl.key === "note_nc_1")) filtered.unshift(NC_NOTE_1);
+            return filtered;
+          }
+          return updated;
         });
       }
     })();
@@ -239,9 +257,10 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
       const { data: sel } = await supabase.from("notes_selection" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
       if (sel && (sel as any).selected_notes) {
         const loadedSelection = (sel as any).selected_notes as Record<string, boolean>;
-        // For non-corporate entities, force corporate-only notes to false regardless of DB value
+        // For non-corporate entities: force corporate-only notes off; ensure note_nc_1 is on
         if (!isCorporate) {
           CORPORATE_ONLY_NOTE_KEYS.forEach(k => { loadedSelection[k] = false; });
+          if (loadedSelection[NC_NOTE_1.key] === undefined) loadedSelection[NC_NOTE_1.key] = true;
         }
         setNoteSelection(loadedSelection);
       }
@@ -359,6 +378,7 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
     const data = stateMap[noteKey]?.[0] || {};
     const onChange = (f: string, v: string) => updateField(noteKey, f, v);
     switch (noteKey) {
+      case "note_nc_1": return <Note1NonCorporate data={data} onChange={onChange} clientData={clientData} />;
       case "note_1": return <Note1 data={data} onChange={onChange} clientData={clientData} />;
       case "note_2": return <Note2 data={data} onChange={onChange} />;
       case "note_29": return <Note29 data={data} onChange={onChange} rolloverFy={rolledFromFy} />;
@@ -514,6 +534,113 @@ function Note1({ data, onChange, clientData }: { data: any; onChange: (f: string
         <CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader>
         <CardContent>
           <Textarea value={data.use_of_estimates || STANDARD_TEXTS.use_of_estimates} onChange={(e) => onChange("use_of_estimates", e.target.value)} rows={4} className="text-sm" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   NOTE NC-1 — ENTITY INFORMATION (NON-CORPORATE)
+   Applies to: LLP, Partnership, Proprietorship, Firm, Trust, HUF, AOP
+   NO CIN field. NO Companies Act 2013 references.
+   ══════════════════════════════════════════════ */
+function Note1NonCorporate({ data, onChange, clientData }: {
+  data: any;
+  onChange: (f: string, v: string) => void;
+  clientData?: {
+    name?: string; registered_office?: string; business_activity?: string;
+    entity_type?: string; date_of_incorporation?: string; pan?: string;
+  } | null;
+}) {
+  const entityName = clientData?.name || data.entity_name || "[Entity Name]";
+  const entityType = clientData?.entity_type || data.entity_type || "";
+  const regOffice = data.registered_office || clientData?.registered_office || "";
+  const bizActivity = data.business_activity || clientData?.business_activity || "";
+  const estDate = data.established_date || clientData?.date_of_incorporation || "";
+  const regNumber = data.registration_number || "";
+
+  const NC_BASIS = "The financial statements of the entity have been prepared in accordance with the Generally Accepted Accounting Principles in India (Indian GAAP) and applicable Accounting Standards. The financial statements have been prepared on accrual basis under the historical cost convention.";
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <Card>
+        <CardHeader><CardTitle className="text-base">a. Overview of the Entity</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="p-4 bg-muted/30 rounded-md text-sm leading-relaxed">
+            <span className="font-semibold">{entityName}</span>
+            {entityType && <span className="text-muted-foreground"> ({entityType})</span>}
+            {" "}having its registered office at{" "}
+            <Input
+              value={regOffice}
+              onChange={(e) => onChange("registered_office", e.target.value)}
+              placeholder="Enter registered office address"
+              className="inline-block w-64 h-7 text-sm mx-1"
+            />
+            {" "}and engaged in business of{" "}
+            <Input
+              value={bizActivity}
+              onChange={(e) => onChange("business_activity", e.target.value)}
+              placeholder="Enter business activity"
+              className="inline-block w-64 h-7 text-sm mx-1"
+            />.
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-foreground">Date of Establishment / Registration</label>
+              <Input
+                type="date"
+                value={estDate}
+                onChange={(e) => onChange("established_date", e.target.value)}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground">
+                Registration Number
+                <span className="text-xs text-muted-foreground ml-1">(LLPIN / Reg. Certificate No.)</span>
+              </label>
+              <Input
+                value={regNumber}
+                onChange={(e) => onChange("registration_number", e.target.value)}
+                placeholder="e.g. AAA-1234 or Reg. No."
+                className="mt-1"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">b. Basis of Preparation</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea
+            value={data.basis_of_preparation || NC_BASIS}
+            onChange={(e) => onChange("basis_of_preparation", e.target.value)}
+            rows={4}
+            className="text-sm"
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">c. Basis of Measurement</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea
+            value={data.basis_of_measurement || STANDARD_TEXTS.basis_of_measurement}
+            onChange={(e) => onChange("basis_of_measurement", e.target.value)}
+            rows={4}
+            className="text-sm"
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-base">d. Use of Estimates</CardTitle></CardHeader>
+        <CardContent>
+          <Textarea
+            value={data.use_of_estimates || STANDARD_TEXTS.use_of_estimates}
+            onChange={(e) => onChange("use_of_estimates", e.target.value)}
+            rows={4}
+            className="text-sm"
+          />
         </CardContent>
       </Card>
     </div>

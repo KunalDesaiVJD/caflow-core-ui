@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { ArrowRight, BookMarked, Shield, Loader2 } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
@@ -33,13 +31,6 @@ export default function PipelineStage7Combined({
     engEntityType === "company" ||
     clientEntityType === "Private Ltd" ||
     clientEntityType === "Public Ltd";
-
-  // caroApplicable: applies to ALL corporate entities (Private Ltd / Public Ltd).
-  // Fix (Issue 12): Removed the caro_applicable / requires_caro flag requirement —
-  // most engagements never had that flag set to true, so CARO never showed even for
-  // companies. The entity-type gate is the correct enforcement — CARO 2020 is
-  // mandatory for all companies. Firms can mark individual clauses as N/A inside.
-  const caroApplicable = isCorporate;
 
   const markComplete = async () => {
     setSaving(true);
@@ -77,10 +68,12 @@ export default function PipelineStage7Combined({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            Stage 7 — Notes to Accounts & CARO
+            {isCorporate ? 'Stage 7 — Notes to Accounts & CARO' : 'Stage 7 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Notes to financial statements and CARO 2020 reporting
+            {isCorporate
+              ? 'Notes to financial statements and CARO 2020 reporting'
+              : 'Notes to financial statements'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -93,47 +86,33 @@ export default function PipelineStage7Combined({
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="notes" className="gap-1">
-            <BookMarked size={14} /> Notes to Accounts
-          </TabsTrigger>
-          <TabsTrigger value="caro" className="gap-1">
-            <Shield size={14} /> CARO 2020
-            {!caroApplicable && (
-              <Badge variant="secondary" className="ml-1 text-[9px]">N/A</Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
+      {isCorporate ? (
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList>
+            <TabsTrigger value="notes" className="gap-1">
+              <BookMarked size={14} /> Notes to Accounts
+            </TabsTrigger>
+            <TabsTrigger value="caro" className="gap-1">
+              <Shield size={14} /> CARO 2020
+            </TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="notes" className="mt-4">
-          <NotesToAccounts engagementIdProp={engagementId} isCorporate={isCorporate} />
-        </TabsContent>
+          <TabsContent value="notes" className="mt-4">
+            <NotesToAccounts engagementIdProp={engagementId} isCorporate={true} />
+          </TabsContent>
 
-        <TabsContent value="caro" className="mt-4">
-          {caroApplicable ? (
+          <TabsContent value="caro" className="mt-4">
             <EngagementCARO
               engagement={engagement}
               client={engagement?.clients}
               onUpdate={() => {}}
             />
-          ) : (
-            <Card className="border-dashed border-2 border-muted">
-              <CardContent className="p-12 text-center space-y-3">
-                <Shield className="w-12 h-12 mx-auto text-muted-foreground/40" />
-                <h3 className="text-lg font-semibold text-foreground">CARO 2020 is not applicable</h3>
-                <p className="text-sm text-muted-foreground">
-                  {!isCorporate
-                    ? `CARO 2020 applies only to companies (Private Limited / Public Limited). This engagement is for a ${clientEntityType || engEntityType || "non-corporate"} entity.`
-                    : "CARO has been marked as not applicable for this engagement. You can update this in the engagement settings if required."}
-                </p>
-                <p className="text-xs text-muted-foreground">Proceed to Stage 8.</p>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-
-      </Tabs>
+          </TabsContent>
+        </Tabs>
+      ) : (
+        /* Non-corporate: Notes to Accounts only — no CARO tab at all */
+        <NotesToAccounts engagementIdProp={engagementId} isCorporate={false} />
+      )}
     </div>
   );
 }
