@@ -22,7 +22,7 @@ import {
   Upload, FileSpreadsheet, FileText, FileCode, Table2, CheckCircle2,
   AlertTriangle, ArrowRight, ArrowLeft, Loader2, Download, Eye,
   Flag, RefreshCw, X, ChevronDown, FileUp, ShieldCheck, FileWarning,
-  CalendarDays, Sparkles, Link2, SkipForward, Check, Save
+  CalendarDays, Sparkles, Link2, SkipForward, Check, Save, Clock
 } from "lucide-react";
 import { buildTbPresentationModel, type TbPresentationModel, type TbSectionType } from "@/lib/tb-hierarchy";
 import coaMasterDataJson from "@/data/coa-master-data.json";
@@ -459,6 +459,9 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const comparativeFileRef = useRef<HTMLInputElement>(null);
   const [deletingPriorTb, setDeletingPriorTb] = useState(false);
   const [showDeletePriorConfirm, setShowDeletePriorConfirm] = useState(false);
+  const [priorTbImportedAt, setPriorTbImportedAt] = useState<string | null>(null);
+  // Filter for comparison table: "all" | "mismatches" | "cy_only" | "py_only"
+  const [comparisonFilter, setComparisonFilter] = useState<"all"|"mismatches"|"cy_only"|"py_only">("all");
   const [deletingTb, setDeletingTb] = useState(false);
   const [tbStatusMsg, setTbStatusMsg] = useState('');
   const [aiClassifying, setAiClassifying] = useState(false);
@@ -639,9 +642,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     queryFn: async () => {
       const { data } = await supabase
         .from("audit_engagements")
-        .select("prior_year_tb_snapshot")
+        .select("prior_year_tb_snapshot, prior_year_tb_imported_at")
         .eq("id", engagementId)
         .maybeSingle();
+      const importedAt = (data as any)?.prior_year_tb_imported_at || null;
+      setPriorTbImportedAt(importedAt);
       const snapshot: any[] = (data as any)?.prior_year_tb_snapshot || [];
       return snapshot.map((row: any) => ({
         name:        (row.name         || "") as string,
@@ -1805,11 +1810,18 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         })
         .eq("id", engagementId);
 
+      const importedAt = new Date().toISOString();
+      setPriorTbImportedAt(importedAt);
       setComparativeResult(result);
       setComparativeFile(null);
       setShowComparativeTb(false);
+      setComparisonFilter("all");
       refetchPriorTb();
-      toast.success(`Prior year TB imported. ${result.mismatched} opening balance mismatches found.`);
+      toast.success(
+        `Prior year TB imported — ${result.total} accounts loaded. ` +
+        `${result.mismatched} mismatch${result.mismatched !== 1 ? "es" : ""} found ` +
+        `(CY opening ≠ PY closing).`
+      );
     } catch (err: any) {
       toast.error(err.message || "Prior year import failed");
     } finally {
@@ -1827,12 +1839,14 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         .from("audit_engagements")
         .update({ prior_year_tb_snapshot: [], prior_year_tb_imported_at: null })
         .eq("id", engagementId);
+      setPriorTbImportedAt(null);
       setComparativeResult(null);
       setComparativeFile(null);
       setShowComparativeTb(false);
       setShowDeletePriorConfirm(false);
+      setComparisonFilter("all");
       await refetchPriorTb();
-      toast.success("Prior year TB deleted successfully");
+      toast.success("Prior year TB deleted. Click 'Import Prior Year TB' to upload a new one.");
     } catch (err: any) {
       toast.error(err.message || "Failed to delete prior year TB");
     } finally {
@@ -2872,42 +2886,51 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               <Card>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <CalendarDays size={14} /> Comparative / Prior Period TB
-                      {comparativeResult && (
-                        <Badge className="bg-primary/10 text-primary text-[10px] ml-1">
-                          {comparativeResult.priorFY} loaded
-                        </Badge>
+                    <div>
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <CalendarDays size={14} /> Comparative / Prior Period TB
+                        {comparativeResult && (
+                          <Badge className="bg-primary/10 text-primary text-[10px] ml-1">
+                            {comparativeResult.priorFY} loaded
+                          </Badge>
+                        )}
+                      </CardTitle>
+                      {comparativeResult && priorTbImportedAt && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                          <Clock size={10} />
+                          Imported {new Date(priorTbImportedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        </p>
                       )}
-                    </CardTitle>
+                    </div>
                     <div className="flex items-center gap-2">
                       {comparativeResult && !showComparativeTb && (
                         <>
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-7 text-xs gap-1"
+                            className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/5"
                             onClick={() => setShowDeletePriorConfirm(true)}
                             disabled={deletingPriorTb}
                           >
                             {deletingPriorTb
                               ? <Loader2 size={12} className="animate-spin" />
                               : <X size={12} />}
-                            Delete
+                            Delete Prior TB
                           </Button>
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
                             className="h-7 text-xs gap-1"
-                            onClick={() => setShowComparativeTb(true)}
+                            onClick={() => { setShowComparativeTb(true); setComparativeFile(null); }}
                           >
                             <RefreshCw size={12} /> Re-upload
                           </Button>
                         </>
                       )}
                       {!comparativeResult && (
-                        <Button variant="ghost" size="sm" onClick={() => setShowComparativeTb(!showComparativeTb)}>
-                          {showComparativeTb ? "Hide" : "Add Prior Year TB"}
+                        <Button variant="ghost" size="sm" className="gap-1" onClick={() => setShowComparativeTb(!showComparativeTb)}>
+                          <Upload size={12} />
+                          {showComparativeTb ? "Hide" : "Import Prior Year TB"}
                         </Button>
                       )}
                     </div>
@@ -2919,8 +2942,9 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                   <CardContent className="space-y-4">
                     <Alert className="py-2">
                       <AlertDescription className="text-xs">
-                        Upload the previous year's Trial Balance to enable opening balance
-                        verification, comparative financial statements, and year-on-year scrutiny rules.
+                        Upload the previous year's Trial Balance. All accounts (opening balances,
+                        transactions Dr/Cr, closing balances, group) will be compared column-by-column
+                        against the current year. Matched, mismatched, new and closed accounts are all shown.
                       </AlertDescription>
                     </Alert>
                     <div
@@ -2957,18 +2981,74 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                 )}
 
                 {/* Full-column comparison table — shown after data is loaded */}
-                {comparativeResult && !showComparativeTb && (
+                {comparativeResult && !showComparativeTb && (() => {
+                  const cyOnlyCount  = comparativeResult.verificationRows.filter((r: any) => r.rowType === "cy_only").length;
+                  const pyOnlyCount  = comparativeResult.verificationRows.filter((r: any) => r.rowType === "py_only").length;
+                  const filteredRows = comparativeResult.verificationRows.filter((r: any) => {
+                    if (comparisonFilter === "mismatches") return r.isMismatch;
+                    if (comparisonFilter === "cy_only")   return r.rowType === "cy_only";
+                    if (comparisonFilter === "py_only")   return r.rowType === "py_only";
+                    return true;
+                  });
+                  return (
                   <CardContent className="space-y-3 pt-0">
-                    <div className="flex gap-4 text-xs flex-wrap">
-                      <span className="text-primary font-medium">✓ Matched: {comparativeResult.matched}</span>
-                      <span className="text-destructive font-medium">✗ Mismatched: {comparativeResult.mismatched}</span>
-                      <span className="text-muted-foreground">Total compared: {comparativeResult.total}</span>
+                    {/* Summary row */}
+                    <div className="flex items-center gap-3 text-xs flex-wrap">
+                      <span className="font-semibold text-foreground">
+                        Total: {comparativeResult.total} accounts
+                      </span>
+                      <span className="text-primary font-medium">
+                        ✓ Match: {comparativeResult.matched}
+                      </span>
+                      <span className="text-destructive font-medium">
+                        ✗ Mismatch: {comparativeResult.mismatched}
+                      </span>
+                      {cyOnlyCount > 0 && (
+                        <span className="text-blue-600 font-medium">
+                          + New (CY only): {cyOnlyCount}
+                        </span>
+                      )}
+                      {pyOnlyCount > 0 && (
+                        <span className="text-orange-600 font-medium">
+                          − Closed (PY only): {pyOnlyCount}
+                        </span>
+                      )}
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      Opening variance = CY Opening − PY Closing.{" "}
-                      <span className="text-amber-600 font-medium">Amber</span> = significant variance (&gt;10% or &gt;₹10,000).{" "}
-                      <span className="text-destructive font-medium">Red</span> = any mismatch ≥ ₹1.
-                    </p>
+                    {/* Legend + filter */}
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        Key: Opening Var = CY Opening − PY Closing.{" "}
+                        <span className="text-amber-600 font-medium">Amber</span> = &gt;10% or &gt;₹10k.{" "}
+                        <span className="text-destructive font-medium">Red</span> = any mismatch ≥ ₹1.{" "}
+                        <span className="text-blue-600 font-medium">Blue</span> = new account.{" "}
+                        <span className="text-orange-600 font-medium">Orange</span> = closed/missing.
+                      </p>
+                      <div className="flex items-center gap-1 text-[11px]">
+                        <span className="text-muted-foreground mr-1">Show:</span>
+                        {(["all","mismatches","cy_only","py_only"] as const).map(f => (
+                          <button
+                            key={f}
+                            onClick={() => setComparisonFilter(f)}
+                            className={cn(
+                              "px-2 py-0.5 rounded border text-[11px] font-medium transition-colors",
+                              comparisonFilter === f
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "border-border text-muted-foreground hover:bg-muted/50"
+                            )}
+                          >
+                            {f === "all" ? `All (${comparativeResult.total})` :
+                             f === "mismatches" ? `Mismatches (${comparativeResult.mismatched})` :
+                             f === "cy_only" ? `New (${cyOnlyCount})` :
+                             `Closed (${pyOnlyCount})`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {filteredRows.length === 0 ? (
+                      <div className="text-center py-8 text-sm text-muted-foreground">
+                        No accounts match the current filter.
+                      </div>
+                    ) : (
                     <div className="border rounded-lg overflow-auto max-h-72">
                       <table className="w-full text-xs min-w-[1000px]">
                         <thead className="bg-muted sticky top-0">
@@ -2989,7 +3069,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                           </tr>
                         </thead>
                         <tbody>
-                          {comparativeResult.verificationRows.map((row: any, i: number) => (
+                          {filteredRows.map((row: any, i: number) => (
                             <tr
                               key={i}
                               className={cn(
@@ -3059,8 +3139,10 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                         </tbody>
                       </table>
                     </div>
+                    )}
                   </CardContent>
-                )}
+                  );
+                })()}
               </Card>
 
               {/* ─── Proceed to COA Mapping ─── */}
