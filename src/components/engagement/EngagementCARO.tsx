@@ -198,7 +198,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
                 return num === r.clause_number;
               });
               if (match && !r.is_locked && r.status !== "approved") {
-                return { ...r, auto_draft: match.answer || match.response || r.auto_draft, status: "drafted" };
+                const aiText = match.answer || match.response || "";
+                return {
+                  ...r,
+                  auto_draft:    aiText || r.auto_draft,
+                  // Fix (Issue 12): surface AI text in the editable textarea
+                  user_response: aiText || r.user_response,
+                  status: "drafted",
+                };
               }
               return r;
             }));
