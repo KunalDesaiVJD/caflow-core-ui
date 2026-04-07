@@ -107,7 +107,7 @@ export default function PipelineStage7Combined({
         </TabsList>
 
         <TabsContent value="notes" className="mt-4">
-          <NotesToAccounts engagementIdProp={engagementId} />
+          <NotesToAccounts engagementIdProp={engagementId} isCorporate={isCorporate} />
         </TabsContent>
 
         <TabsContent value="caro" className="mt-4">

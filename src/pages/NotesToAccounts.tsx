@@ -16,16 +16,19 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { exportToPdf, exportToWord } from "@/lib/exportUtils";
 import { Checkbox } from "@/components/ui/checkbox";
 
+/* ───────────── notes that apply ONLY to corporate (company) entities ───────────── */
+const CORPORATE_ONLY_NOTE_KEYS = new Set(["note_1", "note_34", "note_42"]);
+
 /* ───────────── constants (fallback) ───────────── */
-const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string }[] = [
-  { key: "note_1", num: 1, title: "Corporate Information" },
+const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string; corporateOnly?: boolean }[] = [
+  { key: "note_1", num: 1, title: "Corporate Information", corporateOnly: true },
   { key: "note_2", num: 2, title: "Significant Accounting Policies" },
   { key: "note_29", num: 29, title: "Finance Costs" },
   { key: "note_30", num: 30, title: "Depreciation and Amortisation" },
   { key: "note_31", num: 31, title: "Other Expenses" },
   { key: "note_32", num: 32, title: "Exceptional Items" },
   { key: "note_33", num: 33, title: "Tax Expense" },
-  { key: "note_34", num: 34, title: "Earnings Per Share" },
+  { key: "note_34", num: 34, title: "Earnings Per Share", corporateOnly: true },
   { key: "note_35", num: 35, title: "Contingent Liabilities and Commitments" },
   { key: "note_36", num: 36, title: "Related Party Disclosures" },
   { key: "note_37", num: 37, title: "Segment Reporting" },
@@ -33,7 +36,7 @@ const NOTE_LIST_FALLBACK: { key: string; num: number | string; title: string }[]
   { key: "note_39", num: 39, title: "Foreign Currency Transactions" },
   { key: "note_40", num: 40, title: "Government Grants" },
   { key: "note_41", num: 41, title: "Deferred Tax" },
-  { key: "note_42", num: 42, title: "CSR Expenditure" },
+  { key: "note_42", num: 42, title: "CSR Expenditure", corporateOnly: true },
   { key: "note_43", num: 43, title: "Details of Benami Property" },
   { key: "note_44", num: 44, title: "Events After Reporting Period" },
   { key: "note_45", num: 45, title: "Previous Year Figures" },
@@ -142,12 +145,13 @@ function SNoRow({ sno, label, prefix, data, onChange, indent = false }: { sno: s
     </tr>
   );
 }
-export default function NotesToAccounts({ engagementIdProp, onFinalise }: { engagementIdProp?: string; onFinalise?: () => void } = {}) {
+export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorporate = true }: { engagementIdProp?: string; onFinalise?: () => void; isCorporate?: boolean } = {}) {
   const [sp] = useSearchParams();
   const engagementId = engagementIdProp || sp.get("engagementId") || "";
   const { user } = useAuth();
   const [recordId, setRecordId] = useState("");
-  const [activeNote, setActiveNote] = useState("note_1");
+  // Default active note: for non-corporate start at note_2 since note_1 is corporate-only
+  const [activeNote, setActiveNote] = useState(isCorporate ? "note_1" : "note_2");
   const [saving, setSaving] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [rolledFromFy, setRolledFromFy] = useState("");
@@ -156,10 +160,14 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
   const [clientData, setClientData] = useState<{ name?: string; cin?: string; registered_office?: string; business_activity?: string } | null>(null);
 
   // Dynamic note list: fetched from note_templates master, fallback to hardcoded
-  const [NOTE_LIST, setNOTE_LIST] = useState(NOTE_LIST_FALLBACK);
+  // For non-corporate entities, exclude corporate-only notes
+  const baseNoteList = isCorporate
+    ? NOTE_LIST_FALLBACK
+    : NOTE_LIST_FALLBACK.filter(nl => !nl.corporateOnly);
+  const [NOTE_LIST, setNOTE_LIST] = useState(baseNoteList);
 
   const [noteSelection, setNoteSelection] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, true]))
+    Object.fromEntries(NOTE_LIST_FALLBACK.map(nl => [nl.key, isCorporate ? true : !nl.corporateOnly]))
   );
 
   const [note1, setNote1] = useState<any>({});
@@ -211,13 +219,17 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       if (templates && templates.length > 0) {
         const titleMap = new Map<number, string>();
         (templates as any[]).forEach((t: any) => titleMap.set(t.note_number, t.note_title));
-        setNOTE_LIST(prev => prev.map(nl => {
-          const masterTitle = titleMap.get(typeof nl.num === "string" ? parseInt(nl.num) : nl.num);
-          return masterTitle ? { ...nl, title: masterTitle } : nl;
-        }));
+        setNOTE_LIST(prev => {
+          const updated = prev.map(nl => {
+            const masterTitle = titleMap.get(typeof nl.num === "string" ? parseInt(nl.num) : nl.num);
+            return masterTitle ? { ...nl, title: masterTitle } : nl;
+          });
+          // For non-corporate, ensure corporate-only notes are excluded even after template reload
+          return isCorporate ? updated : updated.filter(nl => !CORPORATE_ONLY_NOTE_KEYS.has(nl.key));
+        });
       }
     })();
-  }, []);
+  }, [isCorporate]);
 
 
   /* ── Load note selection from separate table ── */
@@ -226,7 +238,12 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
     (async () => {
       const { data: sel } = await supabase.from("notes_selection" as any).select("*").eq("engagement_id", engagementId).maybeSingle();
       if (sel && (sel as any).selected_notes) {
-        setNoteSelection((sel as any).selected_notes);
+        const loadedSelection = (sel as any).selected_notes as Record<string, boolean>;
+        // For non-corporate entities, force corporate-only notes to false regardless of DB value
+        if (!isCorporate) {
+          CORPORATE_ONLY_NOTE_KEYS.forEach(k => { loadedSelection[k] = false; });
+        }
+        setNoteSelection(loadedSelection);
       }
     })();
   }, [engagementId]);
@@ -372,6 +389,11 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise }: { enga
       <div className="w-64 border-r border-border bg-card flex-shrink-0">
        <div className="p-4 border-b border-border">
           <h2 className="font-semibold text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Notes to Accounts</h2>
+          {!isCorporate && (
+            <Badge variant="secondary" className="mt-1 text-[9px] bg-blue-50 text-blue-700 border-blue-200">
+              Non-Corporate Entity
+            </Badge>
+          )}
           <p className="text-[10px] text-muted-foreground mt-1">{selectedNotes.length} of {NOTE_LIST.length} selected</p>
         </div>
         <ScrollArea className="h-[calc(100%-4.5rem)]">
