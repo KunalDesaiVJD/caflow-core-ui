@@ -328,45 +328,84 @@ function buildComparativeResultFromLeaves(
   const priorMap = new Map<string, any>();
   for (const n of priorLeaves) priorMap.set(String(n.name).toLowerCase().trim(), n);
 
+  const currentMap = new Map<string, any>();
+  for (const n of currentLeaves) currentMap.set(String(n.name).toLowerCase().trim(), n);
+
   const verificationRows: any[] = [];
   let matched = 0, mismatched = 0;
 
+  // ── Pass 1: all CY accounts (matched + CY-only new accounts) ──
   for (const cur of currentLeaves) {
     const key   = (cur.name || "").toLowerCase().trim();
     const prior = priorMap.get(key);
-    if (!prior) continue;
 
-    const pyClosing  = prior.closing  || 0;
-    const cyOpening  = cur.opening    || 0;
-    const openingVar = cyOpening - pyClosing;
-    const closingVar = (cur.closing   || 0) - pyClosing;
-    const isMismatch = Math.abs(openingVar) >= 1;
-    // significant = opening variance > 10 % of prior closing OR > ₹ 10,000
-    const significantVar = Math.abs(openingVar) > Math.max(Math.abs(pyClosing) * 0.1, 10000);
-
-    if (isMismatch) mismatched++; else matched++;
-
-    verificationRows.push({
-      name:        cur.name,
-      group:       cur.primaryGroup  || prior.primaryGroup  || "",
-      bsPlSide:    cur.bsPlSide      || prior.bsPlSide      || "",
-      pyOpening:   prior.opening     || 0,
-      pyTxnDebit:  prior.txnDebit    || 0,
-      pyTxnCredit: prior.txnCredit   || 0,
-      pyClosing,
-      cyOpening,
-      cyTxnDebit:  cur.txnDebit      || 0,
-      cyTxnCredit: cur.txnCredit     || 0,
-      cyClosing:   cur.closing       || 0,
-      openingVar,
-      closingVar,
-      isMismatch,
-      significantVar,
-    });
+    if (prior) {
+      // Matched account — exists in both years
+      const pyClosing  = prior.closing  || 0;
+      const cyOpening  = cur.opening    || 0;
+      const openingVar = cyOpening - pyClosing;
+      const closingVar = (cur.closing   || 0) - pyClosing;
+      const isMismatch = Math.abs(openingVar) >= 1;
+      const significantVar = Math.abs(openingVar) > Math.max(Math.abs(pyClosing) * 0.1, 10000);
+      if (isMismatch) mismatched++; else matched++;
+      verificationRows.push({
+        name: cur.name,
+        group: cur.primaryGroup || prior.primaryGroup || "",
+        bsPlSide: cur.bsPlSide || prior.bsPlSide || "",
+        pyOpening: prior.opening || 0, pyTxnDebit: prior.txnDebit || 0,
+        pyTxnCredit: prior.txnCredit || 0, pyClosing,
+        cyOpening, cyTxnDebit: cur.txnDebit || 0,
+        cyTxnCredit: cur.txnCredit || 0, cyClosing: cur.closing || 0,
+        openingVar, closingVar, isMismatch, significantVar,
+        rowType: "matched",
+      });
+    } else {
+      // CY-only account — new in current year, no prior year data
+      const cyOpening = cur.opening || 0;
+      const cyClosing = cur.closing || 0;
+      verificationRows.push({
+        name: cur.name,
+        group: cur.primaryGroup || "", bsPlSide: cur.bsPlSide || "",
+        pyOpening: 0, pyTxnDebit: 0, pyTxnCredit: 0, pyClosing: 0,
+        cyOpening, cyTxnDebit: cur.txnDebit || 0,
+        cyTxnCredit: cur.txnCredit || 0, cyClosing,
+        openingVar: cyOpening, closingVar: cyClosing,
+        isMismatch: false, significantVar: false,
+        rowType: "cy_only",
+      });
+    }
   }
 
-  verificationRows.sort((a, b) => Math.abs(b.openingVar) - Math.abs(a.openingVar));
-  return { verificationRows, matched, mismatched, total: matched + mismatched, priorFY };
+  // ── Pass 2: PY-only accounts — existed last year, not in current year ──
+  for (const prior of priorLeaves) {
+    const key = (prior.name || "").toLowerCase().trim();
+    if (!currentMap.has(key)) {
+      const pyClosing = prior.closing || 0;
+      const hasBal = Math.abs(pyClosing) >= 1;
+      if (hasBal) mismatched++;
+      verificationRows.push({
+        name: prior.name,
+        group: prior.primaryGroup || "", bsPlSide: prior.bsPlSide || "",
+        pyOpening: prior.opening || 0, pyTxnDebit: prior.txnDebit || 0,
+        pyTxnCredit: prior.txnCredit || 0, pyClosing,
+        cyOpening: 0, cyTxnDebit: 0, cyTxnCredit: 0, cyClosing: 0,
+        openingVar: -(pyClosing), closingVar: -(pyClosing),
+        isMismatch: hasBal, significantVar: Math.abs(pyClosing) > 10000,
+        rowType: "py_only",
+      });
+    }
+  }
+
+  // Sort: mismatched/significant first, then by absolute opening variance
+  verificationRows.sort((a, b) => {
+    if (a.significantVar && !b.significantVar) return -1;
+    if (!a.significantVar && b.significantVar) return 1;
+    if (a.isMismatch && !b.isMismatch) return -1;
+    if (!a.isMismatch && b.isMismatch) return 1;
+    return Math.abs(b.openingVar) - Math.abs(a.openingVar);
+  });
+
+  return { verificationRows, matched, mismatched, total: verificationRows.length, priorFY };
 }
 
 // ═══════════════════════════════════════
@@ -445,7 +484,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   // nodeId → { primaryGroup, bsPlSide } for user-overridden mappings
   const [tbNodeEdits, setTbNodeEdits]       = useState<Record<string, { primaryGroup: string; bsPlSide: string }>>({});
   const [tbCorrectionsSaving, setTbCorrectionsSaving] = useState(false);
-  const [showTbCorrections, setShowTbCorrections]     = useState(false);
+  const [showTbCorrections, setShowTbCorrections]     = useState(true);
 
   // ─── COA Mapping State ───
   const [coaMappingRows, setCoaMappingRows] = useState<CoaMappingRow[]>([]);
@@ -2696,17 +2735,22 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
               {/* ─── Ledger Mapping Corrections (Issue 9) ─── */}
               {(tbHierarchyNodes.length > 0 || storedTbHierarchy.length > 0) && (
-                <Card>
-                  <CardHeader className="pb-2">
+                <Card className="border-primary/30 shadow-sm">
+                  <CardHeader className="pb-2 bg-primary/5 rounded-t-lg">
                     <div className="flex items-center justify-between flex-wrap gap-2">
-                      <CardTitle className="text-sm flex items-center gap-2">
-                        Correct Ledger Mappings
-                        {Object.keys(tbNodeEdits).length > 0 && (
-                          <Badge className="bg-amber-100 text-amber-700 text-[10px]">
-                            {Object.keys(tbNodeEdits).length} unsaved change(s)
-                          </Badge>
-                        )}
-                      </CardTitle>
+                      <div>
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          🔧 Reclassify Ledger Accounts
+                          {Object.keys(tbNodeEdits).length > 0 && (
+                            <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                              {Object.keys(tbNodeEdits).length} unsaved change(s)
+                            </Badge>
+                          )}
+                        </CardTitle>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          Move ledger accounts to the correct group (e.g. move a Debtor from Creditors group). Changes take effect immediately after saving.
+                        </p>
+                      </div>
                       <div className="flex items-center gap-2">
                         <Button
                           variant="ghost"
@@ -2739,9 +2783,6 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     const allGroups = [...new Set(src.filter(n => !n.isLeaf && n.name?.trim()).map(n => n.name))].sort();
                     return (
                       <CardContent className="p-0">
-                        <p className="text-[11px] text-muted-foreground px-4 pt-2 pb-1">
-                          Correct the Primary Group and BS/PL classification of individual ledger accounts here. Changes are saved to the database.
-                        </p>
                         <div className="max-h-[400px] overflow-auto">
                           <table className="w-full text-xs border-collapse min-w-[760px]">
                             <thead className="sticky top-0 bg-muted/80 text-[10px] uppercase tracking-wide">
@@ -2953,7 +2994,11 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                               key={i}
                               className={cn(
                                 "border-t",
-                                row.significantVar
+                                row.rowType === "cy_only"
+                                  ? "bg-blue-50 dark:bg-blue-950/20"
+                                  : row.rowType === "py_only"
+                                  ? "bg-orange-50 dark:bg-orange-950/20"
+                                  : row.significantVar
                                   ? "bg-amber-50 dark:bg-amber-950/20"
                                   : row.isMismatch
                                   ? "bg-destructive/5"
@@ -2991,11 +3036,22 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                                   : "—"}
                               </td>
                               <td className="p-2 text-center">
-                                <Badge className={row.isMismatch
-                                  ? "bg-destructive/10 text-destructive text-[9px]"
-                                  : "bg-primary/10 text-primary text-[9px]"
+                                <Badge className={
+                                  row.rowType === "cy_only"
+                                    ? "bg-blue-100 text-blue-700 text-[9px]"
+                                    : row.rowType === "py_only"
+                                    ? "bg-orange-100 text-orange-700 text-[9px]"
+                                    : row.isMismatch
+                                    ? "bg-destructive/10 text-destructive text-[9px]"
+                                    : "bg-primary/10 text-primary text-[9px]"
                                 }>
-                                  {row.isMismatch ? "Mismatch" : "Match"}
+                                  {row.rowType === "cy_only"
+                                    ? "New"
+                                    : row.rowType === "py_only"
+                                    ? "Closed"
+                                    : row.isMismatch
+                                    ? "Mismatch"
+                                    : "Match"}
                                 </Badge>
                               </td>
                             </tr>
