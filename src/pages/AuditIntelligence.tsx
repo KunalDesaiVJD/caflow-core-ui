@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -86,6 +87,8 @@ const statusLabel: Record<string, string> = {
 
 export default function AuditIntelligence() {
   const { user } = useAuth();
+  const { can } = usePermissions();
+  const canCreateEngagement = can("Audit Intelligence", "can_create") || user?.role === "superadmin";
   const navigate = useNavigate();
   const {
     selectedClientId, setSelectedClientId,
@@ -283,9 +286,9 @@ export default function AuditIntelligence() {
           }>
             <Layers className="mr-2 h-4 w-4" /> Pipeline View
           </Button>
-          <Button onClick={() => navigate('/audit/pipeline?new=1')}>
+          {canCreateEngagement && <Button onClick={() => navigate('/audit/pipeline?new=1')}>
             <Plus className="mr-2 h-4 w-4" /> New Engagement
-          </Button>
+          </Button>}
         </div>
       </div>
 
@@ -424,9 +427,9 @@ export default function AuditIntelligence() {
           <Building2 className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-1">Select an Engagement</h3>
           <p className="text-sm text-muted-foreground mb-4">Use the filters above to narrow down and select an engagement.</p>
-          <Button onClick={() => navigate('/audit/pipeline?new=1')}>
+          {canCreateEngagement && <Button onClick={() => navigate('/audit/pipeline?new=1')}>
             <Plus className="mr-2 h-4 w-4" /> Create New Engagement
-          </Button>
+          </Button>}
         </Card>
       ) : (
         <>

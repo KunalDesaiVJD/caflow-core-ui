@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -66,8 +67,12 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 const SettingsPage = () => {
   const { user } = useAuth();
+  const { can } = usePermissions();
   const { toast } = useToast();
-  const isAdmin = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
+  const isSuperadmin = user?.role === "superadmin";
+  const canViewSettings = isSuperadmin || can("Settings", "can_view");
+  const canEditSettings = isSuperadmin || can("Settings", "can_edit");
+  const isAdmin = canViewSettings; // backward compat alias
 
   // ─── Firm State (shared — needed for notification and billing saves) ───
   const [firmLoading, setFirmLoading] = useState(true);

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,8 +29,12 @@ interface MembershipEntry {
 
 const FirmSettings = () => {
   const { user } = useAuth();
+  const { can } = usePermissions();
   const { toast } = useToast();
-  const isAdmin = ["superadmin", "firm_admin", "partner_ca"].includes(user?.role || "");
+  const isSuperadmin = user?.role === "superadmin";
+  const canViewFirm = isSuperadmin || can("Firm Management", "can_view");
+  const canEditFirm = isSuperadmin || can("Firm Management", "can_edit");
+  const isAdmin = canViewFirm; // backward compat alias
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -296,7 +301,7 @@ const FirmSettings = () => {
             </Button>
           )}
           {isAdmin && (
-            <Button onClick={save} disabled={saving}>
+            <Button onClick={save} disabled={saving || !canEditFirm}>
               {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
               Save All
             </Button>

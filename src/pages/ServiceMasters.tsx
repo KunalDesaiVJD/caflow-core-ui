@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -91,6 +92,8 @@ const DEFAULT_CATEGORIES = [
 
 const ServiceMasters = () => {
   const { user } = useAuth();
+  const { can } = usePermissions();
+  const canEditServices = can("Service Masters", "can_edit") || user?.role === "superadmin";
   const { toast } = useToast();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [templates, setTemplates] = useState<ServiceTemplate[]>([]);
@@ -271,7 +274,7 @@ const ServiceMasters = () => {
           <h1 className="text-2xl font-display font-bold text-foreground mb-1">Service Masters</h1>
           <p className="text-sm text-muted-foreground">Manage service categories and fee templates for your firm.</p>
         </div>
-        <Button onClick={openNew} className="gap-2"><Plus className="h-4 w-4" /> New Category</Button>
+        {canEditServices && <Button onClick={openNew} className="gap-2"><Plus className="h-4 w-4" /> New Category</Button>}
       </div>
 
       {isSuperadmin && firmsList.length > 0 && (
@@ -304,9 +307,7 @@ const ServiceMasters = () => {
                   )}
                   {tplCount > 0 && <Badge variant="outline" className="text-[10px]">{tplCount} template{tplCount > 1 ? "s" : ""}</Badge>}
                 </div>
-                <Button variant="outline" size="sm" className="w-full gap-1" onClick={() => openEdit(cat)}>
-                  <Pencil className="h-3 w-3" /> Edit
-                </Button>
+                {canEditServices && <Button variant="outline" size="sm" className="w-full gap-1" onClick={() => openEdit(cat)}><Pencil className="h-3 w-3" /> Edit</Button>}
               </CardContent>
             </Card>
           );

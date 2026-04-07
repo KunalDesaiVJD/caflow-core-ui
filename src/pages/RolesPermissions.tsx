@@ -77,6 +77,7 @@ const RolesPermissions = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [savedGrid, setSavedGrid] = useState<Record<string, Record<string, PermRow>>>({});
   const [resetRole, setResetRole] = useState<string | null>(null);
   const [lastModified, setLastModified] = useState<Record<string, { by: string; at: string }>>({});
 
@@ -168,6 +169,7 @@ const RolesPermissions = () => {
     }
 
     setGrid(g);
+    setSavedGrid(JSON.parse(JSON.stringify(g)));
     setLastModified(lm);
     setDirty(false);
     setLoading(false);
@@ -227,6 +229,7 @@ const RolesPermissions = () => {
       if (error) throw error;
       toast({ title: "Permissions saved successfully" });
       setDirty(false);
+      setSavedGrid(JSON.parse(JSON.stringify(grid)));
       await refreshCtx();
       await loadGrid();
     } catch (e: any) {
@@ -238,25 +241,30 @@ const RolesPermissions = () => {
 
   async function handleReset() {
     if (!resetRole || !firmId) return;
+
+    // Use last saved DB state if available; fall back to code defaults
+    const savedRoleGrid = savedGrid[resetRole];
     const defaults = DEFAULT_PERMISSIONS[resetRole as RoleName];
-    if (!defaults) return;
 
     setGrid(prev => {
       const updated = { ...prev };
       updated[resetRole!] = {};
       for (const mod of ALL_MODULES) {
-        updated[resetRole!][mod] = {
-          firm_id: firmId,
-          role: resetRole!,
-          module: mod,
-          ...defaults[mod],
-        };
+        const savedRow = savedRoleGrid?.[mod];
+        const defRow = defaults?.[mod] || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
+        updated[resetRole!][mod] = savedRow
+          ? { ...savedRow }
+          : { firm_id: firmId, role: resetRole!, module: mod, ...defRow };
       }
       return updated;
     });
     setDirty(true);
     setResetRole(null);
-    toast({ title: `${ROLE_LABELS[resetRole]} permissions reset to defaults` });
+    toast({
+      title: savedRoleGrid
+        ? `${ROLE_LABELS[resetRole]} permissions reverted to last saved state`
+        : `${ROLE_LABELS[resetRole]} permissions reset to system defaults`,
+    });
   }
 
   // Wait for permissions context to finish loading before checking access
@@ -411,7 +419,7 @@ const RolesPermissions = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Reset to Defaults?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will reset all permissions for {resetRole ? ROLE_LABELS[resetRole] : ""} to system defaults. You'll need to click "Save Changes" to apply.
+              This will revert all permissions for {resetRole ? ROLE_LABELS[resetRole] : ""} to the last saved state (or system defaults if no save exists yet). You'll need to click "Save Changes" to persist.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

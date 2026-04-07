@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,10 @@ const Clients = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
+  const { can } = usePermissions();
+  const canCreate = can("Client Management", "can_create");
+  const canEdit = can("Client Management", "can_edit");
+  const canDelete = can("Client Management", "can_delete");
   const isSuperadmin = user?.role === "superadmin";
   const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
@@ -334,11 +339,11 @@ const Clients = () => {
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
           </div>
-          <Button variant="outline" size="sm" onClick={() => importRef.current?.click()} disabled={importing} className="gap-1.5"><Upload className="h-4 w-4" /> Import</Button>
+          {canCreate && <Button variant="outline" size="sm" onClick={() => importRef.current?.click()} disabled={importing} className="gap-1.5"><Upload className="h-4 w-4" /> Import</Button>}
           <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
-          <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>
+          {canCreate && <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>}
         </div>
       </div>
 
@@ -412,9 +417,9 @@ const Clients = () => {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                             <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
+                            {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
                             <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
+                            {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -466,8 +471,8 @@ const Clients = () => {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                             <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
+                            {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
+                            {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
