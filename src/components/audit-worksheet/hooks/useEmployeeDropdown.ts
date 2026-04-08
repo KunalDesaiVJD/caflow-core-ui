@@ -23,11 +23,12 @@ export function useEmployeeDropdown(): {
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ["aws-employees", user?.firm_id],
     queryFn: async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("users")
         .select("id, name, role, icai_reg_no")
         .eq("firm_id", user?.firm_id ?? "")
         .order("name");
+      if (error) console.error("[useEmployeeDropdown] Supabase error:", error);
       return (data || []) as Employee[];
     },
     enabled: !!user?.firm_id,
