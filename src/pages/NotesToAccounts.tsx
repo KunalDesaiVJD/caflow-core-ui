@@ -325,7 +325,8 @@ export default function NotesToAccounts({ engagementIdProp, onFinalise, isCorpor
     setSaving(false);
     if (error) toast.error("Save failed: " + error.message);
     else toast.success("Saved");
-  }, [recordId, engagementId, noteSelection, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordId, engagementId, noteSelection, NOTE_LIST, ...NOTE_LIST.map(nl => stateMap[nl.key][0])]);
 
   const triggerAutoSave = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
