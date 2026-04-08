@@ -4,7 +4,6 @@
  *  Tab 1 "Planning & Communication" — Google Calendar grid + comm table
  *  Tab 2 "Audit Status"             — Full status grid
  */
-import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { CalendarDays, TableProperties } from "lucide-react";
@@ -33,13 +32,10 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
   const {
     entries, comms, loading, useLs,
     addEntry, updateEntry, removeEntry,
-    addComm, removeComm,
+    addComm, updateComm, removeComm,
   } = useAuditPlanning(firmId, userId);
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selectedEntry = entries.find(e => e.id === selectedId) || null;
-
-  // ── Handlers wired to the calendar ────────────────────────────────────────
+  // ── Calendar callbacks ─────────────────────────────────────────────────────
 
   async function handleAdd(data: PlanSaveData) {
     await addEntry(data);
@@ -51,7 +47,6 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
 
   async function handleDelete(id: string) {
     await removeEntry(id);
-    if (selectedId === id) setSelectedId(null);
   }
 
   return (
@@ -74,6 +69,7 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
 
         {/* ── Tab 1: Planning & Communication ── */}
         <TabsContent value="planning" className="mt-4 space-y-4">
+          {/* Calendar grid */}
           <PlanningCalendar
             entries={entries}
             loading={loading}
@@ -83,10 +79,14 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
             onUpdateEntry={handleUpdate}
             onDeleteEntry={handleDelete}
           />
+
+          {/* Communication table */}
           <CommunicationTable
             comms={comms}
-            selectedEntry={selectedEntry}
+            entries={entries}
+            clients={clients}
             onAdd={addComm}
+            onUpdate={updateComm}
             onRemove={removeComm}
           />
         </TabsContent>

@@ -195,6 +195,18 @@ export function useAuditPlanning(firmId: string, userId?: string) {
     await load();
   }
 
+  async function updateComm(id: string, patch: Partial<CommEntry>) {
+    if (useLs) {
+      const updated = comms.map(c => c.id === id ? { ...c, ...patch } : c);
+      setComms(updated);
+      lsSave(lsKey("communication", firmId), updated);
+      return;
+    }
+    const { error } = await supabase.from("audit_communication").update(patch as any).eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    await load();
+  }
+
   async function removeComm(id: string) {
     if (useLs) {
       const updated = comms.filter(c => c.id !== id);
@@ -211,6 +223,6 @@ export function useAuditPlanning(firmId: string, userId?: string) {
     entries, comms, loading, useLs,
     reload: load,
     addEntry, updateEntry, removeEntry,
-    addComm, removeComm,
+    addComm, updateComm, removeComm,
   };
 }
