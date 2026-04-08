@@ -49,9 +49,11 @@ const Index = () => {
   const [stats, setStats] = useState<DashboardStats>({ activeClients: 0, tdsDue: 0, itrPending: 0, openAudits: 0 });
   const [dueItems, setDueItems] = useState<DueItem[]>([]);
   const [auditReminders, setAuditReminders] = useState<Array<{
-    client_name: string | null;
-    planned_from: string;
-    planned_to: string;
+    id:             string;
+    client_name:    string | null;
+    planned_from:   string;
+    planned_to:     string;
+    employee_names: string[] | null;
   }>>([]);
 
   const fetchDashboard = useCallback(async () => {
@@ -100,7 +102,7 @@ const Index = () => {
     const today = now.toISOString().split("T")[0];
     let auditReminderQ = supabase
       .from("audit_planning")
-      .select("client_name, planned_from, planned_to")
+      .select("*")
       .contains("employee_ids", [user.id])
       .gte("planned_to", today)
       .order("planned_from", { ascending: true })
@@ -127,9 +129,11 @@ const Index = () => {
 
     setAuditReminders(
       (auditReminderRes.data || []).map((r: any) => ({
-        client_name:  r.client_name  || "Unknown Client",
-        planned_from: r.planned_from,
-        planned_to:   r.planned_to,
+        id:             r.id,
+        client_name:    r.client_name    || "Unknown Client",
+        planned_from:   r.planned_from,
+        planned_to:     r.planned_to,
+        employee_names: r.employee_names || null,
       }))
     );
 
@@ -240,7 +244,7 @@ const Index = () => {
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-display flex items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-indigo-500" />
-                Upcoming Audit Assignments
+                Upcoming Audits
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
@@ -251,20 +255,28 @@ const Index = () => {
                   </div>
                 ))
               ) : (
-                auditReminders.map((r, i) => (
-                  <div key={i}
-                    className="flex items-center justify-between py-2.5 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
+                auditReminders.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex items-start justify-between py-3 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1 -mx-1 transition-colors gap-3"
                     onClick={() => navigate("/audit/tracker")}
                   >
-                    <p className="text-sm text-foreground">
-                      You need to go for audit to{" "}
-                      <span className="font-semibold text-indigo-700">{r.client_name}</span>
-                      {" "}from{" "}
-                      <span className="font-medium">{r.planned_from}</span>
-                      {" "}to{" "}
-                      <span className="font-medium">{r.planned_to}</span>
-                    </p>
-                    <Badge className="text-[10px] px-1.5 bg-indigo-100 text-indigo-700 shrink-0 ml-3">
+                    <div className="space-y-1 min-w-0">
+                      <p className="text-sm text-foreground">
+                        You need to go for audit to{" "}
+                        <span className="font-semibold text-indigo-700">{r.client_name}</span>
+                        {" "}from{" "}
+                        <span className="font-medium">{r.planned_from}</span>
+                        {" "}to{" "}
+                        <span className="font-medium">{r.planned_to}</span>
+                      </p>
+                      {r.employee_names && r.employee_names.length > 0 && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          👥 {r.employee_names.join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <Badge className="text-[10px] px-1.5 bg-indigo-100 text-indigo-700 shrink-0 mt-0.5">
                       Audit
                     </Badge>
                   </div>
