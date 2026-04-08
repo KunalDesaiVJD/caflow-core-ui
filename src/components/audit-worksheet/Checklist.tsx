@@ -1,10 +1,11 @@
 /**
  * Checklist — Sheet 6 "AUDIT DOCUMENTATION"
  *
- * 22 fixed document items with Page Number FROM / TO tracking.
+ * 20 fixed document items with Page Number FROM / TO tracking.
+ * Additional rows can be added dynamically via the "Add Row" button.
  *
- * Rows 1-20: predefined particulars (read-only label).
- * Rows 21-22: blank, user-editable particulars (custom items).
+ * All Particulars are editable; pre-populated rows show their static
+ * text as the default but allow override.
  *
  * Items 8, 10, 12 contain "{fyEndYear}" which is replaced at render
  * with the actual year derived from data.fyEndDate (Req #4).
@@ -88,8 +89,6 @@ const CHECKLIST_DEFS: ChecklistDef[] = [
     id: "stock_qty",        sr: 20,
     particulars: "Quantitative Details of Stock (if apply)",
   },
-  { id: "custom_1",         sr: 21, particulars: "", isCustom: true },
-  { id: "custom_2",         sr: 22, particulars: "", isCustom: true },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
