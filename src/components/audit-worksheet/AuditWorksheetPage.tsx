@@ -8,7 +8,7 @@
  * Usage:
  *   <AuditWorksheetPage engagementId={id} />
  */
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -55,6 +55,18 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
     : "worksheet";
 
   const [activeTab, setActiveTab] = useState(defaultTab);
+
+  // Correct the active tab once engagement data finishes loading.
+  // On first render data.auditType is "" (queries still in flight), so
+  // defaultTab evaluates to "worksheet". This effect fires once after the
+  // async queries resolve and snaps to the correct first tab.
+  const tabInitialized = useRef(false);
+  useEffect(() => {
+    if (!data.loading && data.auditType && !tabInitialized.current) {
+      tabInitialized.current = true;
+      setActiveTab(defaultTab);
+    }
+  }, [data.loading, data.auditType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (data.loading) {
     return (
