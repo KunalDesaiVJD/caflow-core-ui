@@ -29,8 +29,8 @@ const topNavItems = [
 
 const auditStages = [
   { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
-  { title: "Audit Tracker",             path: "/audit/tracker",  icon: ClipboardCheck  },
   { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
+  { title: "Audit Tracker",             path: "/audit/tracker",  icon: ClipboardCheck  },
   { title: "Trial Balance Import",      path: "/audit/pipeline", icon: Upload,       stage: 2  },
   { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
   { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },

@@ -1,0 +1,216 @@
+/**
+ * useAuditPlanning
+ *
+ * CRUD for audit_planning + audit_communication.
+ * Falls back to localStorage when Supabase tables don't exist yet.
+ */
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface PlanEntry {
+  id:             string;
+  firm_id:        string;
+  client_id:      string | null;
+  client_name:    string | null;
+  planned_from:   string;
+  planned_to:     string;
+  employee_ids:   string[];
+  employee_names: string[];
+  created_by:     string | null;
+  created_at:     string;
+}
+
+export interface CommEntry {
+  id:                 string;
+  firm_id:            string;
+  planning_id:        string | null;
+  client_name:        string | null;
+  audit_planned_from: string | null;
+  audit_planned_to:   string | null;
+  contact_person:     string | null;
+  contact_no:         string | null;
+  remarks:            string | null;
+  created_at:         string;
+}
+
+// ─── localStorage helpers ────────────────────────────────────────────────────
+
+function lsKey(type: string, firmId: string) { return `at_${type}_${firmId}`; }
+function lsLoad<T>(key: string): T[] {
+  try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : []; }
+  catch { return []; }
+}
+function lsSave<T>(key: string, data: T[]) {
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useAuditPlanning(firmId: string, userId?: string) {
+  const [entries, setEntries] = useState<PlanEntry[]>([]);
+  const [comms,   setComms]   = useState<CommEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [useLs,   setUseLs]   = useState(false);   // true = Supabase tables absent
+
+  const load = useCallback(async () => {
+    if (!firmId) { setLoading(false); return; }
+    setLoading(true);
+
+    const { data: planData, error: planErr } = await supabase
+      .from("audit_planning")
+      .select("*")
+      .eq("firm_id", firmId)
+      .order("planned_from", { ascending: true });
+
+    if (planErr) {
+      // Supabase table doesn't exist — use localStorage
+      setUseLs(true);
+      setEntries(lsLoad<PlanEntry>(lsKey("planning", firmId)));
+      setComms(lsLoad<CommEntry>(lsKey("communication", firmId)));
+      setLoading(false);
+      return;
+    }
+
+    setUseLs(false);
+    setEntries((planData as PlanEntry[]) || []);
+
+    const { data: commData } = await supabase
+      .from("audit_communication")
+      .select("*")
+      .eq("firm_id", firmId)
+      .order("created_at", { ascending: false });
+    setComms((commData as CommEntry[]) || []);
+    setLoading(false);
+  }, [firmId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Planning CRUD ──────────────────────────────────────────────────────────
+
+  async function addEntry(
+    input: Pick<PlanEntry, "client_id"|"client_name"|"planned_from"|"planned_to"|"employee_ids"|"employee_names">
+  ): Promise<PlanEntry | null> {
+    const draft: PlanEntry = {
+      ...input,
+      id:         crypto.randomUUID(),
+      firm_id:    firmId,
+      created_by: userId || null,
+      created_at: new Date().toISOString(),
+    };
+
+    if (useLs) {
+      const updated = [...entries, draft];
+      setEntries(updated);
+      lsSave(lsKey("planning", firmId), updated);
+      toast.success("Plan added (offline)");
+      return draft;
+    }
+
+    const { data, error } = await supabase
+      .from("audit_planning")
+      .insert({
+        firm_id:        firmId,
+        client_id:      input.client_id,
+        client_name:    input.client_name,
+        planned_from:   input.planned_from,
+        planned_to:     input.planned_to,
+        employee_ids:   input.employee_ids,
+        employee_names: input.employee_names,
+        created_by:     userId || null,
+      })
+      .select()
+      .single();
+
+    if (error) { toast.error(error.message); return null; }
+    toast.success("Plan added");
+    await load();
+    return data as PlanEntry;
+  }
+
+  async function updateEntry(id: string, patch: Partial<PlanEntry>) {
+    if (useLs) {
+      const updated = entries.map(e => e.id === id ? { ...e, ...patch } : e);
+      setEntries(updated);
+      lsSave(lsKey("planning", firmId), updated);
+      toast.success("Updated (offline)");
+      return;
+    }
+    const { error } = await supabase.from("audit_planning").update(patch as any).eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Updated");
+    await load();
+  }
+
+  async function removeEntry(id: string) {
+    if (useLs) {
+      const updatedEntries = entries.filter(e => e.id !== id);
+      const updatedComms   = comms.filter(c => c.planning_id !== id);
+      setEntries(updatedEntries);
+      setComms(updatedComms);
+      lsSave(lsKey("planning",      firmId), updatedEntries);
+      lsSave(lsKey("communication", firmId), updatedComms);
+      return;
+    }
+    const { error } = await supabase.from("audit_planning").delete().eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    await load();
+  }
+
+  // ── Communication CRUD ─────────────────────────────────────────────────────
+
+  async function addComm(
+    input: Pick<CommEntry, "planning_id"|"client_name"|"audit_planned_from"|"audit_planned_to"|"contact_person"|"contact_no"|"remarks">
+  ) {
+    const draft: CommEntry = {
+      ...input,
+      id:         crypto.randomUUID(),
+      firm_id:    firmId,
+      created_at: new Date().toISOString(),
+    };
+
+    if (useLs) {
+      const updated = [draft, ...comms];
+      setComms(updated);
+      lsSave(lsKey("communication", firmId), updated);
+      toast.success("Communication logged (offline)");
+      return;
+    }
+
+    const { error } = await supabase.from("audit_communication").insert({
+      firm_id:            firmId,
+      planning_id:        input.planning_id,
+      client_name:        input.client_name,
+      audit_planned_from: input.audit_planned_from,
+      audit_planned_to:   input.audit_planned_to,
+      contact_person:     input.contact_person,
+      contact_no:         input.contact_no,
+      remarks:            input.remarks,
+    });
+
+    if (error) { toast.error(error.message); return; }
+    toast.success("Communication logged");
+    await load();
+  }
+
+  async function removeComm(id: string) {
+    if (useLs) {
+      const updated = comms.filter(c => c.id !== id);
+      setComms(updated);
+      lsSave(lsKey("communication", firmId), updated);
+      return;
+    }
+    const { error } = await supabase.from("audit_communication").delete().eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    await load();
+  }
+
+  return {
+    entries, comms, loading, useLs,
+    reload: load,
+    addEntry, updateEntry, removeEntry,
+    addComm, removeComm,
+  };
+}
