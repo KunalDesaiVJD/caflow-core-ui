@@ -131,18 +131,21 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const challanIds = new Set(filingChallans.map((c: any) => c.id));
     const filingDeductees = deductees.filter((d: any) => challanIds.has(d.challan_id));
 
-    // #6: Block export if any challan has more TDS applied than its challan amount
+    // Block export ONLY when applied total STRICTLY exceeds challan total (over-applied).
+    // Fully-utilized (applied === challan) and partial/unconsumed (applied < challan) are ALLOWED.
+    // Use Math.round(*100) to avoid floating-point false positives (e.g. 0.1+0.2 = 0.30000...4).
     const overApplied = filingChallans.filter((c: any) => {
       const applied = filingDeductees
         .filter((d: any) => d.challan_id === c.id)
         .reduce((s: number, d: any) =>
           s + (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0), 0);
-      return applied > (c.total_challan_amount || 0) + 1; // +1 for rounding tolerance
+      const challanTotal = c.total_challan_amount || 0;
+      return Math.round(applied * 100) > Math.round(challanTotal * 100); // strictly greater
     });
     if (overApplied.length > 0) {
       toast({
-        title: "Cannot export — challan(s) over-applied",
-        description: `${overApplied.length} challan(s) have more TDS applied than the challan amount. Correct the entries before exporting.`,
+        title: "Cannot generate Genius XLS",
+        description: `One or more challans are over-applied (${overApplied.length} challan${overApplied.length > 1 ? "s" : ""}). Please correct them before proceeding.`,
         variant: "destructive",
       });
       return;
@@ -548,6 +551,39 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const cIds = new Set(fChallans.map((c: any) => c.id));
     const fDeductees = deductees.filter((d: any) => cIds.has(d.challan_id));
 
+    // ── Per-challan utilisation status ─────────────────────────────────────
+    // Applied = sum of (TDS + interest + surcharge) across all deductees for that challan.
+    // Status rules (strictly-greater = over-applied; equal = full; less = partial; zero = unconsumed).
+    type ChallanStatus = "over-applied" | "fully-utilized" | "partial" | "unconsumed";
+    const challanStatus = fChallans.map((c: any) => {
+      const applied = fDeductees
+        .filter((d: any) => d.challan_id === c.id)
+        .reduce((s: number, d: any) =>
+          s + (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0), 0);
+      const challanTotal = c.total_challan_amount || 0;
+      const appliedRounded  = Math.round(applied * 100);
+      const challanRounded  = Math.round(challanTotal * 100);
+      let status: ChallanStatus;
+      if (appliedRounded > challanRounded)    status = "over-applied";
+      else if (appliedRounded === 0)          status = "unconsumed";
+      else if (appliedRounded === challanRounded) status = "fully-utilized";
+      else                                    status = "partial";
+      return { challan: c, applied, challanTotal, status };
+    });
+
+    // Block Generate button when ANY challan is over-applied
+    const hasOverApplied = challanStatus.some(cs => cs.status === "over-applied");
+
+    // Badge helper
+    const statusBadge = (status: ChallanStatus) => {
+      switch (status) {
+        case "over-applied":    return <Badge className="text-[10px] bg-red-100 text-red-700 border-red-300 hover:bg-red-100">Over-applied</Badge>;
+        case "fully-utilized":  return <Badge className="text-[10px] bg-green-100 text-green-700 border-green-300 hover:bg-green-100">Fully Utilized</Badge>;
+        case "partial":         return <Badge className="text-[10px] bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-100">Partial</Badge>;
+        case "unconsumed":      return <Badge className="text-[10px] bg-slate-100 text-slate-500 border-slate-300 hover:bg-slate-100">Unconsumed</Badge>;
+      }
+    };
+
     return (
       <div className="space-y-4">
         <Card>
@@ -574,8 +610,20 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             {!filing ? (
               <p className="text-center text-muted-foreground py-4">No filing found for {selForm} {selQuarters.join(",")} {selFy}</p>
             ) : (
-              <div className="flex justify-center">
-                <Button size="lg" className="gap-2 font-semibold" onClick={generateGeniusXls}>
+              <div className="flex flex-col items-center gap-2">
+                {hasOverApplied && (
+                  <p className="text-sm text-destructive font-medium flex items-center gap-1">
+                    <AlertTriangle size={14} />
+                    One or more challans are over-applied. Correct them before generating.
+                  </p>
+                )}
+                <Button
+                  size="lg"
+                  className="gap-2 font-semibold"
+                  onClick={generateGeniusXls}
+                  disabled={hasOverApplied}
+                  title={hasOverApplied ? "Fix over-applied challans before generating" : "Generate Genius XLS"}
+                >
                   <FileSpreadsheet size={18} /> Generate Genius XLS
                 </Button>
               </div>
@@ -583,6 +631,48 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
           </CardContent>
         </Card>
 
+        {/* ── Challan utilisation summary with status badges ─────────────── */}
+        {fChallans.length > 0 && (
+          <Card>
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm">Challan Utilisation</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">BSR Code</TableHead>
+                    <TableHead className="text-xs">Challan No.</TableHead>
+                    <TableHead className="text-xs">Date</TableHead>
+                    <TableHead className="text-xs text-right">Challan Total</TableHead>
+                    <TableHead className="text-xs text-right">Applied</TableHead>
+                    <TableHead className="text-xs text-right">Balance</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {challanStatus.map(({ challan: c, applied, challanTotal, status }, i) => {
+                    const balance = challanTotal - applied;
+                    const isOver = status === "over-applied";
+                    return (
+                      <TableRow key={i} className={isOver ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                        <TableCell className="text-xs font-mono">{c.bsr_code || "—"}</TableCell>
+                        <TableCell className="text-xs font-mono">{c.challan_serial_no || "—"}</TableCell>
+                        <TableCell className="text-xs">{fmtDate(c.deposit_date)}</TableCell>
+                        <TableCell className="text-xs text-right tabular-nums">{formatINR(challanTotal)}</TableCell>
+                        <TableCell className={cn("text-xs text-right tabular-nums", isOver && "text-destructive font-semibold")}>{formatINR(applied)}</TableCell>
+                        <TableCell className={cn("text-xs text-right tabular-nums", isOver && "text-destructive font-semibold")}>{isOver ? `−${formatINR(Math.abs(balance))}` : formatINR(balance)}</TableCell>
+                        <TableCell>{statusBadge(status)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Deductee preview ───────────────────────────────────────────── */}
         {fDeductees.length > 0 && (
           <Card>
             <CardHeader className="py-3 px-4">
