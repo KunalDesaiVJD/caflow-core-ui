@@ -51,6 +51,17 @@ interface AuditLogEntry {
   remark: string | null;
 }
 
+// ACK file record stored in tds_ack_files table
+interface TdsAckFile {
+  id: string;
+  filing_id: string;
+  client_id: string;
+  firm_id: string | null;
+  file_name: string;
+  file_url: string;
+  created_at: string | null;
+}
+
 interface Props {
   clients: ClientOption[];
   users: UserOption[];
@@ -111,6 +122,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [filings, setFilings] = useState<TdsFiling[]>([]);
   const [deletedClients, setDeletedClients] = useState<Map<string, { name: string | null; deleted_at: string }>>(new Map()); // client_id -> { name, deleted_at }
   const [ackUploading, setAckUploading] = useState<string | null>(null);
+  // Map of filing_id → TdsAckFile (populated after each fetch)
+  const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [fyFilter, setFyFilter] = useState(DEFAULT_FY);
   const [quarterFilter, setQuarterFilter] = useState("all");
@@ -180,6 +193,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setDeletedClients(delMap);
     setFilings(allFilings);
     setLoading(false);
+    // Fetch ACK files for all loaded filings
+    await fetchAckFiles(allFilings.map(f => f.id));
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
   useEffect(() => { fetchFilings(); }, [fetchFilings]);
@@ -208,45 +223,90 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return deletedClients.has(f.client_id);
   };
 
-  // ACK file upload/view/download/delete (Issue 3)
-  const uploadAckFile = async (filing: TdsFiling, file: File) => {
-    setAckUploading(filing.id);
-    const ext = file.name.split('.').pop() || 'pdf';
-    const form = filing.tds_forms?.[0] || 'unknown';
-    const path = `${filing.firm_id}/${filing.client_id}/${filing.financial_year}/${form}/${filing.quarter}/ack.${ext}`;
-    const { error } = await supabase.storage.from('tds-ack-files').upload(path, file, { upsert: true });
-    if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); }
-    else {
-      // Update ack_file_url; column may not exist on older schema — ignore that error gracefully
-      try {
-        await supabase.from('tds_filings').update({ ack_file_url: path } as any).eq('id', filing.id);
-      } catch { /* column missing — file still uploaded to storage */ }
-      fetchFilings();
-      toast({ title: "ACK file uploaded" });
+  // ─── ACK File System (documents bucket + tds_ack_files table) ───────────────
+  // Fetch all ACK file records for a list of filing IDs and populate the map
+  const fetchAckFiles = async (filingIds: string[]) => {
+    if (filingIds.length === 0) { setAckFiles(new Map()); return; }
+    const { data, error } = await (supabase.from('tds_ack_files' as any).select('*').in('filing_id', filingIds));
+    if (error) { console.log('fetchAckFiles error:', error); return; }
+    const map = new Map<string, TdsAckFile>();
+    (data || []).forEach((f: any) => map.set(f.filing_id, f as TdsAckFile));
+    setAckFiles(map);
+  };
+
+  // Upload PDF → documents bucket → insert tds_ack_files record
+  const handleAttachAck = async (filing: TdsFiling, file: File) => {
+    // a. Auth check
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    console.log('Auth user:', authUser?.id);
+    if (!authUser) {
+      toast({ title: 'Login required', description: 'You must be logged in to attach files.', variant: 'destructive' });
+      return;
     }
+    // b. PDF-only validation
+    if (file.type !== 'application/pdf') {
+      toast({ title: 'Only PDF files are allowed', variant: 'destructive' });
+      return;
+    }
+    setAckUploading(filing.id);
+    // c. Upload to 'documents' bucket (public — no RLS on read)
+    const filePath = `ack/${filing.client_id}_${Date.now()}_${file.name}`;
+    const uploadResult = await supabase.storage.from('documents').upload(filePath, file);
+    console.log('Upload result:', uploadResult);
+    if (uploadResult.error) {
+      const msg = uploadResult.error.message || '';
+      console.log('Error details:', uploadResult.error);
+      const desc = msg.includes('Bucket not found') || msg.includes('does not exist')
+        ? 'Storage bucket not configured — ask admin to create "documents" bucket in Supabase'
+        : msg.includes('row-level security') || msg.toLowerCase().includes('rls')
+        ? 'Permission denied — contact admin to check storage RLS policies'
+        : msg;
+      toast({ title: 'Upload failed', description: desc, variant: 'destructive' });
+      setAckUploading(null);
+      return;
+    }
+    // d. Get public URL (works because bucket is public)
+    const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
+    // e. Insert into tds_ack_files
+    const insertPayload = {
+      filing_id: filing.id,
+      client_id: filing.client_id,
+      firm_id: filing.firm_id || null,
+      file_name: file.name,
+      file_url: publicUrl,
+      user_id: authUser.id,
+    };
+    const insertResult = await (supabase.from('tds_ack_files' as any).insert(insertPayload).select('*').single());
+    console.log('Insert result:', insertResult);
+    if (insertResult.error) {
+      console.log('Error details:', insertResult.error);
+      toast({ title: 'Failed to save record', description: insertResult.error.message, variant: 'destructive' });
+      setAckUploading(null);
+      return;
+    }
+    // f. Update local map instantly (no full re-fetch needed)
+    setAckFiles(prev => {
+      const next = new Map(prev);
+      next.set(filing.id, insertResult.data as TdsAckFile);
+      return next;
+    });
+    toast({ title: '✅ ACK file uploaded' });
     setAckUploading(null);
   };
-  const viewAckFile = async (filing: TdsFiling) => {
-    if (!filing.ack_file_url) return;
-    const { data } = await supabase.storage.from('tds-ack-files').createSignedUrl(filing.ack_file_url, 60);
-    if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+
+  // View: open public URL in new tab
+  const viewAckFile = (ackFile: TdsAckFile) => {
+    window.open(ackFile.file_url, '_blank');
   };
-  const downloadAckFile = async (filing: TdsFiling) => {
-    if (!filing.ack_file_url) return;
-    const { data } = await supabase.storage.from('tds-ack-files').createSignedUrl(filing.ack_file_url, 60);
-    if (data?.signedUrl) {
-      const a = document.createElement('a');
-      a.href = data.signedUrl;
-      a.download = `ack_${filing.quarter}_${filing.financial_year}.pdf`;
-      a.click();
-    }
-  };
-  const deleteAckFile = async (filing: TdsFiling) => {
-    if (!filing.ack_file_url) return;
-    await supabase.storage.from('tds-ack-files').remove([filing.ack_file_url]);
-    await supabase.from('tds_filings').update({ ack_file_url: null } as any).eq('id', filing.id);
-    fetchFilings();
-    toast({ title: "ACK file removed" });
+
+  // Download: programmatic <a> click
+  const downloadAckFile = (ackFile: TdsAckFile) => {
+    const a = document.createElement('a');
+    a.href = ackFile.file_url;
+    a.download = ackFile.file_name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
@@ -706,30 +766,51 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       <TableCell>
                         {(() => {
                           const isFiledLocked = f.work_status === "Filed" || f.work_status === "Processed";
+                          const ackFile = ackFiles.get(f.id);
                           return (
                             <div className="space-y-1">
-                              {/* Ack No — locked once Filed */}
+                              {/* Ack No — editable unless Filed */}
                               <Input
                                 className={cn("h-7 w-28 text-xs", isFiledLocked && "bg-muted cursor-not-allowed opacity-70")}
                                 defaultValue={f.acknowledgment_number || ""}
                                 disabled={isFiledLocked}
                                 onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
                               />
-                              {/* Issue 3: ACK file — view+download only when Filed; upload+delete otherwise */}
-                              <div className="flex items-center gap-1">
-                                {f.ack_file_url ? (
+                              {/* ACK PDF attachment — documents bucket + tds_ack_files table */}
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {ackFile ? (
                                   <>
-                                    <button className="text-[9px] text-primary hover:underline" onClick={() => viewAckFile(f)} title="View ACK">📄 View</button>
-                                    <button className="text-[9px] text-primary hover:underline" onClick={() => downloadAckFile(f)} title="Download ACK">⬇ DL</button>
-                                    {!isFiledLocked && (
-                                      <button className="text-[9px] text-destructive hover:underline" onClick={() => deleteAckFile(f)} title="Remove ACK">✕</button>
-                                    )}
+                                    <button
+                                      className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
+                                      onClick={() => viewAckFile(ackFile)}
+                                      title={`View: ${ackFile.file_name}`}
+                                    >
+                                      <ExternalLink size={9} /> View PDF
+                                    </button>
+                                    <button
+                                      className="flex items-center gap-0.5 text-[9px] text-primary hover:underline"
+                                      onClick={() => downloadAckFile(ackFile)}
+                                      title={`Download: ${ackFile.file_name}`}
+                                    >
+                                      <Download size={9} /> Download
+                                    </button>
                                   </>
                                 ) : (
-                                  /* #1: Always allow ACK attachment — user receives ACK *after* filing */
-                                  <label className={cn("text-[9px] text-muted-foreground hover:text-primary cursor-pointer", ackUploading === f.id && "opacity-50 pointer-events-none")}>
-                                    {ackUploading === f.id ? "Uploading..." : "📎 Attach ACK"}
-                                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) uploadAckFile(f, fl); e.target.value = ""; }} />
+                                  <label className={cn(
+                                    "text-[9px] text-muted-foreground hover:text-primary cursor-pointer",
+                                    ackUploading === f.id && "opacity-50 pointer-events-none"
+                                  )}>
+                                    {ackUploading === f.id ? "Uploading…" : "📎 Attach ACK"}
+                                    <input
+                                      type="file"
+                                      accept="application/pdf"
+                                      className="hidden"
+                                      onChange={e => {
+                                        const fl = e.target.files?.[0];
+                                        if (fl) handleAttachAck(f, fl);
+                                        e.target.value = "";
+                                      }}
+                                    />
                                   </label>
                                 )}
                               </div>
