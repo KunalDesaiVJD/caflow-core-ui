@@ -167,24 +167,30 @@ const parseLocalDate = (dateStr: string): Date => {
 };
 
 // Correct interest formula per Sec 201(1A) Income Tax Act
-// Due date = 7th of month following deduction. If paid on/before → 0.
-// Otherwise: 1.5%/month × months from deduction month to deposit month (both inclusive).
-// e.g. Entry 25-Jan / Challan 30-Jan → due 7-Feb → 30-Jan ≤ 7-Feb → 0
-//      Entry 05-Feb / Challan 08-Mar, TDS=3200 → due 7-Mar → 08-Mar > 7-Mar → 2 months → ₹96
-const calcAutoInterest = (tdsAmount: number, paymentDate: string | null, depositDate: string | null): number => {
-  if (!paymentDate || !depositDate || !tdsAmount) return 0;
+// Due date = 7th of month following deduction. If challanDate ≤ dueDate → 0 (STOP).
+// Otherwise: lateMonths = DATEDIF(entryDate, challanDate, 'M') + 1
+//            interest = ROUND(TDS × 1.5% × lateMonths, 0)
+// Returns { interest, lateMonths } so callers can display months without re-computing.
+const calcAutoInterest = (
+  tdsAmount: number,
+  paymentDate: string | null,
+  depositDate: string | null,
+): { interest: number; lateMonths: number } => {
+  if (!paymentDate || !depositDate || !tdsAmount) return { interest: 0, lateMonths: 0 };
   // #3: use parseLocalDate — both dates at local midnight, no UTC shift
-  const deduction = parseLocalDate(paymentDate);
-  const deposit = parseLocalDate(depositDate);
-  // Due date: 7th of the month following the deduction month
-  const dueDate = new Date(deduction.getFullYear(), deduction.getMonth() + 1, 7);
-  // Deposited on or before due date → no interest (entry date > challan date is NOT an error)
-  if (deposit <= dueDate) return 0;
-  // Count months from deduction month to deposit month (both months inclusive)
-  const deductionMonth = deduction.getFullYear() * 12 + deduction.getMonth();
-  const depositMonth = deposit.getFullYear() * 12 + deposit.getMonth();
-  const months = Math.max(1, depositMonth - deductionMonth + 1);
-  return Math.round(tdsAmount * 0.015 * months);
+  const entry = parseLocalDate(paymentDate);
+  const challan = parseLocalDate(depositDate);
+  // Due date: 7th of the month following the entry (deduction) month
+  const dueDate = new Date(entry.getFullYear(), entry.getMonth() + 1, 7);
+  // Deposited on or before due date → no interest
+  if (challan <= dueDate) return { interest: 0, lateMonths: 0 };
+  // lateMonths = DATEDIF(entryDate, challanDate, 'M') + 1
+  const monthsDiff =
+    (challan.getFullYear() - entry.getFullYear()) * 12 +
+    (challan.getMonth() - entry.getMonth());
+  const lateMonths = monthsDiff + 1;
+  const interest = Math.round(tdsAmount * 0.015 * lateMonths);
+  return { interest, lateMonths };
 };
 
 // ─── Previous-quarter label helper ───────────────────────────────────────────
@@ -598,7 +604,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (["amount_paid_credited", "rate_of_tds", "date_of_payment", "deductee_pan"].includes(field)) {
       const newTds = updates.tds_amount ?? deductee.tds_amount ?? deductee.total_tax_deducted ?? 0;
       const newPayDate = field === "date_of_payment" ? value : deductee.date_of_payment;
-      updates.interest_amount = calcAutoInterest(newTds, newPayDate, selectedChallan?.deposit_date || null);
+      updates.interest_amount = calcAutoInterest(newTds, newPayDate, selectedChallan?.deposit_date || null).interest;
     }
     if (field === "deductee_pan") {
       const panVal = (value || "").trim().toUpperCase();
@@ -1388,34 +1394,30 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                         {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                       </TableCell>
                                       <TableCell className="text-right text-xs">
-                                        {/* #5: Tooltip showing full Sec 201(1A) formula */}
+                                        {/* #5: Tooltip showing full Sec 201(1A) formula — read-only, auto-calculated */}
                                         {(() => {
                                           const tdsAmt = d.tds_amount || d.total_tax_deducted || 0;
-                                          const auto = calcAutoInterest(tdsAmt, d.date_of_payment, selectedChallan?.deposit_date || null);
-                                          if (auto === 0) {
+                                          const { interest, lateMonths } = calcAutoInterest(tdsAmt, d.date_of_payment, selectedChallan?.deposit_date || null);
+                                          if (interest === 0) {
                                             return <span className="tabular-nums text-muted-foreground">—</span>;
                                           }
-                                          // Recompute months for tooltip display
                                           const dep = d.date_of_payment ? parseLocalDate(d.date_of_payment) : null;
                                           const chDep = selectedChallan?.deposit_date ? parseLocalDate(selectedChallan.deposit_date) : null;
                                           const dueDate = dep ? new Date(dep.getFullYear(), dep.getMonth() + 1, 7) : null;
-                                          const months = dep && chDep
-                                            ? Math.max(1, (chDep.getFullYear() * 12 + chDep.getMonth()) - (dep.getFullYear() * 12 + dep.getMonth()) + 1)
-                                            : 0;
                                           const fmtD = (dt: Date | null) => dt ? `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}` : "—";
                                           return (
                                             <TooltipProvider>
                                               <Tooltip>
                                                 <TooltipTrigger asChild>
                                                   <span className="font-medium tabular-nums text-amber-600 cursor-help underline decoration-dotted decoration-amber-400">
-                                                    {auto.toLocaleString("en-IN")}
+                                                    {interest.toLocaleString("en-IN")}
                                                   </span>
                                                 </TooltipTrigger>
                                                 <TooltipContent className="text-xs space-y-1 max-w-[260px]">
                                                   <p className="font-semibold">Interest u/s 201(1A)</p>
                                                   <p>Deduction: {fmtD(dep)} · Due: {fmtD(dueDate)}</p>
-                                                  <p>Deposit: {fmtD(chDep)} · Months: {months}</p>
-                                                  <p className="font-mono">₹{tdsAmt.toLocaleString("en-IN")} × 1.5% × {months} = ₹{auto.toLocaleString("en-IN")}</p>
+                                                  <p>Deposit: {fmtD(chDep)} · Months: {lateMonths}</p>
+                                                  <p className="font-mono">₹{tdsAmt.toLocaleString("en-IN")} × 1.5% × {lateMonths} = ₹{interest.toLocaleString("en-IN")}</p>
                                                 </TooltipContent>
                                               </Tooltip>
                                             </TooltipProvider>
