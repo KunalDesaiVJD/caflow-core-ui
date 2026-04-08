@@ -131,6 +131,23 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const challanIds = new Set(filingChallans.map((c: any) => c.id));
     const filingDeductees = deductees.filter((d: any) => challanIds.has(d.challan_id));
 
+    // #6: Block export if any challan has more TDS applied than its challan amount
+    const overApplied = filingChallans.filter((c: any) => {
+      const applied = filingDeductees
+        .filter((d: any) => d.challan_id === c.id)
+        .reduce((s: number, d: any) =>
+          s + (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0), 0);
+      return applied > (c.total_challan_amount || 0) + 1; // +1 for rounding tolerance
+    });
+    if (overApplied.length > 0) {
+      toast({
+        title: "Cannot export — challan(s) over-applied",
+        description: `${overApplied.length} challan(s) have more TDS applied than the challan amount. Correct the entries before exporting.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       await generateGeniusExport(selForm, filing, client || { id: "", name: "Unknown" }, filingChallans, filingDeductees);
       toast({ title: "Genius XLS exported successfully" });

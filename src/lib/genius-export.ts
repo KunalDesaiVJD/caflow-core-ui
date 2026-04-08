@@ -47,8 +47,11 @@ interface Challan {
   surcharge_deposited?: number;
   education_cess_deposited?: number;
   interest_deposited?: number;
-  late_fee?: number;
-  other_amount?: number;
+  // #4 FIX: real DB column names (legacy aliases kept for backward compat)
+  late_fees_234e?: number;   // primary — matches tds_challans DB column
+  late_fee?: number;         // legacy alias
+  others_deposited?: number; // primary — matches tds_challans DB column
+  other_amount?: number;     // legacy alias
   total_challan_amount?: number;
   cheque_dd_no?: string;
   bsr_code?: string;
@@ -213,8 +216,9 @@ export async function generateGeniusExport(
     setCell(wsChallan, r, 3, ch.surcharge_deposited || 0);
     setCell(wsChallan, r, 4, ch.education_cess_deposited || 0);
     setCell(wsChallan, r, 5, ch.interest_deposited || 0);
-    setCell(wsChallan, r, 6, ch.late_fee || 0);
-    setCell(wsChallan, r, 7, ch.other_amount || 0);
+    // #4 FIX: DB columns are late_fees_234e / others_deposited (not late_fee / other_amount)
+    setCell(wsChallan, r, 6, ch.late_fees_234e ?? ch.late_fee ?? 0);
+    setCell(wsChallan, r, 7, ch.others_deposited ?? ch.other_amount ?? 0);
     setCell(wsChallan, r, 8, ch.total_challan_amount || ch.total_tax_deposited || 0);
     setCell(wsChallan, r, 9, ch.cheque_dd_no || "");
     setCell(wsChallan, r, 10, ch.bsr_code || "");

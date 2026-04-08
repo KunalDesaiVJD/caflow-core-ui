@@ -725,9 +725,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                       <button className="text-[9px] text-destructive hover:underline" onClick={() => deleteAckFile(f)} title="Remove ACK">✕</button>
                                     )}
                                   </>
-                                ) : isFiledLocked ? (
-                                  <span className="text-[9px] text-muted-foreground italic">No ACK file</span>
                                 ) : (
+                                  /* #1: Always allow ACK attachment — user receives ACK *after* filing */
                                   <label className={cn("text-[9px] text-muted-foreground hover:text-primary cursor-pointer", ackUploading === f.id && "opacity-50 pointer-events-none")}>
                                     {ackUploading === f.id ? "Uploading..." : "📎 Attach ACK"}
                                     <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) uploadAckFile(f, fl); e.target.value = ""; }} />
