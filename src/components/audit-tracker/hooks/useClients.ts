@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface ClientOption {
-  id:   string;
-  name: string;
+  id:          string;
+  name:        string;
+  entity_type: string | null;
 }
 
 export function useClients(firmId: string) {
@@ -15,7 +16,7 @@ export function useClients(firmId: string) {
     setLoading(true);
     supabase
       .from("clients")
-      .select("id, name")
+      .select("id, name, entity_type")
       .eq("firm_id", firmId)
       .is("deleted_at", null)
       .order("name")

@@ -98,6 +98,7 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
             clients={clients}
             users={users}
             auditFirms={auditFirms}
+            planEntries={entries}
           />
         </TabsContent>
       </Tabs>
