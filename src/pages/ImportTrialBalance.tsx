@@ -24,6 +24,7 @@ import {
 import {
   ArrowLeft, Upload, CheckCircle2, AlertTriangle, FileSpreadsheet, Loader2,
   ChevronRight, ChevronDown, FolderTree, Layers, Tag, Zap, AlertCircle, Trash2, RefreshCw,
+  CalendarDays, FileText,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -85,7 +86,8 @@ interface ExistingTBData {
   plCount: number;
   financialYear: string;
   importFormat: string | null;
-  ledgers: { id: string; ledger_name: string | null; primary_group: string | null; bs_pl_side: string | null; closing_balance: number | null; opening_balance: number | null; matched_category_code: string | null }[];
+  // Fix (Issue 2): txn_debit + txn_credit added for full comparison column display
+  ledgers: { id: string; ledger_name: string | null; primary_group: string | null; bs_pl_side: string | null; closing_balance: number | null; opening_balance: number | null; txn_debit?: number | null; txn_credit?: number | null; matched_category_code: string | null }[];
 }
 
 // ─── Tree Node ───
@@ -172,8 +174,24 @@ export default function ImportTrialBalance() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [reimportAction, setReimportAction] = useState<"replace" | "prior_year" | null>(null);
 
+  // Fix (Issue 2): Prior Period TB state — loaded from audit_engagements.prior_year_tb_snapshot
+  const [priorTbLeaves, setPriorTbLeaves] = useState<any[]>([]);
+  const [priorTbImportedAt, setPriorTbImportedAt] = useState<string | null>(null);
+  const [showDeletePriorConfirm, setShowDeletePriorConfirm] = useState(false);
+  const [deletingPriorTb, setDeletingPriorTb] = useState(false);
+  const [showPriorReupload, setShowPriorReupload] = useState(false);
+  const priorFileRef = useRef<HTMLInputElement>(null);
+  const [priorFileName, setPriorFileName] = useState("");
+  const [priorFileBase64, setPriorFileBase64] = useState("");
+  const [parsePrior, setParsePrior] = useState(false);
+
   const [unmatchedOverrides, setUnmatchedOverrides] = useState<Record<string, string>>({});
   const [savingOverrides, setSavingOverrides] = useState(false);
+
+  // Fix (Issue 3): Ledger reclassify state
+  const [editingLedger, setEditingLedger] = useState<string | null>(null);
+  const [editGroup, setEditGroup] = useState("");
+  const [editBsPlSide, setEditBsPlSide] = useState("");
 
   // Auto-set engagement from context
   useEffect(() => {
@@ -208,18 +226,33 @@ export default function ImportTrialBalance() {
     load();
   }, [clientId]);
 
-  // Check for existing import + hierarchy when engagement changes
+  // Check for existing import + hierarchy + prior year TB when engagement changes
   useEffect(() => {
     if (!engagementId) return;
-    void Promise.all([loadExistingTB(), loadHierarchy()]);
+    void Promise.all([loadExistingTB(), loadHierarchy(), loadPriorTB()]);
   }, [engagementId]);
+
+  // Fix (Issue 2): Load prior period TB snapshot from audit_engagements
+  const loadPriorTB = async () => {
+    if (!engagementId) return;
+    const { data } = await (supabase as any)
+      .from("audit_engagements")
+      .select("prior_year_tb_snapshot, prior_year_tb_imported_at")
+      .eq("id", engagementId)
+      .maybeSingle();
+    const snapshot = (data?.prior_year_tb_snapshot as any[]) || [];
+    const importedAt = data?.prior_year_tb_imported_at || null;
+    setPriorTbLeaves(snapshot);
+    setPriorTbImportedAt(importedAt);
+  };
 
   const loadExistingTB = async () => {
     if (!engagementId) return;
     setLoadingExisting(true);
     try {
+      // Fix (Issue 2): include txn_debit + txn_credit so all comparison columns are populated
       const { data, count } = await supabase.from("trial_balance_snapshots")
-        .select("id, ledger_name, primary_group, bs_pl_side, closing_balance, opening_balance, matched_category_code, financial_year, import_format, account_type", { count: "exact" })
+        .select("id, ledger_name, primary_group, bs_pl_side, closing_balance, opening_balance, txn_debit, txn_credit, matched_category_code, financial_year, import_format, account_type", { count: "exact" })
         .eq("engagement_id", engagementId)
         .order("ledger_name");
 
@@ -299,6 +332,100 @@ export default function ImportTrialBalance() {
 
   const [formSaving, setFormSaving] = useState(false);
 
+  // Fix (Issue 2): Delete prior period TB
+  const handleDeletePriorTB = async () => {
+    if (!engagementId) return;
+    setDeletingPriorTb(true);
+    try {
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({ prior_year_tb_snapshot: [], prior_year_tb_imported_at: null })
+        .eq("id", engagementId);
+      setPriorTbLeaves([]);
+      setPriorTbImportedAt(null);
+      setShowDeletePriorConfirm(false);
+      setShowPriorReupload(false);
+      toast({ title: "Prior period TB removed" });
+    } catch (err: any) {
+      toast({ title: "Failed to remove prior TB", description: err.message, variant: "destructive" });
+    }
+    setDeletingPriorTb(false);
+  };
+
+  // Fix (Issue 2): Re-upload prior period TB (standalone, not via reimport dialog)
+  const handlePriorFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPriorFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      setPriorFileBase64(btoa(binary));
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handlePriorUpload = async () => {
+    if (!priorFileBase64 || !engagementId) return;
+    setParsePrior(true);
+    try {
+      const [startY, endY] = (fy).split("-");
+      const priorFY = `${parseInt(startY) - 1}-${(parseInt(endY) - 1).toString().padStart(2, "0")}`;
+      const { data, error: fnError } = await supabase.functions.invoke("parse-tally-tb", {
+        body: {
+          firmId: firmId || null,
+          fileBase64: priorFileBase64,
+          fileName: priorFileName,
+          financialYear: priorFY,
+          isPriorYear: true,
+        },
+      });
+      if (fnError) throw new Error(fnError.message || "Edge function error");
+      if (!data?.success) throw new Error(data?.error || "Parse failed");
+
+      const priorLeaves = ((data.hierarchy as any[]) || [])
+        .filter((n: any) => n.isLeaf)
+        .map((n: any) => ({
+          name:         n.name          || "",
+          opening:      n.opening       || 0,
+          txnDebit:     n.txnDebit      || n.debit   || 0,
+          txnCredit:    n.txnCredit     || n.credit  || 0,
+          closing:      n.closing       || 0,
+          primaryGroup: n.primaryGroup  || n.group   || "",
+          bsPlSide:     n.bsPlSide      || n.bs_pl_side || "",
+        }));
+      await (supabase as any)
+        .from("audit_engagements")
+        .update({ prior_year_tb_snapshot: priorLeaves, prior_year_tb_imported_at: new Date().toISOString() })
+        .eq("id", engagementId);
+      await loadPriorTB();
+      setShowPriorReupload(false);
+      setPriorFileName("");
+      setPriorFileBase64("");
+      toast({ title: `Prior period TB saved — ${priorLeaves.length} leaf ledgers` });
+    } catch (err: any) {
+      toast({ title: "Prior year parse failed", description: err.message, variant: "destructive" });
+    }
+    setParsePrior(false);
+  };
+
+  // Fix (Issue 3): Save ledger reclassification to trial_balance_snapshots
+  const handleSaveLedgerEdit = async (ledgerId: string) => {
+    if (!editGroup && !editBsPlSide) return;
+    const updates: any = {};
+    if (editGroup) updates.primary_group = editGroup;
+    if (editBsPlSide) updates.bs_pl_side = editBsPlSide;
+    await supabase.from("trial_balance_snapshots").update(updates).eq("id", ledgerId);
+    toast({ title: "Ledger reclassified successfully" });
+    setEditingLedger(null);
+    setEditGroup("");
+    setEditBsPlSide("");
+    await loadExistingTB();
+  };
+
   const isValidUuid = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -368,9 +495,36 @@ export default function ImportTrialBalance() {
       if (!data?.success) throw new Error(data?.error || "Parse failed");
 
       setParseProgress("Tagging ledgers with scrutiny categories...");
-      setImportStats(data as ImportStats);
-      setExistingImport(true);
-      toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
+
+      // Fix (Issue 2): when "prior_year" action, save leaf nodes to prior_year_tb_snapshot
+      // so PipelineStage2 comparative view can rebuild from it on next load.
+      if (reimport === "prior_year" && engagementId) {
+        const priorLeaves = ((data.hierarchy as any[]) || [])
+          .filter((n: any) => n.isLeaf)
+          .map((n: any) => ({
+            name:         n.name          || "",
+            opening:      n.opening       || 0,
+            txnDebit:     n.txnDebit      || n.debit   || 0,
+            txnCredit:    n.txnCredit     || n.credit  || 0,
+            closing:      n.closing       || 0,
+            primaryGroup: n.primaryGroup  || n.group   || "",
+            bsPlSide:     n.bsPlSide      || n.bs_pl_side || "",
+          }));
+        await (supabase as any)
+          .from("audit_engagements")
+          .update({
+            prior_year_tb_snapshot: priorLeaves,
+            prior_year_tb_imported_at: new Date().toISOString(),
+          })
+          .eq("id", engagementId);
+        await loadPriorTB();
+        toast({ title: `Prior period TB saved — ${priorLeaves.length} leaf ledgers stored for comparison` });
+      } else {
+        setImportStats(data as ImportStats);
+        setExistingImport(true);
+        toast({ title: `${data.leafLedgers} ledgers imported & tagged successfully` });
+      }
+
       await Promise.all([loadExistingTB(), loadHierarchy()]);
     } catch (err: any) {
       setError(err.message);
@@ -492,36 +646,90 @@ export default function ImportTrialBalance() {
               </div>
             </div>
 
-            {/* Ledger Table */}
+            {/* Fix (Issue 2): Expanded ledger table — all relevant columns now shown.
+                Fix (Issue 3): Each row has an Edit button to reclassify primary_group / bs_pl_side. */}
             <div className="border rounded-lg overflow-auto max-h-[400px]">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-xs">Ledger Name</TableHead>
-                    <TableHead className="text-xs">Group</TableHead>
+                    <TableHead className="text-xs min-w-[160px]">Ledger Name</TableHead>
+                    <TableHead className="text-xs min-w-[110px]">Group</TableHead>
                     <TableHead className="text-xs">BS/PL</TableHead>
                     <TableHead className="text-xs">Category</TableHead>
-                    <TableHead className="text-xs text-right">Opening</TableHead>
-                    <TableHead className="text-xs text-right">Closing</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">Opening Dr</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">Opening Cr</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">TXN Dr</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">TXN Cr</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">Closing Dr</TableHead>
+                    <TableHead className="text-xs text-right min-w-[80px]">Closing Cr</TableHead>
+                    <TableHead className="text-xs w-8"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {existingTBData.ledgers.map(l => (
-                    <TableRow key={l.id}>
-                      <TableCell className="text-xs">{l.ledger_name || "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{l.primary_group || "—"}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-[10px]">{l.bs_pl_side || "—"}</Badge></TableCell>
-                      <TableCell>
-                        {l.matched_category_code ? (
-                          <Badge variant="secondary" className="text-[10px]">{l.matched_category_code}</Badge>
-                        ) : (
-                          <span className="text-[10px] text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-right font-mono">{fmtNum(l.opening_balance)}</TableCell>
-                      <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(l.closing_balance)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {existingTBData.ledgers.map(l => {
+                    const opn = l.opening_balance ?? 0;
+                    const cls = l.closing_balance ?? 0;
+                    const isEditing = editingLedger === l.id;
+                    return (
+                      <TableRow key={l.id} className={isEditing ? "bg-primary/5" : undefined}>
+                        <TableCell className="text-xs font-medium">{l.ledger_name || "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {isEditing ? (
+                            <input
+                              className="w-full border rounded px-1 py-0.5 text-xs"
+                              value={editGroup}
+                              onChange={e => setEditGroup(e.target.value)}
+                              placeholder={l.primary_group || "Group"}
+                            />
+                          ) : l.primary_group || "—"}
+                        </TableCell>
+                        <TableCell>
+                          {isEditing ? (
+                            <select
+                              className="border rounded px-1 py-0.5 text-xs"
+                              value={editBsPlSide}
+                              onChange={e => setEditBsPlSide(e.target.value)}
+                            >
+                              <option value="">— keep —</option>
+                              <option value="BS">BS</option>
+                              <option value="PL">PL</option>
+                            </select>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px]">{l.bs_pl_side || "—"}</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {l.matched_category_code ? (
+                            <Badge variant="secondary" className="text-[10px]">{l.matched_category_code}</Badge>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-right font-mono">{fmtNum(opn >= 0 ? opn : 0)}</TableCell>
+                        <TableCell className="text-xs text-right font-mono">{fmtNum(opn < 0 ? Math.abs(opn) : 0)}</TableCell>
+                        <TableCell className="text-xs text-right font-mono text-muted-foreground">{fmtNum(l.txn_debit)}</TableCell>
+                        <TableCell className="text-xs text-right font-mono text-muted-foreground">{fmtNum(l.txn_credit)}</TableCell>
+                        <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(cls >= 0 ? cls : 0)}</TableCell>
+                        <TableCell className="text-xs text-right font-mono font-medium">{fmtNum(cls < 0 ? Math.abs(cls) : 0)}</TableCell>
+                        <TableCell className="text-xs">
+                          {isEditing ? (
+                            <div className="flex gap-1">
+                              <button onClick={() => handleSaveLedgerEdit(l.id)} className="text-primary hover:underline text-[10px]">Save</button>
+                              <button onClick={() => { setEditingLedger(null); setEditGroup(""); setEditBsPlSide(""); }} className="text-muted-foreground hover:underline text-[10px]">Cancel</button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setEditingLedger(l.id); setEditGroup(l.primary_group || ""); setEditBsPlSide(l.bs_pl_side || ""); }}
+                              className="text-muted-foreground hover:text-primary transition-colors"
+                              title="Reclassify ledger"
+                            >
+                              <FileText size={12} />
+                            </button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -539,6 +747,121 @@ export default function ImportTrialBalance() {
               </Button>
             </div>
           </CardContent>
+        </Card>
+      )}
+
+      {/* ─── Fix (Issue 2): Prior Period TB Section ─── */}
+      {engagementId && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <CalendarDays size={14} /> Prior Period Trial Balance
+                {priorTbLeaves.length > 0 && (
+                  <Badge className="bg-primary/10 text-primary text-[10px] ml-1">
+                    {priorTbLeaves.length} accounts loaded
+                  </Badge>
+                )}
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                {priorTbLeaves.length > 0 && !showPriorReupload && (
+                  <>
+                    <span className="text-[10px] text-muted-foreground">
+                      {priorTbImportedAt ? `Uploaded ${new Date(priorTbImportedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}` : ""}
+                    </span>
+                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => setShowPriorReupload(true)}>
+                      <RefreshCw size={12} /> Re-upload
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/5"
+                      onClick={() => setShowDeletePriorConfirm(true)} disabled={deletingPriorTb}>
+                      {deletingPriorTb ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Delete
+                    </Button>
+                  </>
+                )}
+                {priorTbLeaves.length === 0 && !showPriorReupload && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => setShowPriorReupload(true)}>
+                    <Upload size={12} /> Upload Prior Year TB
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+
+          {/* Upload form */}
+          {showPriorReupload && (
+            <CardContent className="space-y-3">
+              <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/30"
+                onClick={() => priorFileRef.current?.click()}>
+                <Upload size={18} className="mx-auto mb-1 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">{priorFileName || "Upload Prior Year TB (Excel, CSV, XML, JSON)"}</p>
+                <input ref={priorFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv,.xml,.json"
+                  onChange={handlePriorFileSelect} />
+              </div>
+              {priorFileName && (
+                <Button size="sm" className="w-full gap-1" onClick={handlePriorUpload} disabled={parsePrior || !priorFileBase64}>
+                  {parsePrior ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                  Import as Prior Year TB
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" className="w-full text-xs"
+                onClick={() => { setShowPriorReupload(false); setPriorFileName(""); setPriorFileBase64(""); }}>
+                Cancel
+              </Button>
+            </CardContent>
+          )}
+
+          {/* Prior year ledger table */}
+          {priorTbLeaves.length > 0 && !showPriorReupload && (
+            <CardContent className="pt-0">
+              <div className="border rounded-lg overflow-auto max-h-64">
+                <table className="w-full text-xs min-w-[900px]">
+                  <thead className="bg-muted sticky top-0">
+                    <tr>
+                      <th className="text-left p-2 min-w-[160px]">Account Name</th>
+                      <th className="text-left p-2 min-w-[110px]">Group</th>
+                      <th className="text-center p-2">BS/PL</th>
+                      <th className="text-right p-2 min-w-[80px]">Opening Dr</th>
+                      <th className="text-right p-2 min-w-[80px]">Opening Cr</th>
+                      <th className="text-right p-2 min-w-[80px]">TXN Dr</th>
+                      <th className="text-right p-2 min-w-[80px]">TXN Cr</th>
+                      <th className="text-right p-2 min-w-[80px]">Closing Dr</th>
+                      <th className="text-right p-2 min-w-[80px]">Closing Cr</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {priorTbLeaves.slice(0, 200).map((leaf: any, i: number) => {
+                      const opn = leaf.opening || 0;
+                      const cls = leaf.closing || 0;
+                      return (
+                        <tr key={i} className="border-t hover:bg-muted/30">
+                          <td className="p-2 font-medium">{leaf.name || "—"}</td>
+                          <td className="p-2 text-muted-foreground">{leaf.primaryGroup || "—"}</td>
+                          <td className="p-2 text-center">
+                            <Badge variant="outline" className="text-[10px]">{leaf.bsPlSide || "—"}</Badge>
+                          </td>
+                          <td className="p-2 text-right font-mono">{fmtNum(opn >= 0 ? opn : 0)}</td>
+                          <td className="p-2 text-right font-mono">{fmtNum(opn < 0 ? Math.abs(opn) : 0)}</td>
+                          <td className="p-2 text-right font-mono text-muted-foreground">{fmtNum(leaf.txnDebit || 0)}</td>
+                          <td className="p-2 text-right font-mono text-muted-foreground">{fmtNum(leaf.txnCredit || 0)}</td>
+                          <td className="p-2 text-right font-mono font-medium">{fmtNum(cls >= 0 ? cls : 0)}</td>
+                          <td className="p-2 text-right font-mono font-medium">{fmtNum(cls < 0 ? Math.abs(cls) : 0)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {priorTbLeaves.length > 200 && (
+                <p className="text-[11px] text-muted-foreground text-center mt-2">Showing first 200 of {priorTbLeaves.length} accounts</p>
+              )}
+            </CardContent>
+          )}
+
+          {priorTbLeaves.length === 0 && !showPriorReupload && (
+            <CardContent className="pt-0 pb-4">
+              <p className="text-xs text-muted-foreground text-center py-4">No prior period TB uploaded yet. Click "Upload Prior Year TB" to add one.</p>
+            </CardContent>
+          )}
         </Card>
       )}
 
@@ -829,6 +1152,22 @@ export default function ImportTrialBalance() {
             </Button>
           </div>
           <DialogFooter><Button variant="ghost" onClick={() => setShowReimportDialog(false)}>Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Fix (Issue 2): Delete Prior Period TB Confirmation Dialog */}
+      <Dialog open={showDeletePriorConfirm} onOpenChange={setShowDeletePriorConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Prior Period Trial Balance?</DialogTitle>
+            <DialogDescription>This will permanently delete the prior period TB data stored for comparison. The current year TB is unaffected.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeletePriorConfirm(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeletePriorTB} disabled={deletingPriorTb}>
+              {deletingPriorTb && <Loader2 size={16} className="mr-2 animate-spin" />} Remove Prior TB
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

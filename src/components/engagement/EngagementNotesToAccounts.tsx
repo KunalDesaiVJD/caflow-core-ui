@@ -10,26 +10,28 @@ import { toast } from "sonner";
 import { Sparkles, Loader2, Save, Eye, FileText } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 
+// Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
+// These are filtered out when isCorporate = false.
 const STANDARD_NOTES = [
-  { num: 1, title: "Corporate Information", autoKey: "corporate" },
-  { num: 2, title: "Significant Accounting Policies", autoKey: "policies" },
-  { num: 29, title: "Finance Costs", autoKey: "finance_costs" },
-  { num: 30, title: "Depreciation and Amortisation", autoKey: "depreciation" },
-  { num: 31, title: "Other Expenses", autoKey: "other_expenses" },
-  { num: 32, title: "Exceptional Items", autoKey: "exceptional" },
-  { num: 33, title: "Tax Expense", autoKey: "tax_expense" },
-  { num: 34, title: "Earnings Per Share", autoKey: "eps" },
-  { num: 35, title: "Contingent Liabilities and Commitments", autoKey: "contingent" },
-  { num: 36, title: "Related Party Disclosures", autoKey: "related_party" },
-  { num: 37, title: "Segment Reporting", autoKey: "segments" },
-  { num: 38, title: "Leases", autoKey: "leases" },
-  { num: 39, title: "Foreign Currency Transactions", autoKey: "forex" },
-  { num: 40, title: "Government Grants", autoKey: "grants" },
-  { num: 41, title: "Deferred Tax", autoKey: "deferred_tax" },
-  { num: 42, title: "CSR Expenditure", autoKey: "csr" },
-  { num: 43, title: "Details of Benami Property", autoKey: "benami" },
-  { num: 44, title: "Events After Reporting Period", autoKey: "subsequent" },
-  { num: 45, title: "Previous Year Figures", autoKey: "previous_year" },
+  { num: 1,  title: "Corporate Information",                autoKey: "corporate",    corporateOnly: true  },
+  { num: 2,  title: "Significant Accounting Policies",      autoKey: "policies",     corporateOnly: false },
+  { num: 29, title: "Finance Costs",                        autoKey: "finance_costs",corporateOnly: false },
+  { num: 30, title: "Depreciation and Amortisation",        autoKey: "depreciation", corporateOnly: false },
+  { num: 31, title: "Other Expenses",                       autoKey: "other_expenses",corporateOnly: false },
+  { num: 32, title: "Exceptional Items",                    autoKey: "exceptional",  corporateOnly: false },
+  { num: 33, title: "Tax Expense",                          autoKey: "tax_expense",  corporateOnly: false },
+  { num: 34, title: "Earnings Per Share",                   autoKey: "eps",          corporateOnly: true  },
+  { num: 35, title: "Contingent Liabilities and Commitments", autoKey: "contingent", corporateOnly: false },
+  { num: 36, title: "Related Party Disclosures",            autoKey: "related_party",corporateOnly: false },
+  { num: 37, title: "Segment Reporting",                    autoKey: "segments",     corporateOnly: false },
+  { num: 38, title: "Leases",                               autoKey: "leases",       corporateOnly: false },
+  { num: 39, title: "Foreign Currency Transactions",        autoKey: "forex",        corporateOnly: false },
+  { num: 40, title: "Government Grants",                    autoKey: "grants",       corporateOnly: false },
+  { num: 41, title: "Deferred Tax",                         autoKey: "deferred_tax", corporateOnly: false },
+  { num: 42, title: "CSR Expenditure",                      autoKey: "csr",          corporateOnly: true  },
+  { num: 43, title: "Details of Benami Property",           autoKey: "benami",       corporateOnly: false },
+  { num: 44, title: "Events After Reporting Period",        autoKey: "subsequent",   corporateOnly: false },
+  { num: 45, title: "Previous Year Figures",                autoKey: "previous_year",corporateOnly: false },
 ];
 
 interface NoteData {
@@ -44,9 +46,11 @@ interface Props {
   engagement: any;
   client: any;
   onUpdate: () => void;
+  /** Fix (Issue 4): when false, corporate-only notes (Corporate Info, EPS, CSR) are hidden */
+  isCorporate?: boolean;
 }
 
-export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Props) {
+export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorporate = true }: Props) {
   const [notes, setNotes] = useState<NoteData[]>([]);
   const [selectedNote, setSelectedNote] = useState(0);
   const [drafting, setDrafting] = useState<number | null>(null);
@@ -64,7 +68,9 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate }: Prop
     }
 
     const saved = engagement.notes_to_accounts as Record<string, any> | null;
-    const initial: NoteData[] = STANDARD_NOTES.map(n => {
+    // Fix (Issue 4): filter out corporate-only notes for non-corporate entities
+    const visibleNotes = STANDARD_NOTES.filter(n => isCorporate || !n.corporateOnly);
+    const initial: NoteData[] = visibleNotes.map(n => {
       const existing = saved?.[String(n.num)];
       return {
         num: n.num,
