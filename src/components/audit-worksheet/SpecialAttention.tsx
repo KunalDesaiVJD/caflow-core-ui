@@ -267,11 +267,14 @@ function EmpSelect({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 interface Props {
-  data:         AuditWorksheetData;
-  engagementId: string;
+  data:          AuditWorksheetData;
+  engagementId:  string;
+  /** Issue #10: When true (tax_audit for non-corporate entity),
+   *  hide section 10 "Private Ltd / Ltd Company — Specific Audit Points" */
+  taxAuditMode?: boolean;
 }
 
-export default function SpecialAttention({ data, engagementId }: Props) {
+export default function SpecialAttention({ data, engagementId, taxAuditMode = false }: Props) {
   const {
     data: m, setHeader, setRowField, patchRow, getRow,
     manualSave, saving,
@@ -282,12 +285,15 @@ export default function SpecialAttention({ data, engagementId }: Props) {
   const { end: fyEnd } = fyYears(data.financialYear);
   const fyExpanded     = expandFY(data.financialYear);
 
-  // Resolve checklist with dynamic year substitution
-  const rows = CHECKLIST.map(r => ({
-    ...r,
-    particulars: injectYear(r.particulars, fyEnd),
-    documents:   r.documents ? injectYear(r.documents, fyEnd) : undefined,
-  }));
+  // Resolve checklist with dynamic year substitution.
+  // Issue #10: In taxAuditMode, exclude section 10 (Private Ltd / Ltd specific points).
+  const rows = CHECKLIST
+    .filter(r => !taxAuditMode || !r.id.startsWith("10"))
+    .map(r => ({
+      ...r,
+      particulars: injectYear(r.particulars, fyEnd),
+      documents:   r.documents ? injectYear(r.documents, fyEnd) : undefined,
+    }));
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">

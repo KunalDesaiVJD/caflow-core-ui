@@ -30,10 +30,12 @@ export const BLANK_CHECKLIST_ROW: ChecklistRowState = {
 // ─── Full checklist data ──────────────────────────────────────────────────────
 
 export interface ChecklistSheetData {
-  rows: Record<string, ChecklistRowState>;
+  rows:          Record<string, ChecklistRowState>;
+  /** Issue #11: IDs of dynamically added rows (beyond the static 22) */
+  dynamicRowIds: string[];
 }
 
-export const BLANK_CHECKLIST: ChecklistSheetData = { rows: {} };
+export const BLANK_CHECKLIST: ChecklistSheetData = { rows: {}, dynamicRowIds: [] };
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -63,7 +65,10 @@ export function useChecklistSheetStorage(
         saved.rows &&
         typeof saved.rows === "object"
       ) {
-        setData(saved as ChecklistSheetData);
+        setData({
+          rows:          (saved as ChecklistSheetData).rows,
+          dynamicRowIds: (saved as ChecklistSheetData).dynamicRowIds || [],
+        });
       }
       setLoaded(true);
     })();
@@ -125,10 +130,24 @@ export function useChecklistSheetStorage(
     [data.rows]
   );
 
+  // ── addRow — append a new dynamic row ────────────────────────────────────
+  const addRow = useCallback(() => {
+    const newId = `dyn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setData(prev => {
+      const next: ChecklistSheetData = {
+        rows:          { ...prev.rows, [newId]: { ...BLANK_CHECKLIST_ROW } },
+        dynamicRowIds: [...prev.dynamicRowIds, newId],
+      };
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => persist(next, true), 1000);
+      return next;
+    });
+  }, [persist]);
+
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     return persist(data, false);
   }, [data, persist]);
 
-  return { data, setRowField, getRow, manualSave, saving, loaded };
+  return { data, setRowField, getRow, addRow, manualSave, saving, loaded };
 }

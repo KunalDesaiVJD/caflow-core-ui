@@ -56,10 +56,6 @@ const WORKSHEET_ROWS: RowDef[] = [
     subNote: "(Check With Previous Year Physical Audit Report Copy)",
   },
   {
-    id: "closing_balances", sr: "↳", label: "CLOSING BALANCES",     extentType: "as_on",
-    isSubRow: true,
-  },
-  {
     id: "others",           sr: "9", label: "OTHERS",                extentType: "as_on",
     optional: true,
   },

@@ -26,8 +26,7 @@ export function useEmployeeDropdown(): {
       const { data } = await supabase
         .from("users")
         .select("id, name, role, icai_reg_no")
-        .eq("firm_id", user!.firm_id!)
-        .eq("is_active", true)
+        .eq("firm_id", user?.firm_id ?? "")
         .order("name");
       return (data || []) as Employee[];
     },

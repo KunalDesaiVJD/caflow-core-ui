@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
 import { Badge }   from "@/components/ui/badge";
-import { Save, Loader2, ClipboardCheck } from "lucide-react";
+import { Save, Loader2, ClipboardCheck, Plus } from "lucide-react";
 
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
 import type { AuditWorksheetData }  from "./hooks/useAuditWorksheetData";
@@ -117,17 +117,26 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Checklist({ data, engagementId }: Props) {
-  const { getRow, setRowField, manualSave, saving } =
+  const { data: checklistData, getRow, setRowField, addRow, manualSave, saving } =
     useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
   const fyEndYear = fyEndYearFromDate(data.fyEndDate);
 
+  // All rows = static defs + dynamic rows added by user
+  const dynamicDefs: ChecklistDef[] = (checklistData.dynamicRowIds || []).map((id, i) => ({
+    id,
+    sr:          CHECKLIST_DEFS.length + i + 1,
+    particulars: "",
+    isCustom:    true,
+  }));
+  const allDefs = [...CHECKLIST_DEFS, ...dynamicDefs];
+
   // Count rows where at least one page number is filled
-  const filledCount = CHECKLIST_DEFS.filter(def => {
+  const filledCount = allDefs.filter(def => {
     const row = getRow(def.id);
     return row.page_from.trim() !== "" || row.page_to.trim() !== "";
   }).length;
-  const pct = Math.round((filledCount / CHECKLIST_DEFS.length) * 100);
+  const pct = Math.round((filledCount / allDefs.length) * 100);
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
@@ -150,7 +159,7 @@ export default function Checklist({ data, engagementId }: Props) {
       <div className="border-b bg-muted/30 px-4 py-2.5 space-y-2">
         {/* Progress row */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <Badge
               className={cn(
                 "text-xs",
@@ -161,13 +170,21 @@ export default function Checklist({ data, engagementId }: Props) {
                   : "bg-slate-100 text-slate-600"
               )}
             >
-              {filledCount} / {CHECKLIST_DEFS.length} documented ({pct}%)
+              {filledCount} / {allDefs.length} documented ({pct}%)
             </Badge>
             {pct === 100 && (
               <span className="text-xs text-green-700 font-medium">
                 ✓ All documents page-numbered
               </span>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1 h-7 text-xs border-violet-300 text-violet-700 hover:bg-violet-50"
+              onClick={addRow}
+            >
+              <Plus size={12} /> Add Row
+            </Button>
           </div>
           <Button
             size="sm"
@@ -183,16 +200,6 @@ export default function Checklist({ data, engagementId }: Props) {
           </Button>
         </div>
 
-        {/* Progress bar */}
-        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className={cn(
-              "h-full rounded-full transition-all duration-300",
-              pct === 100 ? "bg-green-500" : "bg-violet-500"
-            )}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
       </div>
 
       {/* ══════════ TABLE ══════════ */}
@@ -211,13 +218,14 @@ export default function Checklist({ data, engagementId }: Props) {
             </tr>
           </thead>
           <tbody>
-            {CHECKLIST_DEFS.map(def => {
+            {allDefs.map(def => {
               const row = getRow(def.id);
-              const hasBoth  = row.page_from.trim() !== "" && row.page_to.trim() !== "";
-              const hasEither = row.page_from.trim() !== "" || row.page_to.trim() !== "";
-              const labelText = def.isCustom
-                ? (row.particulars || "")
+              const hasBoth   = row.page_from.trim() !== "" && row.page_to.trim() !== "";
+              // For static rows: use saved override if present, else fall back to static text
+              const defaultText = def.isCustom
+                ? ""
                 : injectYear(def.particulars, fyEndYear);
+              const displayValue = row.particulars !== "" ? row.particulars : defaultText;
 
               return (
                 <tr
@@ -234,29 +242,16 @@ export default function Checklist({ data, engagementId }: Props) {
                     </span>
                   </td>
 
-                  {/* Particulars */}
+                  {/* Particulars — Issue #11: editable for ALL rows */}
                   <td className="border border-border px-3 py-2">
-                    {def.isCustom ? (
-                      <Input
-                        className="h-7 text-xs w-full border-dashed"
-                        placeholder="Enter custom item description…"
-                        value={row.particulars}
-                        onChange={e =>
-                          setRowField(def.id, "particulars", e.target.value)
-                        }
-                      />
-                    ) : (
-                      <span
-                        className={cn(
-                          "text-xs leading-snug",
-                          hasEither
-                            ? "text-foreground font-medium"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        {labelText}
-                      </span>
-                    )}
+                    <Input
+                      className="h-7 text-xs w-full border-dashed"
+                      placeholder={defaultText || "Enter item description…"}
+                      value={displayValue}
+                      onChange={e =>
+                        setRowField(def.id, "particulars", e.target.value)
+                      }
+                    />
                   </td>
 
                   {/* Page From */}
@@ -297,8 +292,8 @@ export default function Checklist({ data, engagementId }: Props) {
       <div className="border-t bg-muted/20 px-4 py-2 flex items-center justify-between">
         <p className="text-[11px] text-muted-foreground">
           {pct === 100
-            ? `✓ All ${CHECKLIST_DEFS.length} documents page-numbered`
-            : `${CHECKLIST_DEFS.length - filledCount} document(s) without page numbers`}
+            ? `✓ All ${allDefs.length} documents page-numbered`
+            : `${allDefs.length - filledCount} document(s) without page numbers`}
         </p>
         {saving && (
           <p className="text-xs text-muted-foreground flex items-center gap-1">

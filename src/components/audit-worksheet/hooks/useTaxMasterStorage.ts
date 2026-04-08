@@ -16,8 +16,16 @@ import { toast } from "sonner";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
 
+export interface AuditorEntry {
+  id:   string;  // employee UUID
+  name: string;  // denormalised display name
+}
+
 export interface TaxMasterData {
-  // Field 2
+  // Audit Carried Out By — dynamic list of auditors
+  audit_carried_by: AuditorEntry[];
+
+  // Field 2 (kept in data model for backward compat, hidden in UI)
   proprietor_partner_name: string;
 
   // Field 6 — Contact info
@@ -84,6 +92,7 @@ export interface TaxMasterData {
 }
 
 export const BLANK_TAX_MASTER: TaxMasterData = {
+  audit_carried_by: [],
   proprietor_partner_name: "",
   accountant_name: "",
   mobile_no: "",

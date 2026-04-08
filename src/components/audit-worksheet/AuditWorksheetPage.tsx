@@ -14,14 +14,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 
-import AuditWorksheetHeader from "./AuditWorksheetHeader";
-import ExportButtons        from "./ExportButtons";
-import TaxAuditMaster       from "./TaxAuditMaster";
-import InternalAuditMaster  from "./InternalAuditMaster";
-import SpecialAttention     from "./SpecialAttention";
-import Worksheet            from "./Worksheet";
-import QuerySheet           from "./QuerySheet";
-import Checklist            from "./Checklist";
+import AuditWorksheetHeader  from "./AuditWorksheetHeader";
+import ExportButtons         from "./ExportButtons";
+import TaxAuditMaster        from "./TaxAuditMaster";
+import StatutoryAuditMaster  from "./StatutoryAuditMaster";
+import InternalAuditMaster   from "./InternalAuditMaster";
+import SpecialAttention      from "./SpecialAttention";
+import Worksheet             from "./Worksheet";
+import QuerySheet            from "./QuerySheet";
+import Checklist             from "./Checklist";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 import { useWorksheetStorage }   from "./hooks/useWorksheetStorage";
@@ -39,16 +40,21 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   // Determine which tabs to show
   const auditType = data.auditType;
 
-  const showTaxMaster = auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
-  const showIntMaster = auditType === "internal";
+  // Issue #9: Tax Audit Master → only for tax_audit | both (not statutory)
+  const showTaxMaster        = auditType === "tax_audit" || auditType === "both";
+  // Issue #9: Statutory Audit Master → only for statutory | both
+  const showStatutoryMaster  = auditType === "statutory" || auditType === "both";
+  const showIntMaster        = auditType === "internal";
 
-  // Req #3: Special Attention tab HIDDEN (not just disabled) for LLP / Partnership / Proprietorship.
-  // Only Private Ltd / Public Ltd / company engagement type trigger it.
-  const showSpecial = data.isPrivateOrPublicLtd;
+  // Issue #10: Special Attention tab — show for Private/Public Ltd OR for tax_audit.
+  // For tax_audit without corporate entity, pass taxAuditMode so component filters to 9 points.
+  const showSpecial    = data.isPrivateOrPublicLtd || auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
+  const taxAuditMode   = (auditType === "tax_audit" || auditType === "both") && !data.isPrivateOrPublicLtd;
 
   // Default first tab
-  const defaultTab = showTaxMaster ? "tax_master"
-    : showIntMaster              ? "int_master"
+  const defaultTab = showTaxMaster       ? "tax_master"
+    : showStatutoryMaster                ? "statutory_master"
+    : showIntMaster                      ? "int_master"
     : "worksheet";
 
   const [activeTab, setActiveTab] = useState(defaultTab);
@@ -96,6 +102,11 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
               Tax Audit Master
             </TabsTrigger>
           )}
+          {showStatutoryMaster && (
+            <TabsTrigger value="statutory_master" className="text-xs">
+              Statutory Audit Master
+            </TabsTrigger>
+          )}
           {showIntMaster && (
             <TabsTrigger value="int_master" className="text-xs">
               Internal Audit Master
@@ -127,6 +138,16 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           </TabsContent>
         )}
 
+        {/* ── Sheet 1b: Statutory Audit Master ── */}
+        {showStatutoryMaster && (
+          <TabsContent value="statutory_master" className="mt-3">
+            <StatutoryAuditMaster
+              data={data}
+              engagementId={engagementId}
+            />
+          </TabsContent>
+        )}
+
         {/* ── Sheet 2: Internal Audit Master ── */}
         {showIntMaster && (
           <TabsContent value="int_master" className="mt-3">
@@ -143,6 +164,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <SpecialAttention
               data={data}
               engagementId={engagementId}
+              taxAuditMode={taxAuditMode}
             />
           </TabsContent>
         )}
