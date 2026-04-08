@@ -18,9 +18,9 @@ import { Input }     from "@/components/ui/input";
 import { Textarea }  from "@/components/ui/textarea";
 import { Badge }     from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save, Loader2, Building2 } from "lucide-react";
+import { Save, Loader2, Building2, Plus, Trash2 } from "lucide-react";
 
-import { useSpecialAttentionStorage } from "./hooks/useSpecialAttentionStorage";
+import { useSpecialAttentionStorage, type AuditorEntry } from "./hooks/useSpecialAttentionStorage";
 import { useEmployeeDropdown }         from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
 
@@ -347,36 +347,60 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
           </div>
         </div>
 
-        {/* Audit Carried Out By */}
-        <div className="flex flex-wrap gap-4">
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-              Audit Carried Out By — Auditor 1
-            </p>
-            <EmpSelect
-              value={m.auditor1_id}
-              placeholder="Select auditor 1…"
-              onChange={(id, name) => setHeader({ auditor1_id: id, auditor1_name: name })}
-              employees={employees}
-            />
-            {m.auditor1_name && (
-              <p className="text-[11px] text-indigo-700 mt-1 font-medium">✓ {m.auditor1_name}</p>
-            )}
-          </div>
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-              Audit Carried Out By — Auditor 2
-            </p>
-            <EmpSelect
-              value={m.auditor2_id}
-              placeholder="Select auditor 2…"
-              onChange={(id, name) => setHeader({ auditor2_id: id, auditor2_name: name })}
-              employees={employees}
-            />
-            {m.auditor2_name && (
-              <p className="text-[11px] text-indigo-700 mt-1 font-medium">✓ {m.auditor2_name}</p>
-            )}
-          </div>
+        {/* Audit Carried Out By — dynamic list */}
+        <div className="space-y-1.5">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+            Audit Carried Out By
+          </p>
+          {(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by)
+            .map((entry: AuditorEntry, idx: number) => (
+              <div key={idx} className="flex items-center gap-2">
+                <EmpSelect
+                  value={entry.id}
+                  placeholder={`Select auditor ${idx + 1}…`}
+                  onChange={(id, name) => {
+                    const updated = [...(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by)];
+                    updated[idx] = { id, name };
+                    setHeader({ audit_carried_by: updated });
+                  }}
+                  employees={employees}
+                />
+                {entry.name && (
+                  <span className="text-[11px] text-indigo-700 font-medium whitespace-nowrap">
+                    ✓ {entry.name}
+                  </span>
+                )}
+                {(m.audit_carried_by.length > 1) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50 flex-shrink-0"
+                    onClick={() =>
+                      setHeader({ audit_carried_by: m.audit_carried_by.filter((_: AuditorEntry, i: number) => i !== idx) })
+                    }
+                  >
+                    <Trash2 size={13} />
+                  </Button>
+                )}
+              </div>
+            ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="gap-1.5 h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-50 mt-1"
+            onClick={() =>
+              setHeader({
+                audit_carried_by: [
+                  ...(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by),
+                  { id: "", name: "" },
+                ],
+              })
+            }
+          >
+            <Plus size={12} /> Add Auditor
+          </Button>
         </div>
       </div>
 

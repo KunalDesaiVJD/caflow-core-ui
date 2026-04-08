@@ -39,7 +39,15 @@ export const BLANK_ROW: SARowState = {
 
 // ─── Full form data ──────────────────────────────────────────────────────────
 
+export interface AuditorEntry {
+  id:   string;
+  name: string;
+}
+
 export interface SpecialAttentionFormData {
+  /** Dynamic auditor list — replaces fixed auditor1/2 slots */
+  audit_carried_by: AuditorEntry[];
+  /** Kept for backward-compat with existing localStorage data; not rendered in UI */
   auditor1_id:   string;
   auditor1_name: string;
   auditor2_id:   string;
@@ -48,6 +56,7 @@ export interface SpecialAttentionFormData {
 }
 
 export const BLANK_SA: SpecialAttentionFormData = {
+  audit_carried_by: [],
   auditor1_id:   "",
   auditor1_name: "",
   auditor2_id:   "",
@@ -71,7 +80,15 @@ export function useSpecialAttentionStorage(
     if (!engagementId || loaded) return;
     const saved = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
     if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-      setData({ ...BLANK_SA, ...saved, rows: { ...saved.rows } });
+      // One-time migration: if saved data pre-dates audit_carried_by, convert auditor1/2 → array
+      const carried: AuditorEntry[] =
+        Array.isArray((saved as any).audit_carried_by) && (saved as any).audit_carried_by.length > 0
+          ? (saved as any).audit_carried_by
+          : [
+              ...(saved.auditor1_id ? [{ id: saved.auditor1_id, name: saved.auditor1_name || "" }] : []),
+              ...(saved.auditor2_id ? [{ id: saved.auditor2_id, name: saved.auditor2_name || "" }] : []),
+            ];
+      setData({ ...BLANK_SA, ...saved, audit_carried_by: carried, rows: { ...saved.rows } });
     }
     setLoaded(true);
   }, [engagementId, loaded]);
@@ -101,9 +118,9 @@ export function useSpecialAttentionStorage(
     [persist]
   );
 
-  // ── setHeader — auditor1/2 ─────────────────────────────────────────────────
+  // ── setHeader — auditor list + legacy auditor1/2 ──────────────────────────
   const setHeader = useCallback(
-    (patch: Partial<Pick<SpecialAttentionFormData, "auditor1_id"|"auditor1_name"|"auditor2_id"|"auditor2_name">>) => {
+    (patch: Partial<Pick<SpecialAttentionFormData, "audit_carried_by"|"auditor1_id"|"auditor1_name"|"auditor2_id"|"auditor2_name">>) => {
       setData(prev => {
         const next = { ...prev, ...patch };
         debounce(next);
