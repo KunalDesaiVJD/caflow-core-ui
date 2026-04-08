@@ -14,8 +14,8 @@
  *  - manualSave() for explicit Save button
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -69,23 +69,11 @@ export function useSpecialAttentionStorage(
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("special_attention_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      const saved = row?.special_attention_json;
-      if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-        setData({
-          ...BLANK_SA,
-          ...(saved as Partial<SpecialAttentionFormData>),
-          rows: { ...(saved as SpecialAttentionFormData).rows },
-        });
-      }
-      setLoaded(true);
-    })();
+    const saved = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
+    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
+      setData({ ...BLANK_SA, ...saved, rows: { ...saved.rows } });
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -93,18 +81,7 @@ export function useSpecialAttentionStorage(
     async (snapshot: SpecialAttentionFormData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:           engagementId,
-              firm_id:                 firmId ?? null,
-              special_attention_json:  snapshot,
-              updated_at:              new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "special_attention_json", snapshot);
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -112,7 +89,7 @@ export function useSpecialAttentionStorage(
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   // ── debounce helper ────────────────────────────────────────────────────────

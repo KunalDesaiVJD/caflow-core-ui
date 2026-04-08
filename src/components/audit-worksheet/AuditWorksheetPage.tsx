@@ -25,7 +25,7 @@ import QuerySheet            from "./QuerySheet";
 import Checklist             from "./Checklist";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
-import { useWorksheetStorage }   from "./hooks/useWorksheetStorage";
+import { BLANK_MASTER }          from "./hooks/useWorksheetStorage";
 
 interface Props {
   engagementId: string;
@@ -33,9 +33,6 @@ interface Props {
 
 export default function AuditWorksheetPage({ engagementId }: Props) {
   const data = useAuditWorksheetData(engagementId);
-
-  const { master, masterLoaded } =
-    useWorksheetStorage(engagementId, data.engagement?.firm_id);
 
   // Determine which tabs to show
   const auditType = data.auditType;
@@ -59,7 +56,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
 
   const [activeTab, setActiveTab] = useState(defaultTab);
 
-  if (data.loading && !masterLoaded) {
+  if (data.loading) {
     return (
       <div className="space-y-3 p-4">
         <Skeleton className="h-24 w-full" />
@@ -87,7 +84,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
       <div className="flex justify-end">
         <ExportButtons
           data={data}
-          master={master}
+          master={BLANK_MASTER}
           worksheetItems={[]}
           specialAttentionItems={[]}
           checklistItems={[]}

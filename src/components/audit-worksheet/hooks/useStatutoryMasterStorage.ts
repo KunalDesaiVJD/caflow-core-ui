@@ -11,8 +11,8 @@
  *  - Exposes manualSave() for the explicit Save button
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
 
@@ -132,19 +132,11 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("statutory_master_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      const saved = row?.statutory_master_json;
-      if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-        setData({ ...BLANK_STATUTORY_MASTER, ...(saved as Partial<StatutoryMasterData>) });
-      }
-      setLoaded(true);
-    })();
+    const saved = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
+    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
+      setData({ ...BLANK_STATUTORY_MASTER, ...saved });
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Internal save ────────────────────────────────────────────────────────
@@ -152,18 +144,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     async (snapshot: StatutoryMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:          engagementId,
-              firm_id:                firmId ?? null,
-              statutory_master_json:  snapshot,
-              updated_at:             new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "statutory_master_json", snapshot);
         if (!silent) toast.success("Statutory Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -171,7 +152,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   // ── Set a single field + debounced auto-save ──────────────────────────────

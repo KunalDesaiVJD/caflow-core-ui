@@ -9,8 +9,8 @@
  * 1-second debounced auto-save on every mutation.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,19 +61,11 @@ export function useQuerySheetStorage(
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("query_sheet_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      const saved = row?.query_sheet_json;
-      if (saved && typeof saved === "object" && Array.isArray((saved as QuerySheetData).queries)) {
-        setData(saved as QuerySheetData);
-      }
-      setLoaded(true);
-    })();
+    const saved = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
+    if (saved && typeof saved === "object" && Array.isArray(saved.queries)) {
+      setData(saved);
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Persist ───────────────────────────────────────────────────────────────
@@ -81,18 +73,7 @@ export function useQuerySheetStorage(
     async (snapshot: QuerySheetData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:   engagementId,
-              firm_id:         firmId ?? null,
-              query_sheet_json: snapshot,
-              updated_at:      new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "query_sheet_json", snapshot);
         if (!silent) toast.success("Query Sheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -100,7 +81,7 @@ export function useQuerySheetStorage(
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   const debounce = useCallback(
