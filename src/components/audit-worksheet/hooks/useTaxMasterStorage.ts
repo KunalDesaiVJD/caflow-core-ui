@@ -25,14 +25,14 @@ export interface TaxMasterData {
   // Audit Carried Out By — dynamic list of auditors
   audit_carried_by: AuditorEntry[];
 
-  // Field 2 (kept in data model for backward compat, hidden in UI)
+  // Kept for backward compat with existing localStorage data; NOT rendered in UI
   proprietor_partner_name: string;
-
-  // Field 6 — Contact info
-  accountant_name: string;
-  mobile_no: string;
   bank_ac_no: string;
   bank_branch: string;
+
+  // Field 5 — Contact info
+  accountant_name: string;
+  mobile_no: string;
 
   // Field 7 — Previous year documents checkboxes
   prev_moa_aoa_deed: boolean;

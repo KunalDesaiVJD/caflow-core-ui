@@ -6,12 +6,11 @@
  *
  * Fields (in order):
  *  1.  Name of Client           — auto-fetch (read-only)
- *  2.  Proprietor/Partner Name  — free text
- *  3.  Address                  — auto-fetch (read-only)
- *  4.  PAN No.                  — auto-fetch (read-only)
- *  5.  Birth / Regi. Date       — auto-fetch (read-only)
- *  6.  Contact Nos.             — 2-col: Accountant+Mobile  |  Bank A/c+Branch
- *  7.  Previous Year Details    — 2 checkboxes
+ *  2.  Address                  — auto-fetch (read-only)
+ *  3.  PAN No.                  — auto-fetch (read-only)
+ *  4.  Birth / Regi. Date       — auto-fetch (read-only)
+ *  5.  Contact Nos.             — Accountant Name + Mobile No.
+ *  6.  Previous Year Details    — 2 checkboxes
  *  8.  Books of Accounts        — 8 checkboxes in 2 cols + Others text
  *  9.  Stock Quantity Records   — YES/NO + textarea if YES
  * 10.  Dates Audit Conducted    — FROM / TO date pickers
@@ -173,7 +172,7 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
   useEffect(() => {
     if (!loaded || !data.clientName) return;
     // Only auto-fill if all are blank (first open)
-    if (m.audit_date_from || m.proprietor_partner_name) return;
+    if (m.audit_date_from) return;
 
     patchFields({
       audit_date_from: data.fyStartDate,
