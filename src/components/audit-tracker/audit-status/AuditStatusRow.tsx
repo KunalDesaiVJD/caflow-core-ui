@@ -13,7 +13,7 @@
  *  - Two-step delete confirmation
  *  - isNew mode: row starts in edit mode, Save calls onAdd
  */
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -131,7 +131,10 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
   clients: ClientOption[];
   placeholder?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen]     = useState(false);
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 180 });
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const filtered = useMemo(() =>
     (value
       ? clients.filter(c => c.name.toLowerCase().includes(value.toLowerCase()))
@@ -140,18 +143,30 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
     [value, clients]
   );
 
+  function handleFocus() {
+    if (inputRef.current) {
+      const r = inputRef.current.getBoundingClientRect();
+      setDropPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 180) });
+    }
+    setOpen(true);
+  }
+
   return (
-    <div className="relative min-w-[130px]">
+    <div className="min-w-[130px]">
       <Input
+        ref={inputRef}
         value={value}
         onChange={e => onChange(e.target.value, null)}
-        onFocus={() => setOpen(true)}
+        onFocus={handleFocus}
         onBlur={() => setTimeout(() => setOpen(false), 160)}
         placeholder={placeholder || "Search party…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
-        <div className="absolute top-full left-0 z-50 w-full min-w-[180px] bg-popover border rounded-md shadow-lg max-h-48 overflow-auto">
+        <div
+          style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+          className="bg-popover border rounded-md shadow-lg max-h-48 overflow-auto"
+        >
           {filtered.map(c => (
             <div
               key={c.id}
@@ -173,7 +188,10 @@ function UserCombobox({ value, onChange, users, placeholder }: {
   value: string; onChange: (v: string) => void;
   users: UserOption[]; placeholder?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen]     = useState(false);
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 120 });
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const filtered = useMemo(() =>
     (value
       ? users.filter(u => u.name.toLowerCase().includes(value.toLowerCase()))
@@ -182,18 +200,30 @@ function UserCombobox({ value, onChange, users, placeholder }: {
     [value, users]
   );
 
+  function handleFocus() {
+    if (inputRef.current) {
+      const r = inputRef.current.getBoundingClientRect();
+      setDropPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 120) });
+    }
+    setOpen(true);
+  }
+
   return (
-    <div className="relative min-w-[100px]">
+    <div className="min-w-[100px]">
       <Input
+        ref={inputRef}
         value={value}
         onChange={e => onChange(e.target.value)}
-        onFocus={() => setOpen(true)}
+        onFocus={handleFocus}
         onBlur={() => setTimeout(() => setOpen(false), 160)}
         placeholder={placeholder || "Search…"}
         className="h-6 text-[11px] px-1.5 w-full"
       />
       {open && filtered.length > 0 && (
-        <div className="absolute top-full left-0 z-50 w-full bg-popover border rounded-md shadow-lg max-h-40 overflow-auto">
+        <div
+          style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+          className="bg-popover border rounded-md shadow-lg max-h-40 overflow-auto"
+        >
           {filtered.map(u => (
             <div
               key={u.id}

@@ -20,8 +20,9 @@ export function useClients(firmId: string) {
       .eq("firm_id", firmId)
       .is("deleted_at", null)
       .order("name")
-      .then(({ data }) => {
-        setClients(data || []);
+      .then(({ data, error }) => {
+        if (error) console.error("[useClients] query error:", error);
+        setClients((data as ClientOption[]) || []);
         setLoading(false);
       });
   }, [firmId]);

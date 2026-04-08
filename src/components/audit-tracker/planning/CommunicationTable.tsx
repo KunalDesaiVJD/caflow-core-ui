@@ -361,7 +361,9 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
                           Yes
                         </Button>
                         <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1 w-full"
-                          onClick={() => patch(row.id, { confirmDel: false } as any)}>
+                          onClick={() => setRows(prev => prev.map(r =>
+                            r.id === row.id ? { ...r, confirmDel: false } : r
+                          ))}>
                           No
                         </Button>
                       </div>

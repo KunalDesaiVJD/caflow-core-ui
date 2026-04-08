@@ -212,7 +212,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 w-full min-w-0">
 
       {/* Offline badge */}
       {useLs && (
@@ -232,8 +232,8 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       />
 
       {/* Table */}
-      <div className="border rounded-lg overflow-hidden">
-        <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 320px)" }}>
+      <div className="border rounded-lg overflow-hidden w-full">
+        <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
           <table className="border-collapse text-xs" style={{ minWidth: 2200, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}

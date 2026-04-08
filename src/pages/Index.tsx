@@ -108,36 +108,40 @@ const Index = () => {
       .order("planned_from", { ascending: true })
       .limit(5);
 
-    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes] = await Promise.all([
-      clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ,
-    ]);
+    try {
+      const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes] = await Promise.all([
+        clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ,
+      ]);
 
-    setStats({
-      activeClients: clientsRes.count ?? 0,
-      tdsDue: tdsRes.count ?? 0,
-      itrPending: itrRes.count ?? 0,
-      openAudits: auditsRes.count ?? 0,
-    });
+      setStats({
+        activeClients: clientsRes.count ?? 0,
+        tdsDue: tdsRes.count ?? 0,
+        itrPending: itrRes.count ?? 0,
+        openAudits: auditsRes.count ?? 0,
+      });
 
-    setDueItems(
-      (dueRes.data || []).map((d: any) => ({
-        client: d.party_name || "Unknown",
-        due: new Date(d.due_date),
-        type: "TDS",
-      }))
-    );
+      setDueItems(
+        (dueRes.data || []).map((d: any) => ({
+          client: d.party_name || "Unknown",
+          due: new Date(d.due_date),
+          type: "TDS",
+        }))
+      );
 
-    setAuditReminders(
-      (auditReminderRes.data || []).map((r: any) => ({
-        id:             r.id,
-        client_name:    r.client_name    || "Unknown Client",
-        planned_from:   r.planned_from,
-        planned_to:     r.planned_to,
-        employee_names: r.employee_names || null,
-      }))
-    );
-
-    setLoading(false);
+      setAuditReminders(
+        (auditReminderRes.data || []).map((r: any) => ({
+          id:             r.id,
+          client_name:    r.client_name    || "Unknown Client",
+          planned_from:   r.planned_from,
+          planned_to:     r.planned_to,
+          employee_names: r.employee_names || null,
+        }))
+      );
+    } catch (err) {
+      console.error("Dashboard fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [user?.firm_id, user?.role]);
 
   useEffect(() => {
