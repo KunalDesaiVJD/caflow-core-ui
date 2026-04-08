@@ -29,6 +29,7 @@ const topNavItems = [
 
 const auditStages = [
   { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
+  { title: "Audit Tracker",             path: "/audit/tracker",  icon: ClipboardCheck  },
   { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
   { title: "Trial Balance Import",      path: "/audit/pipeline", icon: Upload,       stage: 2  },
   { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
@@ -190,15 +191,15 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
               <CollapsibleContent>
                 <div className="ml-3 pl-3 border-l border-sidebar-border/50 space-y-0.5 mt-1">
                   {auditStages.map((item) => {
-                    const isDashboard = item.path === "/audit" && !('stage' in item && item.stage);
-                    if (isDashboard) {
+                    const isDirectLink = !('stage' in item && item.stage);
+                    if (isDirectLink) {
                       return (
                         <Link
                           key={item.title}
-                          to="/audit"
+                          to={item.path}
                           className={cn(
                             "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
-                            isActive("/audit") && !location.pathname.startsWith("/audit/pipeline")
+                            isActive(item.path) && !location.pathname.startsWith("/audit/pipeline")
                               ? "bg-sidebar-gold/10 text-sidebar-gold"
                               : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
                           )}

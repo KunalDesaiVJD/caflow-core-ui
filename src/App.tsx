@@ -66,6 +66,7 @@ import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
 import AuditMasterConfig from "./pages/AuditMasterConfig";
 import AuditWorksheetPageWrapper from "./pages/AuditWorksheetPageWrapper";
+import AuditTracker from "./pages/AuditTracker";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -168,6 +169,7 @@ const App = () => (
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
               <Route path="/audit/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/master-config" element={<AuditMasterConfig />} />
+              <Route path="/audit/tracker" element={<AuditTracker />} />
               <Route path="/audit/:clientId/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />

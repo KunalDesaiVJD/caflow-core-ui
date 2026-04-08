@@ -11,6 +11,7 @@ const routeLabels: Record<string, string> = {
   "/billing": "Billing",
   "/erp-ledger": "ERP Ledger",
   "/audit-intelligence": "Audit Intelligence",
+  "/audit/tracker": "Audit Tracker",
   "/documents": "Documents",
   "/settings": "Settings",
 };
