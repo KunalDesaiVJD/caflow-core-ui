@@ -1394,30 +1394,72 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                         {Math.round(d.total_tax_deducted || d.tds_amount || 0).toLocaleString("en-IN")}
                                       </TableCell>
                                       <TableCell className="text-right text-xs">
-                                        {/* #5: Tooltip showing full Sec 201(1A) formula — read-only, auto-calculated */}
+                                        {/* Interest u/s 201(1A) — read-only, auto-calculated. Tooltip always shown. */}
                                         {(() => {
                                           const tdsAmt = d.tds_amount || d.total_tax_deducted || 0;
-                                          const { interest, lateMonths } = calcAutoInterest(tdsAmt, d.date_of_payment, selectedChallan?.deposit_date || null);
-                                          if (interest === 0) {
-                                            return <span className="tabular-nums text-muted-foreground">—</span>;
-                                          }
-                                          const dep = d.date_of_payment ? parseLocalDate(d.date_of_payment) : null;
-                                          const chDep = selectedChallan?.deposit_date ? parseLocalDate(selectedChallan.deposit_date) : null;
-                                          const dueDate = dep ? new Date(dep.getFullYear(), dep.getMonth() + 1, 7) : null;
-                                          const fmtD = (dt: Date | null) => dt ? `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}` : "—";
+                                          const payDate = d.date_of_payment ?? null;
+                                          const depDate = selectedChallan?.deposit_date ?? null;
+                                          const hasDates = !!payDate && !!depDate;
+
+                                          // Compute once — stored in IIFE locals, never re-computed on hover
+                                          const { interest, lateMonths } = calcAutoInterest(tdsAmt, payDate, depDate);
+
+                                          // Date context for tooltip display
+                                          const entryDt  = payDate ? parseLocalDate(payDate) : null;
+                                          const chalDt   = depDate ? parseLocalDate(depDate) : null;
+                                          const dueDt    = entryDt ? new Date(entryDt.getFullYear(), entryDt.getMonth() + 1, 7) : null;
+                                          const fmtD = (dt: Date | null) =>
+                                            dt ? `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}` : "—";
+
+                                          // Determine tooltip content variant
+                                          const tooltipBody = !hasDates ? (
+                                            <p className="text-muted-foreground italic">Insufficient data — dates not available</p>
+                                          ) : interest > 0 ? (
+                                            <div className="space-y-1">
+                                              <p className="font-bold text-sm">Interest Calculation</p>
+                                              <p>TDS Amount: <span className="font-medium">₹{tdsAmt.toLocaleString("en-IN")}</span></p>
+                                              <p>Late Months: <span className="font-medium">{lateMonths}</span></p>
+                                              <p>Interest Rate: <span className="font-medium">1.5% per month</span></p>
+                                              <p className="text-muted-foreground text-[10px]">
+                                                Deduction: {fmtD(entryDt)} · Due: {fmtD(dueDt)} · Deposit: {fmtD(chalDt)}
+                                              </p>
+                                              <hr className="border-border" />
+                                              <p className="font-mono text-[11px]">
+                                                {tdsAmt.toLocaleString("en-IN")} × 1.5% × {lateMonths} = ₹{interest.toLocaleString("en-IN")}
+                                              </p>
+                                              <p className="font-bold">Interest = ₹{interest.toLocaleString("en-IN")}</p>
+                                            </div>
+                                          ) : (
+                                            <div className="space-y-1">
+                                              <p className="font-bold text-sm">Interest Calculation</p>
+                                              <p className="text-green-700 font-medium">✓ Paid within due date — Interest = ₹0</p>
+                                              <p className="text-muted-foreground text-[10px]">
+                                                Deduction: {fmtD(entryDt)} · Due: {fmtD(dueDt)} · Deposit: {fmtD(chalDt)}
+                                              </p>
+                                              <p className="text-[10px] text-muted-foreground">
+                                                No penalty u/s 201(1A) as challan was deposited on or before the due date.
+                                              </p>
+                                            </div>
+                                          );
+
                                           return (
                                             <TooltipProvider>
                                               <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                  <span className="font-medium tabular-nums text-amber-600 cursor-help underline decoration-dotted decoration-amber-400">
-                                                    {interest.toLocaleString("en-IN")}
-                                                  </span>
+                                                  {interest > 0 ? (
+                                                    <span className="font-medium tabular-nums text-amber-600 cursor-help underline decoration-dotted decoration-amber-400">
+                                                      ₹{interest.toLocaleString("en-IN")}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="tabular-nums text-muted-foreground cursor-help">—</span>
+                                                  )}
                                                 </TooltipTrigger>
-                                                <TooltipContent className="text-xs space-y-1 max-w-[260px]">
-                                                  <p className="font-semibold">Interest u/s 201(1A)</p>
-                                                  <p>Deduction: {fmtD(dep)} · Due: {fmtD(dueDate)}</p>
-                                                  <p>Deposit: {fmtD(chDep)} · Months: {lateMonths}</p>
-                                                  <p className="font-mono">₹{tdsAmt.toLocaleString("en-IN")} × 1.5% × {lateMonths} = ₹{interest.toLocaleString("en-IN")}</p>
+                                                <TooltipContent
+                                                  className="bg-white text-foreground shadow-lg border border-border p-3 max-w-[280px] z-50 text-xs"
+                                                  side="left"
+                                                  sideOffset={6}
+                                                >
+                                                  {tooltipBody}
                                                 </TooltipContent>
                                               </Tooltip>
                                             </TooltipProvider>
