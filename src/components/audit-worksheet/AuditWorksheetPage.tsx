@@ -43,10 +43,13 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   const showStatutoryMaster  = auditType === "statutory" || auditType === "both";
   const showIntMaster        = auditType === "internal";
 
-  // Issue #10: Special Attention tab — show for Private/Public Ltd OR for tax_audit.
-  // For tax_audit without corporate entity, pass taxAuditMode so component filters to 9 points.
-  const showSpecial    = data.isPrivateOrPublicLtd || auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
-  const taxAuditMode   = (auditType === "tax_audit" || auditType === "both") && !data.isPrivateOrPublicLtd;
+  // Special Attention tab visibility + filter rules:
+  //   statutory              → show, all 10 points  (taxAuditMode=false)
+  //   tax_audit  + corporate → show, all 10 points  (taxAuditMode=false)
+  //   tax_audit  + non-corp  → show, 9 points only  (taxAuditMode=true  → section 10 hidden)
+  //   internal / stock       → hidden
+  const showSpecial  = data.isPrivateOrPublicLtd || auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
+  const taxAuditMode = (auditType === "tax_audit" || auditType === "both") && !data.isPrivateOrPublicLtd;
 
   // Default first tab
   const defaultTab = showTaxMaster       ? "tax_master"
