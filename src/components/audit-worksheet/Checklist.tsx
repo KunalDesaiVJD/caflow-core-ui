@@ -14,7 +14,6 @@
 import { cn } from "@/lib/utils";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
-import { Badge }   from "@/components/ui/badge";
 import { Save, Loader2, ClipboardCheck, Plus } from "lucide-react";
 
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
@@ -155,28 +154,10 @@ export default function Checklist({ data, engagementId }: Props) {
         </p>
       </div>
 
-      {/* ══════════ PROGRESS BAR + SUB-HEADER ══════════ */}
-      <div className="border-b bg-muted/30 px-4 py-2.5 space-y-2">
-        {/* Progress row */}
+      {/* ══════════ TOOLBAR ══════════ */}
+      <div className="border-b bg-muted/30 px-4 py-2.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <Badge
-              className={cn(
-                "text-xs",
-                pct === 100
-                  ? "bg-green-100 text-green-700"
-                  : pct >= 50
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-slate-100 text-slate-600"
-              )}
-            >
-              {filledCount} / {allDefs.length} documented ({pct}%)
-            </Badge>
-            {pct === 100 && (
-              <span className="text-xs text-green-700 font-medium">
-                ✓ All documents page-numbered
-              </span>
-            )}
             <Button
               size="sm"
               variant="outline"
