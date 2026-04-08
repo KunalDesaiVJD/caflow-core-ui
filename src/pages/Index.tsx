@@ -13,6 +13,7 @@ import {
   Search,
   Plus,
   Clock,
+  CalendarDays,
 } from "lucide-react";
 import { startOfMonth, endOfMonth } from "date-fns";
 
@@ -47,6 +48,11 @@ const Index = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({ activeClients: 0, tdsDue: 0, itrPending: 0, openAudits: 0 });
   const [dueItems, setDueItems] = useState<DueItem[]>([]);
+  const [auditReminders, setAuditReminders] = useState<Array<{
+    client_name: string | null;
+    planned_from: string;
+    planned_to: string;
+  }>>([]);
 
   const fetchDashboard = useCallback(async () => {
     if (!user) {
@@ -90,8 +96,18 @@ const Index = () => {
       .limit(5);
     if (!isSuperadmin && firmId) dueQ = dueQ.eq("firm_id", firmId);
 
-    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes] = await Promise.all([
-      clientsQ, tdsQ, itrQ, auditsQ, dueQ,
+    // Audit planning reminders — entries where this user is an employee and audit hasn't ended yet
+    const today = now.toISOString().split("T")[0];
+    let auditReminderQ = supabase
+      .from("audit_planning")
+      .select("client_name, planned_from, planned_to")
+      .contains("employee_ids", [user.id])
+      .gte("planned_to", today)
+      .order("planned_from", { ascending: true })
+      .limit(5);
+
+    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes] = await Promise.all([
+      clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ,
     ]);
 
     setStats({
@@ -106,6 +122,14 @@ const Index = () => {
         client: d.party_name || "Unknown",
         due: new Date(d.due_date),
         type: "TDS",
+      }))
+    );
+
+    setAuditReminders(
+      (auditReminderRes.data || []).map((r: any) => ({
+        client_name:  r.client_name  || "Unknown Client",
+        planned_from: r.planned_from,
+        planned_to:   r.planned_to,
       }))
     );
 
@@ -208,6 +232,48 @@ const Index = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Audit Planning Reminders */}
+      {(loading || auditReminders.length > 0) && (
+        <div className="grid grid-cols-1 gap-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-display flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-indigo-500" />
+                Upcoming Audit Assignments
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              {loading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 py-3">
+                    <Skeleton className="h-4 w-56" />
+                  </div>
+                ))
+              ) : (
+                auditReminders.map((r, i) => (
+                  <div key={i}
+                    className="flex items-center justify-between py-2.5 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
+                    onClick={() => navigate("/audit/tracker")}
+                  >
+                    <p className="text-sm text-foreground">
+                      You need to go for audit to{" "}
+                      <span className="font-semibold text-indigo-700">{r.client_name}</span>
+                      {" "}from{" "}
+                      <span className="font-medium">{r.planned_from}</span>
+                      {" "}to{" "}
+                      <span className="font-medium">{r.planned_to}</span>
+                    </p>
+                    <Badge className="text-[10px] px-1.5 bg-indigo-100 text-indigo-700 shrink-0 ml-3">
+                      Audit
+                    </Badge>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <Card>

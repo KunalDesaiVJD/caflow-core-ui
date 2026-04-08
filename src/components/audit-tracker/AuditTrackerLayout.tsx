@@ -1,8 +1,8 @@
 /**
  * AuditTrackerLayout
- * Main layout with two tabs:
- *  - Planning & Communication  (Gantt calendar + comm table)
- *  - Audit Status              (full status grid)
+ * Two-tab layout:
+ *  Tab 1 "Planning & Communication" — Google Calendar grid + comm table
+ *  Tab 2 "Audit Status"             — Full status grid
  */
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -14,18 +14,16 @@ import { useClients }       from "./hooks/useClients";
 import { useUsers }         from "./hooks/useUsers";
 import { useFirms }         from "./hooks/useFirms";
 
-import PlanningCalendar  from "./planning/PlanningCalendar";
+import PlanningCalendar   from "./planning/PlanningCalendar";
 import CommunicationTable from "./planning/CommunicationTable";
-import AuditStatusGrid   from "./audit-status/AuditStatusGrid";
-
-// ─── Props ────────────────────────────────────────────────────────────────────
+import AuditStatusGrid    from "./audit-status/AuditStatusGrid";
+import type { PlanEntry } from "./hooks/useAuditPlanning";
+import type { PlanSaveData } from "./planning/PlanningEntryDialog";
 
 interface Props {
   firmId: string;
   userId: string;
 }
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AuditTrackerLayout({ firmId, userId }: Props) {
   const { clients }    = useClients(firmId);
@@ -34,17 +32,32 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
 
   const {
     entries, comms, loading, useLs,
-    addEntry, removeEntry,
+    addEntry, updateEntry, removeEntry,
     addComm, removeComm,
   } = useAuditPlanning(firmId, userId);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedEntry = entries.find(e => e.id === selectedId) || null;
 
+  // ── Handlers wired to the calendar ────────────────────────────────────────
+
+  async function handleAdd(data: PlanSaveData) {
+    await addEntry(data);
+  }
+
+  async function handleUpdate(id: string, patch: Partial<PlanEntry>) {
+    await updateEntry(id, patch as any);
+  }
+
+  async function handleDelete(id: string) {
+    await removeEntry(id);
+    if (selectedId === id) setSelectedId(null);
+  }
+
   return (
     <div className="space-y-4">
       {useLs && (
-        <Badge className="bg-amber-100 text-amber-700 text-xs gap-1">
+        <Badge className="bg-amber-100 text-amber-700 text-xs">
           Offline mode — data stored locally. Apply Supabase migration to sync to cloud.
         </Badge>
       )}
@@ -64,12 +77,11 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
           <PlanningCalendar
             entries={entries}
             loading={loading}
-            selectedId={selectedId}
-            onSelectEntry={setSelectedId}
             clients={clients}
             users={users}
-            onAddEntry={async data => { await addEntry(data); }}
-            onDeleteEntry={async id => { await removeEntry(id); if (selectedId === id) setSelectedId(null); }}
+            onAddEntry={handleAdd}
+            onUpdateEntry={handleUpdate}
+            onDeleteEntry={handleDelete}
           />
           <CommunicationTable
             comms={comms}

@@ -1,255 +1,377 @@
 /**
- * PlanningCalendar
- * Gantt-style monthly timeline.
- * Rows = planning entries (left: client + dates + employees)
- * Right: scrollable day grid with colored bars spanning planned dates.
- * Click a row to select it (highlights it and filters the communication table).
+ * PlanningCalendar — Google Calendar-style planning board
+ *
+ * Layout:
+ *   Rows    = dates (1–31 for month view, 7 days for week view)
+ *   Columns = employees (one column per user in the firm)
+ *
+ * Each cell shows the client name assigned to that employee on that date.
+ * 'Leave' renders in a grey block. Empty cells are clickable to create.
+ * Clicking a filled block opens the edit/delete dialog.
+ *
+ * Views: Month | Week
+ * Navigation: < prev | Month Year | next >
  */
-import { useState } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge }  from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  ChevronLeft, ChevronRight, Plus, Trash2, Users,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
 import type { UserOption }   from "../hooks/useUsers";
-import PlanningEntryDialog   from "./PlanningEntryDialog";
+import PlanningEntryDialog, { type PlanSaveData } from "./PlanningEntryDialog";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const MONTHS  = ["January","February","March","April","May","June",
+                 "July","August","September","October","November","December"];
+const DAY_ABR = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// Tailwind colour pairs: bg / text — for client assignment blocks
+const CLIENT_COLORS = [
+  "bg-blue-100 text-blue-800 border-blue-200",
+  "bg-emerald-100 text-emerald-800 border-emerald-200",
+  "bg-amber-100 text-amber-800 border-amber-200",
+  "bg-violet-100 text-violet-800 border-violet-200",
+  "bg-rose-100 text-rose-800 border-rose-200",
+  "bg-cyan-100 text-cyan-800 border-cyan-200",
+  "bg-orange-100 text-orange-800 border-orange-200",
+  "bg-teal-100 text-teal-800 border-teal-200",
+  "bg-pink-100 text-pink-800 border-pink-200",
+  "bg-lime-100 text-lime-800 border-lime-200",
+];
+const LEAVE_COLOR = "bg-gray-100 text-gray-500 border-gray-200";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const MONTHS = ["January","February","March","April","May","June",
-                "July","August","September","October","November","December"];
-
-const BAR_COLORS = [
-  "bg-indigo-400","bg-emerald-400","bg-amber-400","bg-rose-400",
-  "bg-cyan-400","bg-violet-400","bg-orange-400","bg-teal-400",
-];
-
-function colorForIndex(i: number) { return BAR_COLORS[i % BAR_COLORS.length]; }
-
-function daysInMonth(year: number, month: number) {
-  return new Date(year, month + 1, 0).getDate();
+/** Convert JS Date → "YYYY-MM-DD" */
+function toISO(d: Date) {
+  return d.toISOString().slice(0, 10);
 }
 
-function clampBarToMonth(
-  from: string, to: string, year: number, month: number
-): { left: number; width: number } | null {
-  const start      = new Date(from);
-  const end        = new Date(to);
-  const monthStart = new Date(year, month, 1);
-  const monthEnd   = new Date(year, month + 1, 0);
-
-  if (start > monthEnd || end < monthStart) return null;
-
-  const clampedStart = start < monthStart ? monthStart : start;
-  const clampedEnd   = end   > monthEnd   ? monthEnd   : end;
-
-  const total  = daysInMonth(year, month);
-  const left   = ((clampedStart.getDate() - 1) / total) * 100;
-  const width  = ((clampedEnd.getDate() - clampedStart.getDate() + 1) / total) * 100;
-  return { left, width };
+/** Dates for a given month (year, month 0-indexed) */
+function monthDates(year: number, month: number): Date[] {
+  const days = new Date(year, month + 1, 0).getDate();
+  return Array.from({ length: days }, (_, i) => new Date(year, month, i + 1));
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+/** 7 dates starting from the given Monday */
+function weekDates(monday: Date): Date[] {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+}
+
+/** Get Monday of the week containing `d` */
+function mondayOf(d: Date): Date {
+  const r = new Date(d);
+  const dow = r.getDay();           // 0 = Sun
+  const diff = dow === 0 ? -6 : 1 - dow;
+  r.setDate(r.getDate() + diff);
+  r.setHours(0, 0, 0, 0);
+  return r;
+}
+
+/** Stable colour for a client name (same name → same colour) */
+function clientColor(name: string): string {
+  if (!name || name.toLowerCase() === "leave") return LEAVE_COLOR;
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) | 0;
+  }
+  return CLIENT_COLORS[Math.abs(h) % CLIENT_COLORS.length];
+}
+
+/** Find all entries that cover a specific (date ISO, employeeId) cell */
+function cellEntries(entries: PlanEntry[], dateISO: string, empId: string): PlanEntry[] {
+  return entries.filter(e =>
+    (e.employee_ids || []).includes(empId) &&
+    e.planned_from <= dateISO &&
+    e.planned_to   >= dateISO
+  );
+}
+
+// ─── Cell component ───────────────────────────────────────────────────────────
+
+interface CellProps {
+  dateISO:   string;
+  employee:  UserOption;
+  entries:   PlanEntry[];
+  onClick:   (dateISO: string, emp: UserOption, entry: PlanEntry | null) => void;
+}
+
+function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
+  const hits = cellEntries(entries, dateISO, employee.id);
+  const primary = hits[0] || null;
+  const extra   = hits.length - 1;
+
+  if (!primary) {
+    return (
+      <td
+        onClick={() => onClick(dateISO, employee, null)}
+        className="border border-border/60 w-[90px] min-w-[90px] h-8 cursor-pointer hover:bg-indigo-50/40 transition-colors"
+      />
+    );
+  }
+
+  const isLeave = primary.client_name?.toLowerCase() === "leave";
+  const color   = clientColor(primary.client_name || "");
+
+  return (
+    <td
+      onClick={() => onClick(dateISO, employee, primary)}
+      className="border border-border/60 w-[90px] min-w-[90px] h-8 p-[2px] cursor-pointer"
+    >
+      <div className={cn(
+        "h-full px-1.5 rounded border text-[10px] font-medium flex items-center gap-0.5 overflow-hidden",
+        color
+      )}>
+        <span className="truncate flex-1">{isLeave ? "Leave" : primary.client_name}</span>
+        {extra > 0 && <span className="shrink-0 text-[9px] opacity-70">+{extra}</span>}
+      </div>
+    </td>
+  );
+}
+
+// ─── Week-view cell (taller, shows date range info) ──────────────────────────
+
+function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
+  const hits = cellEntries(entries, dateISO, employee.id);
+  const primary = hits[0] || null;
+
+  if (!primary) {
+    return (
+      <td
+        onClick={() => onClick(dateISO, employee, null)}
+        className="border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer hover:bg-indigo-50/40 transition-colors align-top p-1"
+      />
+    );
+  }
+
+  const isLeave = primary.client_name?.toLowerCase() === "leave";
+  const color   = clientColor(primary.client_name || "");
+
+  return (
+    <td
+      onClick={() => onClick(dateISO, employee, primary)}
+      className="border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer p-1 align-top"
+    >
+      <div className={cn(
+        "h-full px-1.5 py-1 rounded border text-[10px] font-medium space-y-0.5",
+        color
+      )}>
+        <p className="truncate font-semibold">{isLeave ? "Leave" : primary.client_name}</p>
+        <p className="text-[9px] opacity-70">
+          {primary.planned_from === primary.planned_to
+            ? primary.planned_from
+            : `${primary.planned_from} → ${primary.planned_to}`}
+        </p>
+      </div>
+    </td>
+  );
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   entries:         PlanEntry[];
   loading:         boolean;
-  selectedId:      string | null;
-  onSelectEntry:   (id: string | null) => void;
   clients:         ClientOption[];
   users:           UserOption[];
-  onAddEntry:      (data: {
-    client_id: string | null; client_name: string | null;
-    planned_from: string; planned_to: string;
-    employee_ids: string[]; employee_names: string[];
-  }) => Promise<void>;
+  onAddEntry:      (data: PlanSaveData) => Promise<void>;
+  onUpdateEntry:   (id: string, data: Partial<PlanEntry>) => Promise<void>;
   onDeleteEntry:   (id: string) => Promise<void>;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PlanningCalendar({
-  entries, loading, selectedId, onSelectEntry,
-  clients, users, onAddEntry, onDeleteEntry,
+  entries, loading, clients, users,
+  onAddEntry, onUpdateEntry, onDeleteEntry,
 }: Props) {
-  const now  = new Date();
+  const now = new Date();
+
+  // ── View state ─────────────────────────────────────────────────────────────
+  const [view,      setView]      = useState<"month"|"week">("month");
   const [year,      setYear]      = useState(now.getFullYear());
   const [month,     setMonth]     = useState(now.getMonth());
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [weekStart, setWeekStart] = useState<Date>(mondayOf(now));
 
-  const total    = daysInMonth(year, month);
-  const dayNums  = Array.from({ length: total }, (_, i) => i + 1);
+  // ── Dialog state ───────────────────────────────────────────────────────────
+  const [dialogOpen,        setDialogOpen]        = useState(false);
+  const [dialogEntry,       setDialogEntry]       = useState<PlanEntry | null>(null);
+  const [dialogDate,        setDialogDate]        = useState<string>("");
+  const [dialogEmpId,       setDialogEmpId]       = useState<string>("");
+  const [dialogEmpName,     setDialogEmpName]     = useState<string>("");
 
-  const visible = entries.filter(e => {
-    const bar = clampBarToMonth(e.planned_from, e.planned_to, year, month);
-    return bar !== null;
-  });
+  // ── Dates to render ────────────────────────────────────────────────────────
+  const dates = useMemo<Date[]>(() => {
+    if (view === "month") return monthDates(year, month);
+    return weekDates(weekStart);
+  }, [view, year, month, weekStart]);
 
-  function prevMonth() {
-    if (month === 0) { setMonth(11); setYear(y => y - 1); }
-    else setMonth(m => m - 1);
+  const todayISO = toISO(now);
+
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  function prevPeriod() {
+    if (view === "month") {
+      if (month === 0) { setMonth(11); setYear(y => y - 1); }
+      else setMonth(m => m - 1);
+    } else {
+      setWeekStart(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; });
+    }
   }
-  function nextMonth() {
-    if (month === 11) { setMonth(0);  setYear(y => y + 1); }
-    else setMonth(m => m + 1);
+  function nextPeriod() {
+    if (view === "month") {
+      if (month === 11) { setMonth(0); setYear(y => y + 1); }
+      else setMonth(m => m + 1);
+    } else {
+      setWeekStart(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; });
+    }
   }
+
+  const periodLabel = view === "month"
+    ? `${MONTHS[month]} ${year}`
+    : (() => {
+        const wEnd = new Date(weekStart);
+        wEnd.setDate(wEnd.getDate() + 6);
+        return `${weekStart.getDate()} ${MONTHS[weekStart.getMonth()].slice(0,3)} – ${wEnd.getDate()} ${MONTHS[wEnd.getMonth()].slice(0,3)} ${wEnd.getFullYear()}`;
+      })();
+
+  // ── Cell click ─────────────────────────────────────────────────────────────
+  const handleCellClick = useCallback((dateISO: string, emp: UserOption, entry: PlanEntry | null) => {
+    setDialogEntry(entry);
+    setDialogDate(dateISO);
+    setDialogEmpId(emp.id);
+    setDialogEmpName(emp.name);
+    setDialogOpen(true);
+  }, []);
+
+  // ── Dialog save ────────────────────────────────────────────────────────────
+  async function handleSave(data: PlanSaveData, entryId?: string) {
+    if (entryId) {
+      await onUpdateEntry(entryId, data as Partial<PlanEntry>);
+    } else {
+      await onAddEntry(data);
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  const CellComponent = view === "month" ? CalCell : WeekCell;
 
   return (
     <div className="space-y-3">
-      {/* Toolbar */}
+
+      {/* ── Toolbar ── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={prevMonth}>
+        {/* Left: navigation */}
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={prevPeriod}>
             <ChevronLeft size={14} />
           </Button>
-          <span className="text-sm font-semibold min-w-[160px] text-center">
-            {MONTHS[month]} {year}
+          <span className="text-sm font-semibold min-w-[200px] text-center select-none">
+            {periodLabel}
           </span>
-          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={nextMonth}>
+          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={nextPeriod}>
             <ChevronRight size={14} />
           </Button>
+          <Button size="sm" variant="outline" className="h-8 text-xs ml-2"
+            onClick={() => { setYear(now.getFullYear()); setMonth(now.getMonth()); setWeekStart(mondayOf(now)); }}>
+            Today
+          </Button>
         </div>
-        <Button size="sm" className="gap-1.5 h-8 text-xs bg-indigo-600 hover:bg-indigo-700"
-          onClick={() => setDialogOpen(true)}>
-          <Plus size={13} /> Add Plan
-        </Button>
+
+        {/* Right: view toggle + add */}
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant={view === "month" ? "default" : "outline"}
+            className="h-8 text-xs gap-1" onClick={() => setView("month")}>
+            <AlignJustify size={12} /> Month
+          </Button>
+          <Button size="sm" variant={view === "week" ? "default" : "outline"}
+            className="h-8 text-xs gap-1" onClick={() => setView("week")}>
+            <Calendar size={12} /> Week
+          </Button>
+          <Button size="sm" className="h-8 text-xs gap-1 bg-indigo-600 hover:bg-indigo-700"
+            onClick={() => { setDialogEntry(null); setDialogDate(""); setDialogEmpId(""); setDialogEmpName(""); setDialogOpen(true); }}>
+            <Plus size={12} /> New
+          </Button>
+        </div>
       </div>
 
-      {/* Gantt table */}
+      {/* ── Calendar grid ── */}
       <div className="border rounded-lg overflow-hidden">
-        <div className="overflow-auto">
-          <table className="w-full text-xs border-collapse" style={{ minWidth: 900 }}>
-            <colgroup>
-              <col style={{ minWidth: 160 }} />
-              <col style={{ minWidth: 180 }} />
-              <col style={{ width: "100%" }} />
-              <col style={{ minWidth: 60 }} />
-            </colgroup>
-            <thead>
-              <tr className="bg-indigo-700 text-white text-[11px] uppercase tracking-wide select-none">
-                <th className="border border-indigo-600 px-3 py-2.5 text-left">Client</th>
-                <th className="border border-indigo-600 px-3 py-2.5 text-left">Employees</th>
-                <th className="border border-indigo-600 px-2 py-2.5">
-                  <div className="flex">
-                    {dayNums.map(d => (
-                      <div key={d} className={cn(
-                        "flex-1 text-center text-[9px] font-normal",
-                        d === new Date().getDate() &&
-                          month === new Date().getMonth() &&
-                          year === new Date().getFullYear() &&
-                          "text-yellow-300 font-bold"
-                      )}>
-                        {d}
-                      </div>
-                    ))}
-                  </div>
+        <div
+          className="overflow-auto"
+          style={{ maxHeight: view === "month" ? "calc(100vh - 340px)" : "auto" }}
+        >
+          <table className="border-collapse text-xs" style={{ tableLayout: "fixed" }}>
+            {/* Sticky header */}
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-indigo-700 text-white text-[11px] uppercase tracking-wide">
+                {/* Date column */}
+                <th className="sticky left-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
+                  Date
                 </th>
-                <th className="border border-indigo-600 px-2 py-2.5 text-center">Del</th>
+                {/* Employee columns */}
+                {users.map(u => (
+                  <th key={u.id}
+                    className="border border-indigo-600 px-2 py-2.5 text-center w-[90px] min-w-[90px] truncate"
+                    title={u.name}>
+                    {u.name.split(" ")[0].toUpperCase()}
+                  </th>
+                ))}
               </tr>
             </thead>
+
             <tbody>
               {loading ? (
-                Array.from({ length: 4 }).map((_, i) => (
+                Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={4} className="px-3 py-2 border border-border">
-                      <Skeleton className="h-5 w-full" />
-                    </td>
+                    <td colSpan={users.length + 1}
+                      className="border border-border/60 h-8 px-3 bg-muted/20 animate-pulse" />
                   </tr>
                 ))
-              ) : visible.length === 0 ? (
+              ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-10 text-center text-muted-foreground">
-                    No audits planned in {MONTHS[month]} {year}
+                  <td colSpan={2} className="py-12 text-center text-muted-foreground text-sm">
+                    No employees found — check user management
                   </td>
                 </tr>
               ) : (
-                visible.map((entry, idx) => {
-                  const bar      = clampBarToMonth(entry.planned_from, entry.planned_to, year, month)!;
-                  const color    = colorForIndex(idx);
-                  const isSelected = selectedId === entry.id;
+                dates.map(date => {
+                  const iso  = toISO(date);
+                  const isToday = iso === todayISO;
+                  const dayLabel = `${DAY_ABR[date.getDay()]} ${date.getDate()}`;
 
                   return (
-                    <tr
-                      key={entry.id}
-                      onClick={() => onSelectEntry(isSelected ? null : entry.id)}
-                      className={cn(
-                        "cursor-pointer transition-colors hover:bg-indigo-50/50",
-                        isSelected && "bg-indigo-50"
-                      )}
-                    >
-                      {/* Client name + dates */}
-                      <td className="border border-border px-3 py-2 align-middle">
-                        <p className="font-medium truncate max-w-[150px]">{entry.client_name || "—"}</p>
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
-                          {entry.planned_from} → {entry.planned_to}
-                        </p>
-                      </td>
-
-                      {/* Employees chips */}
-                      <td className="border border-border px-2 py-2 align-middle">
-                        {entry.employee_names?.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {entry.employee_names.slice(0, 3).map((n, i) => (
-                              <Badge key={i} variant="secondary"
-                                className="text-[10px] px-1.5 py-0">
-                                {n}
-                              </Badge>
-                            ))}
-                            {entry.employee_names.length > 3 && (
-                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-0.5">
-                                <Users size={9} />+{entry.employee_names.length - 3}
-                              </Badge>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/50">—</span>
-                        )}
-                      </td>
-
-                      {/* Gantt bar */}
-                      <td className="border border-border px-0 py-2 align-middle relative">
-                        <div className="relative h-5 mx-1">
-                          <div
-                            className={cn(
-                              "absolute top-0 h-full rounded opacity-80",
-                              color,
-                              isSelected && "opacity-100 ring-2 ring-offset-1 ring-indigo-500"
-                            )}
-                            style={{
-                              left:  `${bar.left}%`,
-                              width: `${Math.max(bar.width, 1)}%`,
-                            }}
-                          />
+                    <tr key={iso} className={cn(isToday && "bg-indigo-50/40")}>
+                      {/* Sticky date cell */}
+                      <td className={cn(
+                        "sticky left-0 z-10 border border-border/60 px-2 align-middle select-none",
+                        view === "month" ? "h-8" : "h-16",
+                        isToday ? "bg-indigo-50 font-bold text-indigo-700" : "bg-card text-muted-foreground"
+                      )}>
+                        <div className="flex items-center gap-1.5">
+                          {isToday && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 shrink-0" />
+                          )}
+                          <span className="text-[11px] whitespace-nowrap">{dayLabel}</span>
                         </div>
                       </td>
 
-                      {/* Delete */}
-                      <td className="border border-border px-2 py-2 text-center align-middle"
-                        onClick={e => e.stopPropagation()}>
-                        {confirmId === entry.id ? (
-                          <div className="flex flex-col gap-0.5">
-                            <Button size="sm" variant="destructive" className="h-5 text-[9px] px-1"
-                              onClick={() => { onDeleteEntry(entry.id); setConfirmId(null); }}>
-                              Yes
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1"
-                              onClick={() => setConfirmId(null)}>
-                              No
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button size="sm" variant="ghost"
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-                            onClick={() => setConfirmId(entry.id)}>
-                            <Trash2 size={12} />
-                          </Button>
-                        )}
-                      </td>
+                      {/* Employee cells */}
+                      {users.map(emp => (
+                        <CellComponent
+                          key={emp.id}
+                          dateISO={iso}
+                          employee={emp}
+                          entries={entries}
+                          onClick={handleCellClick}
+                        />
+                      ))}
                     </tr>
                   );
                 })
@@ -259,13 +381,24 @@ export default function PlanningCalendar({
         </div>
       </div>
 
-      {/* Add Plan dialog */}
+      {/* Entry count hint */}
+      <p className="text-[11px] text-muted-foreground">
+        {entries.length} assignment{entries.length !== 1 ? "s" : ""} total
+        {" · "}Click any cell to create or edit
+      </p>
+
+      {/* ── Dialog ── */}
       <PlanningEntryDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
+        entry={dialogEntry}
+        initialDate={dialogDate}
+        initialEmployeeId={dialogEmpId}
+        initialEmployeeName={dialogEmpName}
         clients={clients}
         users={users}
-        onSave={async data => { await onAddEntry(data); }}
+        onSave={handleSave}
+        onDelete={onDeleteEntry}
       />
     </div>
   );
