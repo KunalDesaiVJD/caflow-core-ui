@@ -19,7 +19,7 @@ import { Badge }    from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, CheckCircle2, AlertCircle,
+  Plus, Trash2,
 } from "lucide-react";
 
 import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
@@ -88,46 +88,6 @@ export default function QuerySheet({ data, engagementId }: Props) {
           Query of Client
           {data.clientName ? ` — ${data.clientName}` : ""}
         </p>
-      </div>
-
-      {/* ══════════ CORRECTION STATUS GATE BANNER ══════════ */}
-      <div
-        className={cn(
-          "px-5 py-3 flex flex-wrap items-center justify-between gap-3 border-b",
-          allCorrected
-            ? "bg-green-50 border-green-200"
-            : "bg-red-50   border-red-200"
-        )}
-      >
-        <div className="flex items-center gap-2.5">
-          {allCorrected ? (
-            <CheckCircle2 size={20} className="text-green-600 flex-shrink-0" />
-          ) : (
-            <AlertCircle  size={20} className="text-red-600   flex-shrink-0" />
-          )}
-          <div>
-            {allCorrected ? (
-              <p className="text-sm font-semibold text-green-800">
-                All queries resolved — ready to proceed
-              </p>
-            ) : (
-              <p className="text-sm font-semibold text-red-800">
-                {pendingCount} of {queries.length}{" "}
-                {queries.length === 1 ? "query" : "queries"} pending correction
-                {" "}— resolve before proceeding
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {allCorrected
-                ? queries.length === 0
-                  ? "No queries raised — pipeline is unblocked."
-                  : "Every query has Correction Status = Yes."
-                : "Set Correction Status to Yes on every row to unblock the pipeline."
-              }
-            </p>
-          </div>
-        </div>
-
       </div>
 
       {/* ══════════ SUB-HEADER (Add + counts + Save) ══════════ */}
