@@ -187,6 +187,56 @@ const calcAutoInterest = (tdsAmount: number, paymentDate: string | null, deposit
   return Math.round(tdsAmount * 0.015 * months);
 };
 
+// ─── Previous-quarter label helper ───────────────────────────────────────────
+// Returns the canonical "previous quarter" label for a given current quarter+FY.
+// Edge-case for Q1: rolls back to Q4 of the preceding financial year.
+//   currentFY format: '2025-26'  →  prevFY for Q1: '2024-25'
+const getPreviousQuarterLabel = (currentQuarter: string, currentFY: string): string => {
+  const [startStr] = currentFY.split("-");
+  const startYear = parseInt(startStr, 10);
+  let prevQuarter: string;
+  let prevFY: string;
+  switch (currentQuarter) {
+    case "Q1":
+      prevQuarter = "Q4";
+      prevFY = `${startYear - 1}-${String(startYear).slice(-2)}`;
+      break;
+    case "Q2": prevQuarter = "Q1"; prevFY = currentFY; break;
+    case "Q3": prevQuarter = "Q2"; prevFY = currentFY; break;
+    case "Q4": prevQuarter = "Q3"; prevFY = currentFY; break;
+    default:   prevQuarter = "Q?"; prevFY = currentFY; break;
+  }
+  return `🔒 ${prevQuarter} FY ${prevFY} Entries (Read-Only)`;
+};
+
+// If prevEntries span more than one unique quarter (multi-quarter carry-forward),
+// build a list label: '🔒 Previous Quarters (Q1, Q2 FY 2025-26) — Read Only'
+const buildPrevQuarterLabel = (
+  prevEntries: Array<{ quarter: string; financial_year: string }>,
+  selQuarter: string,
+  selFy: string,
+): string => {
+  if (prevEntries.length === 0) return getPreviousQuarterLabel(selQuarter, selFy);
+  // Collect unique "Q? FY ????-??" combinations
+  const seen = new Set<string>();
+  prevEntries.forEach(e => seen.add(`${e.quarter} FY ${e.financial_year}`));
+  if (seen.size === 1) {
+    // Single quarter — show exact label from data (most accurate)
+    const [first] = seen;
+    return `🔒 ${first} Entries (Read-Only)`;
+  }
+  // Multiple quarters — group by FY for compact display
+  const byFy: Record<string, string[]> = {};
+  prevEntries.forEach(e => {
+    if (!byFy[e.financial_year]) byFy[e.financial_year] = [];
+    if (!byFy[e.financial_year].includes(e.quarter)) byFy[e.financial_year].push(e.quarter);
+  });
+  const parts = Object.entries(byFy)
+    .map(([fy, qs]) => `${qs.sort().join(", ")} FY ${fy}`)
+    .join("; ");
+  return `🔒 Previous Quarters (${parts}) — Read Only`;
+};
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -1170,11 +1220,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-slate-100 border-l-4 border-l-slate-400">
                                 <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
-                                  {/* #2: Dynamic label — show exact quarter + FY of carried-forward entries */}
+                                  {/* Dynamic label: single prev-quarter uses selQuarter/selFy helper;
+                                      multi-quarter carry-forward lists all unique quarters from data */}
                                   <span className="text-[10px] font-semibold text-slate-600">
-                                    🔒 {prevEntries[0]?.quarter && prevEntries[0]?.financial_year
-                                      ? `${prevEntries[0].quarter} FY ${prevEntries[0].financial_year} Entries (Read-Only)`
-                                      : "Previous Quarter Entries (Read-Only)"}
+                                    {buildPrevQuarterLabel(prevEntries, selQuarter, selFy)}
                                   </span>
                                 </TableCell>
                               </TableRow>
