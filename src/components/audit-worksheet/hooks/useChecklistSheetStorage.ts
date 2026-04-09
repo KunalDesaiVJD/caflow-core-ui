@@ -19,12 +19,18 @@ export interface ChecklistRowState {
   /** Page number string; empty = blank / document not present */
   page_from:   string;
   page_to:     string;
+  /** Supabase Storage path — e.g. checklist/{engId}/{sr}_{filename} */
+  file_path:   string;
+  /** Original filename for display */
+  file_name:   string;
 }
 
 export const BLANK_CHECKLIST_ROW: ChecklistRowState = {
   particulars: "",
   page_from:   "",
   page_to:     "",
+  file_path:   "",
+  file_name:   "",
 };
 
 // ─── Full checklist data ──────────────────────────────────────────────────────
@@ -88,7 +94,24 @@ export function useChecklistSheetStorage(
       setData(prev => {
         const prevRow = prev.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW };
         const next: ChecklistSheetData = {
-          rows: { ...prev.rows, [rowId]: { ...prevRow, [field]: value } },
+          rows:          { ...prev.rows, [rowId]: { ...prevRow, [field]: value } },
+          dynamicRowIds: prev.dynamicRowIds,
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
+  // ── patchRowFields — update multiple row fields atomically ─────────────────
+  const patchRowFields = useCallback(
+    (rowId: string, patch: Partial<ChecklistRowState>) => {
+      setData(prev => {
+        const prevRow = prev.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW };
+        const next: ChecklistSheetData = {
+          rows:          { ...prev.rows, [rowId]: { ...prevRow, ...patch } },
+          dynamicRowIds: prev.dynamicRowIds,
         };
         debounce(next);
         return next;
@@ -122,5 +145,5 @@ export function useChecklistSheetStorage(
     return persist(data, false);
   }, [data, persist]);
 
-  return { data, setRowField, getRow, addRow, manualSave, saving, loaded };
+  return { data, setRowField, patchRowFields, getRow, addRow, manualSave, saving, loaded };
 }

@@ -10,13 +10,16 @@
  * Items 8, 10, 12 contain "{fyEndYear}" which is replaced at render
  * with the actual year derived from data.fyEndDate (Req #4).
  *
- * Header: 'Audit Documentation' + firm name + client name
+ * Each row has a Document upload column (PDF / image, 5 MB max).
  */
+import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
-import { Save, Loader2, ClipboardCheck, Plus } from "lucide-react";
+import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
+import { supabase } from "@/integrations/supabase/client";
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
 import type { AuditWorksheetData }  from "./hooks/useAuditWorksheetData";
 
@@ -93,14 +96,12 @@ const CHECKLIST_DEFS: ChecklistDef[] = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Extract the 4-digit year from an ISO date string like "2026-03-31" → "2026" */
 function fyEndYearFromDate(fyEndDate: string): string {
   if (!fyEndDate) return "____";
   const m = fyEndDate.match(/^(\d{4})/);
   return m ? m[1] : "____";
 }
 
-/** Replace all {fyEndYear} tokens in a particulars string with the real year */
 function injectYear(text: string, year: string): string {
   return text.replace(/\{fyEndYear\}/g, year);
 }
@@ -115,7 +116,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Checklist({ data, engagementId }: Props) {
-  const { data: checklistData, getRow, setRowField, addRow, manualSave, saving } =
+  const { data: checklistData, getRow, setRowField, patchRowFields, addRow, manualSave, saving } =
     useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
   const fyEndYear = fyEndYearFromDate(data.fyEndDate);
@@ -136,8 +137,95 @@ export default function Checklist({ data, engagementId }: Props) {
   }).length;
   const pct = Math.round((filledCount / allDefs.length) * 100);
 
+  // ── Document upload state ──────────────────────────────────────────────────
+  const fileInputRef  = useRef<HTMLInputElement>(null);
+  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
+  const [uploadingRows, setUploadingRows] = useState<Record<string, boolean>>({});
+  const [deletingRows,  setDeletingRows]  = useState<Record<string, boolean>>({});
+
+  const openFilePicker = (rowId: string) => {
+    setPendingRowId(rowId);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !pendingRowId) return;
+
+    // 5 MB guard
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File exceeds 5MB limit");
+      setPendingRowId(null);
+      return;
+    }
+
+    const def    = allDefs.find(d => d.id === pendingRowId);
+    const srNo   = def?.sr ?? 0;
+    // Sanitise filename: replace spaces with underscores
+    const safeName = file.name.replace(/\s+/g, "_");
+    const filePath = `checklist/${engagementId}/${srNo}_${safeName}`;
+
+    setUploadingRows(prev => ({ ...prev, [pendingRowId]: true }));
+
+    const { error } = await supabase.storage
+      .from("documents")
+      .upload(filePath, file, { upsert: true });
+
+    setUploadingRows(prev => ({ ...prev, [pendingRowId]: false }));
+
+    if (error) {
+      toast.error(`Upload failed: ${error.message}`);
+      setPendingRowId(null);
+      return;
+    }
+
+    patchRowFields(pendingRowId, { file_path: filePath, file_name: file.name });
+    toast.success(`"${file.name}" uploaded`);
+    setPendingRowId(null);
+  };
+
+  const handlePreview = (rowId: string) => {
+    const row = getRow(rowId);
+    if (!row.file_path) return;
+    const { data: urlData } = supabase.storage
+      .from("documents")
+      .getPublicUrl(row.file_path);
+    window.open(urlData.publicUrl, "_blank", "noreferrer");
+  };
+
+  const handleDelete = async (rowId: string) => {
+    const row = getRow(rowId);
+    if (!row.file_path) return;
+
+    setDeletingRows(prev => ({ ...prev, [rowId]: true }));
+
+    const { error } = await supabase.storage
+      .from("documents")
+      .remove([row.file_path]);
+
+    setDeletingRows(prev => ({ ...prev, [rowId]: false }));
+
+    if (error) {
+      toast.error(`Delete failed: ${error.message}`);
+      return;
+    }
+
+    patchRowFields(rowId, { file_path: "", file_name: "" });
+    toast.success("Document removed");
+  };
+
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
+
+      {/* Hidden file input — shared by all rows */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.xlsx,.xls,.doc,.docx,.csv"
+        className="hidden"
+        onChange={handleFileChange}
+      />
 
       {/* ══════════ PAGE HEADER ══════════ */}
       <div className="bg-violet-700 text-white px-6 py-4 space-y-0.5">
@@ -179,16 +267,16 @@ export default function Checklist({ data, engagementId }: Props) {
             Save
           </Button>
         </div>
-
       </div>
 
       {/* ══════════ TABLE ══════════ */}
       <div className="overflow-auto">
-        <table className="w-full text-sm border-collapse min-w-[620px]">
+        <table className="w-full text-sm border-collapse min-w-[820px]">
           <thead>
             <tr className="bg-violet-700 text-white text-[11px] uppercase tracking-wide">
               <th className="border border-violet-600 px-2 py-2.5 text-center w-12">Sr.</th>
               <th className="border border-violet-600 px-3 py-2.5 text-left">Particulars</th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center min-w-[180px]">Document</th>
               <th className="border border-violet-600 px-2 py-2.5 text-center w-36">
                 Page Number From
               </th>
@@ -201,7 +289,6 @@ export default function Checklist({ data, engagementId }: Props) {
             {allDefs.map(def => {
               const row = getRow(def.id);
               const hasBoth   = row.page_from.trim() !== "" && row.page_to.trim() !== "";
-              // For static rows: use saved override if present, else fall back to static text
               const defaultText = def.isCustom
                 ? ""
                 : injectYear(def.particulars, fyEndYear);
@@ -222,7 +309,7 @@ export default function Checklist({ data, engagementId }: Props) {
                     </span>
                   </td>
 
-                  {/* Particulars — Issue #11: editable for ALL rows */}
+                  {/* Particulars */}
                   <td className="border border-border px-3 py-2">
                     <Input
                       className="h-7 text-xs w-full border-dashed"
@@ -232,6 +319,54 @@ export default function Checklist({ data, engagementId }: Props) {
                         setRowField(def.id, "particulars", e.target.value)
                       }
                     />
+                  </td>
+
+                  {/* Document */}
+                  <td className="border border-border px-2 py-2 text-center">
+                    {row.file_name ? (
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={row.file_name}>
+                          {row.file_name}
+                        </span>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                            onClick={() => handlePreview(def.id)}
+                          >
+                            <Eye size={10} /> Preview
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-[10px] gap-0.5 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDelete(def.id)}
+                            disabled={deletingRows[def.id]}
+                          >
+                            {deletingRows[def.id]
+                              ? <Loader2 size={10} className="animate-spin" />
+                              : <Trash2 size={10} />
+                            }
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                        onClick={() => openFilePicker(def.id)}
+                        disabled={uploadingRows[def.id]}
+                      >
+                        {uploadingRows[def.id]
+                          ? <Loader2 size={10} className="animate-spin" />
+                          : <Paperclip size={10} />
+                        }
+                        {uploadingRows[def.id] ? "Uploading…" : "Upload"}
+                      </Button>
+                    )}
                   </td>
 
                   {/* Page From */}
