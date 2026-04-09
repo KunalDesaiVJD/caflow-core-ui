@@ -7,6 +7,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
+import { logChanges } from "./useAuditChangeLog";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +55,7 @@ function lsSave(firmId: string, data: StatusEntry[]) {
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
+  const { user } = useAuth();
   const [rows,    setRows]    = useState<StatusEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [useLs,   setUseLs]   = useState(false);
@@ -113,8 +116,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
       toast.success("Saved (offline)");
       return;
     }
+    // Capture old row before updating, for change-log comparison
+    const oldRow = rows.find(r => r.id === id);
     const { error } = await supabase.from("audit_status").update(patch as any).eq("id", id);
     if (error) { toast.error(error.message); return; }
+    // Log field-level changes (best-effort; silent failure if table absent)
+    if (oldRow) {
+      logChanges("audit_status", id, oldRow as any, patch as any, user?.id, user?.name ?? user?.email ?? null);
+    }
     toast.success("Saved");
     await load();
   }

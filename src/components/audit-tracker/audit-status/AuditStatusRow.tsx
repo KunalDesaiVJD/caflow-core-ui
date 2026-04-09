@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2 } from "lucide-react";
+import { Check, X, Trash2, Loader2, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
@@ -250,6 +250,7 @@ interface Props {
   planEntries:  PlanEntry[];
   onSave:       (id: string, patch: StatusPatch) => Promise<void>;
   onDelete:     (id: string) => Promise<void>;
+  onHistory?:   (id: string) => void;
   /** isNew: row was just created in the grid and starts in edit mode */
   isNew?:       boolean;
   onAdd?:       (patch: StatusPatch) => Promise<void>;
@@ -260,7 +261,7 @@ interface Props {
 
 export default function AuditStatusRow({
   row, srNo, clients, users, auditFirms, planEntries,
-  onSave, onDelete,
+  onSave, onDelete, onHistory,
   isNew, onAdd, onCancelNew,
 }: Props) {
 
@@ -581,6 +582,13 @@ export default function AuditStatusRow({
               onClick={startEdit} title="Edit">
               ✎
             </Button>
+            {onHistory && (
+              <Button size="sm" variant="ghost"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-violet-600 hover:bg-violet-50"
+                onClick={() => onHistory(row.id)} title="View History">
+                <History size={11} />
+              </Button>
+            )}
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
               onClick={() => setConfirmDel(true)} title="Delete">

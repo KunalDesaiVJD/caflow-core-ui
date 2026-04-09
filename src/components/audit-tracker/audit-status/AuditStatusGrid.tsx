@@ -16,6 +16,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from "lucide-react";
+import AuditChangeLogModal from "./AuditChangeLogModal";
 import { cn } from "@/lib/utils";
 
 import AuditStatusFilters from "./AuditStatusFilters";
@@ -123,6 +124,10 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 
   // ── New row ───────────────────────────────────────────────────────────────
   const [addingNew, setAddingNew] = useState(false);
+
+  // ── History modal ─────────────────────────────────────────────────────────
+  const [historyRowId, setHistoryRowId] = useState<string | null>(null);
+  const historyRow = historyRowId ? rows.find(r => r.id === historyRowId) : null;
 
   // Reset page when filters change
   useEffect(() => setPage(1), [search, statusFilter, physFilter, scannedFilter, colFilters]);
@@ -360,6 +365,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                     planEntries={planEntries}
                     onSave={updateRow}
                     onDelete={removeRow}
+                    onHistory={id => setHistoryRowId(id)}
                   />
                 ))
               )}
@@ -422,6 +428,14 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
           </div>
         )}
       </div>
+
+      {/* Change history modal */}
+      <AuditChangeLogModal
+        recordId={historyRowId}
+        partyName={historyRow?.party_name ?? null}
+        open={!!historyRowId}
+        onClose={() => setHistoryRowId(null)}
+      />
     </div>
   );
 }
