@@ -19,6 +19,7 @@ export function useClients(firmId: string) {
       .select("id, name, entity_type")
       .eq("firm_id", firmId)
       .is("deleted_at", null)
+      .eq("is_draft", false)
       .order("name")
       .then(({ data, error }) => {
         if (error) console.error("[useClients] query error:", error);

@@ -294,7 +294,7 @@ const NewClientWizard = () => {
   useEffect(() => {
     if (!isEditMode || !clientId) return;
     supabase.from("clients").select("source, is_draft").eq("id", clientId).maybeSingle().then(({ data }) => {
-      if (data?.source === "api" && data?.is_draft === true) setIsApiDraft(true);
+      if (data?.source === "api_import" && data?.is_draft === true) setIsApiDraft(true);
     });
   }, [clientId, isEditMode]);
 
@@ -676,12 +676,22 @@ const NewClientWizard = () => {
       {isApiDraft && (
         <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 p-4">
           <div className="text-blue-600 dark:text-blue-400 mt-0.5">ℹ</div>
-          <div>
+          <div className="flex-1">
             <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">API Import — Review Required</p>
             <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">
-              This client was imported via API. Fields have been auto-filled from the import data.
+              This client was imported via API. Step 1 is auto-filled from the import data.
               Review each step and save to activate the client.
             </p>
+            {step === 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 text-xs border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
+                onClick={() => setStep(1)}
+              >
+                Skip to Step 2 — Advanced Info →
+              </Button>
+            )}
           </div>
         </div>
       )}
