@@ -12,6 +12,7 @@
  * 10 main checklist items with sub-points, exactly from Excel.
  * All hardcoded years are derived dynamically from engagement.financial_year (Req #4).
  */
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -23,6 +24,7 @@ import { Save, Loader2, Building2, Plus, Trash2 } from "lucide-react";
 import { useSpecialAttentionStorage, type AuditorEntry } from "./hooks/useSpecialAttentionStorage";
 import { useEmployeeDropdown }         from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
+import { awLoad }                      from "@/lib/awStorage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -277,10 +279,29 @@ interface Props {
 export default function SpecialAttention({ data, engagementId, taxAuditMode = false }: Props) {
   const {
     data: m, setHeader, setRowField, patchRow, getRow,
-    manualSave, saving,
+    manualSave, saving, loaded,
   } = useSpecialAttentionStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
+
+  // #3 — Auto-fetch Audit Carried Out By from master (statutory → tax fallback)
+  // One-way: only fills when the Special Attention list is empty (user override preserved)
+  useEffect(() => {
+    if (!loaded) return;
+    if (m.audit_carried_by.length > 0) return; // user has data — don't overwrite
+
+    const statutory = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "statutory_master_json");
+    const tax       = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "tax_master_json");
+
+    const source =
+      (statutory?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+        ? statutory!.audit_carried_by!
+        : (tax?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+          ? tax!.audit_carried_by!
+          : null;
+
+    if (source) setHeader({ audit_carried_by: source });
+  }, [loaded, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { end: fyEnd } = fyYears(data.financialYear);
   const fyExpanded     = expandFY(data.financialYear);
