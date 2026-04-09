@@ -26,7 +26,6 @@ import QuerySheet            from "./QuerySheet";
 import Checklist             from "./Checklist";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
-import { BLANK_MASTER }          from "./hooks/useWorksheetStorage";
 
 interface Props {
   engagementId: string;
@@ -103,10 +102,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
       <div className="flex justify-end">
         <ExportButtons
           data={data}
-          master={BLANK_MASTER}
-          worksheetItems={[]}
-          specialAttentionItems={[]}
-          checklistItems={[]}
+          engagementId={engagementId}
         />
       </div>
 
