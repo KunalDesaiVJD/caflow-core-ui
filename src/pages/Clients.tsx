@@ -16,8 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
+import { SyncFromApiDialog } from "@/components/clients/SyncFromApiDialog";
 
 interface Client {
   id: string;
@@ -57,6 +58,7 @@ const Clients = () => {
   const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
   const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
+  const [showSyncDialog, setShowSyncDialog] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -359,6 +361,11 @@ const Clients = () => {
             </button>
           </div>
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
+          {canCreate && (
+            <Button variant="outline" size="sm" onClick={() => setShowSyncDialog(true)} className="gap-1.5">
+              <RefreshCw className="h-4 w-4" /> Sync from API
+            </Button>
+          )}
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
           {canCreate && <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>}
         </div>
@@ -732,6 +739,17 @@ const Clients = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Sync from API Dialog */}
+      <SyncFromApiDialog
+        open={showSyncDialog}
+        onOpenChange={setShowSyncDialog}
+        firmId={effectiveFirmId}
+        onComplete={() => {
+          setShowSyncDialog(false);
+          fetchData();
+        }}
+      />
     </div>
   );
 };
