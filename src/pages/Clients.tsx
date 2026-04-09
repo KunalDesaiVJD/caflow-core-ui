@@ -315,6 +315,29 @@ const Clients = () => {
 
   return (
     <div className="space-y-6">
+      {/* Superadmin firm selector — shown ONLY for superadmin, above everything */}
+      {isSuperadmin && (
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-2.5">
+          <span className="text-xs font-medium text-muted-foreground shrink-0">Viewing firm:</span>
+          <Select
+            value={selectedFirmId || ""}
+            onValueChange={(v) => setSelectedFirmId(v)}
+          >
+            <SelectTrigger className="h-8 text-sm w-auto min-w-[220px]">
+              <SelectValue placeholder="Select a firm…" />
+            </SelectTrigger>
+            <SelectContent>
+              {firmsList.map(f => (
+                <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {firmsList.length === 0 && (
+            <span className="text-xs text-muted-foreground">Loading firms…</span>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
