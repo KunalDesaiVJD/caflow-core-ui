@@ -231,6 +231,7 @@ const Clients = () => {
   const handleExportExcel = () => {
     const rows = filtered.map((c) => ({
       Name: c.name || "",
+      "Customer ID": (c as any).customer_id || "",
       PAN: c.pan || "",
       "Entity Type": c.entity_type || "",
       CIN: c.cin || "",

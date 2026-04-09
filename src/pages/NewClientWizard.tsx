@@ -30,6 +30,7 @@ const ALL_STEPS = [
 
 const defaultBasicInfo: BasicInfoData = {
   name: "",
+  customer_id: "",
   selectedGroupIds: [],
   pan: "",
   entity_type: "",
@@ -249,6 +250,7 @@ const NewClientWizard = () => {
 
       setBasicInfo({
         name: client.name || "",
+        customer_id: client.customer_id || "",
         selectedGroupIds: existingGroupIds,
         pan: client.pan || "",
         entity_type: client.entity_type || "",
@@ -388,6 +390,7 @@ const NewClientWizard = () => {
     const gstins = basicInfo.gstins.filter((g) => g.trim());
     return {
       name: basicInfo.name.trim(),
+      customer_id: basicInfo.customer_id?.trim() || null,
       pan: basicInfo.pan || null,
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
@@ -504,6 +507,7 @@ const NewClientWizard = () => {
           .from("clients")
           .update({
             name: basicInfo.name.trim(),
+            customer_id: basicInfo.customer_id?.trim() || null,
             pan: basicInfo.pan || null,
             entity_type: basicInfo.entity_type || null,
             gstin: gstins.length > 0 ? gstins : null,

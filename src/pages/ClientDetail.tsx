@@ -655,6 +655,7 @@ const ClientDetail = () => {
                 <CardContent className="space-y-3">
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{client.name || "—"}</span></div>
+                    <div><span className="text-muted-foreground">Customer ID:</span> <span className="font-mono">{(client as any).customer_id || <span className="text-muted-foreground italic">Not set</span>}</span></div>
                     <div><span className="text-muted-foreground">PAN:</span> <span className="font-mono">{client.pan || "—"}</span></div>
                     <div><span className="text-muted-foreground">Entity Type:</span> <span>{client.entity_type || "—"}</span></div>
                     {(client.entity_type === "Private Ltd" || client.entity_type === "Public Ltd") && (

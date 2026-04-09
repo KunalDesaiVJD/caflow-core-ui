@@ -14,8 +14,26 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, AlertCircle } from "lucide-react";
 
+// TODO: Supabase migration needed:
+// ALTER TABLE clients ADD COLUMN customer_id TEXT;
+// CREATE UNIQUE INDEX idx_clients_customer_id ON clients(customer_id) WHERE customer_id IS NOT NULL;
+//
+// === CUSTOMER SYNC API INTEGRATION POINT ===
+// The customer_id field is the unique identifier used to sync this client
+// with external systems (Tally, accounting software, CRM, etc.)
+//
+// Usage pattern:
+//   const response = await fetch(`${API_BASE}/customers/${client.customer_id}`);
+//   const externalData = await response.json();
+//   // Auto-fill Step 1 fields from externalData
+//
+// This ties into GAP-4 (API Import Draft Logic) where:
+//   source = 'api_import' AND customer_id = externalSystemId
+// =============================================
+
 export interface BasicInfoData {
   name: string;
+  customer_id: string;
   selectedGroupIds: string[];
   pan: string;
   entity_type: string;
@@ -90,7 +108,20 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
       </div>
 
-      {/* 2. Client Group (multi-select) — REQUIRED */}
+      {/* 2. Customer ID */}
+      <div className="space-y-1.5">
+        <Label>Customer ID</Label>
+        <Input
+          value={data.customer_id}
+          onChange={(e) => update("customer_id", e.target.value.slice(0, 100))}
+          placeholder="e.g. CUST-00123 or Tally GUID"
+          maxLength={100}
+        />
+        <p className="text-xs text-muted-foreground">Used for external API sync (e.g., Tally integration)</p>
+        {errors.customer_id && <p className="text-xs text-destructive">{errors.customer_id}</p>}
+      </div>
+
+      {/* 3. Client Group (multi-select) — REQUIRED */}
       <div className="space-y-2">
         <Label>
           Client Group <span className="text-destructive" aria-hidden="true">*</span>
@@ -142,7 +173,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         )}
       </div>
 
-      {/* 3. PAN */}
+      {/* 4. PAN */}
       <div className="space-y-1.5">
         <Label>PAN <span className="text-destructive">*</span></Label>
         <Input
@@ -154,7 +185,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.pan && <p className="text-xs text-destructive">{errors.pan}</p>}
       </div>
 
-      {/* 4. Entity Type */}
+      {/* 5. Entity Type */}
       <div className="space-y-1.5">
         <Label>Entity Type <span className="text-destructive">*</span></Label>
         <Select value={data.entity_type} onValueChange={(v) => update("entity_type", v)}>
@@ -168,7 +199,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.entity_type && <p className="text-xs text-destructive">{errors.entity_type}</p>}
       </div>
 
-      {/* 5. Email ID */}
+      {/* 6. Email ID */}
       <div className="space-y-1.5">
         <Label>Email ID</Label>
         <Input
@@ -180,7 +211,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 
-      {/* 6. Mobile Number */}
+      {/* 7. Mobile Number */}
       <div className="space-y-1.5">
         <Label>Mobile Number</Label>
         <Input
@@ -195,7 +226,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.mobile && <p className="text-xs text-destructive">{errors.mobile}</p>}
       </div>
 
-      {/* 7. Address */}
+      {/* 8. Address */}
       <div className="space-y-1.5">
         <Label>Address</Label>
         <Textarea
@@ -206,7 +237,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         />
       </div>
 
-      {/* 8. GSTIN (dynamic rows) */}
+      {/* 9. GSTIN (dynamic rows) */}
       <div className="space-y-2">
         <Label>GSTIN</Label>
         {data.gstins.map((g, i) => (
@@ -235,7 +266,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         </Button>
       </div>
 
-      {/* 9. TAN Number */}
+      {/* 10. TAN Number */}
       <div className="space-y-1.5">
         <Label>TAN Number</Label>
         <Input
