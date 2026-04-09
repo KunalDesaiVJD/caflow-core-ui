@@ -82,10 +82,12 @@ interface Props {
   tanNumber: string;
   workGroupType: string;
   warnings: CrossStepWarning[];
+  /** Navigate to a wizard step by index (0 = Basic Info, 1 = Advanced Info, …) */
+  onGoToStep?: (stepIndex: number) => void;
 }
 
 export const StepServiceBilling = ({
-  data, onChange, errors, gstins, tanNumber, workGroupType, warnings,
+  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep,
 }: Props) => {
   const { user } = useAuth();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
@@ -183,15 +185,37 @@ export const StepServiceBilling = ({
 
   return (
     <div className="space-y-6">
-      {/* ── Cross-step warnings ── */}
-      {warnings.map((w) => (
-        <Alert key={w.type} variant="default" className="border-accent/50 bg-accent/10">
-          <AlertTriangle className="h-4 w-4 text-accent-foreground" />
-          <AlertDescription className="text-sm text-foreground">
-            {w.message}
-          </AlertDescription>
-        </Alert>
-      ))}
+      {/* ── Cross-step blocking errors (red — prevents saving until resolved) ── */}
+      {warnings.length > 0 && (
+        <div className="space-y-2">
+          {warnings.map((w) => (
+            <Alert key={w.type} variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span>{w.message}</span>
+                {onGoToStep && (w.type === "gst" || w.type === "tds") && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs font-semibold underline underline-offset-2 hover:no-underline"
+                    onClick={() => onGoToStep(0)}
+                  >
+                    ← Go to Step 1 — Basic Info
+                  </button>
+                )}
+                {onGoToStep && w.type === "itr" && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs font-semibold underline underline-offset-2 hover:no-underline"
+                    onClick={() => onGoToStep(1)}
+                  >
+                    ← Go to Step 2 — Advanced Info
+                  </button>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
+        </div>
+      )}
 
       {/* ── Mode toggle ── */}
       <div className="flex items-center gap-2">

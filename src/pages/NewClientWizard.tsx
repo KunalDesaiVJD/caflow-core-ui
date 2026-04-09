@@ -760,6 +760,7 @@ const NewClientWizard = () => {
               tanNumber={basicInfo.tan_number}
               workGroupType={advancedInfo.work_group_type}
               warnings={crossStepWarnings}
+              onGoToStep={(idx) => setStep(idx)}
             />
           )}
           {currentStepDef?.id === "audit" && (
@@ -769,25 +770,31 @@ const NewClientWizard = () => {
       </Card>
 
       {/* Navigation */}
-      <div className="flex justify-between">
-        {isEditMode ? (
-          <>
-            <div />
-            <Button onClick={saveCurrentStep} disabled={saving} className="gap-2">
-              <Save className="h-4 w-4" /> {saving ? "Saving…" : `Save ${currentStepDef?.label}`}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button variant="outline" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
-              Previous
-            </Button>
-            <Button onClick={handleNext} disabled={saving}>
-              {step === visibleSteps.length - 1 ? (saving ? "Saving…" : "Create Client") : "Next"}
-            </Button>
-          </>
-        )}
-      </div>
+      {/* Disable Next/Save when services step has unresolved cross-step dependency errors */}
+      {(() => {
+        const servicesBlocked = currentStepDef?.id === "services" && crossStepWarnings.length > 0;
+        return (
+          <div className="flex justify-between">
+            {isEditMode ? (
+              <>
+                <div />
+                <Button onClick={saveCurrentStep} disabled={saving || servicesBlocked} className="gap-2">
+                  <Save className="h-4 w-4" /> {saving ? "Saving…" : `Save ${currentStepDef?.label}`}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
+                  Previous
+                </Button>
+                <Button onClick={handleNext} disabled={saving || servicesBlocked}>
+                  {step === visibleSteps.length - 1 ? (saving ? "Saving…" : "Create Client") : "Next"}
+                </Button>
+              </>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 };
