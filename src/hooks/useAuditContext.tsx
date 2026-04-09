@@ -28,9 +28,6 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     if (!user?.firm_id && user?.role !== "superadmin") return;
     setLoading(true);
 
-    // Show all active clients for the firm — the classification filter was causing
-    // 0 clients to appear when no client_fy_classifications rows existed (Issues 2 & 5).
-    // Engagements are already firm-scoped, so no secondary filter is needed here.
     let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
     let clientQuery: any = supabase
       .from("clients")
@@ -43,9 +40,23 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       clientQuery = clientQuery.eq("firm_id", user.firm_id);
     }
 
-    const [engRes, clientRes] = await Promise.all([engQuery, clientQuery]);
+    // Fetch client IDs that have classification = 'Audit' in client_fy_classifications
+    let classQuery: any = supabase
+      .from("client_fy_classifications")
+      .select("client_id")
+      .eq("classification", "Audit");
+
+    const [engRes, clientRes, classRes] = await Promise.all([engQuery, clientQuery, classQuery]);
+    // Only show clients whose classification is 'Audit'
+    const auditClientIdSet = new Set(
+      (classRes.data || []).map((r: any) => r.client_id)
+    );
+    const auditClients = (clientRes.data || []).filter(
+      (c: any) => auditClientIdSet.has(c.id)
+    );
+
     const clientMap = new Map((clientRes.data || []).map((c: any) => [c.id, c]));
-    setClients(clientRes.data || []);
+    setClients(auditClients);
 
     const mapped = (engRes.data || []).map((e: any) => {
       const joined = e.clients as Record<string, any> | null;

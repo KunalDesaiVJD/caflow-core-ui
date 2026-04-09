@@ -100,15 +100,8 @@ export default function AuditIntelligence() {
   const [users, setUsers] = useState<{ id: string; name: string | null }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
-  // #1 — Only show clients that have at least one audit engagement
-  const auditClientIds = useMemo(
-    () => new Set(engagements.map(e => e.client_id)),
-    [engagements]
-  );
-  const auditClients = useMemo(
-    () => clients.filter(c => auditClientIds.has(c.id)),
-    [clients, auditClientIds]
-  );
+  // #1 — clients from context are already filtered to classification='Audit' (see useAuditContext)
+  const auditClients = clients;
 
   // Dialogs
   const [showEditDialog, setShowEditDialog] = useState(false);
