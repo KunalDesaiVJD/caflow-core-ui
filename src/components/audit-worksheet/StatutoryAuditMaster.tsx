@@ -303,29 +303,7 @@ export default function StatutoryAuditMaster({ data, engagementId }: Props) {
         <SectionHeader no={10} label="CARO 2020 Applicable?" />
         <YesNo value={m.caro_applicable} onChange={v => setField("caro_applicable", v)} />
 
-        {/* ── 11. Audit Report Type ── */}
-        <SectionHeader no={11} label="Type of Audit Report" />
-        <Select value={m.audit_form_type || "__none__"}
-          onValueChange={v => setField("audit_form_type", v === "__none__" ? "" : v as any)}>
-          <SelectTrigger className="h-8 text-sm max-w-xs">
-            <SelectValue placeholder="Select type…" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">— Select —</SelectItem>
-            <SelectItem value="Form of Report u/s 143(3)">Form of Report u/s 143(3)</SelectItem>
-            <SelectItem value="Short-form Report">Short-form Report</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {/* ── 12. Payments to Relatives ── */}
-        <SectionHeader no={12} label="Payments to Relatives / Specified Persons" />
-        <YesNo value={m.payments_to_relatives} onChange={v => setField("payments_to_relatives", v)} />
-
-        {/* ── 13. Secured / Unsecured Loans ── */}
-        <SectionHeader no={13} label="Secured / Unsecured Loan Taken or Given" />
-        <YesNo value={m.secured_unsecured_loan} onChange={v => setField("secured_unsecured_loan", v)} />
-
-        {/* ── 14. Audit Carried Out By (dynamic) ── */}
+        {/* ── 11. Audit Carried Out By (dynamic) ── */}
         <SectionHeader no={14} label="Audit Carried Out By" />
         <div className="space-y-2">
           {(m.audit_carried_by || []).map((entry, idx) => (
@@ -375,50 +353,6 @@ export default function StatutoryAuditMaster({ data, engagementId }: Props) {
           </Button>
         </div>
 
-        <Separator />
-
-        {/* ── 15–17. Assignment ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <SectionHeader no={15} label="Audit Report Prepared By" />
-            <EmpSelect label="" value={m.audit_report_prepared_by_id}
-              onChange={(id, name) => patchFields({ audit_report_prepared_by_id: id, audit_report_prepared_by_name: name })}
-              employees={employees} />
-          </div>
-          <div>
-            <SectionHeader no={16} label="Financial Statements Prepared By" />
-            <EmpSelect label="" value={m.return_prepared_by_id}
-              onChange={(id, name) => patchFields({ return_prepared_by_id: id, return_prepared_by_name: name })}
-              employees={employees} />
-          </div>
-          <div>
-            <SectionHeader no={17} label="Reviewed By (Partner)" />
-            <EmpSelect label="" value={m.cd_prepared_by_id}
-              onChange={(id, name) => patchFields({ cd_prepared_by_id: id, cd_prepared_by_name: name })}
-              employees={employees} />
-          </div>
-        </div>
-
-        <Separator />
-
-        {/* ── 18–20. Dates ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <SectionHeader no={18} label="Signed Copy Received" />
-            <Input type="date" className="h-8 text-sm" value={m.signed_copy_received}
-              onChange={e => setField("signed_copy_received", e.target.value)} />
-          </div>
-          <div>
-            <SectionHeader no={19} label="Management Representation Letter" />
-            <Input type="date" className="h-8 text-sm" value={m.management_repr_letter}
-              onChange={e => setField("management_repr_letter", e.target.value)} />
-          </div>
-          <div>
-            <SectionHeader no={20} label="Appointment Letter" />
-            <Input type="date" className="h-8 text-sm" value={m.appointment_letter}
-              onChange={e => setField("appointment_letter", e.target.value)} />
-          </div>
-        </div>
       </div>
 
       {/* ══════════ FOOTER ══════════ */}

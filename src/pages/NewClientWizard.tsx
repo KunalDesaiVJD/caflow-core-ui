@@ -70,6 +70,8 @@ const NewClientWizard = () => {
   const [basicErrors, setBasicErrors] = useState<Record<string, string>>({});
   const [advancedErrors, setAdvancedErrors] = useState<Record<string, string>>({});
   const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({});
+  // For superadmin editing an existing client: track the client's own firm_id
+  const [loadedClientFirmId, setLoadedClientFirmId] = useState<string | null>(null);
 
   // Track linked modules of active services for cross-step logic
   const [activeLinkedModules, setActiveLinkedModules] = useState<string[]>([]);
@@ -234,6 +236,9 @@ const NewClientWizard = () => {
       const client = clientRes.data as any;
       const fyClass = (fyClassRes.data?.[0] as any) ?? null;
       const fyAudit = (fyAuditRes.data?.[0] as any) ?? null;
+
+      // #13: track the client's firm_id so superadmin uses the right firm for service categories
+      if (client.firm_id) setLoadedClientFirmId(client.firm_id);
 
       // GAP-2: load existing group memberships so edit mode doesn't wipe them on save
       const { data: existingMemberships } = await supabase
@@ -761,6 +766,7 @@ const NewClientWizard = () => {
               workGroupType={advancedInfo.work_group_type}
               warnings={crossStepWarnings}
               onGoToStep={(idx) => setStep(idx)}
+              firmId={loadedClientFirmId || effectiveFirmId || undefined}
             />
           )}
           {currentStepDef?.id === "audit" && (

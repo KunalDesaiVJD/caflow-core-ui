@@ -259,6 +259,8 @@ export default function UserManagement() {
     if (!deleteUser) return;
     setDeleteLoading(true);
     try {
+      // Nullify FK references before deleting to avoid constraint errors
+      await supabase.from("demand_notices").update({ assigned_to: null } as any).eq("assigned_to", deleteUser.id);
       await invokeUserMgmt("delete", "POST", { user_id: deleteUser.id });
       toast({ title: "User deleted" });
       setDeleteUser(null);

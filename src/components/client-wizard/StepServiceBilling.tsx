@@ -84,10 +84,12 @@ interface Props {
   warnings: CrossStepWarning[];
   /** Navigate to a wizard step by index (0 = Basic Info, 1 = Advanced Info, …) */
   onGoToStep?: (stepIndex: number) => void;
+  /** Override firm_id for loading service categories (used when superadmin edits a client) */
+  firmId?: string;
 }
 
 export const StepServiceBilling = ({
-  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep,
+  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep, firmId: propFirmId,
 }: Props) => {
   const { user } = useAuth();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
@@ -98,6 +100,9 @@ export const StepServiceBilling = ({
   const set = <K extends keyof ServiceBillingData>(key: K, val: ServiceBillingData[K]) =>
     onChange({ ...data, [key]: val });
 
+  // Use the explicit firmId prop (for superadmin editing a client) or fall back to user's firm
+  const effectiveFirmId = propFirmId || user?.firm_id;
+
   /* Load service categories */
   useEffect(() => {
     const load = async () => {
@@ -107,13 +112,13 @@ export const StepServiceBilling = ({
         .select("id, name, frequency, linked_module")
         .eq("is_active", true)
         .order("sort_order", { ascending: true });
-      if (user?.firm_id) query = query.eq("firm_id", user.firm_id);
+      if (effectiveFirmId) query = query.eq("firm_id", effectiveFirmId);
       const { data: cats } = await query;
       if (cats) setCategories(cats);
       setLoading(false);
     };
     load();
-  }, [user?.firm_id]);
+  }, [effectiveFirmId]);
 
   /* ── Mode switch ── */
   const handleModeSwitch = (newMode: BillingMode) => {

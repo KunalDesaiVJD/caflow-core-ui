@@ -89,12 +89,13 @@ const RolesPermissions = () => {
   const canViewSettings = isSuperadmin || can("Settings", "can_view");
   const canEdit = isSuperadmin || can("Settings", "can_edit");
 
-  // Load firms for superadmin
+  // Load firms for superadmin — auto-select first firm (global permissions view)
   useEffect(() => {
     if (!isSuperadmin) return;
     supabase.from("firms").select("id, name").order("name").then(({ data }) => {
       setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+      // Always auto-select the first firm so the grid shows immediately
+      if (data && data.length > 0) setSelectedFirmId(prev => prev || data[0].id);
     });
   }, [isSuperadmin]);
 

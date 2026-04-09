@@ -58,7 +58,7 @@ const OP_BADGE_COLORS: Record<string, string> = {
   RESTORE: "bg-sky-100 text-sky-700 border-sky-200",
 };
 
-const RESTORE_ROLES = ["partner", "firm_admin", "superadmin"];
+const RESTORE_ROLES = ["partner_ca", "firm_admin", "superadmin"];
 
 function formatValue(val: unknown): string {
   if (val === null || val === undefined) return "null";
