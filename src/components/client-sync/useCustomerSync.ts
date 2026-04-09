@@ -5,6 +5,16 @@
  *       ?customerGroupid=null<key>
  * Format: text/xml wrapping a JSON array in <string> element
  *
+ * CORS / SSL strategy (two-tier):
+ *   1. Try Supabase Edge Function proxy first (`customer-sync`).
+ *      The Edge Function calls the API server-side — no CORS, no SSL issues.
+ *   2. If the Edge Function call fails (e.g. not yet deployed), fall back to
+ *      a direct browser fetch of CUSTOMER_SYNC_API_URL.
+ *      Direct fetch WILL fail in production if the SSL cert is expired.
+ *
+ * To deploy the Edge Function:
+ *   npx supabase functions deploy customer-sync --project-ref hubyywmodekfdzhwiumb
+ *
  * Future: move CUSTOMER_SYNC_API_URL to env var or admin settings.
  */
 
@@ -105,22 +115,47 @@ export function useCustomerSync() {
     setErrorMsg("");
 
     try {
-      // Call the eofficeportal API
-      // CORS NOTE: If this fails in browser, implement a Supabase Edge Function proxy:
-      //   supabase/functions/customer-sync/index.ts → calls API server-side
-      //   Frontend: supabase.functions.invoke('customer-sync')
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000);
-      let response: Response;
-      try {
-        response = await fetch(CUSTOMER_SYNC_API_URL, { signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-      if (!response.ok) throw new Error(`API returned HTTP ${response.status}`);
-      const rawText = await response.text();
+      // ── Tier 1: Supabase Edge Function proxy (server-side, no CORS/SSL issues)
+      let records: ApiRecord[] | null = null;
+      let edgeFnError = "";
 
-      const records = parseCustomerList(rawText);
+      try {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke(
+          "customer-sync",
+          { method: "GET" },
+        );
+        if (fnError) {
+          edgeFnError = fnError.message || "Edge Function error";
+        } else if (fnData?.records && Array.isArray(fnData.records)) {
+          records = fnData.records as ApiRecord[];
+        } else if (fnData?.error) {
+          edgeFnError = fnData.error;
+        }
+      } catch (e: any) {
+        edgeFnError = e?.message ?? "Edge Function unavailable";
+      }
+
+      // ── Tier 2: Direct browser fetch (fallback — works only if no CORS/SSL issue)
+      if (!records) {
+        console.warn(
+          "[CustomerSync] Edge Function unavailable, falling back to direct fetch.",
+          edgeFnError,
+        );
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 30_000);
+        let response: Response;
+        try {
+          response = await fetch(CUSTOMER_SYNC_API_URL, { signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (!response.ok) throw new Error(`API returned HTTP ${response.status}`);
+        const rawText = await response.text();
+        records = parseCustomerList(rawText);
+      }
+
+      // Both tiers failed — records is still null
+      if (!records) throw new Error("Could not retrieve customer list from API.");
       setApiRecords(records);
 
       // Deduplicate: customer_id is the SOLE key — check BOTH published + drafts
