@@ -18,6 +18,7 @@ import AuditWorksheetHeader  from "./AuditWorksheetHeader";
 import ExportButtons         from "./ExportButtons";
 import TaxAuditMaster        from "./TaxAuditMaster";
 import StatutoryAuditMaster  from "./StatutoryAuditMaster";
+import MergedAuditMaster     from "./MergedAuditMaster";
 import InternalAuditMaster   from "./InternalAuditMaster";
 import SpecialAttention      from "./SpecialAttention";
 import Worksheet             from "./Worksheet";
@@ -37,10 +38,12 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   // Determine which tabs to show
   const auditType = data.auditType;
 
-  // Issue #9: Tax Audit Master → only for tax_audit | both (not statutory)
-  const showTaxMaster        = auditType === "tax_audit" || auditType === "both";
-  // Issue #9: Statutory Audit Master → only for statutory | both
-  const showStatutoryMaster  = auditType === "statutory" || auditType === "both";
+  // "both" → single merged tab; otherwise show individual masters
+  const showMergedMaster    = auditType === "both";
+  // Issue #9: Tax Audit Master → only for tax_audit (not both)
+  const showTaxMaster        = auditType === "tax_audit";
+  // Issue #9: Statutory Audit Master → only for statutory (not both)
+  const showStatutoryMaster  = auditType === "statutory";
   const showIntMaster        = auditType === "internal";
 
   // Special Attention tab visibility + filter rules:
@@ -52,7 +55,8 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
   const taxAuditMode = (auditType === "tax_audit" || auditType === "both") && !data.isPrivateOrPublicLtd;
 
   // Default first tab
-  const defaultTab = showTaxMaster       ? "tax_master"
+  const defaultTab = showMergedMaster    ? "merged_master"
+    : showTaxMaster                      ? "tax_master"
     : showStatutoryMaster                ? "statutory_master"
     : showIntMaster                      ? "int_master"
     : "worksheet";
@@ -109,6 +113,11 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
       {/* ── Tabs ── */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex-wrap h-auto gap-1">
+          {showMergedMaster && (
+            <TabsTrigger value="merged_master" className="text-xs">
+              Tax &amp; Statutory Audit Master
+            </TabsTrigger>
+          )}
           {showTaxMaster && (
             <TabsTrigger value="tax_master" className="text-xs">
               Tax Audit Master
@@ -139,6 +148,16 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             Checklist
           </TabsTrigger>
         </TabsList>
+
+        {/* ── Sheet 1: Merged Tax + Statutory Master (both) ── */}
+        {showMergedMaster && (
+          <TabsContent value="merged_master" className="mt-3">
+            <MergedAuditMaster
+              data={data}
+              engagementId={engagementId}
+            />
+          </TabsContent>
+        )}
 
         {/* ── Sheet 1: Tax Audit Master ── */}
         {showTaxMaster && (
