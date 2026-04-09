@@ -19,6 +19,7 @@
 
 import { useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -70,11 +71,17 @@ interface ApiRecord {
 
 type SyncStep = "idle" | "fetching" | "preview" | "importing" | "done" | "error";
 
+interface SyncError {
+  customer_id: string;
+  name:        string;
+  error:       string;
+}
+
 interface SyncResult {
-  created:     number;
-  skipped:     number;
-  failed:      number;
-  failedNames: string[];
+  created: number;
+  skipped: number;
+  failed:  number;
+  errors:  SyncError[];  // structured: { customer_id, name, error }
 }
 
 interface Props {
@@ -100,13 +107,14 @@ function parseApiXml(xmlText: string): ApiRecord[] {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Props) {
+  const { user } = useAuth();
   const [step,         setStep]         = useState<SyncStep>("idle");
   const [errorMsg,     setErrorMsg]     = useState("");
   const [newRecords,   setNewRecords]   = useState<ApiRecord[]>([]);
   const [totalFetched, setTotalFetched] = useState(0);
   const [skippedCount, setSkippedCount] = useState(0);
   const [progress,     setProgress]     = useState({ current: 0, total: 0 });
-  const [result,       setResult]       = useState<SyncResult>({ created: 0, skipped: 0, failed: 0, failedNames: [] });
+  const [result,       setResult]       = useState<SyncResult>({ created: 0, skipped: 0, failed: 0, errors: [] });
 
   // ── Step 1: Fetch + deduplicate ──────────────────────────────────────────────
 
@@ -182,11 +190,21 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
   }, [firmId]);
 
   // ── Step 2: Import ────────────────────────────────────────────────────────────
+  //
+  // Implements createClientsFromApi spec exactly:
+  //   customer_id, name, pan, entity_type, email, mobile, address, gstin,
+  //   firm_id, user_id, is_draft=true, source='api_import'
+  //
+  // WHY is_draft=true  — Step 1 data auto-filled; Steps 2-4 still empty.
+  //                      User must "Continue Setup" to complete the wizard.
+  // WHY source='api_import' — feeds the "Clients via API" bifurcation tab.
 
   const handleImport = useCallback(async () => {
     if (newRecords.length === 0) return;
     setStep("importing");
     setProgress({ current: 0, total: newRecords.length });
+
+    const userId = user?.id ?? null;
 
     // Fetch client groups (global — no firm_id filter, matches wizard behaviour)
     const { data: groups } = await supabase
@@ -199,66 +217,67 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
 
     let created = 0;
     let failed  = 0;
-    const failedNames: string[] = [];
+    const errors: SyncError[] = [];
 
     for (const r of newRecords) {
+      const customer_id = String(r.CustomerId);
+      const name        = r.ClientName?.trim() || null;
+
       try {
-        const gstin    = r.GST_No?.trim()  ? [r.GST_No.trim()]                   : null;
-        const mobile   = (r.Mobile || "").replace(/\D/g, "").slice(0, 10) || null;
-        const tan      = r.TAN_no?.trim()  || null;
-        const pan      = r.PanCard?.trim() || null;
-        const email    = r.email?.trim()   || null;
-        const address  = r.ComAddress?.trim() || null;
-        const name     = r.ClientName?.trim() || null;
-        const entity   = ENTITY_MAP[r.companytypename] ?? r.companytypename ?? null;
-
-        const payload = {
-          customer_id:  String(r.CustomerId),
-          name,
-          pan,
-          email,
-          mobile,
-          address,
-          entity_type:  entity,
-          gstin,
-          tan_number:   tan,
-          source:       "api_import",
-          is_draft:     true,
-          firm_id:      firmId,
-        };
-
-        const { data: inserted, error: insertErr } = await supabase
+        // Map API fields → client insert payload (spec-exact field list)
+        const { error } = await supabase
           .from("clients")
-          .insert(payload as any)
-          .select("id")
-          .single();
-
-        if (insertErr) throw insertErr;
-
-        // Insert group membership if group name matches an existing group
-        const groupName = (r.groupname || "").toLowerCase().trim();
-        const groupId   = groupMap.get(groupName);
-        if (groupId && inserted?.id) {
-          await supabase.from("client_group_memberships").insert({
-            client_id: inserted.id,
-            group_id:  groupId,
-            added_by:  null,
+          .insert({
+            customer_id,
+            name,
+            pan:         r.PanCard?.trim()                          || null,
+            entity_type: ENTITY_MAP[r.companytypename] ?? r.companytypename ?? null,
+            email:       r.email?.trim()                            || null,
+            mobile:      (r.Mobile || "").replace(/\D/g, "").slice(0, 10) || null,
+            address:     r.ComAddress?.trim()                       || null,
+            gstin:       r.GST_No?.trim() ? [r.GST_No.trim()]       : null,
+            tan_number:  r.TAN_no?.trim()                           || null,
+            firm_id:     firmId,
+            user_id:     userId,
+            is_draft:    true,         // DRAFT — needs wizard completion (GAP-4)
+            source:      "api_import", // Feeds "Clients via API" tab bifurcation
           } as any);
-        }
 
-        created++;
-      } catch {
+        if (error) {
+          errors.push({ customer_id, name: name ?? "", error: error.message });
+          failed++;
+        } else {
+          // Bonus: auto-assign group membership when groupname matches exactly
+          const groupId = groupMap.get((r.groupname || "").toLowerCase().trim());
+          if (groupId) {
+            // Best-effort — fetch the just-inserted client id
+            const { data: row } = await supabase
+              .from("clients")
+              .select("id")
+              .eq("customer_id", customer_id)
+              .single() as any;
+            if (row?.id) {
+              await supabase.from("client_group_memberships").insert({
+                client_id: row.id,
+                group_id:  groupId,
+                added_by:  userId,
+              } as any);
+            }
+          }
+          created++;
+        }
+      } catch (e: any) {
+        errors.push({ customer_id, name: name ?? "", error: e?.message ?? "Unknown error" });
         failed++;
-        failedNames.push(r.ClientName || `ID ${r.CustomerId}`);
       }
 
       setProgress((p) => ({ ...p, current: p.current + 1 }));
     }
 
-    setResult({ created, skipped: skippedCount, failed, failedNames });
+    setResult({ created, skipped: skippedCount, failed, errors });
     setStep("done");
     if (created > 0) onComplete();
-  }, [newRecords, firmId, skippedCount, onComplete]);
+  }, [newRecords, firmId, skippedCount, onComplete, user?.id]);
 
   // ── Reset ─────────────────────────────────────────────────────────────────────
 
@@ -269,7 +288,7 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
     setTotalFetched(0);
     setSkippedCount(0);
     setProgress({ current: 0, total: 0 });
-    setResult({ created: 0, skipped: 0, failed: 0, failedNames: [] });
+    setResult({ created: 0, skipped: 0, failed: 0, errors: [] });
     onOpenChange(false);
   }, [onOpenChange]);
 
@@ -467,15 +486,21 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
               </div>
             )}
 
-            {result.failed > 0 && result.failedNames.length > 0 && (
+            {result.failed > 0 && result.errors.length > 0 && (
               <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950/20 p-3">
                 <p className="text-xs font-medium text-destructive mb-1.5">
                   {result.failed} failed import{result.failed !== 1 ? "s" : ""}:
                 </p>
-                <ul className="text-xs text-destructive/80 space-y-0.5 list-disc list-inside">
-                  {result.failedNames.slice(0, 10).map((n, i) => <li key={i}>{n}</li>)}
-                  {result.failedNames.length > 10 && (
-                    <li>… and {result.failedNames.length - 10} more</li>
+                <ul className="text-xs text-destructive/80 space-y-1">
+                  {result.errors.slice(0, 10).map((e, i) => (
+                    <li key={i} className="flex gap-1.5">
+                      <span className="font-mono shrink-0">#{e.customer_id}</span>
+                      <span className="truncate">{e.name || "—"}</span>
+                      <span className="text-destructive/60 truncate">— {e.error}</span>
+                    </li>
+                  ))}
+                  {result.errors.length > 10 && (
+                    <li className="text-muted-foreground">… and {result.errors.length - 10} more</li>
                   )}
                 </ul>
               </div>
