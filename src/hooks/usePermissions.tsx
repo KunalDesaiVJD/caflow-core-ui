@@ -137,11 +137,45 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       ALL_MODULES.forEach(m => { fullPerms[m] = FULL; });
       setPermissions(fullPerms);
 
-      if (user.firm_id) {
-        const { data } = await supabase.from("role_permissions").select("*").eq("firm_id", user.firm_id);
-        if (data && data.length > 0) {
+      // Load global permissions for allPermissions context
+      const { data } = await supabase.from("role_permissions").select("*").is("firm_id", null);
+      if (data && data.length > 0) {
+        const all: Record<string, PermissionMap> = {};
+        data.forEach((row: any) => {
+          if (!all[row.role]) all[row.role] = {};
+          all[row.role][row.module] = {
+            can_view: row.can_view ?? false, can_create: row.can_create ?? false,
+            can_edit: row.can_edit ?? false, can_delete: row.can_delete ?? false, can_export: row.can_export ?? false,
+          };
+        });
+        setAllPermissions(all);
+      }
+      setLoading(false);
+      return;
+    }
+
+    // Load global permissions for this role (firm_id IS NULL)
+    const { data } = await supabase
+      .from("role_permissions")
+      .select("*")
+      .is("firm_id", null)
+      .eq("role", role);
+
+    if (data && data.length > 0) {
+      const perms: PermissionMap = {};
+      data.forEach((row: any) => {
+        perms[row.module] = {
+          can_view: row.can_view ?? false, can_create: row.can_create ?? false,
+          can_edit: row.can_edit ?? false, can_delete: row.can_delete ?? false, can_export: row.can_export ?? false,
+        };
+      });
+      setPermissions(perms);
+
+      if (role === "firm_admin") {
+        const { data: allData } = await supabase.from("role_permissions").select("*").is("firm_id", null);
+        if (allData) {
           const all: Record<string, PermissionMap> = {};
-          data.forEach((row: any) => {
+          allData.forEach((row: any) => {
             if (!all[row.role]) all[row.role] = {};
             all[row.role][row.module] = {
               can_view: row.can_view ?? false, can_create: row.can_create ?? false,
@@ -153,37 +187,6 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       }
       setLoading(false);
       return;
-    }
-
-    if (user.firm_id) {
-      const { data } = await supabase.from("role_permissions").select("*").eq("firm_id", user.firm_id).eq("role", role);
-      if (data && data.length > 0) {
-        const perms: PermissionMap = {};
-        data.forEach((row: any) => {
-          perms[row.module] = {
-            can_view: row.can_view ?? false, can_create: row.can_create ?? false,
-            can_edit: row.can_edit ?? false, can_delete: row.can_delete ?? false, can_export: row.can_export ?? false,
-          };
-        });
-        setPermissions(perms);
-
-        if (role === "firm_admin") {
-          const { data: allData } = await supabase.from("role_permissions").select("*").eq("firm_id", user.firm_id);
-          if (allData) {
-            const all: Record<string, PermissionMap> = {};
-            allData.forEach((row: any) => {
-              if (!all[row.role]) all[row.role] = {};
-              all[row.role][row.module] = {
-                can_view: row.can_view ?? false, can_create: row.can_create ?? false,
-                can_edit: row.can_edit ?? false, can_delete: row.can_delete ?? false, can_export: row.can_export ?? false,
-              };
-            });
-            setAllPermissions(all);
-          }
-        }
-        setLoading(false);
-        return;
-      }
     }
 
     // Fallback to defaults

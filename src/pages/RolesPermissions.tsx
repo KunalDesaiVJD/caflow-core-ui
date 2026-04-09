@@ -3,12 +3,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { ALL_MODULES, ALL_ROLES, DEFAULT_PERMISSIONS, usePermissions, type ModuleName, type RoleName } from "@/hooks/usePermissions";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Shield, RotateCcw, Loader2, Save, Clock, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,7 +15,7 @@ import { format } from "date-fns";
 
 interface PermRow {
   id?: string;
-  firm_id: string;
+  firm_id: null;          // always NULL = global
   role: string;
   module: string;
   can_view: boolean;
@@ -81,40 +80,22 @@ const RolesPermissions = () => {
   const [resetRole, setResetRole] = useState<string | null>(null);
   const [lastModified, setLastModified] = useState<Record<string, { by: string; at: string }>>({});
 
-  // Firm selector for superadmin
-  const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
-  const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
   const isSuperadmin = user?.role === "superadmin";
-  const firmId = isSuperadmin ? selectedFirmId : user?.firm_id;
   const canViewSettings = isSuperadmin || can("Settings", "can_view");
   const canEdit = isSuperadmin || can("Settings", "can_edit");
 
-  // Load firms for superadmin — auto-select first firm (global permissions view)
   useEffect(() => {
-    if (!isSuperadmin) return;
-    supabase.from("firms").select("id, name").order("name").then(({ data }) => {
-      setFirmsList(data || []);
-      // Always auto-select the first firm so the grid shows immediately
-      if (data && data.length > 0) setSelectedFirmId(prev => prev || data[0].id);
-    });
-  }, [isSuperadmin]);
-
-  useEffect(() => {
-    if (!firmId) {
-      setGrid({});
-      setLoading(false);
-      setDirty(false);
-      return;
-    }
     loadGrid();
-  }, [firmId]);
+  }, []);
 
   async function loadGrid() {
     setLoading(true);
+
+    // Load global permissions (firm_id IS NULL)
     const { data } = await supabase
       .from("role_permissions")
       .select("*")
-      .eq("firm_id", firmId!);
+      .is("firm_id", null);
 
     const g: Record<string, Record<string, PermRow>> = {};
     const lm: Record<string, { by: string; at: string }> = {};
@@ -122,7 +103,7 @@ const RolesPermissions = () => {
     if (data && data.length > 0) {
       for (const row of data as any[]) {
         if (!g[row.role]) g[row.role] = {};
-        g[row.role][row.module] = row;
+        g[row.role][row.module] = { ...row, firm_id: null };
         if (row.updated_at && row.updated_by) {
           const key = row.role;
           if (!lm[key] || new Date(row.updated_at) > new Date(lm[key].at)) {
@@ -132,40 +113,26 @@ const RolesPermissions = () => {
       }
     }
 
-    // Fill missing with defaults
-    const missingRows: any[] = [];
+    // Fill missing entries with defaults (in-memory only; persisted on first Save)
     for (const role of ALL_ROLES) {
       if (!g[role]) g[role] = {};
       for (const mod of ALL_MODULES) {
         if (!g[role][mod]) {
-          const def = DEFAULT_PERMISSIONS[role]?.[mod] || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
-          g[role][mod] = { firm_id: firmId!, role, module: mod, ...def };
-          // Fix (Issue 6): Seed missing rows so future saves are UPDATEs not INSERTs.
-          // INSERTs were silently discarded by RLS when the session variable set by
-          // set_user_context had not yet been initialised (async race condition).
-          missingRows.push({ firm_id: firmId!, role, module: mod, ...def });
+          const def = DEFAULT_PERMISSIONS[role as RoleName]?.[mod as ModuleName]
+            || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
+          g[role][mod] = { firm_id: null, role, module: mod, ...def };
         }
       }
     }
-    // Seed all missing defaults to DB (best-effort; errors are ignored)
-    if (missingRows.length > 0) {
-      for (let i = 0; i < missingRows.length; i += 50) {
-        await supabase
-          .from("role_permissions")
-          .upsert(missingRows.slice(i, i + 50), { onConflict: "firm_id,role,module", ignoreDuplicates: true });
-      }
-    }
 
-    // Load user names for last modified
+    // Resolve last-modified user names
     const userIds = [...new Set(Object.values(lm).map(v => v.by))];
     if (userIds.length > 0) {
       const { data: users } = await supabase.from("users").select("id, name").in("id", userIds);
       if (users) {
         const nameMap: Record<string, string> = {};
         users.forEach((u: any) => { nameMap[u.id] = u.name || "Unknown"; });
-        Object.keys(lm).forEach(k => {
-          lm[k].by = nameMap[lm[k].by] || lm[k].by;
-        });
+        Object.keys(lm).forEach(k => { lm[k].by = nameMap[lm[k].by] || lm[k].by; });
       }
     }
 
@@ -183,15 +150,11 @@ const RolesPermissions = () => {
       const newVal = !(row as any)[field];
       (row as any)[field] = newVal;
       // Auto-enable can_view when any other permission is turned on
-      if (newVal && field !== "can_view") {
-        row.can_view = true;
-      }
+      if (newVal && field !== "can_view") row.can_view = true;
       // Auto-disable downstream when can_view is turned off
       if (!newVal && field === "can_view") {
-        row.can_create = false;
-        row.can_edit = false;
-        row.can_delete = false;
-        row.can_export = false;
+        row.can_create = false; row.can_edit = false;
+        row.can_delete = false; row.can_export = false;
       }
       return { ...prev, [role]: { ...prev[role], [module]: row } };
     });
@@ -199,7 +162,7 @@ const RolesPermissions = () => {
   }
 
   async function saveAll() {
-    if (!firmId || !canEdit) return;
+    if (!canEdit) return;
     setSaving(true);
     try {
       const rows: any[] = [];
@@ -208,7 +171,7 @@ const RolesPermissions = () => {
           const r = grid[role]?.[mod];
           if (!r) continue;
           rows.push({
-            firm_id: firmId,
+            firm_id: null,
             role,
             module: mod,
             can_view: r.can_view,
@@ -222,13 +185,20 @@ const RolesPermissions = () => {
         }
       }
 
-      // Upsert all
-      const { error } = await supabase
+      // Delete all existing global rows then insert fresh
+      // (UPSERT with onConflict doesn't work reliably with NULL firm_id)
+      const { error: delError } = await supabase
         .from("role_permissions")
-        .upsert(rows, { onConflict: "firm_id,role,module" });
+        .delete()
+        .is("firm_id", null);
+      if (delError) throw delError;
 
-      if (error) throw error;
-      toast({ title: "Permissions saved successfully" });
+      const { error: insError } = await supabase
+        .from("role_permissions")
+        .insert(rows);
+      if (insError) throw insError;
+
+      toast({ title: "Permissions saved globally" });
       setDirty(false);
       setSavedGrid(JSON.parse(JSON.stringify(grid)));
       await refreshCtx();
@@ -241,21 +211,19 @@ const RolesPermissions = () => {
   }
 
   async function handleReset() {
-    if (!resetRole || !firmId) return;
-
-    // Use last saved DB state if available; fall back to code defaults
+    if (!resetRole) return;
     const savedRoleGrid = savedGrid[resetRole];
     const defaults = DEFAULT_PERMISSIONS[resetRole as RoleName];
-
     setGrid(prev => {
       const updated = { ...prev };
       updated[resetRole!] = {};
       for (const mod of ALL_MODULES) {
         const savedRow = savedRoleGrid?.[mod];
-        const defRow = defaults?.[mod] || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
+        const defRow = defaults?.[mod as ModuleName]
+          || { can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
         updated[resetRole!][mod] = savedRow
           ? { ...savedRow }
-          : { firm_id: firmId, role: resetRole!, module: mod, ...defRow };
+          : { firm_id: null, role: resetRole!, module: mod, ...defRow };
       }
       return updated;
     });
@@ -268,7 +236,6 @@ const RolesPermissions = () => {
     });
   }
 
-  // Wait for permissions context to finish loading before checking access
   if (permissionsLoading || loading) {
     return (
       <div className="space-y-6">
@@ -278,7 +245,6 @@ const RolesPermissions = () => {
     );
   }
 
-  // Access denied — user cannot view Settings module at all
   if (!isSuperadmin && !canViewSettings) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
@@ -302,7 +268,7 @@ const RolesPermissions = () => {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             {canEdit
-              ? "Configure module access for each role in your firm."
+              ? "Global permission matrix — applies to all firms."
               : "View-only. Contact your firm admin to change permissions."}
           </p>
         </div>
@@ -321,29 +287,7 @@ const RolesPermissions = () => {
         </div>
       </div>
 
-      {isSuperadmin && (
-        <div className="flex items-center gap-3">
-          <Select value={selectedFirmId || ""} onValueChange={v => setSelectedFirmId(v)}>
-            <SelectTrigger className="w-64">
-              <SelectValue placeholder={firmsList.length === 0 ? "Loading firms…" : "Select a firm"} />
-            </SelectTrigger>
-            <SelectContent>
-              {firmsList.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {!selectedFirmId && <p className="text-sm text-muted-foreground">Select a firm to view its permission matrix</p>}
-        </div>
-      )}
-
-      {/* Show empty state when superadmin hasn't selected a firm yet */}
-      {!firmId && isSuperadmin && (
-        <Card className="p-12 text-center">
-          <Shield className="h-10 w-10 mx-auto text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">Select a firm above to configure its role permissions.</p>
-        </Card>
-      )}
-
-      {firmId && <Card>
+      <Card>
         <CardContent className="p-0">
           <div className="overflow-auto max-h-[70vh]">
             <table className="w-full text-sm">
@@ -412,7 +356,7 @@ const RolesPermissions = () => {
             </table>
           </div>
         </CardContent>
-      </Card>}
+      </Card>
 
       {/* Reset Confirmation */}
       <AlertDialog open={!!resetRole} onOpenChange={() => setResetRole(null)}>
