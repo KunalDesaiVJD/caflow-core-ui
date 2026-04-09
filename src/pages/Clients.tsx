@@ -241,8 +241,12 @@ const Clients = () => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Clients");
-    XLSX.writeFile(wb, "clients-export.xlsx");
-    toast({ title: "Exported to Excel" });
+    const filename =
+      sourceTab === "api" ? "clients-api.xlsx"
+      : sourceTab === "manual" ? "clients-manual.xlsx"
+      : "clients-export.xlsx";
+    XLSX.writeFile(wb, filename);
+    toast({ title: `Exported ${rows.length} client${rows.length !== 1 ? "s" : ""} to Excel` });
   };
 
   const filtered = clients.filter((c) => {
@@ -255,11 +259,11 @@ const Clients = () => {
       const cGroups = (clientGroupMap[c.id] || []).map(g => g.id);
       matchesGroup = groupFilter.every(gId => cGroups.includes(gId));
     }
-    // GAP-7: source bifurcation
+    // Source tab bifurcation — NULL/undefined source treated as 'manual' (legacy clients)
     const matchesSource =
       sourceTab === "all" ||
       (sourceTab === "manual" && (c.source === "manual" || !c.source)) ||
-      (sourceTab === "api" && c.source === "import");
+      (sourceTab === "api" && c.source === "api_import");
     return matchesSearch && matchesEntity && matchesGroup && matchesSource;
   });
 
@@ -336,42 +340,7 @@ const Clients = () => {
         </div>
       </div>
 
-      {/* Search & Filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search by name or PAN..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
-        </div>
-        <Select value={entityFilter} onValueChange={setEntityFilter}>
-          <SelectTrigger className="w-full sm:w-[200px]"><SelectValue placeholder="Entity Type" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Entity Types</SelectItem>
-            {ENTITY_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="w-full sm:w-[200px] justify-between">
-              <span className="truncate">{groupFilter.length === 0 ? "All Groups" : `${groupFilter.length} group${groupFilter.length > 1 ? "s" : ""}`}</span>
-              {groupFilter.length > 0 && <X className="h-3 w-3 ml-1 shrink-0" onClick={e => { e.stopPropagation(); setGroupFilter([]); }} />}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-56 p-2" align="end">
-            <button className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter("ungrouped")}>
-              <Checkbox checked={groupFilter.includes("ungrouped")} /> <span>Ungrouped</span>
-            </button>
-            {groups.map(g => (
-              <button key={g.id} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter(g.id)}>
-                <Checkbox checked={groupFilter.includes(g.id)} />
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
-                {g.name}
-              </button>
-            ))}
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      {/* GAP-6: Draft Clients Banner — hidden when zero drafts */}
+      {/* Draft Clients Banner — hidden when zero drafts (must stay above tabs) */}
       {drafts.length > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-4">
           {/* Banner heading */}
@@ -436,28 +405,100 @@ const Clients = () => {
         </div>
       )}
 
-      {/* GAP-7: API vs Manual source tabs */}
-      <div className="flex items-center gap-1 border-b border-border">
-        {(["all", "manual", "api"] as const).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setSourceTab(tab)}
-            className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              sourceTab === tab
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tab === "all" ? `All (${clients.length})` : tab === "manual" ? `Manual (${clients.filter(c => c.source === "manual" || !c.source).length})` : `API Imported (${clients.filter(c => c.source === "import").length})`}
-          </button>
-        ))}
+      {/* Source Tabs — ABOVE search/filter per spec */}
+      {(() => {
+        const allCount = clients.length;
+        const apiCount = clients.filter(c => c.source === "api_import").length;
+        const manualCount = clients.filter(c => c.source === "manual" || !c.source).length;
+        const tabs = [
+          { key: "all" as const,    label: "All Clients",             count: allCount },
+          { key: "api" as const,    label: "Clients via API",         count: apiCount },
+          { key: "manual" as const, label: "Clients added Manually",  count: manualCount },
+        ];
+        return (
+          <div className="flex items-center border-b border-border overflow-x-auto">
+            {tabs.map(({ key, label, count }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setSourceTab(key);
+                  // Reset search/filter state on tab switch (spec: "reset is simpler")
+                  setSearch("");
+                  setEntityFilter("all");
+                  setGroupFilter([]);
+                  setCurrentPage(1);
+                }}
+                className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                  sourceTab === key
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  sourceTab === key
+                    ? "bg-primary/10 text-primary"
+                    : "bg-muted text-muted-foreground"
+                }`}>
+                  {count}
+                </span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Search & Filter — BELOW tabs per spec */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Search by name or PAN..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        <Select value={entityFilter} onValueChange={setEntityFilter}>
+          <SelectTrigger className="w-full sm:w-[200px]"><SelectValue placeholder="Entity Type" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Entity Types</SelectItem>
+            {ENTITY_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full sm:w-[200px] justify-between">
+              <span className="truncate">{groupFilter.length === 0 ? "All Groups" : `${groupFilter.length} group${groupFilter.length > 1 ? "s" : ""}`}</span>
+              {groupFilter.length > 0 && <X className="h-3 w-3 ml-1 shrink-0" onClick={e => { e.stopPropagation(); setGroupFilter([]); }} />}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 p-2" align="end">
+            <button className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter("ungrouped")}>
+              <Checkbox checked={groupFilter.includes("ungrouped")} /> <span>Ungrouped</span>
+            </button>
+            {groups.map(g => (
+              <button key={g.id} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent text-left" onClick={() => toggleGroupFilter(g.id)}>
+                <Checkbox checked={groupFilter.includes(g.id)} />
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
+                {g.name}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Content */}
       {loading ? (
         <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : filtered.length === 0 ? (
-        <Card><CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground"><Users className="h-10 w-10 mb-3 opacity-40" /><p>No clients found</p></CardContent></Card>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <Users className="h-10 w-10 mb-3 opacity-40" />
+            <p>
+              {sourceTab === "api"
+                ? "No clients imported via API"
+                : sourceTab === "manual"
+                ? "No manually added clients found"
+                : "No clients found"}
+            </p>
+          </CardContent>
+        </Card>
       ) : viewMode === "it" ? (
         /* IT VIEW */
         <>
@@ -480,7 +521,7 @@ const Clients = () => {
                       <TableCell className="font-medium text-sm">
                         <span className="flex items-center gap-1.5">
                           {client.name || "Unnamed"}
-                          {client.source === "import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                          {client.source === "api_import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
                         </span>
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
