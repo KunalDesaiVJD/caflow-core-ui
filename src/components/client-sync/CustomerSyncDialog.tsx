@@ -202,7 +202,7 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
 
         {/* ── IMPORTING ── */}
         {sync.status === "importing" && (
-          <CustomerSyncProgress progress={sync.progress} />
+          <CustomerSyncProgress progress={sync.progress} onCancel={sync.cancelImport} />
         )}
 
         {/* ── DONE ── */}
@@ -215,17 +215,32 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
           <div className="space-y-4 py-2">
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 flex gap-3">
               <XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <p className="text-sm font-semibold text-destructive">Sync failed</p>
-                <p className="text-xs text-muted-foreground break-all">{sync.errorMsg}</p>
+                {/* Render multi-line messages (e.g. CORS message with deploy command) */}
+                {sync.errorMsg.split("\n").map((line, i) => (
+                  <p key={i} className={
+                    i === 0
+                      ? "text-xs text-muted-foreground break-all"
+                      : "text-xs font-mono text-muted-foreground break-all mt-0.5"
+                  }>
+                    {line}
+                  </p>
+                ))}
+                {/* SSL hint */}
                 {(sync.errorMsg.includes("SSL") ||
                   sync.errorMsg.includes("cert") ||
-                  sync.errorMsg.includes("Failed to fetch") ||
-                  sync.errorMsg.includes("ERR_CERT") ||
-                  sync.errorMsg.includes("NetworkError")) && (
+                  sync.errorMsg.includes("ERR_CERT")) && (
                   <p className="text-xs text-amber-600 mt-1">
                     ⚠️ The API server's SSL certificate may be expired. Ask your IT
                     team to renew the certificate at eofficeportal.com, then retry.
+                  </p>
+                )}
+                {/* Admin hint for invalid data */}
+                {sync.errorMsg.includes("Contact administrator") && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    ⚠️ The API response format may have changed. Check the browser
+                    console for the full response.
                   </p>
                 )}
               </div>
