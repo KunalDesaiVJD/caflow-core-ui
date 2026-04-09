@@ -303,7 +303,7 @@ const NewClientWizard = () => {
     const errors: Record<string, string> = {};
     if (!basicInfo.name.trim()) errors.name = "Legal name is required";
     if (!basicInfo.selectedGroupIds || basicInfo.selectedGroupIds.length === 0) {
-      errors.selectedGroupIds = "At least one client group is required";
+      errors.selectedGroupIds = "At least one Client Group is required";
     }
     if (!basicInfo.pan) {
       errors.pan = "PAN is required";

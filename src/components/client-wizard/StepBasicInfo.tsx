@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, AlertCircle } from "lucide-react";
 
 export interface BasicInfoData {
   name: string;
@@ -90,13 +90,25 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
       </div>
 
-      {/* 2. Client Group (multi-select) */}
+      {/* 2. Client Group (multi-select) — REQUIRED */}
       <div className="space-y-2">
-        <Label>Client Group <span className="text-destructive">*</span></Label>
+        <Label>
+          Client Group <span className="text-destructive" aria-hidden="true">*</span>
+        </Label>
+
         {groups.length > 0 ? (
-          <div className={`grid grid-cols-2 gap-2 rounded-md p-2 transition-colors ${errors.selectedGroupIds ? "ring-2 ring-destructive/50 bg-destructive/5" : ""}`}>
+          <div
+            className={`grid grid-cols-2 gap-2 rounded-md border p-2 transition-colors ${
+              errors.selectedGroupIds
+                ? "border-destructive ring-2 ring-destructive/40 bg-destructive/5"
+                : "border-border"
+            }`}
+            role="group"
+            aria-required="true"
+            aria-invalid={!!errors.selectedGroupIds}
+          >
             {groups.map((g) => (
-              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
+              <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm select-none">
                 <Checkbox
                   checked={data.selectedGroupIds.includes(g.id)}
                   onCheckedChange={() => toggleGroup(g.id)}
@@ -110,9 +122,24 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">No groups found. Create groups in Settings first.</p>
+          /* No groups in DB — always blocks since nothing can be selected */
+          <div className={`flex items-start gap-2 rounded-md border p-3 text-sm ${
+            errors.selectedGroupIds
+              ? "border-destructive bg-destructive/5 text-destructive"
+              : "border-border text-muted-foreground"
+          }`}>
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>No groups found. Go to <strong>Settings → Client Groups</strong> and create at least one group before adding clients.</span>
+          </div>
         )}
-        {errors.selectedGroupIds && <p className="text-xs text-destructive">{errors.selectedGroupIds}</p>}
+
+        {/* Inline error — shown after failed Next / Save attempt */}
+        {errors.selectedGroupIds && (
+          <p className="flex items-center gap-1 text-xs text-destructive" role="alert">
+            <AlertCircle className="h-3 w-3 shrink-0" />
+            {errors.selectedGroupIds}
+          </p>
+        )}
       </div>
 
       {/* 3. PAN */}
