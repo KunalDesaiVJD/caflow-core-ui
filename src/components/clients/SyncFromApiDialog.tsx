@@ -128,33 +128,41 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
       const xmlText = await response.text();
       const records = parseApiXml(xmlText);
 
-      // 1b. Fetch existing clients to deduplicate
-      let existingQuery = supabase
-        .from("clients")
-        .select("pan, customer_id")
-        .is("deleted_at", null);
-      if (firmId) existingQuery = (existingQuery as any).eq("firm_id", firmId);
-      const { data: existing } = await existingQuery;
+      // 1b. Fetch ALL existing customer_ids — both published AND drafts
+      //     (customer_id is the SOLE dedup key; PAN / name are NOT used)
+      const [publishedRes, draftRes] = await Promise.all([
+        supabase
+          .from("clients")
+          .select("customer_id")
+          .not("customer_id", "is", null)
+          .eq("is_draft", false) as any,
+        supabase
+          .from("clients")
+          .select("customer_id")
+          .not("customer_id", "is", null)
+          .eq("is_draft", true) as any,
+      ]);
 
-      const existingPans    = new Set<string>(
-        (existing || [])
-          .map((c: any) => ((c.pan || "") as string).toUpperCase().trim())
-          .filter(Boolean)
-      );
-      const existingCustIds = new Set<string>(
-        (existing || [])
-          .map((c: any) => String((c as any).customer_id || ""))
-          .filter((s) => s && s !== "null" && s !== "undefined")
-      );
+      // Build Set — case-sensitive exact match (spec rule 4)
+      const existingCustIds = new Set<string>([
+        ...((publishedRes.data || []) as any[]).map((c: any) => String(c.customer_id)),
+        ...((draftRes.data    || []) as any[]).map((c: any) => String(c.customer_id)),
+      ]);
 
       // 1c. Split: new vs duplicate
+      //   - Skip if customer_id is null/empty in API response (spec rule 3)
+      //   - Skip if customer_id already exists in DB (spec rule 1)
+      //   - Repeated syncs safe — only truly new records pass through (spec rule 5)
       const toImport: ApiRecord[] = [];
       let skip = 0;
       for (const r of records) {
-        const pan    = (r.PanCard || "").toUpperCase().trim();
-        const custId = String(r.CustomerId);
-        if ((pan && existingPans.has(pan)) || existingCustIds.has(custId)) {
-          skip++;
+        const custId = r.CustomerId != null ? String(r.CustomerId) : "";
+        if (!custId) {
+          skip++; // No customer_id in API record — skip
+          continue;
+        }
+        if (existingCustIds.has(custId)) {
+          skip++; // Already exists (published or draft)
         } else {
           toImport.push(r);
         }
