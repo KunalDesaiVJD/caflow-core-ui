@@ -303,8 +303,8 @@ export default function StatutoryAuditMaster({ data, engagementId }: Props) {
         <SectionHeader no={10} label="CARO 2020 Applicable?" />
         <YesNo value={m.caro_applicable} onChange={v => setField("caro_applicable", v)} />
 
-        {/* ── 11. Audit Carried Out By (dynamic) ── */}
-        <SectionHeader no={14} label="Audit Carried Out By" />
+        {/* ── 11. Audit Carried Out By ── */}
+        <SectionHeader no={11} label="Audit Carried Out By" />
         <div className="space-y-2">
           {(m.audit_carried_by || []).map((entry, idx) => (
             <div key={idx} className="flex items-center gap-2">

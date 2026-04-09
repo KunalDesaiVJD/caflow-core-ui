@@ -463,8 +463,8 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
           )}
         </div>
 
-        {/* ── Audit Carried Out By (dynamic) ── */}
-        <SectionHeader no={15} label="Audit Carried Out By" />
+        {/* ── 12. Audit Carried Out By ── */}
+        <SectionHeader no={12} label="Audit Carried Out By" />
         <div className="space-y-2">
           {(m.audit_carried_by || []).map((entry: AuditorEntry, idx: number) => (
             <div key={idx} className="flex items-center gap-2">
