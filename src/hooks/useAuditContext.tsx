@@ -7,7 +7,7 @@ interface AuditContextType {
   selectedEngagementId: string;
   setSelectedClientId: (id: string) => void;
   setSelectedEngagementId: (id: string) => void;
-  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[];
+  clients: { id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null }[];
   engagements: any[];
   selectedEngagement: any | null;
   loading: boolean;
@@ -20,7 +20,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [selectedClientId, setSelectedClientId] = useState<string>("all");
   const [selectedEngagementId, setSelectedEngagementId] = useState<string>("");
-  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_type?: string | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null }[]>([]);
   const [engagements, setEngagements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,7 +31,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
     let clientQuery: any = supabase
       .from("clients")
-      .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+      .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, internal_audit_applicable, stock_audit_applicable")
       .eq("is_draft", false)
       .is("deleted_at", null);
 

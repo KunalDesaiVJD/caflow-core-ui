@@ -73,10 +73,25 @@ const AUDIT_TYPES = [
 ];
 
 const PERIOD_TYPES = [
-  { value: "annual", label: "Annual" },
-  { value: "half_yearly", label: "Half-Yearly" },
-  { value: "quarterly", label: "Quarterly" },
+  { value: "annual",     label: "Full Year"  },
+  { value: "half_yearly", label: "Half Year" },
+  { value: "quarterly",  label: "Quarter"    },
+  { value: "custom",     label: "Custom"     },
 ];
+
+// ─── Filter audit types by client's audit setup ───
+function getAuditOptionsForClient(client: any) {
+  if (!client) return AUDIT_TYPES;
+  const opts: { value: string; label: string }[] = [];
+  const hasStat = !!client.statutory_audit_applicable;
+  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
+  if (hasStat)          opts.push({ value: "statutory",  label: "Statutory Audit" });
+  if (hasTax)           opts.push({ value: "tax_audit",  label: "Tax Audit" });
+  if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
+  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
+  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  return opts;
+}
 
 type StageStatus = "not_started" | "in_progress" | "complete" | "locked";
 
@@ -164,7 +179,7 @@ export default function AuditPipeline() {
     queryFn: async () => {
       let query = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, internal_audit_applicable, stock_audit_applicable")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .order("name");
@@ -826,11 +841,36 @@ export default function AuditPipeline() {
               </Select>
             </div>
             <div>
-              <Label>Audit Type</Label>
-              <Select value={form1A.audit_type} onValueChange={v => setForm1A(f => ({ ...f, audit_type: v }))}>
+              <Label>Period Type</Label>
+              <Select value={form1A.audit_period_type} onValueChange={v => setForm1A(f => ({ ...f, audit_period_type: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{PERIOD_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div>
+              <Label>Audit Type</Label>
+              {(() => {
+                const selClient = (eligibleClients || []).find(c => c.id === form1A.client_id);
+                const opts = getAuditOptionsForClient(selClient);
+                if (form1A.client_id && opts.length === 0) {
+                  return (
+                    <p className="text-xs text-amber-600 mt-1">
+                      No audit services enabled for this client. Configure in Client → Audit Setup.
+                    </p>
+                  );
+                }
+                return (
+                  <Select value={form1A.audit_type} onValueChange={v => setForm1A(f => ({ ...f, audit_type: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select audit type" /></SelectTrigger>
+                    <SelectContent>
+                      {opts.length === 0
+                        ? AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)
+                        : opts.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)
+                      }
+                    </SelectContent>
+                  </Select>
+                );
+              })()}
             </div>
             <div>
               <Label>Entity Type</Label>

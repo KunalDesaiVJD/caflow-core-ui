@@ -233,7 +233,18 @@ const ClientDetail = () => {
       const filteredCats = clientFirmId
         ? allCats.filter((cat: any) => cat.firm_id === clientFirmId || !cat.firm_id)
         : allCats;
-      setServiceCategories(filteredCats as any as ServiceCategory[]);
+      // Deduplicate by name: prefer firm-specific over global (firm_id non-null first)
+      const sortedCats = [...filteredCats].sort((a, b) =>
+        (a.firm_id ? 0 : 1) - (b.firm_id ? 0 : 1)
+      );
+      const seenNames = new Set<string>();
+      const dedupedCats = sortedCats.filter(cat => {
+        const key = (cat.name || "").toLowerCase().trim();
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
+      setServiceCategories(dedupedCats as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
       setStaffList((staffRes.data || []) as any[]);
       setItrWorkGroups(wgData);
