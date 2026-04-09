@@ -68,12 +68,6 @@ interface ClientService {
 }
 
 const SEVERITY_COLORS: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#9ca3af" };
-const FLAG_LABELS: Record<string, string> = {
-  gst_registered: "GST", tds_deductor: "TDS", fixed_assets: "Fixed Assets",
-  govt_grants: "Govt Grants", multiple_banks: "Multiple Banks", caro_applicable: "CARO",
-  transfer_pricing: "Transfer Pricing", mat_applicable: "MAT", special_deductions: "Special Deductions",
-  msme_suppliers: "MSME",
-};
 
 const FREQUENCIES = [
   { value: "monthly", label: "Monthly" },
@@ -572,8 +566,6 @@ const ClientDetail = () => {
   if (loading) return <div className="space-y-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-40 w-full" /></div>;
   if (!client) return <div className="text-center py-16 text-muted-foreground">Client not found.</div>;
 
-  const compliance = client.compliance_flags || {};
-  const activeFlags = Object.entries(FLAG_LABELS).filter(([key]) => compliance[key]);
   const unresolvedFindings = findings.filter(f => f.status !== "resolved" && f.status !== "waived");
   const highCount = unresolvedFindings.filter(f => f.severity === "HIGH").length;
   const medCount = unresolvedFindings.filter(f => f.severity === "MEDIUM").length;
@@ -712,18 +704,6 @@ const ClientDetail = () => {
                       </Tooltip>
                     </TooltipProvider>
                   </div>
-                </CardContent>
-              </Card>
-
-              {/* Compliance Flags */}
-              <Card>
-                <CardHeader><CardTitle className="text-sm">Compliance Flags</CardTitle></CardHeader>
-                <CardContent>
-                  {activeFlags.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {activeFlags.map(([key, label]) => <Badge key={key} className="text-xs bg-primary/10 text-primary border-primary/20">{label}</Badge>)}
-                    </div>
-                  ) : <p className="text-sm text-muted-foreground">No compliance flags set</p>}
                 </CardContent>
               </Card>
 

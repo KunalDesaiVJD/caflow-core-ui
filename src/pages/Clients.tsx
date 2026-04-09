@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, Upload, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface Client {
@@ -62,6 +62,8 @@ const Clients = () => {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
+  // GAP-7: API vs Manual bifurcation
+  const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api">("all");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
@@ -76,9 +78,9 @@ const Clients = () => {
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
-  // Import state
-  const importRef = useRef<HTMLInputElement>(null);
-  const [importing, setImporting] = useState(false);
+  // GAP-6: draft management
+  const [drafts, setDrafts] = useState<Client[]>([]);
+  const [draftLoading, setDraftLoading] = useState(false);
 
   const fetchData = async () => {
     // GAP-1: always scope to the effective firm — never load cross-firm data
@@ -119,7 +121,7 @@ const Clients = () => {
 
   // GAP-2: re-fetch whenever effectiveFirmId changes (superadmin firm selector, auth load)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchData(); }, [effectiveFirmId]);
+  useEffect(() => { if (effectiveFirmId) { fetchData(); fetchDrafts(); } }, [effectiveFirmId]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -131,6 +133,35 @@ const Clients = () => {
       if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
     });
   }, [isSuperadmin]);
+
+  // GAP-6: load draft clients (is_draft=true) for the draft management banner
+  const fetchDrafts = async () => {
+    if (!effectiveFirmId) { setDrafts([]); return; }
+    setDraftLoading(true);
+    try {
+      const { data } = await supabase
+        .from("clients")
+        .select("id, name, pan, entity_type, created_at, source, firm_id")
+        .eq("is_draft", true)
+        .eq("firm_id", effectiveFirmId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false });
+      setDrafts((data as Client[]) || []);
+    } catch {}
+    setDraftLoading(false);
+  };
+
+  // GAP-6: delete a draft client directly from the list
+  const handleDeleteDraft = async (draftId: string) => {
+    try {
+      const { error } = await supabase.from("clients").delete().eq("id", draftId);
+      if (error) throw error;
+      setDrafts(prev => prev.filter(d => d.id !== draftId));
+      toast({ title: "Draft deleted" });
+    } catch (e: any) {
+      toast({ title: "Error deleting draft", description: e.message, variant: "destructive" });
+    }
+  };
 
   const handleDeleteClient = async () => {
     if (!deleteClient) return;
@@ -202,80 +233,6 @@ const Clients = () => {
     toast({ title: "Exported to Excel" });
   };
 
-  // ── Bulk Import ──
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
-    try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-
-      if (rows.length === 0) { toast({ title: "No data found", variant: "destructive" }); return; }
-
-      // GAP-6: scope PAN duplicate check to the current firm only
-      let existingPansQuery = supabase.from("clients").select("pan").not("pan", "is", null).is("deleted_at", null);
-      if (effectiveFirmId) existingPansQuery = existingPansQuery.eq("firm_id", effectiveFirmId);
-      const { data: existingClients } = await existingPansQuery;
-      const existingPans = new Set((existingClients || []).map((c: any) => (c.pan || "").toUpperCase()).filter(Boolean));
-
-      let success = 0;
-      let failed = 0;
-      const errors: string[] = [];
-
-      for (const row of rows) {
-        const name = (row["Client Name"] || row["Name"] || row["name"] || "").trim();
-        if (!name) { failed++; errors.push("Empty name"); continue; }
-
-        const pan = (row["PAN"] || row["pan"] || "").toUpperCase().trim();
-        if (pan && existingPans.has(pan)) {
-          failed++;
-          errors.push(`Duplicate PAN: ${pan}`);
-          continue;
-        }
-
-        const gstinRaw = (row["GSTIN"] || row["gstin"] || "").trim();
-        const gstin = gstinRaw ? [gstinRaw] : null;
-
-        const { data: insertedClient, error } = await supabase.from("clients").insert({
-          name,
-          pan: pan || null,
-          entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
-          gstin,
-          firm_id: effectiveFirmId,
-          user_id: user?.id || null,
-          is_draft: false,
-          // GAP-7: tag origin so imported rows are distinguishable in the UI
-          // Requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual';
-          source: "import",
-        } as any).select("id").single();
-
-        if (error) {
-          failed++;
-          errors.push(`${name}: ${error.message}`);
-        } else {
-          // Create client_profiles row
-          await supabase.from("client_profiles").insert({ client_id: insertedClient.id, audit_questions: {} as any });
-          success++;
-          if (pan) existingPans.add(pan);
-        }
-      }
-
-      toast({
-        title: "Import Complete",
-        description: `Total: ${rows.length} | Success: ${success} | Failed: ${failed}`,
-      });
-      fetchData();
-    } catch (err: any) {
-      toast({ title: "Import failed", description: err.message, variant: "destructive" });
-    } finally {
-      setImporting(false);
-      if (importRef.current) importRef.current.value = "";
-    }
-  };
-
   const filtered = clients.filter((c) => {
     const matchesSearch = !search || (c.name || "").toLowerCase().includes(search.toLowerCase()) || (c.pan || "").toLowerCase().includes(search.toLowerCase());
     const matchesEntity = entityFilter === "all" || c.entity_type === entityFilter;
@@ -286,11 +243,16 @@ const Clients = () => {
       const cGroups = (clientGroupMap[c.id] || []).map(g => g.id);
       matchesGroup = groupFilter.every(gId => cGroups.includes(gId));
     }
-    return matchesSearch && matchesEntity && matchesGroup;
+    // GAP-7: source bifurcation
+    const matchesSource =
+      sourceTab === "all" ||
+      (sourceTab === "manual" && (c.source === "manual" || !c.source)) ||
+      (sourceTab === "api" && c.source === "import");
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource;
   });
 
   // Reset page when filters change
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter]);
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -356,8 +318,6 @@ const Clients = () => {
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
           </div>
-          {canCreate && <Button variant="outline" size="sm" onClick={() => importRef.current?.click()} disabled={importing} className="gap-1.5"><Upload className="h-4 w-4" /> Import</Button>}
-          <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
           {canCreate && <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>}
@@ -397,6 +357,50 @@ const Clients = () => {
             ))}
           </PopoverContent>
         </Popover>
+      </div>
+
+      {/* GAP-6: Draft Management Banner */}
+      {drafts.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">
+              {drafts.length} Draft{drafts.length > 1 ? "s" : ""} Pending Review
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            {drafts.map(d => (
+              <div key={d.id} className="flex items-center justify-between rounded-md bg-white dark:bg-background border border-amber-100 dark:border-amber-900/50 px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium truncate">{d.name || "Unnamed Draft"}</span>
+                  {d.source === "api" && <Badge variant="outline" className="text-[10px] border-blue-400 text-blue-600">API</Badge>}
+                  {d.source === "manual" && <Badge variant="outline" className="text-[10px]">Manual</Badge>}
+                  {d.pan && <span className="text-[11px] font-mono text-muted-foreground">{d.pan}</span>}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/clients/edit/${d.id}`)}>Resume</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive" onClick={() => handleDeleteDraft(d.id)}>Delete</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* GAP-7: API vs Manual source tabs */}
+      <div className="flex items-center gap-1 border-b border-border">
+        {(["all", "manual", "api"] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setSourceTab(tab)}
+            className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
+              sourceTab === tab
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab === "all" ? `All (${clients.length})` : tab === "manual" ? `Manual (${clients.filter(c => c.source === "manual" || !c.source).length})` : `API Imported (${clients.filter(c => c.source === "import").length})`}
+          </button>
+        ))}
       </div>
 
       {/* Content */}

@@ -94,7 +94,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
       <div className="space-y-2">
         <Label>Client Group <span className="text-destructive">*</span></Label>
         {groups.length > 0 ? (
-          <div className="grid grid-cols-2 gap-2">
+          <div className={`grid grid-cols-2 gap-2 rounded-md p-2 transition-colors ${errors.selectedGroupIds ? "ring-2 ring-destructive/50 bg-destructive/5" : ""}`}>
             {groups.map((g) => (
               <label key={g.id} className="flex items-center gap-2 cursor-pointer text-sm">
                 <Checkbox

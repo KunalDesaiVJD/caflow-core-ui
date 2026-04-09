@@ -235,9 +235,16 @@ const NewClientWizard = () => {
       const fyClass = (fyClassRes.data?.[0] as any) ?? null;
       const fyAudit = (fyAuditRes.data?.[0] as any) ?? null;
 
+      // GAP-2: load existing group memberships so edit mode doesn't wipe them on save
+      const { data: existingMemberships } = await supabase
+        .from("client_group_memberships")
+        .select("group_id")
+        .eq("client_id", clientId!);
+      const existingGroupIds = (existingMemberships || []).map((m: any) => m.group_id);
+
       setBasicInfo({
         name: client.name || "",
-        selectedGroupIds: [],
+        selectedGroupIds: existingGroupIds,
         pan: client.pan || "",
         entity_type: client.entity_type || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
@@ -281,6 +288,15 @@ const NewClientWizard = () => {
 
     return () => { mounted = false; };
   }, [clientId, isEditMode, toast]);
+
+  // GAP-4: detect if this is an API-imported draft being reviewed
+  const [isApiDraft, setIsApiDraft] = useState(false);
+  useEffect(() => {
+    if (!isEditMode || !clientId) return;
+    supabase.from("clients").select("source, is_draft").eq("id", clientId).maybeSingle().then(({ data }) => {
+      if (data?.source === "api" && data?.is_draft === true) setIsApiDraft(true);
+    });
+  }, [clientId, isEditMode]);
 
   /* ───── Validation ───── */
   const validateBasicInfo = async (): Promise<boolean> => {
@@ -351,6 +367,12 @@ const NewClientWizard = () => {
     }
     if (serviceBilling.billingMode === "package_wise" && hasPackageService && !serviceBilling.packageConfig.package_name.trim()) {
       errors.package_name = "Package name is required when using package mode.";
+    }
+    // GAP-5: cross-step dependency warnings are now HARD blocks — prevent proceeding until resolved
+    for (const w of crossStepWarnings) {
+      if (w.type === "gst") errors.services = w.message;
+      if (w.type === "tds") errors.tds = w.message;
+      if (w.type === "itr") errors.itr = w.message;
     }
     setServiceErrors(errors);
     return Object.keys(errors).length === 0;
@@ -649,6 +671,20 @@ const NewClientWizard = () => {
             : "Onboarding wizard — complete all steps to set up the client."}
         </p>
       </div>
+
+      {/* GAP-4: API Import Review banner */}
+      {isApiDraft && (
+        <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 p-4">
+          <div className="text-blue-600 dark:text-blue-400 mt-0.5">ℹ</div>
+          <div>
+            <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">API Import — Review Required</p>
+            <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">
+              This client was imported via API. Fields have been auto-filled from the import data.
+              Review each step and save to activate the client.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Edit mode: Tab navigation | Create mode: Progress bar */}
       {isEditMode ? (
