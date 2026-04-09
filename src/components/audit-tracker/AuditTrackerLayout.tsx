@@ -22,18 +22,19 @@ import type { PlanSaveData } from "./planning/PlanningEntryDialog";
 interface Props {
   firmId: string;
   userId: string;
+  isSuperadmin?: boolean;
 }
 
-export default function AuditTrackerLayout({ firmId, userId }: Props) {
-  const { clients }    = useClients(firmId);
-  const { users }      = useUsers(firmId);
+export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Props) {
+  const { clients }    = useClients(firmId, isSuperadmin);
+  const { users }      = useUsers(firmId, isSuperadmin);
   const { auditFirms } = useFirms(firmId);
 
   const {
     entries, comms, loading, useLs,
     addEntry, updateEntry, removeEntry,
     addComm, updateComm, removeComm,
-  } = useAuditPlanning(firmId, userId);
+  } = useAuditPlanning(firmId, userId, isSuperadmin);
 
   // ── Calendar callbacks ─────────────────────────────────────────────────────
 
@@ -99,6 +100,7 @@ export default function AuditTrackerLayout({ firmId, userId }: Props) {
             users={users}
             auditFirms={auditFirms}
             planEntries={entries}
+            isSuperadmin={isSuperadmin}
           />
         </TabsContent>
       </Tabs>

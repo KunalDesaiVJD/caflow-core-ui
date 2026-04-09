@@ -75,17 +75,18 @@ const BLANK_ROW: StatusEntry = {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  firmId:      string;
-  clients:     ClientOption[];
-  users:       UserOption[];
-  auditFirms:  AuditFirmOption[];
-  planEntries: PlanEntry[];
+  firmId:       string;
+  clients:      ClientOption[];
+  users:        UserOption[];
+  auditFirms:   AuditFirmOption[];
+  planEntries:  PlanEntry[];
+  isSuperadmin?: boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries }: Props) {
-  const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId);
+export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin }: Props) {
+  const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin);
 
   // ── Search (debounced 300 ms) ──────────────────────────────────────────────
   const [searchRaw, setSearchRaw] = useState("");

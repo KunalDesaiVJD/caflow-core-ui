@@ -1,7 +1,7 @@
 /**
  * useEmployeeDropdown
- * Fetches all active users for the current firm, used in employee
- * assignment dropdowns on the Worksheet sheet.
+ * Fetches all active users for assignment dropdowns on the Worksheet sheet.
+ * Superadmin sees users from ALL firms; regular users see their own firm only.
  */
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -19,19 +19,21 @@ export function useEmployeeDropdown(): {
   loading: boolean;
 } {
   const { user } = useAuth();
+  const isSuperadmin = user?.role === "superadmin";
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
-    queryKey: ["aws-employees", user?.firm_id],
+    queryKey: ["aws-employees", isSuperadmin ? "__all__" : user?.firm_id],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("users")
         .select("id, name, role, icai_reg_no")
-        .eq("firm_id", user?.firm_id ?? "")
         .order("name");
+      if (!isSuperadmin) q = q.eq("firm_id", user?.firm_id ?? "");
+      const { data, error } = await q;
       if (error) console.error("[useEmployeeDropdown] Supabase error:", error);
       return (data || []) as Employee[];
     },
-    enabled: !!user?.firm_id,
+    enabled: isSuperadmin || !!user?.firm_id,
     staleTime: 120_000,
   });
 

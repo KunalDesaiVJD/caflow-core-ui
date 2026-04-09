@@ -8,6 +8,7 @@ import AuditTrackerLayout from "@/components/audit-tracker/AuditTrackerLayout";
 
 export default function AuditTracker() {
   const { user, loading } = useAuth();
+  const isSuperadmin = user?.role === "superadmin";
   const firmId = user?.firm_id || "";
   const userId = user?.id      || "";
 
@@ -21,8 +22,8 @@ export default function AuditTracker() {
     );
   }
 
-  // Session resolved but this account has no firm_id assigned
-  if (!firmId) {
+  // Non-superadmin with no firm_id — show guidance
+  if (!firmId && !isSuperadmin) {
     return (
       <div className="p-6 space-y-1">
         <p className="text-sm font-medium text-destructive">No firm assigned to this account.</p>
@@ -49,7 +50,7 @@ export default function AuditTracker() {
         </div>
       </div>
 
-      <AuditTrackerLayout firmId={firmId} userId={userId} />
+      <AuditTrackerLayout firmId={firmId} userId={userId} isSuperadmin={isSuperadmin} />
     </div>
   );
 }

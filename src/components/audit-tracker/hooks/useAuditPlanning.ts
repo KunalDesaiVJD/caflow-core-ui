@@ -49,21 +49,22 @@ function lsSave<T>(key: string, data: T[]) {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useAuditPlanning(firmId: string, userId?: string) {
+export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?: boolean) {
   const [entries, setEntries] = useState<PlanEntry[]>([]);
   const [comms,   setComms]   = useState<CommEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [useLs,   setUseLs]   = useState(false);   // true = Supabase tables absent
 
   const load = useCallback(async () => {
-    if (!firmId) { setLoading(false); return; }
+    if (!firmId && !isSuperadmin) { setLoading(false); return; }
     setLoading(true);
 
-    const { data: planData, error: planErr } = await supabase
+    let planQ = supabase
       .from("audit_planning")
       .select("*")
-      .eq("firm_id", firmId)
       .order("planned_from", { ascending: true });
+    if (!isSuperadmin) planQ = planQ.eq("firm_id", firmId);
+    const { data: planData, error: planErr } = await planQ;
 
     if (planErr) {
       // Supabase table doesn't exist — use localStorage
@@ -77,14 +78,15 @@ export function useAuditPlanning(firmId: string, userId?: string) {
     setUseLs(false);
     setEntries((planData as PlanEntry[]) || []);
 
-    const { data: commData } = await supabase
+    let commQ = supabase
       .from("audit_communication")
       .select("*")
-      .eq("firm_id", firmId)
       .order("created_at", { ascending: false });
+    if (!isSuperadmin) commQ = commQ.eq("firm_id", firmId);
+    const { data: commData } = await commQ;
     setComms((commData as CommEntry[]) || []);
     setLoading(false);
-  }, [firmId]);
+  }, [firmId, isSuperadmin]);
 
   useEffect(() => { load(); }, [load]);
 

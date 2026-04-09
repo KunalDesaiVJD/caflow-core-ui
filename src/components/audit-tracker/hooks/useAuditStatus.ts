@@ -52,20 +52,21 @@ function lsSave(firmId: string, data: StatusEntry[]) {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useAuditStatus(firmId: string) {
+export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
   const [rows,    setRows]    = useState<StatusEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [useLs,   setUseLs]   = useState(false);
 
   const load = useCallback(async () => {
-    if (!firmId) { setLoading(false); return; }
+    if (!firmId && !isSuperadmin) { setLoading(false); return; }
     setLoading(true);
 
-    const { data, error } = await supabase
+    let q = supabase
       .from("audit_status")
       .select("*")
-      .eq("firm_id", firmId)
       .order("created_at", { ascending: true });
+    if (!isSuperadmin) q = q.eq("firm_id", firmId);
+    const { data, error } = await q;
 
     if (error) {
       setUseLs(true);
