@@ -17,7 +17,7 @@
  *   ALTER TABLE clients ALTER COLUMN source SET DEFAULT 'manual';
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -113,8 +113,16 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
   const [newRecords,   setNewRecords]   = useState<ApiRecord[]>([]);
   const [totalFetched, setTotalFetched] = useState(0);
   const [skippedCount, setSkippedCount] = useState(0);
+  const [invalidCount, setInvalidCount] = useState(0);   // records with no customer_id
+  const [showPreview,  setShowPreview]  = useState(false); // collapsible preview table
   const [progress,     setProgress]     = useState({ current: 0, total: 0 });
   const [result,       setResult]       = useState<SyncResult>({ created: 0, skipped: 0, failed: 0, errors: [] });
+
+  // Auto-start fetch as soon as the dialog opens — no extra click needed
+  useEffect(() => {
+    if (open && step === "idle") handleFetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // ── Step 1: Fetch + deduplicate ──────────────────────────────────────────────
 
@@ -157,20 +165,21 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
         ...((draftRes.data    || []) as any[]).map((c: any) => String(c.customer_id)),
       ]);
 
-      // 1c. Split: new vs duplicate
-      //   - Skip if customer_id is null/empty in API response (spec rule 3)
-      //   - Skip if customer_id already exists in DB (spec rule 1)
-      //   - Repeated syncs safe — only truly new records pass through (spec rule 5)
+      // 1c. Split: new vs duplicate vs invalid
+      //   - invalid  = customer_id null/empty in API (spec rule 3)
+      //   - skipped  = customer_id already in DB     (spec rule 1)
+      //   - toImport = net-new records only           (spec rule 5)
       const toImport: ApiRecord[] = [];
-      let skip = 0;
+      let skip    = 0;
+      let invalid = 0;
       for (const r of records) {
         const custId = r.CustomerId != null ? String(r.CustomerId) : "";
         if (!custId) {
-          skip++; // No customer_id in API record — skip
+          invalid++;   // No customer_id — skip silently
           continue;
         }
         if (existingCustIds.has(custId)) {
-          skip++; // Already exists (published or draft)
+          skip++;      // Already exists (published or draft)
         } else {
           toImport.push(r);
         }
@@ -179,6 +188,8 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
       setTotalFetched(records.length);
       setNewRecords(toImport);
       setSkippedCount(skip);
+      setInvalidCount(invalid);
+      setShowPreview(false);
       setStep("preview");
     } catch (err: any) {
       const msg = err?.name === "AbortError"
@@ -288,6 +299,8 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
     setTotalFetched(0);
     setSkippedCount(0);
     setProgress({ current: 0, total: 0 });
+    setInvalidCount(0);
+    setShowPreview(false);
     setResult({ created: 0, skipped: 0, failed: 0, errors: [] });
     onOpenChange(false);
   }, [onOpenChange]);
@@ -300,118 +313,133 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 text-primary" />
-            Sync Clients from API
+            Sync Customers from API
           </DialogTitle>
           <DialogDescription>
-            Fetch customers from eofficeportal and import new ones into CaFlow.
+            Fetching and importing customers from eofficeportal into CaFlow.
           </DialogDescription>
         </DialogHeader>
 
-        {/* ── IDLE ── */}
-        {step === "idle" && (
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              This will fetch all customers from your eofficeportal account and create
-              new draft clients for any that don't already exist (matched by PAN or
-              Customer ID).
-            </p>
-            <ul className="text-sm space-y-1 text-muted-foreground list-disc list-inside">
-              <li>Existing clients (same PAN or Customer ID) are skipped</li>
-              <li>New clients are created as drafts (<code>is_draft = true</code>)</li>
-              <li>Group membership is auto-assigned when group names match</li>
-              <li>Entity types are mapped from API to CaFlow values</li>
-            </ul>
-            <DialogFooter>
-              <Button variant="outline" onClick={handleClose}>Cancel</Button>
-              <Button onClick={handleFetch} className="gap-2">
-                <RefreshCw className="h-4 w-4" /> Fetch from API
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
-
-        {/* ── FETCHING ── */}
-        {step === "fetching" && (
-          <div className="py-8 flex flex-col items-center gap-4">
-            <RefreshCw className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-sm text-muted-foreground">
-              Fetching customers from eofficeportal…
-            </p>
+        {/* ── FETCHING — auto-starts when dialog opens ── */}
+        {(step === "idle" || step === "fetching") && (
+          <div className="py-10 flex flex-col items-center gap-5">
+            <RefreshCw className="h-9 w-9 text-primary animate-spin" />
+            <div className="text-center space-y-1">
+              <p className="text-sm font-medium">Fetching customer list from eofficeportal…</p>
+              <p className="text-xs text-muted-foreground">This may take a few seconds</p>
+            </div>
+            {/* Indeterminate shimmer bar */}
+            <div className="w-full rounded-full h-2 bg-muted overflow-hidden">
+              <div className="h-full bg-primary rounded-full animate-pulse w-2/3" />
+            </div>
           </div>
         )}
 
         {/* ── PREVIEW ── */}
         {step === "preview" && (
-          <div className="space-y-4 py-2">
-            {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-lg border bg-muted/30 p-3 text-center">
-                <p className="text-2xl font-bold text-foreground">{totalFetched}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Fetched</p>
+          <div className="space-y-4 py-1">
+
+            {/* 📊 Sync Summary table */}
+            <div className="rounded-lg border overflow-hidden">
+              <div className="bg-muted/40 px-4 py-2.5 flex items-center gap-2 border-b">
+                <Users className="h-4 w-4 text-primary" />
+                <span className="text-sm font-semibold">Sync Summary</span>
               </div>
-              <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800 p-3 text-center">
-                <p className="text-2xl font-bold text-emerald-600">{newRecords.length}</p>
-                <p className="text-xs text-emerald-600 mt-0.5">New</p>
-              </div>
-              <div className="rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-3 text-center">
-                <p className="text-2xl font-bold text-amber-600">{skippedCount}</p>
-                <p className="text-xs text-amber-600 mt-0.5">Already exist</p>
-              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  <tr className="border-b">
+                    <td className="px-4 py-2.5 text-muted-foreground">Total from API</td>
+                    <td className="px-4 py-2.5 font-semibold text-right">{totalFetched}</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2.5 text-muted-foreground">Already in CaFlow</td>
+                    <td className="px-4 py-2.5 font-semibold text-right text-amber-600">
+                      {skippedCount} <span className="text-xs font-normal">(skipped)</span>
+                    </td>
+                  </tr>
+                  <tr className={invalidCount > 0 ? "border-b" : ""}>
+                    <td className="px-4 py-2.5 text-muted-foreground">New to import</td>
+                    <td className="px-4 py-2.5 font-semibold text-right text-emerald-600">
+                      {newRecords.length}
+                    </td>
+                  </tr>
+                  {invalidCount > 0 && (
+                    <tr>
+                      <td className="px-4 py-2.5 text-muted-foreground">Invalid (no ID)</td>
+                      <td className="px-4 py-2.5 font-semibold text-right text-destructive">
+                        {invalidCount}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
 
-            {newRecords.length === 0 ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-4 flex gap-2">
+            {/* Nothing to import */}
+            {newRecords.length === 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 flex gap-2">
                 <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-sm text-amber-700 dark:text-amber-300">
-                  All {totalFetched} clients already exist in CaFlow — nothing to import.
+                  All customers already exist in CaFlow — nothing to import.
                 </p>
               </div>
-            ) : (
+            )}
+
+            {/* Warning + preview when there are new records */}
+            {newRecords.length > 0 && (
               <>
-                {/* Preview table — first 5 rows */}
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-2">
-                    Preview (first {Math.min(5, newRecords.length)} of {newRecords.length} new clients)
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 flex gap-2">
+                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    New customers will be created as <strong>DRAFTS</strong>.
+                    Complete setup via <strong>Continue Setup</strong> in the draft banner.
                   </p>
-                  <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-medium">Name</th>
-                          <th className="text-left px-3 py-2 font-medium">PAN</th>
-                          <th className="text-left px-3 py-2 font-medium">Type</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {newRecords.slice(0, 5).map((r) => (
-                          <tr key={r.CustomerId} className="border-t">
-                            <td className="px-3 py-1.5 truncate max-w-[140px]">{r.ClientName || "—"}</td>
-                            <td className="px-3 py-1.5 font-mono">{r.PanCard || "—"}</td>
-                            <td className="px-3 py-1.5">
-                              <Badge variant="outline" className="text-[10px] px-1 py-0">
-                                {ENTITY_MAP[r.companytypename] ?? r.companytypename ?? "—"}
-                              </Badge>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {newRecords.length > 5 && (
-                      <p className="text-xs text-muted-foreground px-3 py-2 border-t bg-muted/20">
-                        … and {newRecords.length - 5} more
-                      </p>
-                    )}
-                  </div>
                 </div>
 
-                <p className="text-xs text-muted-foreground">
-                  All {newRecords.length} new clients will be created as <strong>drafts</strong> with
-                  source = <code>api_import</code>. Complete their setup via the Clients page.
-                </p>
+                {/* Collapsible preview table */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((p) => !p)}
+                    className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                  >
+                    <span>Preview New Customers</span>
+                    <span className="text-xs">{showPreview ? "▲" : "▾"}</span>
+                  </button>
+
+                  {showPreview && (
+                    <div className="mt-2 rounded-md border overflow-hidden max-h-52 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted/50 sticky top-0">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium w-20">ID</th>
+                            <th className="text-left px-3 py-2 font-medium">Name</th>
+                            <th className="text-left px-3 py-2 font-medium w-28">PAN</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {newRecords.map((r) => (
+                            <tr key={r.CustomerId} className="border-t hover:bg-muted/20">
+                              <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                                {r.CustomerCode || String(r.CustomerId)}
+                              </td>
+                              <td className="px-3 py-1.5 truncate max-w-[180px]">
+                                {r.ClientName || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 font-mono">
+                                {r.PanCard || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -423,93 +451,100 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
                   Import {newRecords.length} Clients
                 </Button>
               )}
+              {newRecords.length === 0 && (
+                <Button onClick={handleClose}>Close</Button>
+              )}
             </DialogFooter>
           </div>
         )}
 
         {/* ── IMPORTING ── */}
         {step === "importing" && (
-          <div className="py-6 space-y-4">
+          <div className="py-8 space-y-5">
             <div className="flex items-center gap-3">
               <RefreshCw className="h-5 w-5 text-primary animate-spin shrink-0" />
               <div className="flex-1">
-                <p className="text-sm font-medium">
-                  Importing {progress.current} / {progress.total} clients…
+                <p className="text-sm font-semibold">
+                  Importing… {progress.current} / {progress.total}
                 </p>
-                <p className="text-xs text-muted-foreground mt-0.5">Do not close this window.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Do not close this window.
+                </p>
               </div>
             </div>
-            <Progress value={pct} className="h-2" />
-            <p className="text-xs text-right text-muted-foreground">{pct}%</p>
+            <Progress value={pct} className="h-2.5" />
+            <p className="text-xs text-right text-muted-foreground tabular-nums">{pct}%</p>
           </div>
         )}
 
         {/* ── DONE ── */}
         {step === "done" && (
-          <div className="space-y-4 py-2">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800 p-3 text-center">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500 mx-auto mb-1" />
-                <p className="text-2xl font-bold text-emerald-600">{result.created}</p>
-                <p className="text-xs text-emerald-600 mt-0.5">Created</p>
-              </div>
-              <div className="rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-3 text-center">
-                <SkipForward className="h-5 w-5 text-amber-500 mx-auto mb-1" />
-                <p className="text-2xl font-bold text-amber-600">{result.skipped}</p>
-                <p className="text-xs text-amber-600 mt-0.5">Skipped</p>
-              </div>
-              <div className={`rounded-lg border p-3 text-center ${
-                result.failed > 0
-                  ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800"
-                  : "bg-muted/30"
-              }`}>
-                {result.failed > 0
-                  ? <XCircle className="h-5 w-5 text-destructive mx-auto mb-1" />
-                  : <CheckCircle2 className="h-5 w-5 text-muted-foreground mx-auto mb-1" />
-                }
-                <p className={`text-2xl font-bold ${result.failed > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                  {result.failed}
-                </p>
-                <p className={`text-xs mt-0.5 ${result.failed > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                  Failed
-                </p>
-              </div>
+          <div className="space-y-4 py-1">
+
+            {/* ✅ Header */}
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+              <p className="text-base font-semibold">Sync Complete!</p>
             </div>
 
-            {result.created > 0 && (
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-3 flex gap-2">
-                <Users className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                <p className="text-sm text-emerald-700 dark:text-emerald-300">
-                  {result.created} client{result.created !== 1 ? "s" : ""} created as drafts.
-                  Visit the <strong>Clients via API</strong> tab to complete their setup.
-                </p>
-              </div>
-            )}
+            {/* Results table */}
+            <div className="rounded-lg border overflow-hidden text-sm">
+              <table className="w-full">
+                <tbody>
+                  <tr className="border-b">
+                    <td className="px-4 py-2.5 text-muted-foreground">Created</td>
+                    <td className="px-4 py-2.5 font-semibold text-emerald-600">
+                      {result.created} new draft client{result.created !== 1 ? "s" : ""}
+                    </td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2.5 text-muted-foreground">Skipped</td>
+                    <td className="px-4 py-2.5 font-semibold text-amber-600">
+                      {result.skipped} (already exist)
+                    </td>
+                  </tr>
+                  <tr className={result.failed > 0 ? "border-b" : ""}>
+                    <td className="px-4 py-2.5 text-muted-foreground">Failed</td>
+                    <td className={`px-4 py-2.5 font-semibold ${result.failed > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                      {result.failed}{result.failed > 0 ? " (see errors below)" : ""}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
+            {/* Error detail list */}
             {result.failed > 0 && result.errors.length > 0 && (
-              <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950/20 p-3">
-                <p className="text-xs font-medium text-destructive mb-1.5">
-                  {result.failed} failed import{result.failed !== 1 ? "s" : ""}:
-                </p>
-                <ul className="text-xs text-destructive/80 space-y-1">
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-xs font-semibold text-destructive mb-2">Errors:</p>
+                <ul className="text-xs space-y-1 text-destructive/80">
                   {result.errors.slice(0, 10).map((e, i) => (
-                    <li key={i} className="flex gap-1.5">
-                      <span className="font-mono shrink-0">#{e.customer_id}</span>
-                      <span className="truncate">{e.name || "—"}</span>
-                      <span className="text-destructive/60 truncate">— {e.error}</span>
+                    <li key={i}>
+                      • <span className="font-mono">{e.customer_id}</span>: {e.error}
                     </li>
                   ))}
                   {result.errors.length > 10 && (
-                    <li className="text-muted-foreground">… and {result.errors.length - 10} more</li>
+                    <li className="text-muted-foreground">
+                      … and {result.errors.length - 10} more
+                    </li>
                   )}
                 </ul>
               </div>
             )}
 
+            {/* Guidance note */}
+            {result.created > 0 && (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-3 flex gap-2">
+                <Users className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                  Draft clients appear in the <strong>Clients via API</strong> tab and
+                  in the Draft banner. Complete setup via <strong>Continue Setup</strong>.
+                </p>
+              </div>
+            )}
+
             <DialogFooter>
-              <Button onClick={handleClose} className="gap-2">
-                <CheckCircle2 className="h-4 w-4" /> Done
-              </Button>
+              <Button onClick={handleClose}>Close</Button>
             </DialogFooter>
           </div>
         )}
@@ -519,21 +554,28 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
           <div className="space-y-4 py-2">
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 flex gap-3">
               <XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-destructive">Sync failed</p>
+              <div className="space-y-1.5">
+                <p className="text-sm font-semibold text-destructive">Sync failed</p>
                 <p className="text-xs text-muted-foreground break-all">{errorMsg}</p>
-                {(errorMsg.includes("SSL") || errorMsg.includes("cert") || errorMsg.includes("Failed to fetch") || errorMsg.includes("ERR_CERT")) && (
-                  <p className="text-xs text-amber-600 mt-2">
-                    ⚠️ The API server's SSL certificate may be expired. Ask your IT team
-                    to renew the certificate at eofficeportal.com, then retry.
+                {(errorMsg.includes("SSL") ||
+                  errorMsg.includes("cert") ||
+                  errorMsg.includes("Failed to fetch") ||
+                  errorMsg.includes("ERR_CERT") ||
+                  errorMsg.includes("NetworkError")) && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    ⚠️ The API server's SSL certificate may be expired. Ask your IT
+                    team to renew the certificate at eofficeportal.com, then retry.
                   </p>
                 )}
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={handleClose}>Close</Button>
-              <Button onClick={() => { setStep("idle"); setErrorMsg(""); }} className="gap-2">
-                <RotateCcw className="h-4 w-4" /> Try Again
+              <Button
+                onClick={() => { setStep("idle"); setErrorMsg(""); handleFetch(); }}
+                className="gap-2"
+              >
+                <RotateCcw className="h-4 w-4" /> Retry
               </Button>
             </DialogFooter>
           </div>

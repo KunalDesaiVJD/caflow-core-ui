@@ -18,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
-import { SyncFromApiDialog } from "@/components/clients/SyncFromApiDialog";
+import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
 
 interface Client {
   id: string;
@@ -741,13 +741,13 @@ const Clients = () => {
       </Dialog>
 
       {/* Sync from API Dialog */}
-      <SyncFromApiDialog
+      <CustomerSyncDialog
         open={showSyncDialog}
         onOpenChange={setShowSyncDialog}
         firmId={effectiveFirmId}
         onComplete={() => {
           setShowSyncDialog(false);
-          fetchData();
+          fetchData();  // Step 5: refresh client list after sync
         }}
       />
     </div>
