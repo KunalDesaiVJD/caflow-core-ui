@@ -81,6 +81,8 @@ const Clients = () => {
   // GAP-6: draft management
   const [drafts, setDrafts] = useState<Client[]>([]);
   const [draftLoading, setDraftLoading] = useState(false);
+  const [deleteDraftCandidate, setDeleteDraftCandidate] = useState<Client | null>(null);
+  const [deleteDraftLoading, setDeleteDraftLoading] = useState(false);
 
   const fetchData = async () => {
     // GAP-1: always scope to the effective firm — never load cross-firm data
@@ -151,15 +153,25 @@ const Clients = () => {
     setDraftLoading(false);
   };
 
-  // GAP-6: delete a draft client directly from the list
-  const handleDeleteDraft = async (draftId: string) => {
+  // GAP-6: hard-delete a draft client + companion records (called after confirmation)
+  const handleDeleteDraft = async () => {
+    if (!deleteDraftCandidate) return;
+    setDeleteDraftLoading(true);
     try {
-      const { error } = await supabase.from("clients").delete().eq("id", draftId);
+      // Cascade-delete companion records first to avoid FK constraint issues
+      await Promise.all([
+        supabase.from("client_group_memberships").delete().eq("client_id", deleteDraftCandidate.id),
+        supabase.from("client_profiles").delete().eq("client_id", deleteDraftCandidate.id),
+      ]);
+      const { error } = await supabase.from("clients").delete().eq("id", deleteDraftCandidate.id);
       if (error) throw error;
-      setDrafts(prev => prev.filter(d => d.id !== draftId));
-      toast({ title: "Draft deleted" });
+      setDrafts(prev => prev.filter(d => d.id !== deleteDraftCandidate.id));
+      setDeleteDraftCandidate(null);
+      toast({ title: "Draft deleted", description: "The incomplete client record has been removed." });
     } catch (e: any) {
       toast({ title: "Error deleting draft", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteDraftLoading(false);
     }
   };
 
@@ -359,29 +371,67 @@ const Clients = () => {
         </Popover>
       </div>
 
-      {/* GAP-6: Draft Management Banner */}
+      {/* GAP-6: Draft Clients Banner — hidden when zero drafts */}
       {drafts.length > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">
-              {drafts.length} Draft{drafts.length > 1 ? "s" : ""} Pending Review
+        <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-4">
+          {/* Banner heading */}
+          <div className="flex items-center gap-2 mb-3">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-400 text-white text-[10px] font-bold shrink-0">
+              {drafts.length}
+            </span>
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              {drafts.length} Draft Client{drafts.length !== 1 ? "s" : ""} — Setup Incomplete
             </p>
           </div>
-          <div className="space-y-1.5">
-            {drafts.map(d => (
-              <div key={d.id} className="flex items-center justify-between rounded-md bg-white dark:bg-background border border-amber-100 dark:border-amber-900/50 px-3 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-medium truncate">{d.name || "Unnamed Draft"}</span>
-                  {d.source === "api" && <Badge variant="outline" className="text-[10px] border-blue-400 text-blue-600">API</Badge>}
-                  {d.source === "manual" && <Badge variant="outline" className="text-[10px]">Manual</Badge>}
-                  {d.pan && <span className="text-[11px] font-mono text-muted-foreground">{d.pan}</span>}
+
+          {/* Draft rows: Name | PAN | Created date | Actions */}
+          <div className="space-y-2">
+            {drafts.map(d => {
+              const createdLabel = d.created_at
+                ? new Date(d.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                : "—";
+              return (
+                <div
+                  key={d.id}
+                  className="flex items-center gap-3 rounded-md bg-white dark:bg-background border border-amber-200 dark:border-amber-800/60 px-3 py-2.5"
+                >
+                  {/* Name */}
+                  <span className="flex-1 text-sm font-medium text-foreground truncate min-w-0">
+                    {d.name || <span className="italic text-muted-foreground">Unnamed Draft</span>}
+                  </span>
+
+                  {/* PAN */}
+                  <span className="hidden sm:block text-xs font-mono text-muted-foreground w-24 shrink-0 truncate">
+                    {d.pan || "—"}
+                  </span>
+
+                  {/* Created date */}
+                  <span className="hidden md:block text-xs text-muted-foreground w-28 shrink-0">
+                    {createdLabel}
+                  </span>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-300"
+                      onClick={() => navigate(`/clients/edit/${d.id}`)}
+                    >
+                      Continue Setup
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeleteDraftCandidate(d)}
+                    >
+                      Delete Draft
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/clients/edit/${d.id}`)}>Resume</Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive" onClick={() => handleDeleteDraft(d.id)}>Delete</Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -559,7 +609,31 @@ const Clients = () => {
         </>
       )}
 
-      {/* Delete Confirmation */}
+      {/* Draft Delete Confirmation */}
+      <AlertDialog open={!!deleteDraftCandidate} onOpenChange={open => { if (!open) setDeleteDraftCandidate(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Draft Client?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the incomplete client record
+              {deleteDraftCandidate?.name ? <> <strong>{deleteDraftCandidate.name}</strong></> : ""} along with
+              all associated profiles and group memberships. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteDraftLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteDraft}
+              disabled={deleteDraftLoading}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteDraftLoading ? "Deleting…" : "Delete Draft"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Archive Client Confirmation */}
       <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
