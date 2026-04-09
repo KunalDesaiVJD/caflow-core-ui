@@ -28,6 +28,8 @@ interface Client {
   gstin: string[] | null;
   created_at: string | null;
   firm_id: string | null;
+  /** 'manual' | 'import' — requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual' */
+  source?: string | null;
 }
 
 interface GroupInfo {
@@ -79,8 +81,17 @@ const Clients = () => {
   const [importing, setImporting] = useState(false);
 
   const fetchData = async () => {
+    // GAP-1: always scope to the effective firm — never load cross-firm data
+    if (!effectiveFirmId) {
+      setClients([]);
+      setLoading(false);
+      return;
+    }
     const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*", { count: "exact" }).eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }),
+      supabase.from("clients").select("*", { count: "exact" })
+        .eq("is_draft", false).is("deleted_at", null)
+        .eq("firm_id", effectiveFirmId)               // ← firm-scoped
+        .order("created_at", { ascending: false }),
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
@@ -106,7 +117,9 @@ const Clients = () => {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  // GAP-2: re-fetch whenever effectiveFirmId changes (superadmin firm selector, auth load)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, [effectiveFirmId]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -202,8 +215,10 @@ const Clients = () => {
 
       if (rows.length === 0) { toast({ title: "No data found", variant: "destructive" }); return; }
 
-      // Get existing PANs for duplicate check
-      const { data: existingClients } = await supabase.from("clients").select("pan").not("pan", "is", null);
+      // GAP-6: scope PAN duplicate check to the current firm only
+      let existingPansQuery = supabase.from("clients").select("pan").not("pan", "is", null).is("deleted_at", null);
+      if (effectiveFirmId) existingPansQuery = existingPansQuery.eq("firm_id", effectiveFirmId);
+      const { data: existingClients } = await existingPansQuery;
       const existingPans = new Set((existingClients || []).map((c: any) => (c.pan || "").toUpperCase()).filter(Boolean));
 
       let success = 0;
@@ -229,10 +244,12 @@ const Clients = () => {
           pan: pan || null,
           entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
           gstin,
-          // TODO: Supabase RLS policy needs superadmin bypass for clients insert
           firm_id: effectiveFirmId,
           user_id: user?.id || null,
           is_draft: false,
+          // GAP-7: tag origin so imported rows are distinguishable in the UI
+          // Requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual';
+          source: "import",
         } as any).select("id").single();
 
         if (error) {
@@ -406,7 +423,12 @@ const Clients = () => {
                   const svcCount = serviceCountMap[client.id] || 0;
                   return (
                     <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
-                      <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                      <TableCell className="font-medium text-sm">
+                        <span className="flex items-center gap-1.5">
+                          {client.name || "Unnamed"}
+                          {client.source === "import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                        </span>
+                      </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                       <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
@@ -507,8 +529,9 @@ const Clients = () => {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                           <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
+                          {/* GAP-3: respect canEdit / canDelete in card view, same as IT + table views */}
+                          {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
+                          {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>

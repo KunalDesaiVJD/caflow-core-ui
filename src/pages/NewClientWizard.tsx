@@ -51,9 +51,8 @@ const NewClientWizard = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
-  // All clients go under V J Desai & Co.
-  const VJ_DESAI_FIRM_ID = "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
-  const effectiveFirmId = VJ_DESAI_FIRM_ID;
+  // GAP-4: use the authenticated user's own firm_id — never hardcode a UUID
+  const effectiveFirmId = user?.firm_id ?? null;
 
   const isEditMode = Boolean(clientId);
   const [draftId, setDraftId] = useState<string | null>(clientId || null);
@@ -116,6 +115,9 @@ const NewClientWizard = () => {
           firm_id: effectiveFirmId,
           user_id: authData.user.id,
           is_draft: true,
+          // GAP-7: tag origin — 'manual' for wizard-created clients
+          // Requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual';
+          source: "manual",
         } as any)
         .select("id")
         .single();
@@ -300,11 +302,14 @@ const NewClientWizard = () => {
       errors.mobile = "Mobile number must be 10 digits";
     }
     if (basicInfo.pan && !errors.pan) {
-      const { data: existing } = await supabase
+      // GAP-5: restrict uniqueness check to the current firm — PANs are unique per firm, not globally
+      let panQuery = supabase
         .from("clients")
         .select("id")
         .eq("pan", basicInfo.pan)
-        .limit(1);
+        .is("deleted_at", null);
+      if (effectiveFirmId) panQuery = panQuery.eq("firm_id", effectiveFirmId);
+      const { data: existing } = await panQuery.limit(1);
       if (existing && existing.length > 0 && (!isEditMode || existing[0].id !== clientId)) {
         errors.pan = "Client with this PAN already exists.";
       }
