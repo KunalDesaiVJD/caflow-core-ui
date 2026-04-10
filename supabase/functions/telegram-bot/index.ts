@@ -135,6 +135,22 @@ Deno.serve(async (req: Request) => {
     const ctx     = await loadContext(userId);
     const ctxHint = buildCtxHint(ctx);
 
+    // ── Deterministic pre-checks (bypass Claude for clear keywords) ──
+    // "pdf" anywhere in message → always send_pdf (never get_invoice)
+    // This prevents Claude from routing "give me pdf for 25/2026-27" → get_invoice
+    const textLower = text.toLowerCase();
+    if (textLower.includes("pdf") && !text.startsWith("/")) {
+      const invMatch  = text.match(/(\d+\/\d{4}-\d{2,4}|\d{1,4}\/\d{4})/);
+      const pdfIntent: Intent = {
+        action:      "send_pdf",
+        invoice_no:  invMatch?.[0] ?? null,
+        client_name: null,
+      };
+      console.log(`[Bot] Pre-check PDF → send_pdf`, JSON.stringify(pdfIntent));
+      await handleSendPdf(chatId, pdfIntent, ctx);
+      return new Response("ok");
+    }
+
     // ── Parse intent with AI (two-pass + context) ─────────────────
     const intent = await parseIntent(text, ctxHint);
     console.log(`[Bot] Intent:`, JSON.stringify(intent));
