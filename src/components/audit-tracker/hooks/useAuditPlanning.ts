@@ -107,6 +107,24 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       const updated = [...entries, draft];
       setEntries(updated);
       lsSave(lsKey("planning", firmId), updated);
+
+      // Auto-add communication log entry (offline)
+      const commDraft: CommEntry = {
+        id:                 crypto.randomUUID(),
+        firm_id:            firmId,
+        planning_id:        draft.id,
+        client_name:        input.client_name,
+        audit_planned_from: input.planned_from,
+        audit_planned_to:   input.planned_to,
+        contact_person:     null,
+        contact_no:         null,
+        remarks:            "Auto-created from Planning Calendar",
+        created_at:         new Date().toISOString(),
+      };
+      const updatedComms = [commDraft, ...comms];
+      setComms(updatedComms);
+      lsSave(lsKey("communication", firmId), updatedComms);
+
       toast.success("Plan added (offline)");
       return draft;
     }
@@ -127,9 +145,33 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       .single();
 
     if (error) { toast.error(error.message); return null; }
+
+    const newEntry = data as PlanEntry;
+
+    // Part B — Auto-insert into communication log (audit_communication)
+    await supabase.from("audit_communication").insert({
+      firm_id:            firmId,
+      planning_id:        newEntry.id,
+      client_name:        input.client_name,
+      audit_planned_from: input.planned_from,
+      audit_planned_to:   input.planned_to,
+      remarks:            "Auto-created from Planning Calendar",
+    });
+
+    // Part B — Auto-upsert into audit_status as Scheduled
+    await supabase.from("audit_status").insert({
+      firm_id:                  firmId,
+      client_id:                input.client_id,
+      party_name:               input.client_name,
+      audit_status:             "Scheduled",
+      physical_audit_conducted: "No",
+      accounting_data:          "No",
+      scanned:                  "No",
+    });
+
     toast.success("Plan added");
     await load();
-    return data as PlanEntry;
+    return newEntry;
   }
 
   async function updateEntry(id: string, patch: Partial<PlanEntry>) {

@@ -25,6 +25,7 @@ import { useSpecialAttentionStorage, type AuditorEntry } from "./hooks/useSpecia
 import { useEmployeeDropdown }         from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
 import { awLoad }                      from "@/lib/awStorage";
+import { supabase }                    from "@/integrations/supabase/client";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -285,22 +286,47 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
   const { employees } = useEmployeeDropdown();
 
   // #3 — Auto-fetch Audit Carried Out By from master (statutory → tax fallback)
-  // One-way: only fills when the Special Attention list is empty (user override preserved)
+  // One-way: only fills when the Special Attention list is empty (user override preserved).
+  // Source priority: (1) local Special Attention data → (2) localStorage master → (3) Supabase audit_worksheet_master
   useEffect(() => {
     if (!loaded) return;
-    if (m.audit_carried_by.length > 0) return; // user has data — don't overwrite
+    if (m.audit_carried_by.length > 0) return; // user has saved data — don't overwrite
 
+    // ── Step 1: try localStorage (same-session or previously cached master) ──
     const statutory = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "statutory_master_json");
     const tax       = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "tax_master_json");
 
-    const source =
+    const lsSource =
       (statutory?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
         ? statutory!.audit_carried_by!
         : (tax?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
           ? tax!.audit_carried_by!
           : null;
 
-    if (source) setHeader({ audit_carried_by: source });
+    if (lsSource) { setHeader({ audit_carried_by: lsSource }); return; }
+
+    // ── Step 2: fallback to Supabase audit_worksheet_master (cross-session / saved to DB) ──
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("audit_worksheet_master")
+        .select("statutory_master_json, tax_master_json")
+        .eq("engagement_id", engagementId)
+        .maybeSingle();
+
+      if (!data) return;
+
+      const dbStatutory = (data.statutory_master_json as any)?.audit_carried_by;
+      const dbTax       = (data.tax_master_json as any)?.audit_carried_by;
+
+      const dbSource: AuditorEntry[] | null =
+        (Array.isArray(dbStatutory) && dbStatutory.filter((e: any) => e.id).length > 0)
+          ? dbStatutory
+          : (Array.isArray(dbTax) && dbTax.filter((e: any) => e.id).length > 0)
+            ? dbTax
+            : null;
+
+      if (dbSource) setHeader({ audit_carried_by: dbSource });
+    })();
   }, [loaded, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { end: fyEnd } = fyYears(data.financialYear);

@@ -179,9 +179,9 @@ export default function AuditPipeline() {
     queryFn: async () => {
       let query = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, internal_audit_applicable, stock_audit_applicable")
-        .eq("is_draft", false)
-        .is("deleted_at", null)
+        .select("id, name, entity_type")
+        .eq("client_classification", "Audit")
+        .eq("is_active", true)
         .order("name");
 
       if (user?.firm_id) {
@@ -218,6 +218,31 @@ export default function AuditPipeline() {
       return data || [];
     },
     enabled: !!user?.id,
+  });
+
+  // ─── Partners for selected audit firm (New Engagement modal) ───
+  const { data: partnersForFirm = [] } = useQuery({
+    queryKey: ["audit-firm-partners", form1A.audit_firm_id],
+    queryFn: async () => {
+      if (!form1A.audit_firm_id) return [];
+      // Try audit_registration table first (spec); fall back to audit_firms.partner_name
+      const { data: regData, error: regErr } = await supabase
+        .from("audit_registration" as any)
+        .select("id, partner_name, membership_no")
+        .eq("firm_id", form1A.audit_firm_id);
+      if (!regErr && regData?.length) return regData as { id: string; partner_name: string; membership_no: string | null }[];
+      // Fallback: single partner stored directly on audit_firms row
+      const { data: firmData } = await supabase
+        .from("audit_firms")
+        .select("id, partner_name, partner_icai_no")
+        .eq("id", form1A.audit_firm_id)
+        .single();
+      if (firmData?.partner_name) {
+        return [{ id: firmData.id, partner_name: firmData.partner_name, membership_no: firmData.partner_icai_no ?? null }];
+      }
+      return [];
+    },
+    enabled: !!form1A.audit_firm_id,
   });
 
   // ─── Selected engagement detail ───
@@ -268,7 +293,7 @@ export default function AuditPipeline() {
   // ─── Stage 1 form state ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
   const [planning, setPlanning] = useState({
@@ -288,6 +313,7 @@ export default function AuditPipeline() {
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
       audit_firm_id: engagement.audit_firm_id || "",
+      partner_id: engagement.partner_id || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -383,6 +409,8 @@ export default function AuditPipeline() {
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
         audit_firm_id: form1A.audit_firm_id || null,
+        // partner_id FK → users; only set when partner is a system user (audit_registration IDs may differ)
+        partner_id: form1A.partner_id || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -800,7 +828,10 @@ export default function AuditPipeline() {
           <div className="grid gap-4">
             <div>
               <Label>Audit Firm <span className="text-destructive">*</span></Label>
-              <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+              <Select
+                value={form1A.audit_firm_id}
+                onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v, partner_id: "" }))}
+              >
                 <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
                 <SelectContent>
                   {(auditFirmsForEng || []).length === 0 ? (
@@ -813,6 +844,36 @@ export default function AuditPipeline() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Partner — auto-populated from selected audit firm */}
+            {form1A.audit_firm_id && (
+              <div>
+                <Label>Partner</Label>
+                <Select
+                  value={form1A.partner_id}
+                  onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
+                  disabled={partnersForFirm.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners on file" : "Select partner"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {partnersForFirm.map(p => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.partner_name}
+                        {p.membership_no ? ` (${p.membership_no})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {partnersForFirm.length === 0 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Add partners in Settings → Audit Firms
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <Label>Client *</Label>
               <Select value={form1A.client_id} onValueChange={v => {

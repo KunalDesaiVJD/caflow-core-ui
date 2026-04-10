@@ -922,7 +922,20 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                       {r.invoice_gen_type === "auto" ? "Auto" : "Reminder"}
                     </Badge>
                     {r.invoice_gen_type === "reminder" ? (
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/billing/new?type=invoice&client=${r.client_id}&amount=${r.billing_amount}`)}>
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(
+                        "/billing/new?type=invoice",
+                        {
+                          state: {
+                            prefill: {
+                              client_id:   r.client_id,
+                              client_name: reminderClientMap[r.client_id] || "",
+                              amount:      r.billing_amount,
+                              period:      r.frequency,
+                              due_date:    r.next_due_date,
+                            },
+                          },
+                        }
+                      )}>
                         Create Invoice
                       </Button>
                     ) : (

@@ -407,6 +407,8 @@ const NewClientWizard = () => {
       business_activity: advancedInfo.business_nature || null,
       cin: advancedInfo.cin || null,
       is_draft: false,
+      is_active: true,
+      updated_at: new Date().toISOString(),
     };
   };
 
@@ -428,15 +430,19 @@ const NewClientWizard = () => {
         invoice_gen_type: cfg.invoice_gen_type,
         billing_mode: serviceBilling.billingMode,
       }));
-      await supabase.from("client_services").upsert(rows as any, {
+      const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
         onConflict: "client_id,service_category_id",
       });
+      if (svcError) {
+        console.error("[Services] upsert error:", svcError);
+        throw svcError;
+      }
     }
 
     // Save package if package mode
     if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
       const pkg = serviceBilling.packageConfig;
-      await supabase.from("client_service_packages").insert({
+      const { error: pkgError } = await supabase.from("client_service_packages").insert({
         client_id: targetClientId,
         package_name: pkg.package_name,
         service_category_ids: pkg.service_ids as any,
@@ -445,6 +451,10 @@ const NewClientWizard = () => {
         billing_amount: pkg.billing_amount,
         invoice_gen_type: pkg.invoice_gen_type,
       } as any);
+      if (pkgError) {
+        console.error("[Services] package insert error:", pkgError);
+        throw pkgError;
+      }
     }
 
     // Create billing reminders
@@ -455,7 +465,7 @@ const NewClientWizard = () => {
       nextDue.setDate(cfg.reminder_date);
       if (nextDue <= new Date()) nextDue.setMonth(nextDue.getMonth() + 1);
 
-      await supabase.from("billing_reminders").insert({
+      const { error: reminderError } = await supabase.from("billing_reminders").insert({
         client_id: targetClientId,
         firm_id: firmId,
         service_category_id: serviceId,
@@ -465,6 +475,10 @@ const NewClientWizard = () => {
         next_due_date: nextDue.toISOString().split("T")[0],
         invoice_gen_type: cfg.invoice_gen_type,
       } as any);
+      if (reminderError) {
+        console.error("[Services] billing_reminders insert error:", reminderError);
+        // Non-fatal — log but don't abort (RLS may block this for non-superadmin)
+      }
     }
   };
 
@@ -551,6 +565,9 @@ const NewClientWizard = () => {
       } else if (stepId === "services") {
         if (!validateServiceBilling()) { setSaving(false); return; }
         await saveServiceBillingData(clientId);
+        toast({ title: "Services saved", description: "Service billing configuration saved successfully." });
+        setSaving(false);
+        return;
       } else if (stepId === "audit") {
         await saveAuditSetup(clientId);
       }

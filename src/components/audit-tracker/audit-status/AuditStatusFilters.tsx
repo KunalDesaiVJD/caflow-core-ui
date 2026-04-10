@@ -11,16 +11,15 @@ import { Search, RefreshCw, Plus } from "lucide-react";
 // ─── Exported constant ────────────────────────────────────────────────────────
 
 export const AUDIT_STATUS_OPTIONS = [
-  "Not Started",
-  "In Progress",
-  "Under Review",
-  "Completed",
-  "Signed",
-  "Filed",
-  "Pending Signature",
-  "Pending Filing",
-  "Cancelled",
-  "OTHERS",
+  "DATA PENDING",
+  "QUERIES GIVEN TO CLIENT",
+  "PREPARE PENDING",
+  "VERIFICATION PENDING",
+  "REPORT WITH VJD",
+  "REPORT WITH KVD",
+  "REPORT SENT TO CLIENT",
+  "REPORT SIGNED",
+  "OTHERS (SPECIFY)",
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -30,10 +29,6 @@ interface Props {
   onSearch:      (v: string) => void;
   statusFilter:  string;
   onStatus:      (v: string) => void;
-  physFilter:    string;
-  onPhys:        (v: string) => void;
-  scannedFilter: string;
-  onScanned:     (v: string) => void;
   onRefresh:     () => void;
   onAddRow:      () => void;
 }
@@ -43,8 +38,6 @@ interface Props {
 export default function AuditStatusFilters({
   search, onSearch,
   statusFilter, onStatus,
-  physFilter, onPhys,
-  scannedFilter, onScanned,
   onRefresh, onAddRow,
 }: Props) {
   return (
@@ -61,7 +54,7 @@ export default function AuditStatusFilters({
         />
       </div>
 
-      {/* Audit Status filter */}
+      {/* Audit Status quick-filter */}
       <Select value={statusFilter} onValueChange={onStatus}>
         <SelectTrigger className="h-8 text-xs w-40">
           <SelectValue placeholder="All Statuses" />
@@ -71,30 +64,6 @@ export default function AuditStatusFilters({
           {AUDIT_STATUS_OPTIONS.map(s => (
             <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>
           ))}
-        </SelectContent>
-      </Select>
-
-      {/* Physical Audit filter */}
-      <Select value={physFilter} onValueChange={onPhys}>
-        <SelectTrigger className="h-8 text-xs w-36">
-          <SelectValue placeholder="Physical Audit" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all"  className="text-xs">Physical — All</SelectItem>
-          <SelectItem value="Yes"  className="text-xs">Physical — Yes</SelectItem>
-          <SelectItem value="No"   className="text-xs">Physical — No</SelectItem>
-        </SelectContent>
-      </Select>
-
-      {/* Scanned filter */}
-      <Select value={scannedFilter} onValueChange={onScanned}>
-        <SelectTrigger className="h-8 text-xs w-32">
-          <SelectValue placeholder="Scanned" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all" className="text-xs">Scanned — All</SelectItem>
-          <SelectItem value="Yes" className="text-xs">Scanned — Yes</SelectItem>
-          <SelectItem value="No"  className="text-xs">Scanned — No</SelectItem>
         </SelectContent>
       </Select>
 

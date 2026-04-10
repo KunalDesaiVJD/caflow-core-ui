@@ -44,9 +44,16 @@ const LEAVE_COLOR = "bg-gray-100 text-gray-500 border-gray-200";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Convert JS Date → "YYYY-MM-DD" */
-function toISO(d: Date) {
-  return d.toISOString().slice(0, 10);
+/**
+ * Convert JS Date → "YYYY-MM-DD" using LOCAL date components.
+ * DO NOT use d.toISOString() — it converts to UTC and shifts the date
+ * backward by the TZ offset (e.g. IST UTC+5:30 shifts Apr 9 → Apr 8).
+ */
+function toISO(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm   = String(d.getMonth() + 1).padStart(2, "0");
+  const dd   = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 /** Dates for a given month (year, month 0-indexed) */

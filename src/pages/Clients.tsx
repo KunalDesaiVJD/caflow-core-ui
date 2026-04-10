@@ -31,6 +31,8 @@ interface Client {
   firm_id: string | null;
   /** 'manual' | 'import' — requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual' */
   source?: string | null;
+  /** Populated only when All Firms selected — joined from firms table */
+  firm_name?: string | null;
 }
 
 interface GroupInfo {
@@ -57,7 +59,9 @@ const Clients = () => {
   const isSuperadmin = user?.role === "superadmin";
   const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
-  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
+  // "__all__" sentinel = superadmin viewing all firms at once
+  const showAllFirms = isSuperadmin && selectedFirmId === "__all__";
+  const effectiveFirmId = showAllFirms ? null : (isSuperadmin ? selectedFirmId : (user?.firm_id || null));
   const [showSyncDialog, setShowSyncDialog] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -87,23 +91,45 @@ const Clients = () => {
   const [deleteDraftLoading, setDeleteDraftLoading] = useState(false);
 
   const fetchData = async () => {
-    // GAP-1: always scope to the effective firm — never load cross-firm data
-    if (!effectiveFirmId) {
+    // GAP-1: scope to firm unless superadmin selected "All Firms"
+    if (!effectiveFirmId && !showAllFirms) {
       setClients([]);
       setLoading(false);
       return;
     }
-    const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*", { count: "exact" })
-        .eq("is_draft", false).is("deleted_at", null)
-        .eq("firm_id", effectiveFirmId)               // ← firm-scoped
-        .order("created_at", { ascending: false }),
+
+    // Build base selects — include firms(name) join when showing all firms
+    const clientSelect = showAllFirms
+      ? "*, firms(name)"
+      : "*";
+
+    let mainQuery = supabase.from("clients").select(clientSelect, { count: "exact" })
+      .eq("is_draft", false).is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    if (!showAllFirms && effectiveFirmId) mainQuery = mainQuery.eq("firm_id", effectiveFirmId);
+
+    let draftQuery = supabase.from("clients").select(clientSelect)
+      .eq("is_draft", true).eq("source", "api_import").is("deleted_at", null)
+      .order("created_at", { ascending: false }).limit(2000);
+    if (!showAllFirms && effectiveFirmId) draftQuery = draftQuery.eq("firm_id", effectiveFirmId);
+
+    const [clientsRes, apiDraftRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
+      mainQuery,
+      draftQuery,
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
     ]);
 
-    setClients((clientsRes.data as Client[]) || []);
+    // Normalise firms(name) join → flat firm_name field
+    const normalise = (rows: any[]): Client[] =>
+      (rows || []).map(r => ({ ...r, firm_name: r.firms?.name ?? null }));
+
+    // Merge published clients + api_import drafts into one list
+    setClients([
+      ...normalise(clientsRes.data as any[]),
+      ...normalise(apiDraftRes.data as any[]),
+    ]);
     setGroups((groupsRes.data as GroupInfo[]) || []);
 
     const map: Record<string, GroupInfo[]> = {};
@@ -123,9 +149,9 @@ const Clients = () => {
     setLoading(false);
   };
 
-  // GAP-2: re-fetch whenever effectiveFirmId changes (superadmin firm selector, auth load)
+  // GAP-2: re-fetch whenever effectiveFirmId or showAllFirms changes (superadmin firm selector, auth load)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (effectiveFirmId) { fetchData(); fetchDrafts(); } }, [effectiveFirmId]);
+  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); } }, [effectiveFirmId, showAllFirms]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -134,22 +160,29 @@ const Clients = () => {
     if (!isSuperadmin) return;
     supabase.from("firms").select("id, name").order("name").then(({ data }) => {
       setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+      if (data && data.length > 0 && !selectedFirmId) {
+        // Default to the user's own firm_id, otherwise first in list
+        const def = data.find(f => f.id === user?.firm_id) || data[0];
+        setSelectedFirmId(def.id);
+      }
     });
   }, [isSuperadmin]);
 
-  // GAP-6: load draft clients (is_draft=true) for the draft management banner
+  // GAP-6: load draft clients (is_draft=true, source='manual') for the draft management banner
+  // api_import drafts are shown in the "Clients via API" tab instead of the banner
   const fetchDrafts = async () => {
-    if (!effectiveFirmId) { setDrafts([]); return; }
+    if (!effectiveFirmId && !showAllFirms) { setDrafts([]); return; }
     setDraftLoading(true);
     try {
-      const { data } = await supabase
+      let q = supabase
         .from("clients")
         .select("id, name, pan, entity_type, created_at, source, firm_id")
         .eq("is_draft", true)
-        .eq("firm_id", effectiveFirmId)
+        .neq("source", "api_import")   // api_import drafts go in main list, not banner
         .is("deleted_at", null)
         .order("created_at", { ascending: false });
+      if (!showAllFirms && effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+      const { data } = await q;
       setDrafts((data as Client[]) || []);
     } catch {}
     setDraftLoading(false);
@@ -321,21 +354,25 @@ const Clients = () => {
       {/* Superadmin firm selector — shown ONLY for superadmin, above everything */}
       {isSuperadmin && (
         <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-2.5">
-          <span className="text-xs font-medium text-muted-foreground shrink-0">Viewing firm:</span>
+          <span className="text-xs font-medium text-muted-foreground shrink-0">Filter by Firm:</span>
           <Select
             value={selectedFirmId || ""}
-            onValueChange={(v) => setSelectedFirmId(v)}
+            onValueChange={(v) => { setSelectedFirmId(v); setCurrentPage(1); }}
           >
             <SelectTrigger className="h-8 text-sm w-auto min-w-[220px]">
               <SelectValue placeholder="Select a firm…" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="__all__">🌐 All Firms</SelectItem>
               {firmsList.map(f => (
                 <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {firmsList.length === 0 && (
+          {showAllFirms && (
+            <span className="text-xs text-primary font-medium">Showing clients from all firms</span>
+          )}
+          {firmsList.length === 0 && !showAllFirms && (
             <span className="text-xs text-muted-foreground">Loading firms…</span>
           )}
         </div>
@@ -540,6 +577,7 @@ const Clients = () => {
                   <TableHead className="text-xs">Client Name</TableHead>
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
+                  {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
                   <TableHead className="text-xs">Active Services</TableHead>
                   <TableHead className="text-xs w-12"></TableHead>
                 </TableRow>
@@ -557,6 +595,7 @@ const Clients = () => {
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
+                      {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
                       <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                       <TableCell>
                         <DropdownMenu>
@@ -589,6 +628,7 @@ const Clients = () => {
                   <TableHead className="text-xs">Name</TableHead>
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Entity Type</TableHead>
+                  {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
                   <TableHead className="text-xs">CIN</TableHead>
                   <TableHead className="text-xs">GSTIN</TableHead>
                   <TableHead className="text-xs">Groups</TableHead>
@@ -603,6 +643,7 @@ const Clients = () => {
                       <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
                       <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
                       <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
+                      {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
                       <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
                       <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
                       <TableCell>

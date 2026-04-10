@@ -32,16 +32,15 @@ import { AUDIT_STATUS_OPTIONS }          from "./AuditStatusFilters";
 const YES_NO = ["Yes", "No"];
 
 const STATUS_COLORS: Record<string, string> = {
-  "Not Started":      "bg-gray-100 text-gray-600",
-  "In Progress":      "bg-blue-100 text-blue-700",
-  "Under Review":     "bg-yellow-100 text-yellow-700",
-  "Completed":        "bg-green-100 text-green-700",
-  "Signed":           "bg-violet-100 text-violet-700",
-  "Filed":            "bg-teal-100 text-teal-700",
-  "Pending Signature":"bg-orange-100 text-orange-700",
-  "Pending Filing":   "bg-amber-100 text-amber-700",
-  "Cancelled":        "bg-red-100 text-red-700",
-  "OTHERS":           "bg-pink-100 text-pink-700",
+  "DATA PENDING":            "bg-gray-100 text-gray-600",
+  "QUERIES GIVEN TO CLIENT": "bg-yellow-100 text-yellow-700",
+  "PREPARE PENDING":         "bg-orange-100 text-orange-700",
+  "VERIFICATION PENDING":    "bg-blue-100 text-blue-700",
+  "REPORT WITH VJD":         "bg-violet-100 text-violet-700",
+  "REPORT WITH KVD":         "bg-purple-100 text-purple-700",
+  "REPORT SENT TO CLIENT":   "bg-teal-100 text-teal-700",
+  "REPORT SIGNED":           "bg-green-100 text-green-700",
+  "OTHERS (SPECIFY)":        "bg-pink-100 text-pink-700",
 };
 
 function isCorporate(entityType: string | null | undefined) {
@@ -242,19 +241,22 @@ function UserCombobox({ value, onChange, users, placeholder }: {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  row:          StatusEntry;
-  srNo:         number;
-  clients:      ClientOption[];
-  users:        UserOption[];
-  auditFirms:   AuditFirmOption[];
-  planEntries:  PlanEntry[];
-  onSave:       (id: string, patch: StatusPatch) => Promise<void>;
-  onDelete:     (id: string) => Promise<void>;
-  onHistory?:   (id: string) => void;
+  row:                StatusEntry;
+  srNo:               number;
+  clients:            ClientOption[];
+  users:              UserOption[];
+  auditFirms:         AuditFirmOption[];
+  planEntries:        PlanEntry[];
+  onSave:             (id: string, patch: StatusPatch) => Promise<void>;
+  onDelete:           (id: string) => Promise<void>;
+  onHistory?:         (id: string) => void;
   /** isNew: row was just created in the grid and starts in edit mode */
-  isNew?:       boolean;
-  onAdd?:       (patch: StatusPatch) => Promise<void>;
-  onCancelNew?: () => void;
+  isNew?:             boolean;
+  onAdd?:             (patch: StatusPatch) => Promise<void>;
+  onCancelNew?:       () => void;
+  /** Save All registry — row registers its save fn when editing starts */
+  onRegisterSave?:   (id: string, fn: () => Promise<void>) => void;
+  onUnregisterSave?: (id: string) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -263,6 +265,7 @@ export default function AuditStatusRow({
   row, srNo, clients, users, auditFirms, planEntries,
   onSave, onDelete, onHistory,
   isNew, onAdd, onCancelNew,
+  onRegisterSave, onUnregisterSave,
 }: Props) {
 
   // ── Edit state ───────────────────────────────────────────────────────────────
@@ -298,6 +301,7 @@ export default function AuditStatusRow({
   function startEdit() {
     setDraft(buildDraft(row, clients));
     setEditing(true);
+    onRegisterSave?.(row.id, commitSave);
   }
 
   function set(field: keyof RowDraft, val: string) {
@@ -346,18 +350,22 @@ export default function AuditStatusRow({
       await onSave(row.id, patch);
     }
     setSaving(false);
-    if (!isNew) setEditing(false);
+    if (!isNew) {
+      setEditing(false);
+      onUnregisterSave?.(row.id);
+    }
   }
 
   function cancelEdit() {
     if (isNew && onCancelNew) { onCancelNew(); return; }
     setEditing(false);
     setDraft(buildDraft(row, clients));
+    onUnregisterSave?.(row.id);
   }
 
   // ── Convenience aliases ───────────────────────────────────────────────────────
   const showUdinStatutoryEdit = isCorporate(draft.entityType);
-  const showOther = draft.audit_status === "OTHERS";
+  const showOther = draft.audit_status === "OTHERS (SPECIFY)";
 
   const statusColor = STATUS_COLORS[row.audit_status || ""] || "bg-gray-100 text-gray-600";
 
@@ -408,7 +416,7 @@ export default function AuditStatusRow({
       <TCell className="min-w-[130px]">
         {editing
           ? <EInput value={draft.audit_employees} onChange={v => set("audit_employees", v)} placeholder="Names…" />
-          : <span className="text-muted-foreground text-[11px]">{row.audit_employees || "—"}</span>}
+          : <span title={row.audit_employees || ""} className="text-muted-foreground text-[11px] truncate block max-w-[130px]">{row.audit_employees || "—"}</span>}
       </TCell>
 
       {/* 6 · Audit Report Prepared By */}
@@ -434,7 +442,7 @@ export default function AuditStatusRow({
         ) : row.audit_status ? (
           <div className="space-y-0.5">
             <Badge className={cn("text-[10px]", statusColor)}>{row.audit_status}</Badge>
-            {row.audit_status === "OTHERS" && row.audit_status_other && (
+            {row.audit_status === "OTHERS (SPECIFY)" && row.audit_status_other && (
               <p className="text-[10px] text-muted-foreground truncate">{row.audit_status_other}</p>
             )}
           </div>
@@ -454,7 +462,7 @@ export default function AuditStatusRow({
       <TCell className="min-w-[110px]">
         {editing
           ? <ESelect value={draft.firm} onChange={handleFirmChange} options={firmNames} placeholder="Select firm…" />
-          : <span>{row.firm || "—"}</span>}
+          : <span title={row.firm || ""}>{row.firm || "—"}</span>}
       </TCell>
 
       {/* 10 · Partner */}
@@ -464,7 +472,7 @@ export default function AuditStatusRow({
             ? <ESelect value={draft.partner} onChange={v => set("partner", v)} options={partnerOptions} placeholder="Select partner…" />
             : <EInput value={draft.partner} onChange={v => set("partner", v)} placeholder="Partner…" />
         ) : (
-          <span>{row.partner || "—"}</span>
+          <span title={row.partner || ""}>{row.partner || "—"}</span>
         )}
       </TCell>
 
@@ -542,57 +550,30 @@ export default function AuditStatusRow({
           : <span>{row.uploaded_by || "—"}</span>}
       </TCell>
 
-      {/* 19 · Remarks */}
+      {/* 19 · Remarks — inline save/cancel appended when editing (Actions column removed per Issue #8D) */}
       <TCell className="min-w-[130px]">
-        {editing
-          ? <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
-          : <span className="text-muted-foreground line-clamp-2 text-[11px]">{row.remarks || "—"}</span>}
-      </TCell>
-
-      {/* 20 · Actions */}
-      <TCell className="w-20 text-center">
         {editing ? (
-          <div className="flex items-center justify-center gap-1">
+          <div className="flex items-center gap-1">
+            <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
             <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-green-600 hover:bg-green-50"
-              onClick={commitSave} disabled={saving} title="Save">
+              className="h-6 w-6 p-0 shrink-0 text-green-600 hover:bg-green-50"
+              onClick={commitSave} disabled={saving} title="Save row">
               {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
             </Button>
             <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-red-500 hover:bg-red-50"
+              className="h-6 w-6 p-0 shrink-0 text-red-500 hover:bg-red-50"
               onClick={cancelEdit} title="Cancel">
               <X size={11} />
             </Button>
           </div>
-        ) : confirmDel ? (
-          <div className="flex flex-col gap-0.5">
-            <Button size="sm" variant="destructive" className="h-5 text-[9px] px-1 w-full"
-              onClick={() => { onDelete(row.id); setConfirmDel(false); }}>
-              Confirm
-            </Button>
-            <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1 w-full"
-              onClick={() => setConfirmDel(false)}>
-              Cancel
-            </Button>
-          </div>
         ) : (
-          <div className="flex items-center justify-center gap-1">
+          <div className="flex items-center gap-1 group">
+            <span className="text-muted-foreground line-clamp-2 text-[11px] flex-1">{row.remarks || "—"}</span>
+            {/* Edit trigger — visible on row hover */}
             <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
-              onClick={startEdit} title="Edit">
+              className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-indigo-600"
+              onClick={startEdit} title="Edit row">
               ✎
-            </Button>
-            {onHistory && (
-              <Button size="sm" variant="ghost"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-violet-600 hover:bg-violet-50"
-                onClick={() => onHistory(row.id)} title="View History">
-                <History size={11} />
-              </Button>
-            )}
-            <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-              onClick={() => setConfirmDel(true)} title="Delete">
-              <Trash2 size={11} />
             </Button>
           </div>
         )}

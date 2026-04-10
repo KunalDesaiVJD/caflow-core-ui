@@ -15,7 +15,10 @@ import { Badge }    from "@/components/ui/badge";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Save, Filter, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 import AuditChangeLogModal from "./AuditChangeLogModal";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +59,6 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "3CA Checked By",    id: "checked_by",                 filterType: "text"   },
   { label: "3CA Uploaded By",   id: "uploaded_by",                filterType: "text"   },
   { label: "Remarks",           id: "remarks",                    filterType: "text"   },
-  { label: "Actions",           id: "_actions",                   filterType: "none"   },
 ];
 
 // ─── Blank template for a new row ─────────────────────────────────────────────
@@ -100,16 +102,21 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   }, [searchRaw]);
 
   // ── Quick-filter bar ───────────────────────────────────────────────────────
-  const [statusFilter,  setStatusFilter]  = useState("all");
-  const [physFilter,    setPhysFilter]    = useState("all");
-  const [scannedFilter, setScannedFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  // ── Per-column filter row ──────────────────────────────────────────────────
-  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  // ── Per-column filters ─────────────────────────────────────────────────────
+  const [colFilters,    setColFilters]    = useState<Record<string, string>>({});
+  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+
   function setColFilter(id: string, val: string) {
     setColFilters(p => ({ ...p, [id]: val }));
     setPage(1);
   }
+  function clearColFilters() {
+    setColFilters({});
+    setPage(1);
+  }
+  const hasColFilters = Object.values(colFilters).some(Boolean);
 
   // ── Sorting ───────────────────────────────────────────────────────────────
   const [sortField, setSortField] = useState<string | null>(null);
@@ -129,8 +136,32 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   const [historyRowId, setHistoryRowId] = useState<string | null>(null);
   const historyRow = historyRowId ? rows.find(r => r.id === historyRowId) : null;
 
+  // ── Save All registry — rows register their save fn when editing ──────────
+  const saveRegistry = useRef<Map<string, () => Promise<void>>>(new Map());
+  const [saveAllBusy, setSaveAllBusy] = useState(false);
+
+  function registerSave(id: string, fn: () => Promise<void>) {
+    saveRegistry.current.set(id, fn);
+  }
+  function unregisterSave(id: string) {
+    saveRegistry.current.delete(id);
+  }
+
+  async function handleSaveAll() {
+    const fns = [...saveRegistry.current.values()];
+    if (fns.length === 0) { toast.info("No unsaved changes"); return; }
+    setSaveAllBusy(true);
+    try {
+      await Promise.all(fns.map(fn => fn()));
+      toast.success(`Saved ${fns.length} row${fns.length !== 1 ? "s" : ""}`);
+    } catch (e: any) {
+      toast.error("Save All failed: " + (e?.message || "unknown error"));
+    }
+    setSaveAllBusy(false);
+  }
+
   // Reset page when filters change
-  useEffect(() => setPage(1), [search, statusFilter, physFilter, scannedFilter, colFilters]);
+  useEffect(() => setPage(1), [search, statusFilter, colFilters]);
 
   // ── Filtering + sorting ───────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -144,17 +175,21 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       );
     }
 
-    // Quick-filter bar
-    if (statusFilter !== "all")  result = result.filter(r => r.audit_status === statusFilter);
-    if (physFilter   !== "all")  result = result.filter(r => r.physical_audit_conducted === physFilter);
-    if (scannedFilter !== "all") result = result.filter(r => r.scanned === scannedFilter);
+    // Quick-filter bar: Audit Status
+    if (statusFilter !== "all") result = result.filter(r => r.audit_status === statusFilter);
 
     // Per-column filters
     Object.entries(colFilters).forEach(([id, val]) => {
       if (!val || val === "all") return;
+      const colDef = COLS.find(c => c.id === id);
       result = result.filter(r => {
-        const rv = (r as any)[id];
-        return rv && typeof rv === "string" && rv.toLowerCase().includes(val.toLowerCase());
+        const rv = String((r as any)[id] ?? "");
+        // Exact match for select-based filters (yes/no and status)
+        if (colDef?.filterType === "yesno" || colDef?.filterType === "status") {
+          return rv === val;
+        }
+        // Substring match for text / date columns
+        return rv.toLowerCase().includes(val.toLowerCase());
       });
     });
 
@@ -168,7 +203,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
     }
 
     return result;
-  }, [rows, search, statusFilter, physFilter, scannedFilter, colFilters, sortField, sortDir]);
+  }, [rows, search, statusFilter, colFilters, sortField, sortDir]);
 
   // ── Pagination slice ──────────────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -220,22 +255,38 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   return (
     <div className="space-y-3 w-full min-w-0">
 
-      {/* Offline badge */}
-      {useLs && (
-        <Badge className="bg-amber-100 text-amber-700 text-xs gap-1">
-          Offline mode — data stored locally. Apply Supabase migration to persist to cloud.
-        </Badge>
-      )}
-
       {/* Filter toolbar */}
       <AuditStatusFilters
-        search={searchRaw}          onSearch={v => { setSearchRaw(v); setPage(1); }}
-        statusFilter={statusFilter}  onStatus={v => { setStatusFilter(v); setPage(1); }}
-        physFilter={physFilter}      onPhys={v => { setPhysFilter(v); setPage(1); }}
-        scannedFilter={scannedFilter} onScanned={v => { setScannedFilter(v); setPage(1); }}
+        search={searchRaw}         onSearch={v => { setSearchRaw(v); setPage(1); }}
+        statusFilter={statusFilter} onStatus={v => { setStatusFilter(v); setPage(1); }}
         onRefresh={reload}
         onAddRow={() => { setAddingNew(true); setPage(1); }}
       />
+
+      {/* Save All + Clear Column Filters row */}
+      <div className="flex items-center justify-between gap-2">
+        {/* Clear column filters — only shown when at least one is active */}
+        {hasColFilters ? (
+          <Button
+            size="sm" variant="outline"
+            className="h-8 text-xs gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
+            onClick={clearColFilters}
+          >
+            <X size={12} /> Clear Column Filters
+          </Button>
+        ) : <div />}
+
+        {/* Save All — commits all rows currently in edit mode */}
+        <Button
+          size="sm"
+          className="gap-1.5 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
+          onClick={handleSaveAll}
+          disabled={saveAllBusy}
+        >
+          <Save size={13} />
+          {saveAllBusy ? "Saving…" : "Save All"}
+        </Button>
+      </div>
 
       {/* Table */}
       <div className="border rounded-lg overflow-hidden w-full">
@@ -245,76 +296,126 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
             {/* ── Sticky header row ── */}
             <thead className="sticky top-0 z-30">
               <tr className="bg-indigo-700 text-white text-[10px] uppercase tracking-wide">
-                {COLS.map(col => (
-                  <th
-                    key={col.id}
-                    title={col.label}
-                    onClick={col.sortable ? () => toggleSort(col.id) : undefined}
-                    className={cn(
-                      "border border-indigo-600 px-2 py-2.5 text-left whitespace-nowrap select-none",
-                      col.id === "_srno"    && "sticky left-0 z-40 bg-indigo-700 w-10",
-                      col.id === "party_name" && "sticky left-10 z-40 bg-indigo-700 min-w-[140px]",
-                      col.id === "_actions"  && "w-20 text-center",
-                      col.sortable && "cursor-pointer hover:bg-indigo-600",
-                    )}
-                  >
-                    <span className="flex items-center">
-                      {col.label}
-                      {col.sortable && <SortIcon field={col.id} />}
-                    </span>
-                  </th>
-                ))}
-              </tr>
+                {COLS.map(col => {
+                  const activeFilter = colFilters[col.id];
+                  return (
+                    <th
+                      key={col.id}
+                      title={col.label}
+                      onClick={col.sortable ? () => toggleSort(col.id) : undefined}
+                      className={cn(
+                        "border border-indigo-600 px-2 py-2.5 text-left whitespace-nowrap select-none",
+                        col.id === "_srno"      && "sticky left-0 z-40 bg-indigo-700 w-10",
+                        col.id === "party_name" && "sticky left-10 z-40 bg-indigo-700 min-w-[140px]",
+                        col.sortable && "cursor-pointer hover:bg-indigo-600",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-0.5">
+                        {/* Label + sort icon */}
+                        <span className="flex items-center gap-0.5 truncate">
+                          {col.label}
+                          {col.sortable && <SortIcon field={col.id} />}
+                        </span>
 
-              {/* ── Per-column filter row ── */}
-              <tr className="bg-muted/40 border-b border-border">
-                {COLS.map(col => (
-                  <th
-                    key={col.id}
-                    className={cn(
-                      "border border-border/50 px-1 py-1",
-                      col.id === "_srno"     && "sticky left-0 z-40 bg-muted/40 w-10",
-                      col.id === "party_name"  && "sticky left-10 z-40 bg-muted/40",
-                      col.id === "_actions"   && "w-20",
-                    )}
-                  >
-                    {col.filterType === "text" && (
-                      <Input
-                        value={colFilters[col.id] || ""}
-                        onChange={e => setColFilter(col.id, e.target.value)}
-                        placeholder="Filter…"
-                        className="h-5 text-[10px] px-1.5 border-border/70"
-                      />
-                    )}
-                    {col.filterType === "yesno" && (
-                      <Select value={colFilters[col.id] || "all"} onValueChange={v => setColFilter(col.id, v === "all" ? "" : v)}>
-                        <SelectTrigger className="h-5 text-[10px] px-1"><SelectValue placeholder="All" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all" className="text-[10px]">All</SelectItem>
-                          {YES_NO_OPTIONS.map(o => <SelectItem key={o} value={o} className="text-[10px]">{o}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    )}
-                    {col.filterType === "status" && (
-                      <Select value={colFilters[col.id] || "all"} onValueChange={v => setColFilter(col.id, v === "all" ? "" : v)}>
-                        <SelectTrigger className="h-5 text-[10px] px-1"><SelectValue placeholder="All" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all" className="text-[10px]">All</SelectItem>
-                          {AUDIT_STATUS_OPTIONS.map(o => <SelectItem key={o} value={o} className="text-[10px]">{o}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    )}
-                    {col.filterType === "date" && (
-                      <Input
-                        type="date"
-                        value={colFilters[col.id] || ""}
-                        onChange={e => setColFilter(col.id, e.target.value)}
-                        className="h-5 text-[10px] px-1 border-border/70"
-                      />
-                    )}
-                    {/* none → empty cell */}
-                  </th>
-                ))}
+                        {/* Per-column filter button (all cols except _srno) */}
+                        {col.filterType !== "none" && (
+                          <Popover
+                            open={openFilterCol === col.id}
+                            onOpenChange={open => setOpenFilterCol(open ? col.id : null)}
+                          >
+                            <PopoverTrigger asChild>
+                              <button
+                                onClick={e => e.stopPropagation()}
+                                title={activeFilter ? `Filtered: ${activeFilter}` : `Filter ${col.label}`}
+                                className={cn(
+                                  "flex-shrink-0 p-0.5 rounded hover:bg-indigo-500 transition-colors",
+                                  activeFilter
+                                    ? "text-yellow-300"
+                                    : "text-indigo-300 hover:text-white",
+                                )}
+                              >
+                                <Filter size={9} />
+                              </button>
+                            </PopoverTrigger>
+
+                            <PopoverContent
+                              className="p-2 z-50"
+                              style={{ width: col.filterType === "status" ? 220 : 176 }}
+                              align="start"
+                              side="bottom"
+                            >
+                              {col.filterType === "yesno" ? (
+                                /* Yes / No select */
+                                <Select
+                                  value={activeFilter || "all"}
+                                  onValueChange={v => {
+                                    setColFilter(col.id, v === "all" ? "" : v);
+                                    setOpenFilterCol(null);
+                                  }}
+                                >
+                                  <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all" className="text-xs">All</SelectItem>
+                                    <SelectItem value="Yes"  className="text-xs">Yes</SelectItem>
+                                    <SelectItem value="No"   className="text-xs">No</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              ) : col.filterType === "status" ? (
+                                /* Audit-status select */
+                                <Select
+                                  value={activeFilter || "all"}
+                                  onValueChange={v => {
+                                    setColFilter(col.id, v === "all" ? "" : v);
+                                    setOpenFilterCol(null);
+                                  }}
+                                >
+                                  <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all" className="text-xs">All Statuses</SelectItem>
+                                    {AUDIT_STATUS_OPTIONS.map(s => (
+                                      <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                /* Free-text input for text / date columns */
+                                <div className="flex items-center gap-1">
+                                  <Input
+                                    autoFocus
+                                    className="h-7 text-xs flex-1"
+                                    placeholder="Filter…"
+                                    value={activeFilter || ""}
+                                    onChange={e => setColFilter(col.id, e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === "Enter" || e.key === "Escape")
+                                        setOpenFilterCol(null);
+                                    }}
+                                    onClick={e => e.stopPropagation()}
+                                  />
+                                  {activeFilter && (
+                                    <button
+                                      onClick={() => {
+                                        setColFilter(col.id, "");
+                                        setOpenFilterCol(null);
+                                      }}
+                                      className="text-muted-foreground hover:text-foreground flex-shrink-0"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </PopoverContent>
+                          </Popover>
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
 
@@ -334,6 +435,8 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                   isNew
                   onAdd={handleAddNew}
                   onCancelNew={() => setAddingNew(false)}
+                  onRegisterSave={registerSave}
+                  onUnregisterSave={unregisterSave}
                 />
               )}
 
@@ -366,6 +469,8 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                     onSave={updateRow}
                     onDelete={removeRow}
                     onHistory={id => setHistoryRowId(id)}
+                    onRegisterSave={registerSave}
+                    onUnregisterSave={unregisterSave}
                   />
                 ))
               )}

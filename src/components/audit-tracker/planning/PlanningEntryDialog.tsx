@@ -29,6 +29,18 @@ import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
 import type { UserOption }   from "../hooks/useUsers";
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Ensure a date value is a plain "YYYY-MM-DD" string with no time/TZ component.
+ * <input type="date"> already returns this format, but guard against any
+ * runtime value that could carry a timestamp or TZ suffix.
+ */
+function safeISO(raw: string): string {
+  if (!raw) return raw;
+  return raw.slice(0, 10);          // take only the date part, drop anything after
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface PlanSaveData {
@@ -116,8 +128,9 @@ export default function PlanningEntryDialog({
   async function handleSave() {
     if (!from || !to) return;
     setSaving(true);
+    // safeISO strips any time/TZ suffix — keeps value as pure "YYYY-MM-DD"
     await onSave(
-      { client_id: clientId || null, client_name: clientName || null, planned_from: from, planned_to: to, employee_ids: empIds, employee_names: empNames },
+      { client_id: clientId || null, client_name: clientName || null, planned_from: safeISO(from), planned_to: safeISO(to), employee_ids: empIds, employee_names: empNames },
       isEdit ? entry!.id : undefined
     );
     setSaving(false);

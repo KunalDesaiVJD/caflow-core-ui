@@ -5,7 +5,6 @@
  *  Tab 2 "Audit Status"             — Full status grid
  */
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
 import { CalendarDays, TableProperties } from "lucide-react";
 
 import { useAuditPlanning } from "./hooks/useAuditPlanning";
@@ -52,12 +51,6 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
   return (
     <div className="space-y-4">
-      {useLs && (
-        <Badge className="bg-amber-100 text-amber-700 text-xs">
-          Offline mode — data stored locally. Apply Supabase migration to sync to cloud.
-        </Badge>
-      )}
-
       <Tabs defaultValue="planning">
         <TabsList className="h-auto gap-1">
           <TabsTrigger value="planning" className="text-xs gap-1.5">
@@ -70,6 +63,16 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
 
         {/* ── Tab 1: Planning & Communication ── */}
         <TabsContent value="planning" className="mt-4 space-y-4">
+          {/* Communication table — shown ABOVE calendar per spec */}
+          <CommunicationTable
+            comms={comms}
+            entries={entries}
+            clients={clients}
+            onAdd={addComm}
+            onUpdate={updateComm}
+            onRemove={removeComm}
+          />
+
           {/* Calendar grid */}
           <PlanningCalendar
             entries={entries}
@@ -79,16 +82,6 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             onAddEntry={handleAdd}
             onUpdateEntry={handleUpdate}
             onDeleteEntry={handleDelete}
-          />
-
-          {/* Communication table */}
-          <CommunicationTable
-            comms={comms}
-            entries={entries}
-            clients={clients}
-            onAdd={addComm}
-            onUpdate={updateComm}
-            onRemove={removeComm}
           />
         </TabsContent>
 

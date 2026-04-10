@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -214,10 +214,14 @@ const NewInvoice = () => {
   const navigate = useNavigate();
   const { invoiceId } = useParams<{ invoiceId?: string }>();
   const [searchParams] = useSearchParams();
+  const { state: routeState } = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
   const isSuperadmin = user?.role === "superadmin";
   const isEdit = !!invoiceId;
+
+  // Route-state prefill (from Billing reminder → "Create Invoice")
+  const prefillApplied = useRef(false);
 
   // Document type from query param or default
   const initialDocType = (searchParams.get("type") as DocumentType) || "invoice";
@@ -805,6 +809,43 @@ const NewInvoice = () => {
     if (!isEdit || !sourceDocumentId) return;
     // This runs on edit load - we handle conversion marking in save
   }, [isEdit, sourceDocumentId]);
+
+  // Pre-fill from Billing reminder navigation state
+  // Fires once on mount; guard prevents re-application on re-renders.
+  useEffect(() => {
+    const prefill = (routeState as any)?.prefill;
+    if (!prefill || isEdit || prefillApplied.current) return;
+    prefillApplied.current = true;
+
+    // Set client (the client-detail useEffect will auto-fill toName/toGstin/toAddress)
+    if (prefill.client_id) setClientId(String(prefill.client_id));
+
+    // Pre-populate a single line item with the billing amount
+    const amt = Number(prefill.amount) || 0;
+    if (amt > 0) {
+      const gstAmt = Math.round(amt * 0.18 * 100) / 100;
+      const desc = prefill.service_type
+        ? String(prefill.service_type)
+        : "Professional Services";
+      const details = prefill.period
+        ? `Period: ${String(prefill.period)}`
+        : "";
+      setLineItems([{
+        ...EMPTY_ITEM(),
+        description:        desc,
+        description_details: details,
+        rate:          amt,
+        taxable_value: amt,
+        quantity:      1,
+        gst_percent:   18,
+        gst_amount:    gstAmt,
+        total:         amt + gstAmt,
+      }]);
+    }
+
+    // Pre-fill reference with due date if present
+    if (prefill.due_date) setReferenceNo(String(prefill.due_date));
+  }, [routeState, isEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDownloadPdf = async () => {
     if (status === "draft") {
