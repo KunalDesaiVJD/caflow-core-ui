@@ -135,23 +135,8 @@ Deno.serve(async (req: Request) => {
     const ctx     = await loadContext(userId);
     const ctxHint = buildCtxHint(ctx);
 
-    // ── Deterministic pre-checks (bypass Claude for clear keywords) ──
-    // "pdf" anywhere in message → always send_pdf (never get_invoice)
-    // This prevents Claude from routing "give me pdf for 25/2026-27" → get_invoice
-    const textLower = text.toLowerCase();
-    if (textLower.includes("pdf") && !text.startsWith("/")) {
-      const invMatch  = text.match(/(\d+\/\d{4}-\d{2,4}|\d{1,4}\/\d{4})/);
-      const pdfIntent: Intent = {
-        action:      "send_pdf",
-        invoice_no:  invMatch?.[0] ?? null,
-        client_name: null,
-      };
-      console.log(`[Bot] Pre-check PDF → send_pdf`, JSON.stringify(pdfIntent));
-      await handleSendPdf(chatId, pdfIntent, ctx);
-      return new Response("ok");
-    }
-
-    // ── Parse intent with AI (two-pass + context) ─────────────────
+    // ── Parse intent with AI — fully open-ended NLU ───────────────
+    // Claude understands any language/phrasing; no pre-checks needed
     const intent = await parseIntent(text, ctxHint);
     console.log(`[Bot] Intent:`, JSON.stringify(intent));
 
@@ -506,8 +491,8 @@ async function handleGetInvoice(chatId: number, intent: Intent, userId?: number)
     if (userId) {
       await saveContext(userId, {
         last_intent:      intent,
-        last_client_name: intent.client_name ?? invoice?.to_name ?? null,
-        last_invoice_ids: invoice ? [invoice.id] : null,
+        last_client_name: intent.client_name ?? inv?.to_name ?? null,
+        last_invoice_ids: inv ? [inv.id] : null,
       });
     }
   } else {
@@ -614,6 +599,24 @@ async function handleGetLedger(chatId: number, intent: Intent) {
   }
 
   await sendMsg(chatId, msg);
+
+  // ── Also deliver the full ledger as a PDF file ───────────────────────────────
+  try {
+    await sendTelegram(chatId, "⏳ Generating ledger PDF…");
+    const now    = new Date();
+    const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const fyLabel = intent.financial_year ?? `${fyYear}-${String(fyYear + 1).slice(2)}`;
+    const firmName = FIRM_DISPLAY_NAME;
+    const pdfBytes = await generateLedgerPdf(clientName, firmName, entries, fyLabel);
+    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+    const caption = `📒 Account Statement: ${clientName}\nFY ${fyLabel} | ${entries.length} transactions`;
+    await sendTelegramDocumentBytes(chatId, pdfBytes, `Ledger_${safeClient}_FY${fyLabel}.pdf`, caption);
+  } catch (pdfErr: unknown) {
+    const msg2 = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
+    console.error("[Bot] Ledger PDF delivery error:", msg2);
+    // Text was already sent — PDF failure is non-fatal
+    await sendTelegram(chatId, `⚠️ Could not generate PDF: ${msg2.slice(0, 100)}`);
+  }
 }
 
 // ─── /receipts ────────────────────────────────────────────────────────────────
@@ -891,44 +894,47 @@ function buildCtxHint(ctx: TgContext | null): string | undefined {
 
 function buildSystemPrompt(ctxHint?: string): string {
   const contextBlock = ctxHint
-    ? `\n\nCONVERSATION CONTEXT (from user's previous message):\n${ctxHint}\nUse this to resolve vague references such as "above invoices", "same client", "those", "all shown", "that client", etc.`
-    : "";
+    ? `\nCONVERSATION CONTEXT (from previous message): ${ctxHint}\nIf user says "same", "wahi", "uske liye", "those", "above", "that client" — fill from context.`
+    : "No prior context.";
 
-  return `You are a billing assistant for a CA firm. Parse user messages into billing intents. Return ONLY valid JSON.
+  return `You are an intelligent billing assistant for an Indian Chartered Accountant firm. Your task is to understand what the user wants — in ANY language or phrasing — and return a structured JSON intent.
 
-Be LENIENT — always infer the most likely intent even when phrasing is vague, informal, or refers to previous context.
+CORE PRINCIPLE: Understand the MEANING, not exact words. Users may write in English, Hindi, Hinglish, or a casual mix. Typos, abbreviations, and informal phrasing are all fine — figure out what they mean.
 
-Possible intents:
-1. get_invoice  → { "action": "get_invoice", "client_name": "...", "doc_no": "..." or null, "date_from": null, "date_to": null }
-2. get_ledger   → { "action": "get_ledger",  "client_name": "...", "fy": "2026-27" or null }
-3. send_email   → { "action": "send_email",  "client_name": "...", "document_type": "invoice"|"ledger", "email_to": "client"|"group", "doc_no": null }
-3b. send_pdf   → { "action": "send_pdf",   "client_name": "...", "doc_no": "..." or null }  ← user wants PDF file delivered in this chat
-4. get_outstanding → { "action": "get_outstanding", "client_name": null, "limit": 10 }
-5. get_overdue  → { "action": "get_overdue",  "client_name": null, "limit": 10 }
-6. get_summary  → { "action": "get_summary" }
-7. get_receipts → { "action": "get_receipts", "client_name": null, "limit": 10 }
-8. help         → { "action": "help" }
-9. unknown      → { "action": "unknown" }   ← ONLY for completely unrelated queries (weather, jokes, etc.)
+AVAILABLE ACTIONS:
+- get_invoice     → user wants to VIEW/LIST invoice details or look up a specific invoice
+- get_ledger      → user wants a ledger, khata, account statement, hisaab, passbook for a client
+- send_email      → user wants to EMAIL document(s) to someone's email inbox (not receive here)
+- send_pdf        → user wants a PDF FILE delivered right here in this chat
+- get_outstanding → user wants to see unpaid/pending/baaki invoices
+- get_overdue     → user wants invoices past their due date / late payments
+- get_summary     → user wants an overview, total, dashboard, report, summary
+- get_receipts    → user wants payment receipts, collections, payments received
+- help            → user is asking what the bot can do or needs guidance
+- unknown         → ONLY use this for messages completely unrelated to billing (cricket scores, weather, jokes, etc.)
 
-Varied phrasings — always map these to billing intents:
-• "send me pdf / pdf copy / send pdf / download pdf / get pdf" → send_pdf (NOT send_email — user wants the file HERE in this chat)
-• "email me / send to email / send via email / email invoice" → send_email (delivers to client's email inbox)
-• "above invoices / all above / same as before / those invoices / all shown" → use context to fill client_name
-• "that client / same client / the client" → use context last_client_name
-• "email it / forward it / send to them" → send_email
-• "show bills / show charges / my invoices" → get_invoice
-• "account statement / account summary / my account" → get_ledger
-• "WhatsApp copy / share copy" → send_email (treat as email)
+HOW TO DISTINGUISH ACTIONS:
+- Wants PDF in THIS chat → send_pdf (e.g. "pdf bhejo", "pdf chahiye", "send me pdf", "pdf do", "pdf file", "invoice ka pdf", "give me pdf for 25/2026-27", "invoice in .pdf", ".pdf chahiye")
+- Wants EMAIL sent to client → send_email (e.g. "email karo", "mail bhejo", "send to email", "email invoice")
+- Wants to SEE invoice data → get_invoice (e.g. "show invoice", "invoice dikhao", "invoice details")
+- Wants LEDGER/KHATA → get_ledger (e.g. "ledger do", "khata dikhao", "account statement", "ledger of Gujarat Water", "statement chahiye")
+- Context references ("same client", "wahi", "upar wala", "those", "above") → use CONTEXT to fill client_name
 
-Examples:
-- "Show invoices for Gujarat Water" → { "action": "get_invoice", "client_name": "Gujarat Water", "doc_no": null }
-- "Email the latest invoice to Gujarat Water" → { "action": "send_email", "client_name": "Gujarat Water", "document_type": "invoice", "email_to": "client", "doc_no": null }
-- "Send me PDF of invoice 29/2026-27" → { "action": "send_pdf", "client_name": null, "doc_no": "29/2026-27" }
-- "Send PDFs of last 3 invoices for Gujarat Water" → { "action": "send_pdf", "client_name": "Gujarat Water", "doc_no": null }
-- "Please send me pdf copy of all above invoices" (context: last client = Gujarat Water) → { "action": "send_pdf", "client_name": "Gujarat Water", "doc_no": null }
-- "Send those to the client" (context: last client = Accurate PMS) → { "action": "send_email", "client_name": "Accurate PMS", "document_type": "invoice", "email_to": "client", "doc_no": null }
-- "Show ledger of Accurate PMS FY 2026-27" → { "action": "get_ledger", "client_name": "Accurate PMS", "fy": "2026-27" }
-- "Send ledger to all clients" → { "action": "send_email", "client_name": null, "document_type": "ledger", "email_to": "group", "doc_no": null }${contextBlock}`;
+EXTRACT THESE FIELDS:
+- client_name: any company or person name (null if not mentioned)
+- doc_no: invoice/document number pattern like "29/2026-27" or "25/2026-27" (null if not mentioned)
+- fy: financial year like "2026-27" or "2025-26" (null if not mentioned)
+- document_type: "invoice" or "ledger" (null if unclear)
+- email_to: "client" or "group" (for send_email only, else null)
+- limit: number of records (default 10)
+
+CONTEXT:
+${contextBlock}
+
+Return ONLY this JSON — no explanation, no markdown, no extra text:
+{ "action": "...", "client_name": "..." or null, "doc_no": "..." or null, "fy": "..." or null, "document_type": "invoice" or "ledger" or null, "email_to": "client" or null, "limit": 10 }
+
+NEVER return "unknown" for any billing-related query, no matter how casually or informally phrased.`;
 }
 
 function normaliseIntent(parsed: any): Intent {
@@ -1102,35 +1108,17 @@ async function handleSendPdf(chatId: number, intent: Intent, ctx: TgContext | nu
 
       const firmName = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
 
-      // Generate PDF bytes
+      // Generate PDF bytes directly — no Storage upload needed
       const pdfBytes = await generateInvoicePdf(inv, firmName, clientName);
-
-      // Upload to Supabase Storage (public bucket required for Telegram)
-      const tempPath = `temp/inv_${inv.id}_${Date.now()}.pdf`;
-      const { error: uploadErr } = await supabase.storage
-        .from("documents")
-        .upload(tempPath, pdfBytes, { contentType: "application/pdf", upsert: true });
-
-      if (uploadErr) {
-        console.error("[Bot] Storage upload error:", uploadErr.message);
-        await sendTelegram(chatId, `⚠️ Could not upload PDF for ${inv.invoice_no}. Skipping.`);
-        continue;
-      }
-
-      const { data: urlData } = supabase.storage
-        .from("documents").getPublicUrl(tempPath);
-      const pdfUrl = urlData.publicUrl;
 
       const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
       const caption   =
         `📄 Invoice ${inv.invoice_no ?? "—"} | ${clientName}\n` +
-        `₹${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${fmtDate(inv.invoice_date)}`;
+        `Rs.${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${fmtDate(inv.invoice_date)}`;
 
-      await sendTelegramDocument(chatId, pdfUrl, `Invoice_${safeInvNo}.pdf`, caption);
+      // Send raw bytes via multipart/form-data — works without any public bucket
+      await sendTelegramDocumentBytes(chatId, pdfBytes, `Invoice_${safeInvNo}.pdf`, caption);
       sentCount++;
-
-      // Clean up temp file (best-effort, non-fatal)
-      supabase.storage.from("documents").remove([tempPath]).catch(() => {});
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[Bot] PDF send error:", msg);
@@ -1143,27 +1131,30 @@ async function handleSendPdf(chatId: number, intent: Intent, ctx: TgContext | nu
   }
 }
 
-// ─── Telegram sendDocument ────────────────────────────────────────────────────
-async function sendTelegramDocument(
+// ─── sendTelegramDocumentBytes — sends PDF via multipart (no Storage needed) ──
+// Uses raw bytes + FormData so Telegram receives the file directly.
+// This works regardless of whether any Supabase Storage bucket exists or is public.
+async function sendTelegramDocumentBytes(
   chatId: number,
-  fileUrl: string,
+  pdfBytes: Uint8Array,
   fileName: string,
   caption: string,
 ): Promise<void> {
-  const url  = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
-  const body = JSON.stringify({
-    chat_id:  chatId,
-    document: fileUrl,   // Must be a publicly accessible URL
-    caption,
-  });
-  const res = await fetch(url, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("caption", caption);
+  form.append(
+    "document",
+    new Blob([pdfBytes], { type: "application/pdf" }),
+    fileName,
+  );
+  const res = await fetch(
+    `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
+    { method: "POST", body: form },
+  );
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Telegram sendDocument failed (${res.status}): ${err.slice(0, 150)}`);
+    throw new Error(`sendDocument failed (${res.status}): ${err.slice(0, 200)}`);
   }
 }
 
