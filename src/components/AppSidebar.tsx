@@ -24,7 +24,7 @@ const topNavItems = [
   { title: "Clients", path: "/clients", icon: Users, module: "Client Management" },
   { title: "TDS Management", path: "/tds-filings", icon: Receipt, module: "TDS" },
   { title: "IT Returns", path: "/itr", icon: FileText, module: "IT Returns" },
-  { title: "Billing & Timesheet", path: "/billing", icon: CreditCard, module: "Billing" },
+  { title: "Billing", path: "/billing", icon: CreditCard, module: "Billing" },
 ];
 
 const auditStages = [

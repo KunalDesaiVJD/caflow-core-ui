@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import LedgerTabComponent from "@/components/billing/LedgerTab";
+import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
+import EmailSettingsTab from "@/components/billing/EmailSettingsTab";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -42,7 +44,7 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, User, RefreshCw, Share2, Phone,
+  Archive, ChevronDown, User, RefreshCw, Share2, Phone, History,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
@@ -173,36 +175,67 @@ function DocumentFilterBar({
   );
 }
 
+// ─── Documents Sub-Tab (Invoices / Quotations / Credit Notes merged) ───────
+function DocumentsTab() {
+  const [subTab, setSubTab] = useState("invoice");
+  return (
+    <div className="space-y-3">
+      <Tabs value={subTab} onValueChange={setSubTab}>
+        <TabsList>
+          <TabsTrigger value="invoice" className="gap-1.5">
+            <FileText size={13} /> Invoices
+          </TabsTrigger>
+          <TabsTrigger value="quotation_proforma" className="gap-1.5">
+            <FileSpreadsheet size={13} /> Quotations &amp; Proforma
+          </TabsTrigger>
+          <TabsTrigger value="credit_note" className="gap-1.5">
+            <Archive size={13} /> Credit Notes
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="invoice" className="mt-3">
+          <DocumentListTab documentType="invoice" />
+        </TabsContent>
+        <TabsContent value="quotation_proforma" className="mt-3">
+          <DocumentListTab documentType="quotation_proforma" />
+        </TabsContent>
+        <TabsContent value="credit_note" className="mt-3">
+          <DocumentListTab documentType="credit_note" />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ─── Main Billing Page ───────────────────────────────────────────────────────
 const Billing = () => {
-  const [activeTab, setActiveTab] = useState("invoices");
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const { user } = useAuth();
+  const firmId = user?.firm_id ?? null;
+  const userId = user?.id ?? null;
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Billing & Timesheet</h1>
-        <p className="text-sm text-muted-foreground">Invoices, quotations, credit notes, time tracking, and revenue reports</p>
+        <h1 className="text-2xl font-bold text-foreground">Billing</h1>
+        <p className="text-sm text-muted-foreground">Dashboard, documents, receipts, ledger, and email settings</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex-wrap">
-          <TabsTrigger value="invoices" className="gap-2"><FileText size={14} /> Invoices</TabsTrigger>
-          <TabsTrigger value="quotations" className="gap-2"><FileSpreadsheet size={14} /> Quotations & Proforma</TabsTrigger>
-          <TabsTrigger value="credit-notes" className="gap-2"><FileText size={14} /> Credit Notes</TabsTrigger>
-          <TabsTrigger value="timesheet" className="gap-2"><Clock size={14} /> Timesheet</TabsTrigger>
+          <TabsTrigger value="dashboard" className="gap-2"><BarChart3 size={14} /> Dashboard</TabsTrigger>
+          <TabsTrigger value="documents" className="gap-2"><FileText size={14} /> Documents</TabsTrigger>
           <TabsTrigger value="receipts" className="gap-2"><Receipt size={14} /> Receipts</TabsTrigger>
           <TabsTrigger value="ledger" className="gap-2"><BookOpen size={14} /> Ledger</TabsTrigger>
           <TabsTrigger value="item-master" className="gap-2"><Settings2 size={14} /> Item Master</TabsTrigger>
-          <TabsTrigger value="reports" className="gap-2"><BarChart3 size={14} /> Reports</TabsTrigger>
+          <TabsTrigger value="email-settings" className="gap-2"><Mail size={14} /> Email Settings</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="invoices"><DocumentListTab documentType="invoice" /></TabsContent>
-        <TabsContent value="quotations"><DocumentListTab documentType="quotation_proforma" /></TabsContent>
-        <TabsContent value="credit-notes"><DocumentListTab documentType="credit_note" /></TabsContent>
-        <TabsContent value="timesheet"><TimesheetTab /></TabsContent>
+        <TabsContent value="dashboard"><BillingDashboardTab firmId={firmId} /></TabsContent>
+        <TabsContent value="documents"><DocumentsTab /></TabsContent>
         <TabsContent value="receipts"><ReceiptsTab /></TabsContent>
         <TabsContent value="ledger"><LedgerTabComponent /></TabsContent>
         <TabsContent value="item-master"><ItemMasterTab /></TabsContent>
-        <TabsContent value="reports"><ReportsTab /></TabsContent>
+        <TabsContent value="email-settings"><EmailSettingsTab firmId={firmId} userId={userId} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -1648,9 +1681,9 @@ function TimesheetTab() {
 }
 
 // ═══════════════════════════════════════
-// REPORTS TAB
+// REPORTS TAB (replaced by BillingDashboardTab)
 // ═══════════════════════════════════════
-function ReportsTab() {
+function ReportsTab_UNUSED() {
   const { user } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
   const firmId = user?.firm_id;
