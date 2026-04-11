@@ -173,6 +173,18 @@ export default function AuditPipeline() {
     enabled: !!user?.firm_id,
   });
 
+  // ─── Stage 1 form state — must be declared before any useQuery that references form1A ───
+  const [form1A, setForm1A] = useState({
+    client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
+  });
+  const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
+  const [planning, setPlanning] = useState({
+    materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
+    key_areas: "", risk_profile: "medium", risk_justification: "",
+    expected_completion: "", review_dates: "",
+  });
+
   // ─── Audit-eligible clients — filtered by classification FY ───
   // Queries client_fy_classifications (FY-aware) instead of the legacy JSONB field.
   // Re-fetches automatically when form1A.financial_year changes so the dropdown
@@ -297,18 +309,6 @@ export default function AuditPipeline() {
     }
     setActiveStage(currentStage);
   }, [currentStage, searchParams]);
-
-  // ─── Stage 1 form state ───
-  const [form1A, setForm1A] = useState({
-    client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
-  });
-  const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
-  const [planning, setPlanning] = useState({
-    materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
-    key_areas: "", risk_profile: "medium", risk_justification: "",
-    expected_completion: "", review_dates: "",
-  });
 
   // Load form from engagement
   useEffect(() => {
