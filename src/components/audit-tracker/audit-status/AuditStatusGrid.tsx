@@ -59,6 +59,7 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "3CA Checked By",    id: "checked_by",                 filterType: "text"   },
   { label: "3CA Uploaded By",   id: "uploaded_by",                filterType: "text"   },
   { label: "Remarks",           id: "remarks",                    filterType: "text"   },
+  { label: "",                  id: "_history",                   filterType: "none"   },
 ];
 
 // ─── Blank template for a new row ─────────────────────────────────────────────
@@ -291,7 +292,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       {/* Table */}
       <div className="border rounded-lg overflow-hidden w-full">
         <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
-          <table className="border-collapse text-xs" style={{ minWidth: 2200, tableLayout: "fixed" }}>
+          <table className="border-collapse text-xs" style={{ minWidth: 2240, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}
             <thead className="sticky top-0 z-30">
@@ -307,6 +308,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                         "border border-indigo-600 px-2 py-2.5 text-left whitespace-nowrap select-none",
                         col.id === "_srno"      && "sticky left-0 z-40 bg-indigo-700 w-10",
                         col.id === "party_name" && "sticky left-10 z-40 bg-indigo-700 min-w-[140px]",
+                        col.id === "_history"   && "w-9 text-center",
                         col.sortable && "cursor-pointer hover:bg-indigo-600",
                       )}
                     >

@@ -578,6 +578,21 @@ export default function AuditStatusRow({
           </div>
         )}
       </TCell>
+
+      {/* 20 · Version history — clock icon, always visible for saved rows */}
+      <TCell className="w-9 text-center">
+        {!isNew && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
+            onClick={() => onHistory?.(row.id)}
+            title="View change history"
+          >
+            <History size={12} />
+          </Button>
+        )}
+      </TCell>
     </tr>
   );
 }

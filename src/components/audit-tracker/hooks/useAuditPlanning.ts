@@ -7,6 +7,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
+import { logChanges } from "./useAuditChangeLog";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +52,7 @@ function lsSave<T>(key: string, data: T[]) {
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?: boolean) {
+  const { user } = useAuth();
   const [entries, setEntries] = useState<PlanEntry[]>([]);
   const [comms,   setComms]   = useState<CommEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,8 +185,14 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       toast.success("Updated (offline)");
       return;
     }
+    const oldRow = entries.find(e => e.id === id);
     const { error } = await supabase.from("audit_planning").update(patch as any).eq("id", id);
     if (error) { toast.error(error.message); return; }
+    // Log field-level changes into audit_change_log (best-effort)
+    if (oldRow) {
+      logChanges("audit_planning", id, oldRow as any, patch as any,
+        user?.id, user?.name ?? user?.email ?? null);
+    }
     toast.success("Updated");
     await load();
   }
@@ -246,8 +255,14 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       lsSave(lsKey("communication", firmId), updated);
       return;
     }
+    const oldRow = comms.find(c => c.id === id);
     const { error } = await supabase.from("audit_communication").update(patch as any).eq("id", id);
     if (error) { toast.error(error.message); return; }
+    // Log field-level changes into audit_change_log (best-effort)
+    if (oldRow) {
+      logChanges("audit_communication", id, oldRow as any, patch as any,
+        user?.id, user?.name ?? user?.email ?? null);
+    }
     await load();
   }
 

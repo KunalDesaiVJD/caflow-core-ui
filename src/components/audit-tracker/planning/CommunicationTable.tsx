@@ -22,11 +22,12 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Check, ChevronsUpDown, Plus, Save, Loader2, Trash2, X,
+  Check, ChevronsUpDown, Plus, Save, Loader2, Trash2, X, History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CommEntry, PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption }         from "../hooks/useClients";
+import AuditChangeLogModal from "../audit-status/AuditChangeLogModal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,9 @@ function ClientCell({ value, clientId, clients, onChange }: ClientCellProps) {
 
 export default function CommunicationTable({ comms, entries, clients, onAdd, onUpdate, onRemove }: Props) {
   const [rows, setRows] = useState<DraftRow[]>([]);
+  // ── Version history modal ─────────────────────────────────────────────────
+  const [historyRowId,    setHistoryRowId]    = useState<string | null>(null);
+  const [historyRowLabel, setHistoryRowLabel] = useState<string | null>(null);
 
   // ── Sync from comms (skip dirty / unsaved rows) ───────────────────────────
   useEffect(() => {
@@ -261,7 +265,7 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
               <th className="border border-border px-2 py-2 text-left min-w-[130px]">Contact Person</th>
               <th className="border border-border px-2 py-2 text-left w-[150px]">Contact No</th>
               <th className="border border-border px-2 py-2 text-left">Remarks</th>
-              <th className="border border-border px-2 py-2 text-center w-20">Actions</th>
+              <th className="border border-border px-2 py-2 text-center w-24">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -398,6 +402,19 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
                         >
                           <Trash2 size={10} />
                         </Button>
+                        {/* Version history — only for persisted rows */}
+                        {!row.isNew && (
+                          <Button size="sm" variant="ghost"
+                            className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
+                            onClick={() => {
+                              setHistoryRowId(row.id);
+                              setHistoryRowLabel(row.clientName || "Communication Row");
+                            }}
+                            title="View change history"
+                          >
+                            <History size={10} />
+                          </Button>
+                        )}
                       </div>
                     )}
                     {/* Dirty indicator */}
@@ -430,6 +447,14 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
           Dates auto-fill from Planning entries when client is selected
         </p>
       </div>
+
+      {/* Change history modal — reuses same modal as Audit Status */}
+      <AuditChangeLogModal
+        recordId={historyRowId}
+        partyName={historyRowLabel}
+        open={!!historyRowId}
+        onClose={() => { setHistoryRowId(null); setHistoryRowLabel(null); }}
+      />
     </div>
   );
 }

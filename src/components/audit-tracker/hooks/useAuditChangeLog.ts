@@ -56,6 +56,7 @@ export function useAuditChangeLog(recordId: string | null) {
 // ─── Helper: insert change log entries (best-effort, never throws) ────────────
 
 export const FIELD_LABELS: Record<string, string> = {
+  // ── audit_status fields ──────────────────────────────────────────────────────
   party_name:                    "Party Name",
   physical_audit_conducted:      "Physical Audit",
   accounting_data:               "Accounting Data",
@@ -77,6 +78,16 @@ export const FIELD_LABELS: Record<string, string> = {
   remarks:                       "Remarks",
   client_id:                     "Client",
   engagement_id:                 "Engagement",
+  // ── audit_communication fields ───────────────────────────────────────────────
+  client_name:                   "Client",
+  audit_planned_from:            "Audit Planned From",
+  audit_planned_to:              "Audit Planned To",
+  contact_person:                "Contact Person",
+  contact_no:                    "Contact No",
+  // ── audit_planning fields ────────────────────────────────────────────────────
+  planned_from:                  "Planned From",
+  planned_to:                    "Planned To",
+  employee_names:                "Audit Employees",
 };
 
 export async function logChanges(
