@@ -533,6 +533,101 @@ const NewClientWizard = () => {
     } as any, { onConflict: "client_id,financial_year" });
   };
 
+  /* ───── Draft → Final promotion helper ─────────────────────────────────────
+   *
+   * Called after every step save in EDIT mode.
+   * Queries the DB to verify ALL required conditions are now satisfied, then
+   * flips is_draft → false if they are. This covers clients created via the
+   * external API that bypass handleFinalSubmit() entirely.
+   *
+   * Required conditions:
+   *   1. clients.name, .pan, .entity_type  — all non-empty
+   *   2. client_fy_classifications row      — financial_year + classification set
+   *   3. client_services                    — at least one active service row
+   * ─────────────────────────────────────────────────────────────────────────── */
+  const tryPromoteToFinal = async (): Promise<boolean> => {
+    if (!clientId) return false;
+
+    // ── 1. Read current draft status + required scalar fields ──
+    const { data: row, error: rowErr } = await supabase
+      .from("clients")
+      .select("is_draft, name, pan, entity_type")
+      .eq("id", clientId)
+      .maybeSingle();
+
+    if (rowErr) {
+      console.error("[Wizard] tryPromoteToFinal: could not read client:", rowErr.message);
+      return false;
+    }
+    if (!row || !row.is_draft) return false; // Already final — nothing to do
+
+    const nameOk = Boolean(row.name?.trim());
+    const panOk  = Boolean(row.pan?.trim());
+    const typeOk = Boolean(row.entity_type?.trim());
+
+    // ── 2. Check FY classification ──
+    const { data: fyRows } = await supabase
+      .from("client_fy_classifications")
+      .select("financial_year, classification")
+      .eq("client_id", clientId)
+      .limit(1);
+    const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
+
+    // ── 3. Check at least one active service ──
+    const { data: svcRows } = await supabase
+      .from("client_services")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("is_active", true)
+      .limit(1);
+    const svcOk = (svcRows?.length ?? 0) > 0;
+
+    console.log("[Wizard] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
+
+    if (!nameOk || !panOk || !typeOk || !fyOk || !svcOk) {
+      // Not yet complete — tell the user what's still missing
+      const missing: string[] = [];
+      if (!nameOk) missing.push("Name");
+      if (!panOk)  missing.push("PAN");
+      if (!typeOk) missing.push("Entity Type");
+      if (!fyOk)   missing.push("Financial Year / Classification");
+      if (!svcOk)  missing.push("at least one active Service");
+      toast({
+        title: "Details saved — client still in draft",
+        description: `Still required: ${missing.join(", ")}`,
+      });
+      return false;
+    }
+
+    // ── 4. All conditions met → promote ──
+    const { error: promoteErr } = await supabase
+      .from("clients")
+      .update({ is_draft: false } as any)
+      .eq("id", clientId);
+
+    if (promoteErr) {
+      // ROOT CAUSE C/D — log the exact error so RLS issues are visible
+      console.error("[Wizard] Promotion FAILED for", clientId, ":", promoteErr.message, promoteErr);
+      toast({
+        title: "Could not activate client",
+        description: `DB error: ${promoteErr.message}`,
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    toast({
+      title: "✅ Client activated!",
+      description: "All required details are complete. The client is now active.",
+    });
+
+    // Step 5 (spec): navigate to ClientDetail so the status badge refreshes instantly.
+    // Same confetti + delayed navigate as handleFinalSubmit().
+    confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 } });
+    setTimeout(() => navigate(`/clients/${clientId}`), 700);
+    return true;
+  };
+
   /* ───── Edit mode: save single step ───── */
   const saveCurrentStep = async () => {
     if (!clientId) return;
@@ -592,14 +687,22 @@ const NewClientWizard = () => {
       } else if (stepId === "services") {
         if (!validateServiceBilling()) { setSaving(false); return; }
         await saveServiceBillingData(clientId);
-        toast({ title: "Services saved", description: "Service billing configuration saved successfully." });
+        // ROOT CAUSE A/B fix: check promotion on services save too (has early return)
+        const promoted = await tryPromoteToFinal();
+        if (!promoted) {
+          toast({ title: "Services saved", description: "Service billing configuration saved successfully." });
+        }
         setSaving(false);
         return;
       } else if (stepId === "audit") {
         await saveAuditSetup(clientId);
       }
 
-      toast({ title: "Saved", description: `${currentStepDef?.label} saved successfully.` });
+      // ROOT CAUSE A/B fix: attempt draft→final promotion after every step save
+      const promoted = await tryPromoteToFinal();
+      if (!promoted) {
+        toast({ title: "Saved", description: `${currentStepDef?.label} saved successfully.` });
+      }
     } catch (err: any) {
       toast({ title: "Error saving", description: err.message, variant: "destructive" });
     } finally {
@@ -832,7 +935,30 @@ const NewClientWizard = () => {
           <div className="flex justify-between">
             {isEditMode ? (
               <>
-                <div />
+                {/* ROOT CAUSE A fix: manual "Activate Client" override for API-imported drafts */}
+                {isApiDraft ? (
+                  <Button
+                    variant="outline"
+                    disabled={saving}
+                    className="gap-2 border-green-400 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950/30"
+                    onClick={async () => {
+                      setSaving(true);
+                      const promoted = await tryPromoteToFinal();
+                      if (!promoted) {
+                        toast({
+                          title: "Client cannot be activated yet",
+                          description: "Please save all required steps (Basic Info, Advanced Info, at least one Service) first.",
+                          variant: "destructive",
+                        });
+                      }
+                      setSaving(false);
+                    }}
+                  >
+                    {saving ? "Checking…" : "✓ Activate Client"}
+                  </Button>
+                ) : (
+                  <div />
+                )}
                 <Button onClick={saveCurrentStep} disabled={saving || servicesBlocked} className="gap-2">
                   <Save className="h-4 w-4" /> {saving ? "Saving…" : `Save ${currentStepDef?.label}`}
                 </Button>

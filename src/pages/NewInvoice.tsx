@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -220,13 +220,27 @@ const NewInvoice = () => {
   const isSuperadmin = user?.role === "superadmin";
   const isEdit = !!invoiceId;
 
-  // Route-state prefill (from Billing reminder → "Create Invoice")
-  const prefillApplied = useRef(false);
+  // ─── ROOT CAUSE B+C FIX ────────────────────────────────────────────────────
+  // Extract prefill data SYNCHRONOUSLY (before any useState) so the form's
+  // initial state is already populated on the very first render — no effect
+  // timing gap, no skeleton flash, no blank-form frame.
+  // Only applies in new-invoice mode (not edit).
+  const prefillData: {
+    client_id?:    string;
+    client_name?:  string;
+    amount?:       number;
+    period?:       string;
+    due_date?:     string;
+    service_name?: string;
+    reminder_id?:  string;
+  } | null = !invoiceId ? ((routeState as any)?.prefill ?? null) : null;
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Document type from query param or default
   const initialDocType = (searchParams.get("type") as DocumentType) || "invoice";
 
-  const [loading, setLoading] = useState(true);
+  // ROOT CAUSE C FIX: new invoices start with loading=false — no skeleton flash
+  const [loading, setLoading] = useState(!!invoiceId);
   const [saving, setSaving] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [firmsList, setFirmsList] = useState<Firm[]>([]);
@@ -237,13 +251,32 @@ const NewInvoice = () => {
   // Document type
   const [docType, setDocType] = useState<DocumentType>(initialDocType);
 
-  // Invoice state
-  const [clientId, setClientId] = useState("");
+  // Invoice state — ROOT CAUSE B FIX: initialize directly from prefillData
+  const [clientId, setClientId] = useState(
+    prefillData?.client_id ? String(prefillData.client_id) : ""
+  );
   const [invoiceNo, setInvoiceNo] = useState("");
   const [seqNumber, setSeqNumber] = useState<number | null>(null);
   const [invoiceDate, setInvoiceDate] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [referenceNo, setReferenceNo] = useState("");
-  const [lineItems, setLineItems] = useState<LineItem[]>([EMPTY_ITEM()]);
+  const [referenceNo, setReferenceNo] = useState(
+    prefillData?.due_date ? String(prefillData.due_date) : ""
+  );
+  const [lineItems, setLineItems] = useState<LineItem[]>(() => {
+    if (!prefillData) return [EMPTY_ITEM()];
+    const amt = Number(prefillData.amount) || 0;
+    const gstAmt = Math.round(amt * 0.18 * 100) / 100;
+    return [{
+      ...EMPTY_ITEM(),
+      description:         prefillData.service_name || "Professional Services",
+      description_details: prefillData.period ? `Period: ${String(prefillData.period)}` : "",
+      rate:          amt,
+      taxable_value: amt,
+      quantity:      1,
+      gst_percent:   18,
+      gst_amount:    gstAmt,
+      total:         amt + gstAmt,
+    }];
+  });
   const [isIntraState, setIsIntraState] = useState(true);
   const [status, setStatus] = useState("draft");
   const [showLogo, setShowLogo] = useState(true);
@@ -256,8 +289,11 @@ const NewInvoice = () => {
   const [docNoManual, setDocNoManual] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState("");
 
-  // Client fields
-  const [toName, setToName] = useState("");
+  // Client fields — ROOT CAUSE B FIX: set toName immediately from prefill
+  // so the name shows even before the async clients-list fetch completes
+  const [toName, setToName] = useState(
+    prefillData?.client_name ? String(prefillData.client_name) : ""
+  );
   const [toGstin, setToGstin] = useState("");
   const [toAddress, setToAddress] = useState("");
 
@@ -733,6 +769,16 @@ const NewInvoice = () => {
             .update({ status: "converted", converted_to_id: savedId, conversion_date: new Date().toISOString() })
             .eq("id", sourceDocumentId);
         }
+
+        // ── STEP 6: Close the reminder loop ──────────────────────────────────
+        // If this invoice was created from a billing reminder, mark that
+        // reminder as "invoiced" and store a back-reference to this invoice.
+        if (prefillData?.reminder_id && savedId) {
+          await supabase.from("billing_reminders")
+            .update({ status: "invoice_created", last_invoice_id: savedId })
+            .eq("id", prefillData.reminder_id);
+        }
+        // ─────────────────────────────────────────────────────────────────────
       }
 
       // Auto-insert ledger entry when finalizing
@@ -810,42 +856,9 @@ const NewInvoice = () => {
     // This runs on edit load - we handle conversion marking in save
   }, [isEdit, sourceDocumentId]);
 
-  // Pre-fill from Billing reminder navigation state
-  // Fires once on mount; guard prevents re-application on re-renders.
-  useEffect(() => {
-    const prefill = (routeState as any)?.prefill;
-    if (!prefill || isEdit || prefillApplied.current) return;
-    prefillApplied.current = true;
-
-    // Set client (the client-detail useEffect will auto-fill toName/toGstin/toAddress)
-    if (prefill.client_id) setClientId(String(prefill.client_id));
-
-    // Pre-populate a single line item with the billing amount
-    const amt = Number(prefill.amount) || 0;
-    if (amt > 0) {
-      const gstAmt = Math.round(amt * 0.18 * 100) / 100;
-      const desc = prefill.service_type
-        ? String(prefill.service_type)
-        : "Professional Services";
-      const details = prefill.period
-        ? `Period: ${String(prefill.period)}`
-        : "";
-      setLineItems([{
-        ...EMPTY_ITEM(),
-        description:        desc,
-        description_details: details,
-        rate:          amt,
-        taxable_value: amt,
-        quantity:      1,
-        gst_percent:   18,
-        gst_amount:    gstAmt,
-        total:         amt + gstAmt,
-      }]);
-    }
-
-    // Pre-fill reference with due date if present
-    if (prefill.due_date) setReferenceNo(String(prefill.due_date));
-  }, [routeState, isEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  // NOTE: Prefill from Billing reminder is now handled synchronously via
+  // `prefillData` extracted before useState calls above (ROOT CAUSE B+C fix).
+  // No post-paint effect needed — state is already populated on first render.
 
   const handleDownloadPdf = async () => {
     if (status === "draft") {
@@ -931,6 +944,20 @@ const NewInvoice = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT PANEL — Form */}
         <div className="w-[45%] overflow-y-auto border-r border-border p-4 space-y-4">
+
+          {/* ── Step 5: Prefill banner (shown when opened from a billing reminder) ── */}
+          {prefillData && (
+            <div className="flex items-start gap-2 rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-950/30 px-3 py-2.5">
+              <Info size={14} className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-blue-700 dark:text-blue-300">
+                <span className="font-semibold">Pre-filled from Billing Reminder</span>
+                {prefillData.client_name && <span> — {prefillData.client_name}</span>}
+                {prefillData.service_name && <span> · {prefillData.service_name}</span>}
+                {prefillData.due_date && <span> · Due {prefillData.due_date}</span>}
+                <span className="block text-blue-500 dark:text-blue-400 mt-0.5">Review the details below and click <strong>Save Draft</strong> or <strong>Finalize</strong> to create the invoice.</span>
+              </div>
+            </div>
+          )}
 
           {/* Document Type Selector */}
           {!isEdit && (

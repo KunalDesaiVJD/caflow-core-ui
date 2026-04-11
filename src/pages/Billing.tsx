@@ -360,7 +360,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     (async () => {
       const today = format(new Date(), "yyyy-MM-dd");
       const { data } = await supabase.from("billing_reminders")
-        .select("*")
+        .select("*, service_categories(name)")
         .eq("firm_id", firmId)
         .eq("status", "pending")
         .lte("next_due_date", today);
@@ -481,6 +481,24 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     if (!shareInvoice) return;
     setShareSending(true);
     try {
+      // ── Generate PDF once — reused for both email attachment and WhatsApp download ──
+      let pdfBlob: Blob | null = null;
+      let pdfBase64: string | undefined;
+      const pdfFilename = `${(shareInvoice.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+      try {
+        const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", shareInvoice.id).single();
+        if (fullInv) {
+          pdfBlob = await generateInvoicePdfBlob(fullInv as any);
+          pdfBase64 = await new Promise<string>(resolve => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
+            reader.readAsDataURL(pdfBlob!);
+          });
+        }
+      } catch (pdfErr) {
+        console.warn("[SharePDF] PDF generation failed — sending without attachment:", pdfErr);
+      }
+
       if (shareViaEmail && shareEmail) {
         await supabase.functions.invoke("send-notification", {
           body: {
@@ -496,26 +514,24 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
               custom_email: shareEmail,
               custom_subject: shareSubject,
               custom_message: shareMessage,
+              ...(pdfBase64 ? { pdf_base64: pdfBase64, pdf_filename: pdfFilename } : {}),
             },
           },
         });
         await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", shareInvoice.id);
-        toast({ title: "Email sent successfully" });
+        toast({ title: pdfBase64 ? "Email sent with PDF attachment" : "Email sent successfully" });
       }
       if (shareViaWhatsApp && sharePhone) {
         const phone = sharePhone.replace(/\D/g, "");
         const fullPhone = phone.startsWith("91") ? phone : `91${phone}`;
         const msg = encodeURIComponent(shareMessage);
         window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
-        toast({ title: "WhatsApp opened — attach the downloaded PDF to the message" });
-        const { generateInvoicePdfBlob } = await import("@/lib/invoicePdfGenerator");
-        const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", shareInvoice.id).single();
-        if (fullInv) {
-          const blob = await generateInvoicePdfBlob(fullInv as any);
-          const url = URL.createObjectURL(blob);
+        toast({ title: "WhatsApp opened — PDF downloaded for manual attachment" });
+        if (pdfBlob) {
+          const url = URL.createObjectURL(pdfBlob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `${(shareInvoice.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+          a.download = pdfFilename;
           a.click();
           URL.revokeObjectURL(url);
         }
@@ -548,6 +564,26 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
       : inv.document_type === "proforma" ? "proforma_sent"
       : "invoice_generated";
 
+    // Generate PDF attachment for client-facing emails
+    let pdfBase64: string | undefined;
+    let pdfFilename: string | undefined;
+    if (!sendToResponsible) {
+      try {
+        const { data: fullInv } = await supabase.from("invoices").select("*").eq("id", inv.id).single();
+        if (fullInv) {
+          const blob = await generateInvoicePdfBlob(fullInv as any);
+          pdfBase64 = await new Promise<string>(resolve => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
+            reader.readAsDataURL(blob);
+          });
+          pdfFilename = `${(inv.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+        }
+      } catch (pdfErr) {
+        console.warn("[SendPDF] PDF generation failed — sending without attachment:", pdfErr);
+      }
+    }
+
     try {
       await supabase.functions.invoke("send-notification", {
         body: {
@@ -561,6 +597,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
             amount: total,
             document_type: inv.document_type || "invoice",
             client_name: clientMap[inv.client_id || ""]?.name || "",
+            ...(pdfBase64 ? { pdf_base64: pdfBase64, pdf_filename: pdfFilename } : {}),
           },
         },
       });
@@ -570,7 +607,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
 
     if (!sendToResponsible) {
       await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", inv.id);
-      toast({ title: "Document sent" });
+      toast({ title: pdfBase64 ? "Document sent with PDF attachment" : "Document sent" });
     } else {
       toast({ title: "Responsible person notified" });
     }
@@ -584,6 +621,14 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
     setBulkSending(true);
     setBulkProgress({ current: 0, total: selected.length });
 
+    // Pre-fetch full invoice records for PDF generation (client sends only)
+    const needsPdf = bulkSendTarget === "client" || bulkSendTarget === "both";
+    let fullInvoiceMap: Record<string, any> = {};
+    if (needsPdf) {
+      const { data: fullInvoices } = await supabase.from("invoices").select("*").in("id", selected.map(i => i.id));
+      (fullInvoices || []).forEach((inv: any) => { fullInvoiceMap[inv.id] = inv; });
+    }
+
     let sentCount = 0;
     for (const inv of selected) {
       setBulkProgress(p => ({ ...p, current: p.current + 1 }));
@@ -592,6 +637,23 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
         : inv.document_type === "quotation" ? "quotation_sent"
         : inv.document_type === "proforma" ? "proforma_sent"
         : "invoice_generated";
+
+      // Generate PDF for client-facing emails
+      let pdfBase64: string | undefined;
+      let pdfFilename: string | undefined;
+      if (needsPdf && fullInvoiceMap[inv.id]) {
+        try {
+          const blob = await generateInvoicePdfBlob(fullInvoiceMap[inv.id] as any);
+          pdfBase64 = await new Promise<string>(resolve => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
+            reader.readAsDataURL(blob);
+          });
+          pdfFilename = `${(inv.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
+        } catch (pdfErr) {
+          console.warn("[BulkSendPDF] PDF failed for", inv.invoice_no, pdfErr);
+        }
+      }
 
       try {
         await supabase.functions.invoke("send-notification", {
@@ -605,6 +667,7 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
               invoice_no: inv.invoice_no,
               amount: total,
               document_type: inv.document_type || "invoice",
+              ...(pdfBase64 ? { pdf_base64: pdfBase64, pdf_filename: pdfFilename } : {}),
             },
           },
         });
@@ -927,11 +990,13 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
                         {
                           state: {
                             prefill: {
-                              client_id:   r.client_id,
-                              client_name: reminderClientMap[r.client_id] || "",
-                              amount:      r.billing_amount,
-                              period:      r.frequency,
-                              due_date:    r.next_due_date,
+                              client_id:    r.client_id,
+                              client_name:  reminderClientMap[r.client_id] || "",
+                              amount:       r.billing_amount,
+                              period:       r.frequency,
+                              due_date:     r.next_due_date,
+                              service_name: (r as any).service_categories?.name || "",
+                              reminder_id:  r.id,
                             },
                           },
                         }
@@ -1021,6 +1086,37 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           </SelectContent>
         </Select>
         <div className="flex-1" />
+        {/* Email & WhatsApp quick-send buttons — always visible in every sub-tab */}
+        <Button
+          variant="outline"
+          className="gap-1"
+          onClick={() => {
+            if (selectedIds.size === 0) {
+              toast({ title: "Select documents first", description: "Tick the checkboxes next to the documents you want to send." });
+            } else {
+              setBulkSendMode("email");
+              setBulkSendOpen(true);
+            }
+          }}
+        >
+          <Mail size={14} /> Email
+          {selectedIds.size > 0 && <span className="ml-1 text-xs bg-primary text-primary-foreground rounded-full px-1.5 py-0.5 leading-none">{selectedIds.size}</span>}
+        </Button>
+        <Button
+          variant="outline"
+          className="gap-1"
+          onClick={() => {
+            if (selectedIds.size === 0) {
+              toast({ title: "Select documents first", description: "Tick the checkboxes next to the documents you want to send via WhatsApp." });
+            } else {
+              setBulkSendMode("whatsapp");
+              setBulkSendOpen(true);
+            }
+          }}
+        >
+          <MessageSquare size={14} /> WhatsApp
+          {selectedIds.size > 0 && <span className="ml-1 text-xs bg-green-600 text-white rounded-full px-1.5 py-0.5 leading-none">{selectedIds.size}</span>}
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="gap-1" disabled={bulkZipProgress.active}>
@@ -1201,11 +1297,17 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
         </DialogContent>
       </Dialog>
 
-      {/* Share Invoice Dialog */}
+      {/* Share Document Dialog */}
       <Dialog open={shareOpen} onOpenChange={setShareOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Share2 size={18} /> Share Invoice</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 size={18} />
+              Share {shareInvoice?.document_type === "credit_note" ? "Credit Note"
+                : shareInvoice?.document_type === "quotation" ? "Quotation"
+                : shareInvoice?.document_type === "proforma" ? "Proforma"
+                : "Invoice"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
@@ -1227,9 +1329,12 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
               <Label>Message</Label>
               <Textarea value={shareMessage} onChange={e => setShareMessage(e.target.value)} rows={4} />
             </div>
-            <div>
-              <Label className="text-sm text-muted-foreground">Attachment</Label>
-              <p className="text-sm font-medium">{shareInvoice?.invoice_no || "Invoice"}.pdf (auto-generated)</p>
+            <div className="flex items-center gap-2 p-2.5 rounded-md bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+              <FileText size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div className="text-sm">
+                <span className="font-medium text-emerald-700 dark:text-emerald-300">PDF attached automatically — </span>
+                <span className="text-emerald-600 dark:text-emerald-400">{shareInvoice?.invoice_no || "document"}.pdf</span>
+              </div>
             </div>
             <div className="flex items-center gap-6">
               <Label className="text-sm font-medium">Send via:</Label>

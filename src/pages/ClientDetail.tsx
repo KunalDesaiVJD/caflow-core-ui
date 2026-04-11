@@ -168,6 +168,9 @@ const ClientDetail = () => {
   // Audit classification (FY-based)
   const [isAuditClient, setIsAuditClient] = useState(false);
 
+  // Manual "Activate Now" button loading state — must be declared here (before any early returns)
+  const [activating, setActivating] = useState(false);
+
   // Derived: is TDS service active?
   const hasTdsActive = clientServices.some(cs => {
     const cat = serviceCategories.find(c => c.id === cs.service_category_id);
@@ -196,6 +199,17 @@ const ClientDetail = () => {
       setTanValue((client as any).tan_number || "");
     }
   }, [client]);
+
+  // Step 3B (spec): On mount, silently auto-promote if all required fields are
+  // already present.  This catches API-created clients whose details were filled
+  // in a previous session but were never promoted because the save handlers
+  // didn't run the promotion check at that time.
+  useEffect(() => {
+    if (loading) return; // Wait for initial data fetch to complete
+    if (!client || !(client as any).is_draft) return; // Not a draft — nothing to do
+    tryPromoteToFinal();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]); // Fires exactly once when loading transitions true → false
 
   async function loadAllData() {
     setLoading(true);
@@ -267,6 +281,84 @@ const ClientDetail = () => {
     setLoading(false);
   }
 
+  /* ─── Draft → Final promotion (mirrors wizard logic) ──────────────────────
+   *
+   * Fires after every save action in ClientDetail.  Checks all required
+   * conditions from the DB and flips is_draft → false when they are all met.
+   * This handles clients created via the external API that never go through
+   * the wizard's handleFinalSubmit() path.
+   *
+   * Required conditions (same as wizard):
+   *   1. clients.name + .pan + .entity_type  — all non-empty
+   *   2. client_fy_classifications row        — financial_year + classification set
+   *   3. client_services                      — at least one active service row
+   * ─────────────────────────────────────────────────────────────────────────── */
+  async function tryPromoteToFinal() {
+    if (!clientId) return;
+
+    // ── 1. Read scalar required fields + current draft flag ──
+    const { data: row, error: rowErr } = await supabase
+      .from("clients")
+      .select("is_draft, name, pan, entity_type")
+      .eq("id", clientId)
+      .maybeSingle();
+
+    if (rowErr) {
+      console.error("[ClientDetail] tryPromoteToFinal: could not read client:", rowErr.message);
+      return;
+    }
+    if (!row || !row.is_draft) return; // Not a draft — nothing to do
+
+    const nameOk = Boolean(row.name?.trim());
+    const panOk  = Boolean(row.pan?.trim());
+    const typeOk = Boolean(row.entity_type?.trim());
+
+    // ── 2. Check FY classification row ──
+    const { data: fyRows } = await supabase
+      .from("client_fy_classifications")
+      .select("financial_year, classification")
+      .eq("client_id", clientId)
+      .limit(1);
+    const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
+
+    // ── 3. Check at least one active service row ──
+    const { data: svcRows } = await supabase
+      .from("client_services")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("is_active", true)
+      .limit(1);
+    const svcOk = (svcRows?.length ?? 0) > 0;
+
+    console.log("[ClientDetail] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
+
+    if (!nameOk || !panOk || !typeOk || !fyOk || !svcOk) return; // Still incomplete
+
+    // ── 4. All conditions met → promote to final ──
+    const { error: promoteErr } = await supabase
+      .from("clients")
+      .update({ is_draft: false } as any)
+      .eq("id", clientId);
+
+    if (promoteErr) {
+      // ROOT CAUSE C/D: log exact error to surface RLS or permission issues
+      console.error("[ClientDetail] Promotion FAILED:", promoteErr.message, promoteErr);
+      toast({
+        title: "Could not activate client",
+        description: `DB error: ${promoteErr.message}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Update local state so the draft banner disappears immediately
+    setClient(prev => prev ? { ...prev, is_draft: false } as any : prev);
+    toast({
+      title: "✅ Client activated!",
+      description: "All required details are complete. The client is now active.",
+    });
+  }
+
   // TAN save
   async function saveTan() {
     if (!clientId) return;
@@ -285,6 +377,8 @@ const ClientDetail = () => {
       await supabase.from("clients").update({ tan_number: trimmed || null } as any).eq("id", clientId);
       setClient(prev => prev ? { ...prev, tan_number: trimmed || null } : prev);
       toast({ title: "TAN saved" });
+      // ROOT CAUSE A/B fix: check if client can now be promoted to final
+      await tryPromoteToFinal();
     } catch (e: any) {
       toast({ title: "Error saving TAN", description: e.message, variant: "destructive" });
     } finally {
@@ -415,6 +509,8 @@ const ClientDetail = () => {
 
       const { data } = await supabase.from("client_services").select("*").eq("client_id", clientId!);
       setClientServices((data || []) as any as ClientService[]);
+      // ROOT CAUSE A/B fix: activating a service may complete the requirements
+      if (!currentlyActive) await tryPromoteToFinal();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
@@ -491,6 +587,8 @@ const ClientDetail = () => {
       const { data } = await supabase.from("client_services").select("*").eq("client_id", clientId!);
       setClientServices((data || []) as any as ClientService[]);
       setTdsActivateModal(null);
+      // ROOT CAUSE A/B fix: TDS activation may complete the service requirement
+      await tryPromoteToFinal();
     } catch (e: any) {
       toast({ title: "Error activating TDS", description: e.message, variant: "destructive" });
     } finally {
@@ -567,6 +665,8 @@ const ClientDetail = () => {
         audit_turnover: auditForm.audit_turnover ? Number(auditForm.audit_turnover) : null,
       } as any).eq("id", clientId);
       toast({ title: "Audit setup saved" });
+      // ROOT CAUSE A/B fix: check if client can now be promoted to final
+      await tryPromoteToFinal();
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     } finally {
@@ -604,6 +704,12 @@ const ClientDetail = () => {
     }
   };
 
+  const handleActivateNow = async () => {
+    setActivating(true);
+    await tryPromoteToFinal();
+    setActivating(false);
+  };
+
   // TAN validation state
   const tanInvalid = tanValue.trim() !== '' && !TAN_REGEX.test(tanValue.trim().toUpperCase());
   const tanRequiredButMissing = hasTdsActive && !tanValue.trim();
@@ -611,11 +717,31 @@ const ClientDetail = () => {
   return (
     <div className="space-y-4">
       {isDraft && (
-        <div className="flex items-center justify-between rounded-lg border border-accent bg-accent/10 p-4">
-          <p className="text-sm font-medium text-foreground">This client is a draft. Complete setup to activate.</p>
-          <div className="flex gap-2">
-            <Button variant="destructive" size="sm" onClick={handleDeleteDraft}>Delete Draft</Button>
-            <Button size="sm" onClick={() => navigate(`/clients/edit/${client.id}`)}>Continue Setup</Button>
+        <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/20 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                This client is a draft — not yet active.
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                Required to activate: <strong>Name</strong>, <strong>PAN</strong>, <strong>Entity Type</strong>,
+                <strong> Financial Year &amp; Classification</strong> (via "Continue Setup"), and at least
+                one <strong>active Service</strong>.
+              </p>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button variant="destructive" size="sm" onClick={handleDeleteDraft}>Delete</Button>
+              <Button size="sm" variant="outline" onClick={() => navigate(`/clients/edit/${client.id}`)}>Continue Setup</Button>
+              <Button
+                size="sm"
+                disabled={activating}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={handleActivateNow}
+              >
+                {activating ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                {activating ? " Checking…" : "✓ Activate Now"}
+              </Button>
+            </div>
           </div>
         </div>
       )}
