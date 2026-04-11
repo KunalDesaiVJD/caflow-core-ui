@@ -79,17 +79,19 @@ const BLANK_ROW: StatusEntry = {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  firmId:       string;
-  clients:      ClientOption[];
-  users:        UserOption[];
-  auditFirms:   AuditFirmOption[];
-  planEntries:  PlanEntry[];
-  isSuperadmin?: boolean;
+  firmId:          string;
+  clients:         ClientOption[];
+  users:           UserOption[];
+  auditFirms:      AuditFirmOption[];
+  planEntries:     PlanEntry[];
+  isSuperadmin?:   boolean;
+  /** When set, only rows matching this client_id are shown (Select Client mode) */
+  clientIdFilter?: string | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin }: Props) {
+export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter }: Props) {
   const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin);
 
   // ── Search (debounced 300 ms) ──────────────────────────────────────────────
@@ -168,6 +170,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   const filtered = useMemo(() => {
     let result = rows;
 
+    // Client-scope filter (Select Client mode — applied before all other filters)
+    if (clientIdFilter) result = result.filter(r => r.client_id === clientIdFilter);
+
     // Global text search
     if (search) {
       const q = search.toLowerCase();
@@ -204,7 +209,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
     }
 
     return result;
-  }, [rows, search, statusFilter, colFilters, sortField, sortDir]);
+  }, [rows, search, statusFilter, colFilters, sortField, sortDir, clientIdFilter]);
 
   // ── Pagination slice ──────────────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));

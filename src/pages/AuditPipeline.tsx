@@ -37,7 +37,7 @@ import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
 import PipelineStage7Combined from "@/components/pipeline/PipelineStage7Combined";
-import Form3CD from "@/pages/Form3CD";
+import Form3Reports from "@/pages/Form3Reports";
 
 // ─── Constants ───
 const STAGES = [
@@ -812,7 +812,7 @@ export default function AuditPipeline() {
                 <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
               </Button>
             </div>
-            <Form3CD engagementIdProp={selectedEngId} />
+            <Form3Reports engagementIdProp={selectedEngId} />
           </div>
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */

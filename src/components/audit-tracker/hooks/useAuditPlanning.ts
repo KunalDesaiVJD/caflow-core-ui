@@ -172,6 +172,25 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       scanned:                  "No",
     });
 
+    // Part C — Notify every assigned employee on their dashboard
+    if (input.employee_ids && input.employee_ids.length > 0) {
+      const fmt = (d: string) =>
+        new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+      const notifications = input.employee_ids.map((uid) => ({
+        firm_id: firmId,
+        user_id: uid,
+        type:    "audit_scheduled",
+        title:   `Audit at ${input.client_name ?? "Client"}`,
+        message: `You are scheduled for audit at ${input.client_name ?? "Client"} from ${fmt(input.planned_from)} to ${fmt(input.planned_to)}.`,
+        link:    "/audit/tracker",
+        is_read: false,
+      }));
+      // Best-effort — table may not exist yet
+      try {
+        await supabase.from("user_notifications").insert(notifications);
+      } catch { /* ignore */ }
+    }
+
     toast.success("Plan added");
     await load();
     return newEntry;

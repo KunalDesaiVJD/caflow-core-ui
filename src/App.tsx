@@ -35,7 +35,8 @@ import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
 import AuditFirms from "./pages/AuditFirms";
 import ClientGroups from "./pages/ClientGroups";
-import Form3CD from "./pages/Form3CD";
+import Form3CD      from "./pages/Form3CD";
+import Form3Reports from "./pages/Form3Reports";
 import NotesToAccounts from "./pages/NotesToAccounts";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
@@ -167,6 +168,7 @@ const App = () => (
               <Route path="/audit/:clientId/import-trial-balance" element={<ImportTrialBalance />} />
               <Route path="/audit/3cd" element={<Form3CD />} />
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
+              <Route path="/audit/3reports" element={<Form3Reports />} />
               <Route path="/audit/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/master-config" element={<AuditMasterConfig />} />
               <Route path="/audit/tracker" element={<AuditTracker />} />

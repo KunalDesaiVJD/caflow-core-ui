@@ -14,6 +14,8 @@ import {
   Plus,
   Clock,
   CalendarDays,
+  Bell,
+  X,
 } from "lucide-react";
 import { startOfMonth, endOfMonth } from "date-fns";
 
@@ -38,6 +40,16 @@ interface DueItem {
   type: string;
 }
 
+interface UserNotification {
+  id:         string;
+  type:       string;
+  title:      string;
+  message:    string;
+  link:       string | null;
+  is_read:    boolean;
+  created_at: string;
+}
+
 function daysUntil(date: Date) {
   return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000));
 }
@@ -55,6 +67,7 @@ const Index = () => {
     planned_to:     string;
     employee_names: string[] | null;
   }>>([]);
+  const [notifications, setNotifications] = useState<UserNotification[]>([]);
 
   const fetchDashboard = useCallback(async () => {
     if (!user) {
@@ -108,9 +121,18 @@ const Index = () => {
       .order("planned_from", { ascending: true })
       .limit(5);
 
+    // User notifications — unread, most recent first
+    const notifQ = supabase
+      .from("user_notifications")
+      .select("id, type, title, message, link, is_read, created_at")
+      .eq("user_id", user.id)
+      .eq("is_read", false)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
     try {
-      const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes] = await Promise.all([
-        clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ,
+      const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes, notifRes] = await Promise.all([
+        clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ, notifQ,
       ]);
 
       setStats({
@@ -137,6 +159,11 @@ const Index = () => {
           employee_names: r.employee_names || null,
         }))
       );
+
+      // Notifications — silently ignore if table doesn't exist yet
+      if (!notifRes.error && notifRes.data) {
+        setNotifications(notifRes.data as UserNotification[]);
+      }
     } catch (err) {
       console.error("Dashboard fetch error:", err);
     } finally {
@@ -147,6 +174,24 @@ const Index = () => {
   useEffect(() => {
     if (user) fetchDashboard();
   }, [user, fetchDashboard]);
+
+  const dismissNotification = async (id: string, link?: string | null) => {
+    // Optimistically remove from UI
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    // Mark as read in DB (best-effort)
+    try {
+      await supabase.from("user_notifications").update({ is_read: true }).eq("id", id);
+    } catch { /* ignore if table absent */ }
+    if (link) navigate(link);
+  };
+
+  const dismissAllNotifications = async () => {
+    const ids = notifications.map((n) => n.id);
+    setNotifications([]);
+    try {
+      await supabase.from("user_notifications").update({ is_read: true }).in("id", ids);
+    } catch { /* ignore */ }
+  };
 
   // Superadmin can access dashboard too — no redirect
   const userRole = user?.role || "staff_article";
@@ -176,6 +221,49 @@ const Index = () => {
           {welcomeLine}
         </p>
       </div>
+
+      {/* Notification Banner */}
+      {notifications.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
+              <Bell className="h-4 w-4" />
+              <span>Notifications</span>
+              <span className="inline-flex items-center justify-center rounded-full bg-indigo-600 text-white text-[10px] font-bold h-4 min-w-4 px-1">
+                {notifications.length}
+              </span>
+            </div>
+            <button
+              onClick={dismissAllNotifications}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+            >
+              Mark all as read
+            </button>
+          </div>
+          <div className="space-y-2">
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className="flex items-start gap-3 rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 cursor-pointer hover:bg-indigo-100 transition-colors"
+                onClick={() => dismissNotification(n.id, n.link)}
+              >
+                <Bell className="h-4 w-4 text-indigo-500 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-indigo-800 leading-snug">{n.title}</p>
+                  <p className="text-xs text-indigo-700 mt-0.5 leading-snug">{n.message}</p>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); dismissNotification(n.id); }}
+                  className="shrink-0 text-indigo-400 hover:text-indigo-700 transition-colors mt-0.5"
+                  title="Dismiss"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
