@@ -37,6 +37,144 @@ const FIRM_DISPLAY_NAME   = "V J Desai & Co.";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+// ─── Claude system prompt ─────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are CAFlow Billing Agent, an AI assistant for \
+Indian CA firms. You help users query and manage billing data (invoices, \
+ledgers, clients, payments, receipts) via natural language.
+
+CAPABILITIES:
+- Search invoices by client name, doc number, date range, status
+- Fetch client ledgers with running balance
+- List all clients or search clients by name/PAN
+- Get outstanding/overdue invoices across all firms
+- Calculate totals, summaries, aging reports
+- Send invoice/ledger PDFs via Telegram (use send_pdf_to_telegram tool)
+- Email invoices/ledgers to clients with PDF attachments
+- Understand context — if user says 'above invoices', 'that client', \
+'same as before', use conversation history
+
+RULES:
+- All firms are treated as ONE unit (no firm filter)
+- Always use tools to fetch real data — never make up information
+- When user asks for PDF, USE the send_pdf_to_telegram tool
+- When user asks to email, USE the send_email_with_attachments tool
+- Respond in friendly, concise format with emojis
+- Use Markdown formatting for lists and tables
+- If a client name is ambiguous, show top matches and ask user to clarify
+- NEVER say 'I did not understand' — always try to help`;
+
+// ─── Claude tool definitions (function calling) ───────────────────────────────
+const BILLING_TOOLS = [
+  {
+    name: "search_invoices",
+    description: "Search invoices by client name (partial match), doc number, date range, or status. Returns list of invoices.",
+    input_schema: {
+      type: "object",
+      properties: {
+        client_name: { type: "string", description: "Partial client name" },
+        doc_no:      { type: "string", description: "Invoice/document number (partial match ok)" },
+        date_from:   { type: "string", description: "Start date YYYY-MM-DD" },
+        date_to:     { type: "string", description: "End date YYYY-MM-DD" },
+        status:      { type: "string", enum: ["draft", "finalized", "sent", "paid", "overdue"] },
+        limit:       { type: "number", description: "Max results (default 20)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_ledger",
+    description: "Get client ledger with all entries and running balance.",
+    input_schema: {
+      type: "object",
+      properties: {
+        client_name: { type: "string", description: "Client name (partial match ok)" },
+        date_from:   { type: "string", description: "Start date YYYY-MM-DD (optional)" },
+        date_to:     { type: "string", description: "End date YYYY-MM-DD (optional)" },
+      },
+      required: ["client_name"],
+    },
+  },
+  {
+    name: "list_clients",
+    description: "List all clients or search by name/PAN. Use for 'give me all client names' type queries.",
+    input_schema: {
+      type: "object",
+      properties: {
+        search: { type: "string", description: "Partial name or PAN" },
+        limit:  { type: "number", description: "Max results (default 50)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_outstanding_invoices",
+    description: "Get all unpaid/overdue invoices across all clients. Set overdue_only=true to show only past-due invoices.",
+    input_schema: {
+      type: "object",
+      properties: {
+        client_name:  { type: "string",  description: "Filter to a specific client (optional)" },
+        overdue_only: { type: "boolean", description: "If true, only return invoices past due date (default false)" },
+        limit:        { type: "number",  description: "Max results (default 20)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_billing_summary",
+    description: "Dashboard summary: total billed, paid, outstanding, by period.",
+    input_schema: {
+      type: "object",
+      properties: {
+        period: {
+          type: "string",
+          description: "Period filter — one of: this_month, last_month, fy_2026_27 (or any fy_YYYY_YY pattern). Omit for all-time.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "send_pdf_to_telegram",
+    description: "Generate and send PDF files directly to the Telegram chat. Use when user asks for PDF.",
+    input_schema: {
+      type: "object",
+      properties: {
+        document_type: { type: "string", enum: ["invoice", "ledger"], description: "Type of PDF to generate" },
+        invoice_ids:   { type: "array",  items: { type: "string" }, description: "Specific invoice UUIDs to generate PDFs for" },
+        client_name:   { type: "string", description: "Client name — used when no invoice_ids provided" },
+        doc_no:        { type: "string", description: "Invoice doc number (partial match ok)" },
+      },
+      required: ["document_type"],
+    },
+  },
+  {
+    name: "send_email_with_attachments",
+    description: "Send email to client with invoice PDF and/or ledger PDF attached.",
+    input_schema: {
+      type: "object",
+      properties: {
+        client_name:     { type: "string",  description: "Client name to send email to" },
+        invoice_doc_no:  { type: "string",  description: "Invoice doc number to attach (partial match ok)" },
+        include_invoice: { type: "boolean", description: "Attach invoice PDF (default true)" },
+        include_ledger:  { type: "boolean", description: "Attach current-FY ledger PDF (default true)" },
+        email_to:        { type: "string",  description: "Override recipient email (optional)" },
+      },
+      required: ["client_name"],
+    },
+  },
+  {
+    name: "get_client_details",
+    description: "Get full details of a client including PAN, GSTIN, contact info, and recent invoice summary.",
+    input_schema: {
+      type: "object",
+      properties: {
+        client_name: { type: "string", description: "Client name (partial match ok)" },
+      },
+      required: ["client_name"],
+    },
+  },
+];
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface TgFrom { id: number; username?: string; first_name?: string; }
 interface TgMessage {
@@ -109,57 +247,17 @@ Deno.serve(async (req: Request) => {
 
   console.log(`[Bot] Message from ${message.from.first_name ?? "?"} (${userId}): ${text.slice(0, 80)}`);
 
-  try {
-    // ── /start command — clean welcome, no auth check ─────────────
-    if (text === "/start" || text.startsWith("/start ")) {
-      await sendTelegram(chatId,
-        `Welcome to CAFlow Billing Agent! 🤖\n\n` +
-        `I can help you with:\n` +
-        `📄 Invoices — 'Show invoices for [client name]'\n` +
-        `📒 Ledger — 'Ledger of [client name]'\n` +
-        `📧 Email — 'Email invoice to [client name]'\n` +
-        `📎 PDF — 'Send me PDF of invoice 29/2026-27'\n\n` +
-        `Just type naturally — I understand!\n` +
-        `Type /help for more examples.`
-      );
-      return new Response("ok");
-    }
-
-    // ── /help command directly ────────────────────────────────────
-    if (text === "/help") {
-      await handleHelp(chatId);
-      return new Response("ok");
-    }
-
-    // ── Load per-user conversation context ────────────────────────
-    const ctx     = await loadContext(userId);
-    const ctxHint = buildCtxHint(ctx);
-
-    // ── Parse intent with AI — fully open-ended NLU ───────────────
-    // Claude understands any language/phrasing; no pre-checks needed
-    const intent = await parseIntent(text, ctxHint);
-    console.log(`[Bot] Intent:`, JSON.stringify(intent));
-
-    switch (intent.action) {
-      case "get_invoice":    await handleGetInvoice(chatId, intent, userId); break;
-      case "get_ledger":     await handleGetLedger(chatId, intent); break;
-      case "get_outstanding":await handleOutstanding(chatId, intent.limit ?? 10); break;
-      case "get_overdue":    await handleOverdue(chatId, intent.limit ?? 10); break;
-      case "get_summary":    await handleSummary(chatId); break;
-      case "send_email":     await handleSendEmail(chatId, intent); break;
-      case "send_pdf":       await handleSendPdf(chatId, intent, ctx); break;
-      case "get_receipts":   await handleReceipts(chatId, intent.limit ?? 10); break;
-      case "help":           await handleHelp(chatId); break;
-      default:
-        // Should rarely reach here since intentFallback returns "help" as last resort
-        await handleHelp(chatId);
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[Bot] Unhandled error:", msg);
-    await sendMsg(chatId, `❌ An error occurred\\. Please try again\\.\n_Error: ${escMd(msg.slice(0, 100))}_`);
+  // ONLY /start bypasses Claude — simple welcome, nothing else
+  if (text === "/start") {
+    await sendTelegram(chatId,
+      "Welcome to CAFlow Billing Agent! Ask me anything about invoices, " +
+      "ledgers, clients, payments, or emails. I understand natural language."
+    );
+    return new Response("ok");
   }
 
+  // EVERYTHING ELSE → Claude API (no exceptions, no keyword shortcuts)
+  await handleWithClaude(chatId, userId, text);
   return new Response("ok");
 });
 
@@ -167,99 +265,114 @@ Deno.serve(async (req: Request) => {
 // HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── /start ───────────────────────────────────────────────────────────────────
-async function handleStart(chatId: number, text: string, telegramUserId: number, from: TgFrom) {
-  const token = text.replace("/start", "").trim();
-
-  if (token.startsWith("link_")) {
-    // Validate link token
-    const linkCode = token.slice(5); // remove "link_" prefix
-    const { data: linkRow } = await supabase
-      .from("telegram_link_tokens")
-      .select("*")
-      .eq("token", linkCode)
-      .eq("used", false)
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    if (!linkRow) {
-      await sendMsg(chatId,
-        "❌ *Invalid or Expired Token*\n\n" +
-        "This link has expired or was already used\\.\n" +
-        "Please generate a new link token from CAFlow Settings\\."
-      );
-      return;
-    }
-
-    // Link this Telegram account to the firm
-    const { error } = await supabase
-      .from("telegram_authorized_users")
-      .upsert({
-        telegram_user_id:    telegramUserId,
-        telegram_chat_id:    chatId,
-        telegram_username:   from.username ?? null,
-        telegram_first_name: from.first_name ?? null,
-        firm_id:             linkRow.firm_id,
-        user_id:             linkRow.user_id,
-        is_active:           true,
-        linked_at:           new Date().toISOString(),
-        last_used_at:        new Date().toISOString(),
-      }, { onConflict: "telegram_user_id" });
-
-    if (error) {
-      console.error("[Bot] Link upsert error:", error);
-      await sendMsg(chatId, "❌ Failed to link account\\. Please try again\\.");
-      return;
-    }
-
-    // Mark token as used
-    await supabase
-      .from("telegram_link_tokens")
-      .update({ used: true })
-      .eq("id", linkRow.id);
-
-    await sendMsg(chatId,
-      "✅ *Account Linked Successfully\\!*\n\n" +
-      `Welcome, *${escMd(from.first_name ?? "User")}*\\!\n\n` +
-      "Your Telegram is now connected to CAFlow\\.\n\n" +
-      "Type /help to see what I can do for you\\."
-    );
-    return;
-  }
-
-  // Generic welcome — not yet linked
-  await sendMsg(chatId,
-    `👋 *Welcome to ${escMd(FIRM_DISPLAY_NAME)} Billing Bot\\!*\n\n` +
-    "I can help you with:\n" +
-    "📋 Invoice queries \\& status\n" +
-    "📒 Client ledger statements\n" +
-    "📊 Billing summary \\& reports\n" +
-    "💰 Payment receipts\n" +
-    "📧 Send invoices via email\n\n" +
-    "━━━━━━━━━━━━━\n" +
-    `🔑 *Your Telegram ID:* \`${telegramUserId}\`\n\n` +
-    "Share this ID with your firm admin to get access\\.\n\n" +
-    "Type /help for the full command list\\."
+// ─── help (dynamic via Claude) ────────────────────────────────────────────────
+async function handleHelpDynamic(chatId: number): Promise<void> {
+  const helpText = await callClaudeRaw(
+    "You are the CAFlow Billing Agent. Respond with a short, friendly summary of what you can do. " +
+    "Cover: invoice queries, ledger statements, outstanding/overdue amounts, billing summary, receipts, email/PDF delivery. " +
+    "Use simple bullet points. Do not mention slash commands. Keep it under 100 words.",
+    "What can you do?",
+    200
+  );
+  await sendTelegram(chatId,
+    helpText ??
+    "I can help with:\n• Invoice queries\n• Ledger statements\n• Outstanding & overdue amounts\n• Billing summary\n• Receipts\n• Sending invoices by email or PDF\n\nJust ask naturally!"
   );
 }
 
-// ─── /help ────────────────────────────────────────────────────────────────────
-async function handleHelp(chatId: number) {
-  const msg =
-    `🤖 *CAFlow Billing Agent*\n\n` +
-    `Here is what I can do:\n\n` +
-    `📄 *Invoices*\n` +
-    `• 'Show invoices for Gujarat Water Supply'\n` +
-    `• 'Get invoice 29/2026-27'\n` +
-    `• 'All invoices from April 2026'\n\n` +
-    `📒 *Ledger*\n` +
-    `• 'Ledger of Accurate PMS'\n` +
-    `• 'Show ledger for FY 2026-27'\n\n` +
-    `📧 *Email*\n` +
-    `• 'Email latest invoice to Gujarat Water'\n` +
-    `• 'Send ledger to Accurate PMS client'\n\n` +
-    `Just type naturally — I understand!`;
-  await sendTelegram(chatId, msg, "Markdown");
+// ─── handleWithClaude — full Claude tool-use loop ──────────────────────────────
+async function handleWithClaude(chatId: number, userId: number, userText: string): Promise<void> {
+  if (!ANTHROPIC_API_KEY) {
+    await sendMsg(chatId, "⚠️ AI service unavailable\\. Please try again later\\.");
+    return;
+  }
+
+  // Load conversation history (last 20 messages = 10 exchanges)
+  let history: Array<{ role: string; content: any }> = [];
+  try {
+    const { data: ctx } = await (supabase as any)
+      .from("telegram_context")
+      .select("history")
+      .eq("user_id", userId)
+      .maybeSingle();
+    history = ctx?.history ?? [];
+  } catch { /* table may not exist yet — degrade gracefully */ }
+
+  history.push({ role: "user", content: userText });
+
+  const CLAUDE_HEADERS = {
+    "Content-Type":      "application/json",
+    "x-api-key":         ANTHROPIC_API_KEY,
+    "anthropic-version": "2023-06-01",
+  };
+
+  const makeBody = (msgs: typeof history) => JSON.stringify({
+    model:      "claude-sonnet-4-20250514",
+    max_tokens: 2000,
+    system:     SYSTEM_PROMPT,
+    tools:      BILLING_TOOLS,
+    messages:   msgs,
+  });
+
+  try {
+    let res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
+    });
+    if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    let msg = await res.json();
+
+    // ── Tool use loop ──────────────────────────────────────────────────────────
+    let rounds = 0;
+    while (msg.stop_reason === "tool_use" && rounds++ < 5) {
+      const toolUses    = (msg.content as any[]).filter(b => b.type === "tool_use");
+      const toolResults: any[] = [];
+
+      for (const tu of toolUses) {
+        console.log(`[Bot] Tool call: ${tu.name}`, JSON.stringify(tu.input).slice(0, 200));
+        let result: any;
+        try {
+          result = await executeTool(tu.name, tu.input as Record<string, any>, chatId);
+        } catch (e: unknown) {
+          result = { error: e instanceof Error ? e.message : String(e) };
+        }
+        toolResults.push({
+          type:        "tool_result",
+          tool_use_id: tu.id,
+          content:     JSON.stringify(result),
+        });
+      }
+
+      history.push({ role: "assistant", content: msg.content });
+      history.push({ role: "user",      content: toolResults });
+
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
+      });
+      if (!res.ok) throw new Error(`Claude API (round ${rounds + 1}) ${res.status}`);
+      msg = await res.json();
+    }
+
+    // ── Send Claude's final text reply ─────────────────────────────────────────
+    const textBlocks = ((msg.content ?? []) as any[]).filter(b => b.type === "text");
+    const finalText  = textBlocks.map((b: any) => b.text).join("\n").trim();
+    if (finalText) await sendTelegram(chatId, finalText, "Markdown");
+
+    // ── Persist updated history ────────────────────────────────────────────────
+    history.push({ role: "assistant", content: msg.content });
+    try {
+      await (supabase as any)
+        .from("telegram_context")
+        .upsert(
+          { user_id: userId, history: history.slice(-20), updated_at: new Date().toISOString() },
+          { onConflict: "user_id" }
+        );
+    } catch { /* non-fatal */ }
+
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[Bot] handleWithClaude error:", errMsg);
+    await sendMsg(chatId, `❌ An error occurred\\. Please try again\\.\n_${escMd(errMsg.slice(0, 120))}_`);
+  }
 }
 
 // ─── /summary ─────────────────────────────────────────────────────────────────
@@ -838,6 +951,586 @@ async function handleSendEmail(chatId: number, intent: Intent) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TOOL EXECUTOR — thin dispatcher → named implementation functions
+// All functions return structured JSON; no Telegram messages sent (except
+// action tools send_pdf_to_telegram / send_email_with_attachments)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function executeTool(
+  name: string,
+  input: Record<string, any>,
+  chatId: number,
+): Promise<any> {
+  switch (name) {
+    case "search_invoices":           return await searchInvoices(input);
+    case "get_ledger":                return await getLedger(input);
+    case "list_clients":              return await listClients(input);
+    case "get_outstanding_invoices":  return await getOutstanding(input);
+    case "get_billing_summary":       return await getSummary(input);
+    case "send_pdf_to_telegram":      return await sendPdfToTelegram(chatId, input);
+    case "send_email_with_attachments": return await sendEmailWithAttachments(chatId, input);
+    case "get_client_details":        return await getClientDetails(input);
+    default:                          return { error: `Unknown tool: ${name}` };
+  }
+}
+
+// ─── searchInvoices ───────────────────────────────────────────────────────────
+async function searchInvoices(input: Record<string, any>): Promise<any> {
+  let query = supabase
+    .from("invoices")
+    .select("id,invoice_no,client_id,to_name,document_type,status,invoice_date,due_date,paid_at,amount,gst_amount,total_amount,subject")
+    .order("invoice_date", { ascending: false });
+
+  if (input.client_name) {
+    const ids = await searchClientIds(input.client_name);
+    if (ids.length) query = query.in("client_id", ids);
+    else            query = query.ilike("to_name", `%${input.client_name}%`);
+  }
+  if (input.doc_no)
+    query = query.ilike("invoice_no", `%${input.doc_no}%`);
+
+  // status="overdue" is a virtual filter — apply as finalized/sent + date check post-fetch
+  const isOverdueFilter = input.status === "overdue";
+  if (input.status && !isOverdueFilter)
+    query = query.eq("status", input.status);
+  else if (isOverdueFilter)
+    query = query.in("status", ["finalized", "sent"]);
+
+  if (input.date_from) query = query.gte("invoice_date", input.date_from);
+  if (input.date_to)   query = query.lte("invoice_date", input.date_to);
+
+  const { data, error } = await query.limit(input.limit ?? 20);
+  if (error) return { error: error.message };
+
+  const today     = new Date();
+  const clientMap = await fetchClientNames((data ?? []).map(i => i.client_id));
+  let rows = (data ?? []).map(i => ({
+    id:            i.id,
+    invoice_no:    i.invoice_no,
+    client_name:   clientMap[i.client_id ?? ""] ?? i.to_name ?? "Unknown",
+    status:        i.status,
+    document_type: i.document_type,
+    invoice_date:  i.invoice_date,
+    due_date:      i.due_date,
+    paid_at:       i.paid_at,
+    amount:        i.total_amount ?? i.amount ?? 0,
+    subject:       i.subject,
+    overdue:       i.due_date && ["finalized", "sent"].includes(i.status ?? "")
+                     ? new Date(i.due_date) < today : false,
+  }));
+
+  if (isOverdueFilter) rows = rows.filter(r => r.overdue);
+
+  return {
+    count:        rows.length,
+    total_amount: rows.reduce((s, r) => s + r.amount, 0),
+    invoices:     rows,
+  };
+}
+
+// ─── getLedger ────────────────────────────────────────────────────────────────
+async function getLedger(input: Record<string, any>): Promise<any> {
+  if (!input.client_name) return { error: "client_name is required" };
+
+  const { data: clients } = await supabase
+    .from("clients").select("id,name,email")
+    .ilike("name", `%${input.client_name}%`)
+    .eq("is_draft", false).is("deleted_at", null).limit(3);
+
+  if (!clients?.length) return { error: `Client '${input.client_name}' not found` };
+
+  const client = clients[0];
+  let ledgerQ  = supabase
+    .from("client_ledger_entries").select("*")
+    .eq("client_id", client.id)
+    .order("entry_date", { ascending: true });
+
+  if (input.date_from) ledgerQ = ledgerQ.gte("entry_date", input.date_from);
+  if (input.date_to)   ledgerQ = ledgerQ.lte("entry_date", input.date_to);
+
+  const { data: entries } = await ledgerQ;
+  if (!entries?.length)
+    return { client_name: client.name, client_email: client.email, entries: [], closing_balance: 0 };
+
+  const totalDebit  = entries.reduce((s, e) => s + (e.debit_amount  ?? 0), 0);
+  const totalCredit = entries.reduce((s, e) => s + (e.credit_amount ?? 0), 0);
+  const closingBal  = entries[entries.length - 1].balance ?? (totalDebit - totalCredit);
+
+  return {
+    client_name:         client.name,
+    client_email:        client.email,
+    total_entries:       entries.length,
+    total_debit:         totalDebit,
+    total_credit:        totalCredit,
+    closing_balance:     closingBal,
+    recent_entries:      entries.slice(-15).map(e => ({
+      date:       e.entry_date,
+      narration:  e.narration ?? e.entry_type ?? "—",
+      debit:      e.debit_amount  ?? 0,
+      credit:     e.credit_amount ?? 0,
+      balance:    e.balance,
+      entry_type: e.entry_type,
+    })),
+    other_clients_found: clients.slice(1).map(c => c.name),
+  };
+}
+
+// ─── listClients ──────────────────────────────────────────────────────────────
+async function listClients(input: Record<string, any>): Promise<any> {
+  let query = supabase
+    .from("clients").select("id,name,email,pan,gstin,phone")
+    .eq("is_draft", false).is("deleted_at", null)
+    .order("name", { ascending: true });
+
+  if (input.search)
+    query = query.or(`name.ilike.%${input.search}%,pan.ilike.%${input.search}%`);
+
+  const { data, error } = await query.limit(input.limit ?? 50);
+  if (error) return { error: error.message };
+
+  return {
+    count:   data?.length ?? 0,
+    clients: (data ?? []).map(c => ({
+      id: c.id, name: c.name, email: c.email, pan: c.pan, gstin: c.gstin, phone: c.phone,
+    })),
+  };
+}
+
+// ─── getOutstanding ───────────────────────────────────────────────────────────
+async function getOutstanding(input: Record<string, any>): Promise<any> {
+  const today    = new Date();
+  const todayStr = today.toISOString().split("T")[0];
+
+  let query = supabase
+    .from("invoices")
+    .select("id,invoice_no,client_id,to_name,invoice_date,due_date,status,amount,total_amount")
+    .in("status", ["finalized", "sent"])
+    .order("due_date", { ascending: true, nullsFirst: false });
+
+  // overdue_only → only invoices past their due date
+  if (input.overdue_only)
+    query = query.lt("due_date", todayStr);
+
+  // optional client filter
+  if (input.client_name) {
+    const ids = await searchClientIds(input.client_name);
+    if (ids.length) query = query.in("client_id", ids);
+    else            query = query.ilike("to_name", `%${input.client_name}%`);
+  }
+
+  const { data, error } = await query.limit(input.limit ?? 20);
+  if (error) return { error: error.message };
+
+  const clientMap = await fetchClientNames((data ?? []).map(i => i.client_id));
+  const rows = (data ?? []).map(i => ({
+    invoice_no:   i.invoice_no,
+    client_name:  clientMap[i.client_id ?? ""] ?? i.to_name ?? "Unknown",
+    amount:       i.total_amount ?? i.amount ?? 0,
+    status:       i.status,
+    due_date:     i.due_date,
+    overdue:      i.due_date ? new Date(i.due_date) < today : false,
+    days_overdue: (i.due_date && new Date(i.due_date) < today)
+      ? Math.floor((today.getTime() - new Date(i.due_date).getTime()) / 86400000)
+      : 0,
+  }));
+
+  return {
+    count:        rows.length,
+    total_amount: rows.reduce((s, r) => s + r.amount, 0),
+    overdue_only: !!input.overdue_only,
+    invoices:     rows,
+  };
+}
+
+// ─── getSummary ───────────────────────────────────────────────────────────────
+function parsePeriod(period: string | undefined): { dateFrom: string | null; dateTo: string | null; label: string } {
+  const now = new Date();
+  if (!period) return { dateFrom: null, dateTo: null, label: "all time" };
+
+  if (period === "this_month") {
+    const y = now.getFullYear(), m = now.getMonth();
+    return {
+      dateFrom: new Date(y, m, 1).toISOString().split("T")[0],
+      dateTo:   new Date(y, m + 1, 0).toISOString().split("T")[0],
+      label:    now.toLocaleString("en-IN", { month: "long", year: "numeric" }),
+    };
+  }
+  if (period === "last_month") {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return {
+      dateFrom: d.toISOString().split("T")[0],
+      dateTo:   new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split("T")[0],
+      label:    d.toLocaleString("en-IN", { month: "long", year: "numeric" }),
+    };
+  }
+  // fy_2026_27 pattern
+  const fyM = period.match(/^fy_(\d{4})_(\d{2,4})$/i);
+  if (fyM) {
+    const startY = parseInt(fyM[1]);
+    return {
+      dateFrom: `${startY}-04-01`,
+      dateTo:   `${startY + 1}-03-31`,
+      label:    `FY ${startY}-${fyM[2]}`,
+    };
+  }
+  return { dateFrom: null, dateTo: null, label: period };
+}
+
+async function getSummary(input: Record<string, any>): Promise<any> {
+  const { dateFrom, dateTo, label } = parsePeriod(input.period);
+
+  let query = supabase
+    .from("invoices")
+    .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type");
+  if (dateFrom) query = query.gte("invoice_date", dateFrom);
+  if (dateTo)   query = query.lte("invoice_date", dateTo);
+
+  const { data: invoices, error } = await query;
+  if (error) return { error: error.message };
+
+  const today       = new Date();
+  const all         = invoices ?? [];
+  const paid        = all.filter(i => i.status === "paid");
+  const outstanding = all.filter(i => ["finalized", "sent"].includes(i.status ?? ""));
+  const overdue     = outstanding.filter(i => i.due_date && new Date(i.due_date) < today);
+  const draft       = all.filter(i => i.status === "draft");
+  const sumAmt      = (arr: any[]) => arr.reduce((s, i) => s + (i.total_amount ?? i.amount ?? 0), 0);
+  const fyYear      = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+
+  return {
+    period:          label,
+    financial_year:  `${fyYear}-${String(fyYear + 1).slice(2)}`,
+    total_billed:    sumAmt(all),
+    total_paid:      sumAmt(paid),
+    outstanding:     sumAmt(outstanding),
+    overdue:         sumAmt(overdue),
+    counts: {
+      total: all.length, paid: paid.length, outstanding: outstanding.length,
+      overdue: overdue.length, draft: draft.length,
+    },
+  };
+}
+
+// ─── sendPdfToTelegram ────────────────────────────────────────────────────────
+// Delivery strategy (Phase 4):
+//   Primary  → upload to Supabase Storage "documents" bucket → Telegram URL
+//   Fallback → multipart FormData bytes (works without a public bucket)
+async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Promise<any> {
+  const docType: string = input.document_type ?? "invoice";
+
+  // ── Shared delivery helper ─────────────────────────────────────────────────
+  async function deliverPdf(pdfBytes: Uint8Array, filename: string, caption: string): Promise<void> {
+    const tempPath = `temp/${filename.replace(/\.pdf$/i, "")}_${Date.now()}.pdf`;
+
+    // ── Primary: Storage bucket → public URL → sendDocument ─────────────────
+    try {
+      const { error: upErr } = await supabase.storage
+        .from("documents")
+        .upload(tempPath, pdfBytes, { contentType: "application/pdf", upsert: true });
+
+      if (!upErr) {
+        const { data: urlData } = supabase.storage
+          .from("documents")
+          .getPublicUrl(tempPath);
+
+        const tgRes = await fetch(
+          `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
+          {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id:  chatId,
+              document: urlData.publicUrl,
+              caption,
+            }),
+          },
+        );
+
+        // Non-blocking cleanup of temp file
+        supabase.storage.from("documents").remove([tempPath]).catch(() => {});
+
+        if (tgRes.ok) return;                         // ✅ delivered via URL
+        const tgErr = await tgRes.text();
+        console.warn("[Bot] Telegram URL delivery failed:", tgErr.slice(0, 200));
+      } else {
+        console.warn("[Bot] Storage upload failed:", upErr.message,
+          "— bucket may not exist or not be public");
+      }
+    } catch (e: unknown) {
+      console.warn("[Bot] Storage path threw:", e instanceof Error ? e.message : String(e));
+    }
+
+    // ── Fallback: send bytes directly via multipart FormData ─────────────────
+    console.log("[Bot] Falling back to multipart delivery for:", filename);
+    await sendTelegramDocumentBytes(chatId, pdfBytes, filename, caption);
+  }
+
+  // ── Ledger PDF ─────────────────────────────────────────────────────────────
+  if (docType === "ledger") {
+    if (!input.client_name) return { error: "client_name is required for ledger PDF" };
+
+    const ledgerResult = await getLedger({ client_name: input.client_name });
+    if (ledgerResult.error) return ledgerResult;
+
+    const { client_name, total_entries, closing_balance, recent_entries } = ledgerResult;
+    const entries    = recent_entries ?? [];
+    const now        = new Date();
+    const fyYear     = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const fyLabel    = `${fyYear}-${String(fyYear + 1).slice(2)}`;
+    const safeClient = client_name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+    const caption    = `📒 Account Statement: ${client_name}\nFY ${fyLabel} | ${total_entries} entries | Balance: Rs.${fmtNum(closing_balance)}`;
+
+    await sendTelegram(chatId, `⏳ Generating ledger PDF for ${client_name}…`);
+    const pdfBytes = await generateLedgerPdf(client_name, FIRM_DISPLAY_NAME, entries, fyLabel);
+    await deliverPdf(pdfBytes, `Ledger_${safeClient}_FY${fyLabel}.pdf`, caption);
+
+    return { ok: true, document_type: "ledger", client_name, fy_label: fyLabel };
+  }
+
+  // ── Invoice PDF(s) ─────────────────────────────────────────────────────────
+  let invoices: any[] = [];
+
+  if (input.invoice_ids?.length) {
+    const { data } = await supabase.from("invoices").select("*").in("id", input.invoice_ids);
+    invoices = data ?? [];
+  } else if (input.doc_no) {
+    const { data } = await supabase.from("invoices").select("*")
+      .ilike("invoice_no", `%${input.doc_no}%`).limit(3);
+    invoices = data ?? [];
+  } else if (input.client_name) {
+    const ids = await searchClientIds(input.client_name);
+    if (ids.length) {
+      const { data } = await supabase.from("invoices").select("*")
+        .in("client_id", ids).neq("status", "draft")
+        .order("invoice_date", { ascending: false }).limit(3);
+      invoices = data ?? [];
+    }
+  }
+
+  if (!invoices.length) return { error: "No invoices found matching the criteria." };
+
+  await sendTelegram(chatId, `⏳ Generating ${invoices.length} invoice PDF${invoices.length > 1 ? "s" : ""}…`);
+
+  const sent: string[] = [];
+  for (const inv of invoices) {
+    let clientName = inv.to_name ?? "Client";
+    if (inv.client_id) {
+      const { data: cl } = await supabase.from("clients").select("name")
+        .eq("id", inv.client_id).maybeSingle();
+      if (cl?.name) clientName = cl.name;
+    }
+
+    const firmName = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
+    const pdfBytes = await generateInvoicePdf(inv, firmName, clientName);
+    const safeNo   = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
+    const caption  = `📄 Invoice ${inv.invoice_no ?? ""} | ${clientName}\n` +
+                     `Rs.${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${capitalize(inv.status ?? "draft")} | ${fmtDate(inv.invoice_date)}`;
+
+    await deliverPdf(pdfBytes, `Invoice_${safeNo}.pdf`, caption);
+    sent.push(inv.invoice_no ?? inv.id);
+  }
+
+  return { ok: true, document_type: "invoice", sent_invoices: sent };
+}
+
+// ─── sendEmailWithAttachments ─────────────────────────────────────────────────
+async function sendEmailWithAttachments(chatId: number, input: Record<string, any>): Promise<any> {
+  if (!input.client_name) return { error: "client_name is required" };
+
+  // ── 1. Resolve client ──────────────────────────────────────────────────────
+  const { data: clients } = await supabase.from("clients").select("id,name,email")
+    .ilike("name", `%${input.client_name}%`).limit(1);
+  if (!clients?.length || !clients[0].email)
+    return { error: "Client not found or no email" };
+
+  const clientId       = clients[0].id;
+  const clientName     = clients[0].name ?? "Client";
+  const recipientEmail = input.email_to ?? clients[0].email;
+
+  const includeInvoice = input.include_invoice !== false;  // default true
+  const includeLedger  = input.include_ledger  !== false;  // default true
+
+  // ── 2. Resolve invoice (best-effort — skipped if not found) ───────────────
+  let inv: any = null;
+  if (includeInvoice) {
+    const invQ = supabase.from("invoices").select("*")
+      .neq("status", "draft").order("invoice_date", { ascending: false }).limit(1);
+    const { data: invData } = await (input.invoice_doc_no
+      ? invQ.ilike("invoice_no", `%${input.invoice_doc_no}%`)
+      : invQ.eq("client_id", clientId)
+    ).maybeSingle();
+    inv = invData ?? null;
+    // Not fatal — if invoice not found we still send the ledger
+    if (!inv) console.warn(`[Bot] sendEmail: no invoice found for '${clientName}' — skipping invoice attachment`);
+  }
+
+  await sendTelegram(chatId, `⏳ Sending email to ${recipientEmail}…`);
+
+  const now     = new Date();
+  const fyYear  = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const fyLabel = `${fyYear}-${String(fyYear + 1).slice(2)}`;
+  const firmName = inv?.from_firm_name ?? FIRM_DISPLAY_NAME;
+
+  // ── 3. Fetch ALL ledger entries (complete account statement) ───────────────
+  let ledgerEntries: any[] = [];
+  if (includeLedger) {
+    const { data: le } = await supabase.from("client_ledger_entries").select("*")
+      .eq("client_id", clientId)
+      .order("entry_date", { ascending: true });
+    ledgerEntries = le ?? [];
+  }
+
+  // ── 4. Build attachments conditionally ────────────────────────────────────
+  const attachments: { filename: string; content: string }[] = [];
+
+  if (includeInvoice && inv) {
+    const pdfBytes  = await generateInvoicePdf(inv, firmName, clientName);
+    const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
+    attachments.push({ filename: `Invoice_${safeInvNo}.pdf`, content: uint8ToBase64(pdfBytes) });
+  }
+  if (includeLedger && ledgerEntries.length > 0) {
+    const pdfBytes   = await generateLedgerPdf(clientName, firmName, ledgerEntries, fyLabel);
+    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+    attachments.push({ filename: `Ledger_${safeClient}.pdf`, content: uint8ToBase64(pdfBytes) });
+  }
+
+  if (!attachments.length)
+    return { error: "Nothing to attach — no invoice found and no ledger entries exist." };
+
+  // ── 5. Build email ─────────────────────────────────────────────────────────
+  const subject = inv
+    ? `Invoice ${inv.invoice_no} & Account Statement — ${firmName}`
+    : `Account Statement — ${firmName}`;
+
+  const emailHtml = buildInvoiceEmailHtml({
+    firmName, clientName,
+    invoiceNo:   inv?.invoice_no ?? "",
+    amount:      inv ? fmtNum(inv.total_amount ?? inv.amount ?? 0) : "—",
+    dueDate:     fmtDate(inv?.due_date),
+    invoiceDate: fmtDate(inv?.invoice_date),
+    status:      inv?.status ?? "finalized",
+    hasLedger:   ledgerEntries.length > 0,
+    fyLabel,
+  });
+
+  // ── 6. Send — Resend primary, Graph API fallback ───────────────────────────
+  const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+  if (RESEND_API_KEY) {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from:        `${firmName} <${EMAIL_FROM}>`,
+        to:          recipientEmail,
+        subject,
+        html:        emailHtml,
+        attachments,
+      }),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`Resend failed (${r.status}): ${errText.slice(0, 200)}`);
+    }
+  } else {
+    const graphAttachments = attachments.map(a => ({
+      "@odata.type": "#microsoft.graph.fileAttachment" as const,
+      name:          a.filename,
+      contentType:   "application/pdf",
+      contentBytes:  a.content,
+    }));
+    await sendEmailViaGraph(recipientEmail, subject, emailHtml, graphAttachments);
+  }
+
+  // ── 7. Post-send: update invoice status + notification log ─────────────────
+  if (inv?.status === "finalized") {
+    await supabase.from("invoices")
+      .update({ status: "sent", sent_at: now.toISOString() })
+      .eq("id", inv.id);
+  }
+  await supabase.from("notification_log").insert({
+    recipient_id: clientId,
+    channel:      "email",
+    type:         "invoice_generated",
+    status:       "sent",
+    sent_at:      now.toISOString(),
+    content: {
+      subject,
+      to:          recipientEmail,
+      invoice_id:  inv?.id ?? null,
+      source:      "telegram_bot_v5",
+      attachments: attachments.map(a => a.filename),
+    },
+  });
+
+  return {
+    success:     true,
+    sent_to:     recipientEmail,
+    client_name: clientName,
+    invoice_no:  inv?.invoice_no ?? null,
+    attachments: attachments.length,
+    filenames:   attachments.map(a => a.filename),
+  };
+}
+
+// ─── getClientDetails ─────────────────────────────────────────────────────────
+async function getClientDetails(input: Record<string, any>): Promise<any> {
+  if (!input.client_name) return { error: "client_name is required" };
+
+  const { data: clients } = await supabase
+    .from("clients")
+    .select("id,name,email,phone,pan,gstin,address,city,state,pincode,contact_person,notes,created_at")
+    .ilike("name", `%${input.client_name}%`)
+    .eq("is_draft", false).is("deleted_at", null).limit(3);
+
+  if (!clients?.length) return { error: `Client '${input.client_name}' not found` };
+
+  const client = clients[0];
+
+  // Recent invoice summary for this client
+  const { data: invoices } = await supabase
+    .from("invoices")
+    .select("id,invoice_no,status,amount,total_amount,invoice_date,due_date,paid_at")
+    .eq("client_id", client.id)
+    .order("invoice_date", { ascending: false })
+    .limit(5);
+
+  const today       = new Date();
+  const all         = invoices ?? [];
+  const outstanding = all.filter(i => ["finalized", "sent"].includes(i.status ?? ""));
+  const overdue     = outstanding.filter(i => i.due_date && new Date(i.due_date) < today);
+  const sumAmt      = (arr: any[]) => arr.reduce((s, i) => s + (i.total_amount ?? i.amount ?? 0), 0);
+
+  return {
+    id:             client.id,
+    name:           client.name,
+    email:          client.email,
+    phone:          client.phone,
+    pan:            client.pan,
+    gstin:          client.gstin,
+    address:        [client.address, client.city, client.state, client.pincode].filter(Boolean).join(", "),
+    contact_person: client.contact_person,
+    notes:          client.notes,
+    client_since:   client.created_at?.split("T")[0] ?? null,
+    invoice_summary: {
+      recent:            all.length,
+      outstanding_count: outstanding.length,
+      outstanding_amount: sumAmt(outstanding),
+      overdue_count:     overdue.length,
+      overdue_amount:    sumAmt(overdue),
+      recent_invoices:   all.map(i => ({
+        invoice_no: i.invoice_no, status: i.status,
+        amount: i.total_amount ?? i.amount ?? 0,
+        date: i.invoice_date, due_date: i.due_date,
+      })),
+    },
+    other_matches: clients.slice(1).map(c => ({ id: c.id, name: c.name })),
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CONVERSATION CONTEXT — per-user memory in telegram_context table
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -978,6 +1671,27 @@ async function callClaude(systemPrompt: string, userText: string, maxTokens = 30
   return JSON.parse(clean);
 }
 
+async function callClaudeRaw(systemPrompt: string, userText: string, maxTokens = 200): Promise<string | null> {
+  if (!ANTHROPIC_API_KEY) return null;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key":         ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type":      "application/json",
+    },
+    body: JSON.stringify({
+      model:      "claude-haiku-4-20250514",
+      max_tokens: maxTokens,
+      system:     systemPrompt,
+      messages: [{ role: "user", content: userText }],
+    }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return (data.content?.[0]?.text ?? "").trim() || null;
+}
+
 async function parseIntent(text: string, ctxHint?: string): Promise<Intent> {
   if (!ANTHROPIC_API_KEY) {
     console.warn("[Bot] ANTHROPIC_API_KEY not set — using keyword fallback");
@@ -1018,37 +1732,8 @@ Return ONLY JSON: { "action": "...", "client_name": "..." or null, "document_typ
   }
 }
 
-/** Keyword-based fallback when Claude is unavailable or both passes fail */
-function intentFallback(text: string): Intent {
-  const t = text.toLowerCase();
-  if (t.includes("outstanding") || t.includes("unpaid") || t.includes("pending"))
-    return { action: "get_outstanding", limit: 10 };
-  if (t.includes("overdue") || t.includes("past due"))
-    return { action: "get_overdue", limit: 10 };
-  if (t.includes("summary") || t.includes("dashboard") || t.includes("report") || t.includes("overview"))
-    return { action: "get_summary" };
-  if (t.includes("ledger") || t.includes("account statement") || t.includes("statement")) {
-    const m = text.match(/(?:ledger|statement)\s+(?:for|of)?\s+(.+)/i);
-    return { action: "get_ledger", client_name: m?.[1]?.trim() ?? null };
-  }
-  if (t.includes("receipt") || (t.includes("payment") && t.includes("received")))
-    return { action: "get_receipts", limit: 10 };
-  if (t.includes("pdf")) {
-    // PDF in this chat
-    const invM = text.match(/\d+\/?\d{0,4}-?\d{0,2}/);
-    return { action: "send_pdf", invoice_no: invM?.[0] ?? null };
-  }
-  if (t.includes("send") || t.includes("email")) {
-    const invM   = text.match(/\d+\/?\d{0,4}-?\d{0,2}/);
-    const emailM = text.match(/[\w.-]+@[\w.-]+\.\w+/);
-    return { action: "send_email", invoice_no: invM?.[0] ?? null, email_to: emailM?.[0] ?? null, document_type: "invoice" };
-  }
-  if (t.includes("help") || t === "/help")
-    return { action: "help" };
-  const invPat = text.match(/\d+\/\d{4}-\d{2,4}/);
-  if (invPat || t.includes("invoice") || t.includes("bill"))
-    return { action: "get_invoice", invoice_no: invPat?.[0] ?? null };
-  // Last resort: show help rather than "I didn't understand"
+/** Fallback when Claude API is unavailable */
+function intentFallback(_text: string): Intent {
   return { action: "help" };
 }
 
