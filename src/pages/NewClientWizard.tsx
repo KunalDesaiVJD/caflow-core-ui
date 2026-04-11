@@ -77,6 +77,10 @@ const NewClientWizard = () => {
   // Track linked modules of active services for cross-step logic
   const [activeLinkedModules, setActiveLinkedModules] = useState<string[]>([]);
 
+  // The classification value that was last saved to DB (edit mode).
+  // Used to show warning modal in StepAdvancedInfo when the user changes it.
+  const [savedClassification, setSavedClassification] = useState<string>("");
+
   // Derive itrServiceActive from service billing state
   const itrServiceActive = activeLinkedModules.includes("itr");
 
@@ -260,6 +264,9 @@ const NewClientWizard = () => {
         address: client.address || "",
         tan_number: client.tan_number || "",
       });
+
+      // Remember the DB-saved classification for the warning modal
+      setSavedClassification(fyClass?.classification || "");
 
       setAdvancedInfo({
         ...defaultAdvancedInfo,
@@ -482,8 +489,10 @@ const NewClientWizard = () => {
     }
   };
 
-  const saveFYClassification = async (targetClientId: string) => {
+  const saveFYClassification = async (targetClientId: string, authUserId?: string) => {
     if (!advancedInfo.classification || !advancedInfo.financial_year) return;
+
+    // Upsert current classification (single source of truth per client+FY)
     const { error } = await supabase.from("client_fy_classifications").upsert({
       client_id: targetClientId,
       financial_year: advancedInfo.financial_year,
@@ -491,6 +500,23 @@ const NewClientWizard = () => {
       audit_firm_id: advancedInfo.audit_firm_id || null,
     } as any, { onConflict: "client_id,financial_year" });
     if (error) throw error;
+
+    // Append-only history row — preserves every change with actor + timestamp
+    try {
+      await (supabase as any).from("client_classification_history").insert({
+        client_id:      targetClientId,
+        financial_year: advancedInfo.financial_year,
+        classification: advancedInfo.classification,
+        changed_by:     authUserId ?? null,
+        changed_at:     new Date().toISOString(),
+      });
+    } catch (histErr) {
+      // History is non-fatal — log but do not abort the save
+      console.warn("[Wizard] Could not write classification history:", histErr);
+    }
+
+    // Keep local savedClassification in sync so the warning modal reflects the new state
+    setSavedClassification(advancedInfo.classification);
   };
 
   const saveAuditSetup = async (targetClientId: string) => {
@@ -561,7 +587,8 @@ const NewClientWizard = () => {
           } as any)
           .eq("id", clientId);
         if (error) throw error;
-        await saveFYClassification(clientId);
+        const { data: authData } = await supabase.auth.getUser();
+        await saveFYClassification(clientId, authData.user?.id);
       } else if (stepId === "services") {
         if (!validateServiceBilling()) { setSaving(false); return; }
         await saveServiceBillingData(clientId);
@@ -622,8 +649,8 @@ const NewClientWizard = () => {
         await supabase.from("client_profiles").insert({ client_id: newId, audit_questions: {} as any });
       }
 
-      // 3. INSERT client_fy_classifications
-      await saveFYClassification(newId);
+      // 3. INSERT client_fy_classifications + history row
+      await saveFYClassification(newId, authUserId);
 
       // 4. Audit setup if classification is Audit
       await saveAuditSetup(newId);
@@ -775,6 +802,7 @@ const NewClientWizard = () => {
               entityType={basicInfo.entity_type}
               itrServiceActive={itrServiceActive}
               errors={advancedErrors}
+              savedClassification={isEditMode ? savedClassification : undefined}
             />
           )}
           {currentStepDef?.id === "services" && (

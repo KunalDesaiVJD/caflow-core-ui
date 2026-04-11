@@ -16,9 +16,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
+import { ClassificationByFYView } from "@/components/clients/ClassificationByFYView";
 
 interface Client {
   id: string;
@@ -44,7 +45,7 @@ interface GroupInfo {
 const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
-type ViewMode = "it" | "table" | "card";
+type ViewMode = "it" | "table" | "card" | "classify";
 
 const VIEW_KEY = "caflow_client_view";
 
@@ -393,8 +394,15 @@ const Clients = () => {
             <button onClick={() => setViewMode("table")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <List className="h-3.5 w-3.5" />
             </button>
-            <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+            <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setViewMode("classify")}
+              title="Classification by FY"
+              className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "classify" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              <BadgeCheck className="h-3.5 w-3.5" />
             </button>
           </div>
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
@@ -720,7 +728,14 @@ const Clients = () => {
           </div>
           <PaginationControls />
         </>
-      )}
+      ) : viewMode === "classify" ? (
+        /* CLASSIFICATION BY FY VIEW */
+        <ClassificationByFYView
+          firmId={effectiveFirmId}
+          showAllFirms={showAllFirms}
+          canEdit={canEdit}
+        />
+      ) : null}
 
       {/* Draft Delete Confirmation */}
       <AlertDialog open={!!deleteDraftCandidate} onOpenChange={open => { if (!open) setDeleteDraftCandidate(null); }}>

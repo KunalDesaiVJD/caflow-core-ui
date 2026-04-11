@@ -173,26 +173,34 @@ export default function AuditPipeline() {
     enabled: !!user?.firm_id,
   });
 
-  // ─── Audit-eligible clients ───
+  // ─── Audit-eligible clients — filtered by classification FY ───
+  // Queries client_fy_classifications (FY-aware) instead of the legacy JSONB field.
+  // Re-fetches automatically when form1A.financial_year changes so the dropdown
+  // always shows clients classified as Audit for the engagement's chosen FY.
   const { data: eligibleClients } = useQuery({
-    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
+    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id, form1A.financial_year],
     queryFn: async () => {
-      let query = supabase
-        .from("clients")
-        .select("id, name, entity_type")
-        .eq("client_classification", "Audit")
-        .eq("is_active", true)
-        .order("name");
+      let query = (supabase as any)
+        .from("client_fy_classifications")
+        .select("client_id, clients!inner(id, name, entity_type, is_active, firm_id)")
+        .eq("classification", "Audit")
+        .eq("financial_year", form1A.financial_year)
+        .eq("clients.is_active", true);
 
       if (user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id);
+        query = query.eq("clients.firm_id", user.firm_id);
       }
 
       const { data, error } = await query;
       if (error) throw error;
-      return data || [];
+      // Flatten: return array of { id, name, entity_type } matching old shape
+      return ((data || []) as any[]).map((r: any) => ({
+        id:          r.clients?.id,
+        name:        r.clients?.name,
+        entity_type: r.clients?.entity_type,
+      })).filter((c: any) => c.id);
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && !!form1A.financial_year,
   });
 
   // ─── Staff ───
