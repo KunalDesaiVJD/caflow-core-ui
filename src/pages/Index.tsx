@@ -13,6 +13,9 @@ import {
   Search,
   Plus,
   Clock,
+  CalendarDays,
+  Bell,
+  X,
 } from "lucide-react";
 import { startOfMonth, endOfMonth } from "date-fns";
 
@@ -37,6 +40,16 @@ interface DueItem {
   type: string;
 }
 
+interface UserNotification {
+  id:         string;
+  type:       string;
+  title:      string;
+  message:    string;
+  link:       string | null;
+  is_read:    boolean;
+  created_at: string;
+}
+
 function daysUntil(date: Date) {
   return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000));
 }
@@ -47,6 +60,14 @@ const Index = () => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({ activeClients: 0, tdsDue: 0, itrPending: 0, openAudits: 0 });
   const [dueItems, setDueItems] = useState<DueItem[]>([]);
+  const [auditReminders, setAuditReminders] = useState<Array<{
+    id:             string;
+    client_name:    string | null;
+    planned_from:   string;
+    planned_to:     string;
+    employee_names: string[] | null;
+  }>>([]);
+  const [notifications, setNotifications] = useState<UserNotification[]>([]);
 
   const fetchDashboard = useCallback(async () => {
     if (!user) {
@@ -90,31 +111,87 @@ const Index = () => {
       .limit(5);
     if (!isSuperadmin && firmId) dueQ = dueQ.eq("firm_id", firmId);
 
-    const [clientsRes, tdsRes, itrRes, auditsRes, dueRes] = await Promise.all([
-      clientsQ, tdsQ, itrQ, auditsQ, dueQ,
-    ]);
+    // Audit planning reminders — entries where this user is an employee and audit hasn't ended yet
+    const today = now.toISOString().split("T")[0];
+    let auditReminderQ = supabase
+      .from("audit_planning")
+      .select("*")
+      .contains("employee_ids", [user.id])
+      .gte("planned_to", today)
+      .order("planned_from", { ascending: true })
+      .limit(5);
 
-    setStats({
-      activeClients: clientsRes.count ?? 0,
-      tdsDue: tdsRes.count ?? 0,
-      itrPending: itrRes.count ?? 0,
-      openAudits: auditsRes.count ?? 0,
-    });
+    // User notifications — unread, most recent first
+    const notifQ = supabase
+      .from("user_notifications")
+      .select("id, type, title, message, link, is_read, created_at")
+      .eq("user_id", user.id)
+      .eq("is_read", false)
+      .order("created_at", { ascending: false })
+      .limit(10);
 
-    setDueItems(
-      (dueRes.data || []).map((d: any) => ({
-        client: d.party_name || "Unknown",
-        due: new Date(d.due_date),
-        type: "TDS",
-      }))
-    );
+    try {
+      const [clientsRes, tdsRes, itrRes, auditsRes, dueRes, auditReminderRes, notifRes] = await Promise.all([
+        clientsQ, tdsQ, itrQ, auditsQ, dueQ, auditReminderQ, notifQ,
+      ]);
 
-    setLoading(false);
+      setStats({
+        activeClients: clientsRes.count ?? 0,
+        tdsDue: tdsRes.count ?? 0,
+        itrPending: itrRes.count ?? 0,
+        openAudits: auditsRes.count ?? 0,
+      });
+
+      setDueItems(
+        (dueRes.data || []).map((d: any) => ({
+          client: d.party_name || "Unknown",
+          due: new Date(d.due_date),
+          type: "TDS",
+        }))
+      );
+
+      setAuditReminders(
+        (auditReminderRes.data || []).map((r: any) => ({
+          id:             r.id,
+          client_name:    r.client_name    || "Unknown Client",
+          planned_from:   r.planned_from,
+          planned_to:     r.planned_to,
+          employee_names: r.employee_names || null,
+        }))
+      );
+
+      // Notifications — silently ignore if table doesn't exist yet
+      if (!notifRes.error && notifRes.data) {
+        setNotifications(notifRes.data as UserNotification[]);
+      }
+    } catch (err) {
+      console.error("Dashboard fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [user?.firm_id, user?.role]);
 
   useEffect(() => {
     if (user) fetchDashboard();
   }, [user, fetchDashboard]);
+
+  const dismissNotification = async (id: string, link?: string | null) => {
+    // Optimistically remove from UI
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    // Mark as read in DB (best-effort)
+    try {
+      await supabase.from("user_notifications").update({ is_read: true }).eq("id", id);
+    } catch { /* ignore if table absent */ }
+    if (link) navigate(link);
+  };
+
+  const dismissAllNotifications = async () => {
+    const ids = notifications.map((n) => n.id);
+    setNotifications([]);
+    try {
+      await supabase.from("user_notifications").update({ is_read: true }).in("id", ids);
+    } catch { /* ignore */ }
+  };
 
   // Superadmin can access dashboard too — no redirect
   const userRole = user?.role || "staff_article";
@@ -144,6 +221,49 @@ const Index = () => {
           {welcomeLine}
         </p>
       </div>
+
+      {/* Notification Banner */}
+      {notifications.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
+              <Bell className="h-4 w-4" />
+              <span>Notifications</span>
+              <span className="inline-flex items-center justify-center rounded-full bg-indigo-600 text-white text-[10px] font-bold h-4 min-w-4 px-1">
+                {notifications.length}
+              </span>
+            </div>
+            <button
+              onClick={dismissAllNotifications}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+            >
+              Mark all as read
+            </button>
+          </div>
+          <div className="space-y-2">
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className="flex items-start gap-3 rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 cursor-pointer hover:bg-indigo-100 transition-colors"
+                onClick={() => dismissNotification(n.id, n.link)}
+              >
+                <Bell className="h-4 w-4 text-indigo-500 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-indigo-800 leading-snug">{n.title}</p>
+                  <p className="text-xs text-indigo-700 mt-0.5 leading-snug">{n.message}</p>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); dismissNotification(n.id); }}
+                  className="shrink-0 text-indigo-400 hover:text-indigo-700 transition-colors mt-0.5"
+                  title="Dismiss"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -208,6 +328,56 @@ const Index = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Audit Planning Reminders */}
+      {(loading || auditReminders.length > 0) && (
+        <div className="grid grid-cols-1 gap-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-display flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-indigo-500" />
+                Upcoming Audits
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              {loading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 py-3">
+                    <Skeleton className="h-4 w-56" />
+                  </div>
+                ))
+              ) : (
+                auditReminders.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex items-start justify-between py-3 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 rounded px-1 -mx-1 transition-colors gap-3"
+                    onClick={() => navigate("/audit/tracker")}
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <p className="text-sm text-foreground">
+                        You need to go for audit to{" "}
+                        <span className="font-semibold text-indigo-700">{r.client_name}</span>
+                        {" "}from{" "}
+                        <span className="font-medium">{r.planned_from}</span>
+                        {" "}to{" "}
+                        <span className="font-medium">{r.planned_to}</span>
+                      </p>
+                      {r.employee_names && r.employee_names.length > 0 && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          👥 {r.employee_names.join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <Badge className="text-[10px] px-1.5 bg-indigo-100 text-indigo-700 shrink-0 mt-0.5">
+                      Audit
+                    </Badge>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <Card>

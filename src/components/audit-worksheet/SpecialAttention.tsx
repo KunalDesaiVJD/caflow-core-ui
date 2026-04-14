@@ -12,17 +12,20 @@
  * 10 main checklist items with sub-points, exactly from Excel.
  * All hardcoded years are derived dynamically from engagement.financial_year (Req #4).
  */
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
 import { Textarea }  from "@/components/ui/textarea";
 import { Badge }     from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save, Loader2, Building2 } from "lucide-react";
+import { Save, Loader2, Building2, Plus, Trash2 } from "lucide-react";
 
-import { useSpecialAttentionStorage } from "./hooks/useSpecialAttentionStorage";
+import { useSpecialAttentionStorage, type AuditorEntry } from "./hooks/useSpecialAttentionStorage";
 import { useEmployeeDropdown }         from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
+import { awLoad }                      from "@/lib/awStorage";
+import { supabase }                    from "@/integrations/supabase/client";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -267,27 +270,107 @@ function EmpSelect({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 interface Props {
-  data:         AuditWorksheetData;
-  engagementId: string;
+  data:          AuditWorksheetData;
+  engagementId:  string;
+  /** Issue #10: When true (tax_audit for non-corporate entity),
+   *  hide section 10 "Private Ltd / Ltd Company — Specific Audit Points" */
+  taxAuditMode?: boolean;
 }
 
-export default function SpecialAttention({ data, engagementId }: Props) {
+export default function SpecialAttention({ data, engagementId, taxAuditMode = false }: Props) {
   const {
     data: m, setHeader, setRowField, patchRow, getRow,
-    manualSave, saving,
+    manualSave, saving, loaded,
   } = useSpecialAttentionStorage(engagementId, data.engagement?.firm_id);
 
   const { employees } = useEmployeeDropdown();
 
+  // #3 — Auto-fetch Audit Carried Out By (one-way: only fills when list is empty)
+  // Source priority:
+  //   1. Local Special Attention data (already in `m.audit_carried_by`) — skip if present
+  //   2. localStorage master (statutory_master_json → tax_master_json)
+  //   3. Supabase audit_worksheet_master (cross-session DB copy)
+  //   4. Engagement partner_id + team_members → resolved from users table (ISSUE-16 fix)
+  useEffect(() => {
+    if (!loaded) return;
+    if (m.audit_carried_by.length > 0) return; // user has saved data — don't overwrite
+
+    (async () => {
+      // ── Step 1: localStorage master ──
+      const statutory = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "statutory_master_json");
+      const tax       = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "tax_master_json");
+
+      const lsSource =
+        (statutory?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+          ? statutory!.audit_carried_by!
+          : (tax?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+            ? tax!.audit_carried_by!
+            : null;
+
+      if (lsSource) { setHeader({ audit_carried_by: lsSource }); return; }
+
+      // ── Step 2: Supabase audit_worksheet_master ──
+      const { data: masterRow } = await (supabase as any)
+        .from("audit_worksheet_master")
+        .select("statutory_master_json, tax_master_json")
+        .eq("engagement_id", engagementId)
+        .maybeSingle();
+
+      if (masterRow) {
+        const dbStatutory = (masterRow.statutory_master_json as any)?.audit_carried_by;
+        const dbTax       = (masterRow.tax_master_json as any)?.audit_carried_by;
+        const dbSource: AuditorEntry[] | null =
+          (Array.isArray(dbStatutory) && dbStatutory.filter((e: any) => e.id).length > 0)
+            ? dbStatutory
+            : (Array.isArray(dbTax) && dbTax.filter((e: any) => e.id).length > 0)
+              ? dbTax
+              : null;
+        if (dbSource) { setHeader({ audit_carried_by: dbSource }); return; }
+      }
+
+      // ── Step 3: fall back to engagement partner + team members (ISSUE-16) ──
+      // Collects partner_id (FK → users) and team_members (UUID[]) from the engagement,
+      // resolves names from the users table, and uses them as the default auditor list.
+      const engAuditorIds: string[] = [
+        ...(data.engagement?.partner_id ? [data.engagement.partner_id] : []),
+        ...(Array.isArray(data.engagement?.team_members) ? data.engagement!.team_members as string[] : []),
+      ].filter(Boolean);
+      const uniqueIds = [...new Set(engAuditorIds)];
+
+      if (uniqueIds.length > 0) {
+        // CONFLICT-1 FIX: scope to the engagement's firm so cross-firm UUIDs
+        // (which should never occur, but could via data corruption) are excluded.
+        const engFirmId = data.engagement?.firm_id;
+        let userQ = supabase
+          .from("users" as any)
+          .select("id, name")
+          .in("id", uniqueIds);
+        if (engFirmId) userQ = (userQ as any).eq("firm_id", engFirmId);
+        const { data: userRows } = await userQ;
+
+        if (userRows && (userRows as any[]).length > 0) {
+          const userMap = new Map((userRows as any[]).map(u => [u.id, (u.name as string) ?? u.id]));
+          const engAuditors: AuditorEntry[] = uniqueIds
+            .filter(id => userMap.has(id))
+            .map(id => ({ id, name: userMap.get(id)! }));
+          if (engAuditors.length > 0) setHeader({ audit_carried_by: engAuditors });
+        }
+      }
+    })();
+  }, [loaded, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const { end: fyEnd } = fyYears(data.financialYear);
   const fyExpanded     = expandFY(data.financialYear);
 
-  // Resolve checklist with dynamic year substitution
-  const rows = CHECKLIST.map(r => ({
-    ...r,
-    particulars: injectYear(r.particulars, fyEnd),
-    documents:   r.documents ? injectYear(r.documents, fyEnd) : undefined,
-  }));
+  // Resolve checklist with dynamic year substitution.
+  // Issue #10: In taxAuditMode, exclude section 10 (Private Ltd / Ltd specific points).
+  const rows = CHECKLIST
+    .filter(r => !taxAuditMode || !r.id.startsWith("10"))
+    .map(r => ({
+      ...r,
+      particulars: injectYear(r.particulars, fyEnd),
+      documents:   r.documents ? injectYear(r.documents, fyEnd) : undefined,
+    }));
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
@@ -341,36 +424,60 @@ export default function SpecialAttention({ data, engagementId }: Props) {
           </div>
         </div>
 
-        {/* Audit Carried Out By */}
-        <div className="flex flex-wrap gap-4">
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-              Audit Carried Out By — Auditor 1
-            </p>
-            <EmpSelect
-              value={m.auditor1_id}
-              placeholder="Select auditor 1…"
-              onChange={(id, name) => setHeader({ auditor1_id: id, auditor1_name: name })}
-              employees={employees}
-            />
-            {m.auditor1_name && (
-              <p className="text-[11px] text-indigo-700 mt-1 font-medium">✓ {m.auditor1_name}</p>
-            )}
-          </div>
-          <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-              Audit Carried Out By — Auditor 2
-            </p>
-            <EmpSelect
-              value={m.auditor2_id}
-              placeholder="Select auditor 2…"
-              onChange={(id, name) => setHeader({ auditor2_id: id, auditor2_name: name })}
-              employees={employees}
-            />
-            {m.auditor2_name && (
-              <p className="text-[11px] text-indigo-700 mt-1 font-medium">✓ {m.auditor2_name}</p>
-            )}
-          </div>
+        {/* Audit Carried Out By — dynamic list */}
+        <div className="space-y-1.5">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+            Audit Carried Out By
+          </p>
+          {(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by)
+            .map((entry: AuditorEntry, idx: number) => (
+              <div key={idx} className="flex items-center gap-2">
+                <EmpSelect
+                  value={entry.id}
+                  placeholder={`Select auditor ${idx + 1}…`}
+                  onChange={(id, name) => {
+                    const updated = [...(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by)];
+                    updated[idx] = { id, name };
+                    setHeader({ audit_carried_by: updated });
+                  }}
+                  employees={employees}
+                />
+                {entry.name && (
+                  <span className="text-[11px] text-indigo-700 font-medium whitespace-nowrap">
+                    ✓ {entry.name}
+                  </span>
+                )}
+                {(m.audit_carried_by.length > 1) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50 flex-shrink-0"
+                    onClick={() =>
+                      setHeader({ audit_carried_by: m.audit_carried_by.filter((_: AuditorEntry, i: number) => i !== idx) })
+                    }
+                  >
+                    <Trash2 size={13} />
+                  </Button>
+                )}
+              </div>
+            ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="gap-1.5 h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-50 mt-1"
+            onClick={() =>
+              setHeader({
+                audit_carried_by: [
+                  ...(m.audit_carried_by.length === 0 ? [{ id: "", name: "" }] : m.audit_carried_by),
+                  { id: "", name: "" },
+                ],
+              })
+            }
+          >
+            <Plus size={12} /> Add Auditor
+          </Button>
         </div>
       </div>
 
@@ -433,21 +540,54 @@ export default function SpecialAttention({ data, engagementId }: Props) {
                     </p>
                   </td>
 
-                  {/* Checked By */}
-                  <td className="border border-border px-2 py-1.5 align-top">
-                    <EmpSelect
-                      value={rs.checked_by_id}
-                      placeholder="Checked by…"
-                      onChange={(id, name) => patchRow(row.id, {
-                        checked_by_id: id, checked_by_name: name,
-                      })}
-                      employees={employees}
-                    />
-                    {rs.checked_by_name && (
-                      <p className="text-[10px] text-green-700 mt-0.5 font-medium truncate">
-                        ✓ {rs.checked_by_name}
-                      </p>
+                  {/* Checked By — multi-select chips (ISSUE-17) */}
+                  <td className="border border-border px-2 py-1.5 align-top min-w-[140px]">
+                    {/* Existing checker chips */}
+                    {rs.checked_by_names.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {rs.checked_by_names.map((name, ci) => name ? (
+                          <span
+                            key={ci}
+                            className="inline-flex items-center gap-0.5 bg-green-50 border border-green-200 rounded-full px-1.5 py-0.5 text-[10px] text-green-800 font-medium"
+                          >
+                            ✓ {name}
+                            <button
+                              type="button"
+                              className="text-green-400 hover:text-red-600 leading-none font-bold ml-0.5"
+                              onClick={() => patchRow(row.id, {
+                                checked_by_ids:   rs.checked_by_ids.filter((_, j) => j !== ci),
+                                checked_by_names: rs.checked_by_names.filter((_, j) => j !== ci),
+                              })}
+                            >×</button>
+                          </span>
+                        ) : null)}
+                      </div>
                     )}
+                    {/* Add-another dropdown — value stays "" so placeholder always shows */}
+                    <Select
+                      value=""
+                      onValueChange={id => {
+                        if (!id || rs.checked_by_ids.includes(id)) return;
+                        const emp = employees.find(e => e.id === id);
+                        patchRow(row.id, {
+                          checked_by_ids:   [...rs.checked_by_ids, id],
+                          checked_by_names: [...rs.checked_by_names, emp?.name || ""],
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-6 text-[10px] border-dashed border-green-300 text-green-600 hover:bg-green-50">
+                        <SelectValue placeholder="+ Add checker" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employees
+                          .filter(e => !rs.checked_by_ids.includes(e.id))
+                          .map(e => (
+                            <SelectItem key={e.id} value={e.id} className="text-xs">
+                              {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </td>
 
                   {/* Verified By */}

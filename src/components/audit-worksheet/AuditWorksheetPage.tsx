@@ -8,23 +8,24 @@
  * Usage:
  *   <AuditWorksheetPage engagementId={id} />
  */
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 
-import AuditWorksheetHeader from "./AuditWorksheetHeader";
-import ExportButtons        from "./ExportButtons";
-import TaxAuditMaster       from "./TaxAuditMaster";
-import InternalAuditMaster  from "./InternalAuditMaster";
-import SpecialAttention     from "./SpecialAttention";
-import Worksheet            from "./Worksheet";
-import QuerySheet           from "./QuerySheet";
-import Checklist            from "./Checklist";
+import AuditWorksheetHeader  from "./AuditWorksheetHeader";
+import ExportButtons         from "./ExportButtons";
+import TaxAuditMaster        from "./TaxAuditMaster";
+import StatutoryAuditMaster  from "./StatutoryAuditMaster";
+import MergedAuditMaster     from "./MergedAuditMaster";
+import InternalAuditMaster   from "./InternalAuditMaster";
+import SpecialAttention      from "./SpecialAttention";
+import Worksheet             from "./Worksheet";
+import QuerySheet            from "./QuerySheet";
+import Checklist             from "./Checklist";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
-import { useWorksheetStorage }   from "./hooks/useWorksheetStorage";
 
 interface Props {
   engagementId: string;
@@ -33,27 +34,47 @@ interface Props {
 export default function AuditWorksheetPage({ engagementId }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
-  const { master, masterLoaded } =
-    useWorksheetStorage(engagementId, data.engagement?.firm_id);
-
   // Determine which tabs to show
   const auditType = data.auditType;
 
-  const showTaxMaster = auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
-  const showIntMaster = auditType === "internal";
+  // "both" → single merged tab; otherwise show individual masters
+  const showMergedMaster    = auditType === "both";
+  // Issue #9: Tax Audit Master → only for tax_audit (not both)
+  const showTaxMaster        = auditType === "tax_audit";
+  // Issue #9: Statutory Audit Master → only for statutory (not both)
+  const showStatutoryMaster  = auditType === "statutory";
+  const showIntMaster        = auditType === "internal";
 
-  // Req #3: Special Attention tab HIDDEN (not just disabled) for LLP / Partnership / Proprietorship.
-  // Only Private Ltd / Public Ltd / company engagement type trigger it.
-  const showSpecial = data.isPrivateOrPublicLtd;
+  // Special Attention tab visibility + filter rules:
+  //   statutory              → show, all 10 points  (taxAuditMode=false)
+  //   tax_audit  + corporate → show, all 10 points  (taxAuditMode=false)
+  //   tax_audit  + non-corp  → show, 9 points only  (taxAuditMode=true  → section 10 hidden)
+  //   internal / stock       → hidden
+  const showSpecial  = data.isPrivateOrPublicLtd || auditType === "tax_audit" || auditType === "both" || auditType === "statutory";
+  const taxAuditMode = (auditType === "tax_audit" || auditType === "both") && !data.isPrivateOrPublicLtd;
 
   // Default first tab
-  const defaultTab = showTaxMaster ? "tax_master"
-    : showIntMaster              ? "int_master"
+  const defaultTab = showMergedMaster    ? "merged_master"
+    : showTaxMaster                      ? "tax_master"
+    : showStatutoryMaster                ? "statutory_master"
+    : showIntMaster                      ? "int_master"
     : "worksheet";
 
   const [activeTab, setActiveTab] = useState(defaultTab);
 
-  if (data.loading && !masterLoaded) {
+  // Correct the active tab once engagement data finishes loading.
+  // On first render data.auditType is "" (queries still in flight), so
+  // defaultTab evaluates to "worksheet". This effect fires once after the
+  // async queries resolve and snaps to the correct first tab.
+  const tabInitialized = useRef(false);
+  useEffect(() => {
+    if (!data.loading && data.auditType && !tabInitialized.current) {
+      tabInitialized.current = true;
+      setActiveTab(defaultTab);
+    }
+  }, [data.loading, data.auditType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (data.loading) {
     return (
       <div className="space-y-3 p-4">
         <Skeleton className="h-24 w-full" />
@@ -81,19 +102,26 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
       <div className="flex justify-end">
         <ExportButtons
           data={data}
-          master={master}
-          worksheetItems={[]}
-          specialAttentionItems={[]}
-          checklistItems={[]}
+          engagementId={engagementId}
         />
       </div>
 
       {/* ── Tabs ── */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex-wrap h-auto gap-1">
+          {showMergedMaster && (
+            <TabsTrigger value="merged_master" className="text-xs">
+              Tax &amp; Statutory Audit Master
+            </TabsTrigger>
+          )}
           {showTaxMaster && (
             <TabsTrigger value="tax_master" className="text-xs">
               Tax Audit Master
+            </TabsTrigger>
+          )}
+          {showStatutoryMaster && (
+            <TabsTrigger value="statutory_master" className="text-xs">
+              Statutory Audit Master
             </TabsTrigger>
           )}
           {showIntMaster && (
@@ -117,10 +145,30 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           </TabsTrigger>
         </TabsList>
 
+        {/* ── Sheet 1: Merged Tax + Statutory Master (both) ── */}
+        {showMergedMaster && (
+          <TabsContent value="merged_master" className="mt-3">
+            <MergedAuditMaster
+              data={data}
+              engagementId={engagementId}
+            />
+          </TabsContent>
+        )}
+
         {/* ── Sheet 1: Tax Audit Master ── */}
         {showTaxMaster && (
           <TabsContent value="tax_master" className="mt-3">
             <TaxAuditMaster
+              data={data}
+              engagementId={engagementId}
+            />
+          </TabsContent>
+        )}
+
+        {/* ── Sheet 1b: Statutory Audit Master ── */}
+        {showStatutoryMaster && (
+          <TabsContent value="statutory_master" className="mt-3">
+            <StatutoryAuditMaster
               data={data}
               engagementId={engagementId}
             />
@@ -143,6 +191,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <SpecialAttention
               data={data}
               engagementId={engagementId}
+              taxAuditMode={taxAuditMode}
             />
           </TabsContent>
         )}

@@ -259,6 +259,15 @@ export default function UserManagement() {
     if (!deleteUser) return;
     setDeleteLoading(true);
     try {
+      // Nullify ALL FK references before deleting to avoid constraint errors
+      await Promise.all([
+        supabase.from("demand_notices").update({ assigned_to: null } as any).eq("assigned_to", deleteUser.id),
+        supabase.from("demand_notices").update({ created_by: null } as any).eq("created_by", deleteUser.id),
+        supabase.from("itr_profiles").update({ assigned_to: null } as any).eq("assigned_to", deleteUser.id),
+        supabase.from("itr_profiles").update({ prepared_by: null } as any).eq("prepared_by", deleteUser.id),
+        supabase.from("timesheets").update({ user_id: null } as any).eq("user_id", deleteUser.id),
+        supabase.from("chat_participants").delete().eq("user_id", deleteUser.id),
+      ]);
       await invokeUserMgmt("delete", "POST", { user_id: deleteUser.id });
       toast({ title: "User deleted" });
       setDeleteUser(null);

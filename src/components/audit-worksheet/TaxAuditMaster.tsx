@@ -6,12 +6,11 @@
  *
  * Fields (in order):
  *  1.  Name of Client           — auto-fetch (read-only)
- *  2.  Proprietor/Partner Name  — free text
- *  3.  Address                  — auto-fetch (read-only)
- *  4.  PAN No.                  — auto-fetch (read-only)
- *  5.  Birth / Regi. Date       — auto-fetch (read-only)
- *  6.  Contact Nos.             — 2-col: Accountant+Mobile  |  Bank A/c+Branch
- *  7.  Previous Year Details    — 2 checkboxes
+ *  2.  Address                  — auto-fetch (read-only)
+ *  3.  PAN No.                  — auto-fetch (read-only)
+ *  4.  Birth / Regi. Date       — auto-fetch (read-only)
+ *  5.  Contact Nos.             — Accountant Name + Mobile No.
+ *  6.  Previous Year Details    — 2 checkboxes
  *  8.  Books of Accounts        — 8 checkboxes in 2 cols + Others text
  *  9.  Stock Quantity Records   — YES/NO + textarea if YES
  * 10.  Dates Audit Conducted    — FROM / TO date pickers
@@ -37,10 +36,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Save, Loader2, Wand2, Eye, EyeOff, Building2 } from "lucide-react";
+import { Save, Loader2, Wand2, Eye, EyeOff, Building2, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { useTaxMasterStorage } from "./hooks/useTaxMasterStorage";
+import { useTaxMasterStorage, type AuditorEntry } from "./hooks/useTaxMasterStorage";
 import { useEmployeeDropdown }  from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -173,7 +172,7 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
   useEffect(() => {
     if (!loaded || !data.clientName) return;
     // Only auto-fill if all are blank (first open)
-    if (m.audit_date_from || m.proprietor_partner_name) return;
+    if (m.audit_date_from) return;
 
     patchFields({
       audit_date_from: data.fyStartDate,
@@ -255,19 +254,6 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
         <SectionHeader no={1} label="Name of Client" />
         <ReadOnlyField label="Client / Assessee Name" value={data.clientName} />
 
-        {/* ── 2. Proprietor / Partner Name ── */}
-        <SectionHeader no={2} label="Proprietor / Partner Name" />
-        <div className="space-y-0.5">
-          <Label htmlFor="prop_name" className="text-xs">Name</Label>
-          <Input
-            id="prop_name"
-            className="h-8 text-sm max-w-sm"
-            value={m.proprietor_partner_name}
-            onChange={e => setField("proprietor_partner_name", e.target.value)}
-            placeholder="Enter proprietor / partner name…"
-          />
-        </div>
-
         {/* ── 3. Address ── */}
         <SectionHeader no={3} label="Address" />
         <ReadOnlyField
@@ -288,66 +274,36 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
 
         {/* ── 6. Contact Nos. ── */}
         <SectionHeader no={6} label="Contact Nos." />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border rounded-lg p-3 bg-muted/20">
-          {/* Left */}
-          <div className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wide">
-              Accountant / CA Contact
-            </p>
-            <div className="space-y-0.5">
-              <Label htmlFor="acc_name" className="text-xs">Accountant Name</Label>
-              <Input
-                id="acc_name"
-                className="h-8 text-sm"
-                value={m.accountant_name}
-                onChange={e => setField("accountant_name", e.target.value)}
-                placeholder="Name…"
-              />
-            </div>
-            <div className="space-y-0.5">
-              <Label htmlFor="mobile" className="text-xs">Mobile No. (10 digits)</Label>
-              <Input
-                id="mobile"
-                className="h-8 text-sm font-mono"
-                maxLength={10}
-                value={m.mobile_no}
-                onChange={e => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 10);
-                  setField("mobile_no", v);
-                }}
-                placeholder="9876543210"
-              />
-              {m.mobile_no && m.mobile_no.length !== 10 && (
-                <p className="text-[10px] text-red-500">Must be exactly 10 digits</p>
-              )}
-            </div>
+        <div className="border rounded-lg p-3 bg-muted/20 max-w-sm space-y-3">
+          <p className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wide">
+            Accountant / CA Contact
+          </p>
+          <div className="space-y-0.5">
+            <Label htmlFor="acc_name" className="text-xs">Accountant Name</Label>
+            <Input
+              id="acc_name"
+              className="h-8 text-sm"
+              value={m.accountant_name}
+              onChange={e => setField("accountant_name", e.target.value)}
+              placeholder="Name…"
+            />
           </div>
-
-          {/* Right */}
-          <div className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wide">
-              Bank Details
-            </p>
-            <div className="space-y-0.5">
-              <Label htmlFor="bank_ac" className="text-xs">Bank A/c No.</Label>
-              <Input
-                id="bank_ac"
-                className="h-8 text-sm font-mono"
-                value={m.bank_ac_no}
-                onChange={e => setField("bank_ac_no", e.target.value)}
-                placeholder="Account number…"
-              />
-            </div>
-            <div className="space-y-0.5">
-              <Label htmlFor="bank_branch" className="text-xs">Bank &amp; Branch</Label>
-              <Input
-                id="bank_branch"
-                className="h-8 text-sm"
-                value={m.bank_branch}
-                onChange={e => setField("bank_branch", e.target.value)}
-                placeholder="e.g. SBI, Main Branch, Mumbai"
-              />
-            </div>
+          <div className="space-y-0.5">
+            <Label htmlFor="mobile" className="text-xs">Mobile No. (10 digits)</Label>
+            <Input
+              id="mobile"
+              className="h-8 text-sm font-mono"
+              maxLength={10}
+              value={m.mobile_no}
+              onChange={e => {
+                const v = e.target.value.replace(/\D/g, "").slice(0, 10);
+                setField("mobile_no", v);
+              }}
+              placeholder="9876543210"
+            />
+            {m.mobile_no && m.mobile_no.length !== 10 && (
+              <p className="text-[10px] text-red-500">Must be exactly 10 digits</p>
+            )}
           </div>
         </div>
 
@@ -507,101 +463,64 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
           )}
         </div>
 
-        {/* ── 12. Payments to Relatives ── */}
-        <SectionHeader no={12} label="Payments to Relatives / Specified Persons" />
-        <YesNo
-          value={m.payments_to_relatives}
-          onChange={v => setField("payments_to_relatives", v)}
-        />
-
-        {/* ── 13. Secured / Unsecured Loans ── */}
-        <SectionHeader no={13} label="Secured / Unsecured Loan Taken or Given" />
-        <YesNo
-          value={m.secured_unsecured_loan}
-          onChange={v => setField("secured_unsecured_loan", v)}
-        />
-
-        {/* ── 14. Deduction Details ── */}
-        <SectionHeader no={14} label="Deduction Details (80C, 80D, etc.)" />
-        <YesNo
-          value={m.deduction_details}
-          onChange={v => setField("deduction_details", v)}
-        />
-
-        <Separator />
-
-        {/* ── 15–17. Assignment ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <SectionHeader no={15} label="Audit Report Prepared By" />
-            <EmpSelect
-              label=""
-              value={m.audit_report_prepared_by_id}
-              onChange={(id, name) => patchFields({
-                audit_report_prepared_by_id:   id,
-                audit_report_prepared_by_name: name,
-              })}
-              employees={employees}
-            />
-          </div>
-          <div>
-            <SectionHeader no={16} label="IT Return Prepared By" />
-            <EmpSelect
-              label=""
-              value={m.return_prepared_by_id}
-              onChange={(id, name) => patchFields({
-                return_prepared_by_id:   id,
-                return_prepared_by_name: name,
-              })}
-              employees={employees}
-            />
-          </div>
-          <div>
-            <SectionHeader no={17} label="3CD Prepared By" />
-            <EmpSelect
-              label=""
-              value={m.cd_prepared_by_id}
-              onChange={(id, name) => patchFields({
-                cd_prepared_by_id:   id,
-                cd_prepared_by_name: name,
-              })}
-              employees={employees}
-            />
-          </div>
+        {/* ── 12. Audit Carried Out By ── */}
+        <SectionHeader no={12} label="Audit Carried Out By" />
+        <div className="space-y-2">
+          {(m.audit_carried_by || []).map((entry: AuditorEntry, idx: number) => (
+            <div key={idx} className="flex items-center gap-2">
+              <Select
+                value={entry.id || "__none__"}
+                onValueChange={empId => {
+                  const realId = empId === "__none__" ? "" : empId;
+                  const emp = employees.find(e => e.id === realId);
+                  const updated = [...(m.audit_carried_by || [])];
+                  updated[idx] = { id: realId, name: emp?.name || "" };
+                  setField("audit_carried_by", updated);
+                }}
+              >
+                <SelectTrigger className="h-8 text-sm flex-1 max-w-xs">
+                  <SelectValue placeholder="— Select auditor —" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— Unassigned —</SelectItem>
+                  {employees.map(e => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {entry.name && (
+                <span className="text-xs text-primary font-medium">✓ {entry.name}</span>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+                onClick={() => {
+                  const updated = (m.audit_carried_by || []).filter((_: AuditorEntry, i: number) => i !== idx);
+                  setField("audit_carried_by", updated);
+                }}
+              >
+                <Trash2 size={13} />
+              </Button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="gap-1.5 h-7 text-xs border-primary/30 text-primary"
+            onClick={() => {
+              const updated = [...(m.audit_carried_by || []), { id: "", name: "" }];
+              setField("audit_carried_by", updated);
+            }}
+          >
+            <Plus size={12} /> Add Auditor
+          </Button>
         </div>
 
-        <Separator />
-
-        {/* ── 18–20. Dates ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <SectionHeader no={18} label="Signed Copy Received" />
-            <Input
-              type="date"
-              className="h-8 text-sm"
-              value={m.signed_copy_received}
-              onChange={e => setField("signed_copy_received", e.target.value)}
-            />
-          </div>
-          <div>
-            <SectionHeader no={19} label="Management Representation Letter" />
-            <Input
-              type="date"
-              className="h-8 text-sm"
-              value={m.management_repr_letter}
-              onChange={e => setField("management_repr_letter", e.target.value)}
-            />
-          </div>
-          <div>
-            <SectionHeader no={20} label="Appointment Letter" />
-            <Input
-              type="date"
-              className="h-8 text-sm"
-              value={m.appointment_letter}
-              onChange={e => setField("appointment_letter", e.target.value)}
-            />
-          </div>
-        </div>
       </div>
 
       {/* ══════════ FOOTER ══════════ */}

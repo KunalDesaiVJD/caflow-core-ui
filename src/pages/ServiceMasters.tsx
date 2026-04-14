@@ -125,7 +125,10 @@ const ServiceMasters = () => {
     if (!isSuperadmin) return;
     supabase.from("firms").select("id, name").order("name").then(({ data }) => {
       setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+      if (data && data.length > 0 && !selectedFirmId) {
+        const def = data.find(f => f.id === user?.firm_id) || data[0];
+        setSelectedFirmId(def.id);
+      }
     });
   }, [isSuperadmin]);
 

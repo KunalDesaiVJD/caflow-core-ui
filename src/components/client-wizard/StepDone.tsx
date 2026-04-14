@@ -3,19 +3,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, ArrowRight } from "lucide-react";
 import type { BasicInfoData } from "./StepBasicInfo";
-import type { ComplianceFlagsData } from "./StepComplianceFlags";
 
 interface Props {
   mode?: "create" | "edit";
   basicInfo: BasicInfoData;
-  complianceFlags: ComplianceFlagsData;
   partnerName: string | null;
   saving: boolean;
   onSubmit: () => void;
 }
 
-export const StepDone = ({ mode = "create", basicInfo, complianceFlags, partnerName, saving, onSubmit }: Props) => {
-  const activeFlags = Object.values(complianceFlags).filter(Boolean).length;
+export const StepDone = ({ mode = "create", basicInfo, partnerName, saving, onSubmit }: Props) => {
   const isEdit = mode === "edit";
 
   return (
@@ -45,10 +42,6 @@ export const StepDone = ({ mode = "create", basicInfo, complianceFlags, partnerN
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">PAN</span>
             <span className="font-mono text-sm">{basicInfo.pan || "—"}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Compliance Checks Activated</span>
-            <Badge>{activeFlags} of 10</Badge>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Assigned Partner</span>

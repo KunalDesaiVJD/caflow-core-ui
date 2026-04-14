@@ -8,8 +8,8 @@
  * 1-second debounced auto-save on every field change.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -53,19 +53,11 @@ export function useWorksheetSheetStorage(
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("worksheet_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      const saved = row?.worksheet_json;
-      if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-        setData({ rows: { ...(saved as WorksheetSheetData).rows } });
-      }
-      setLoaded(true);
-    })();
+    const saved = awLoad<WorksheetSheetData>(engagementId, "worksheet_json");
+    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
+      setData({ rows: { ...saved.rows } });
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -73,18 +65,7 @@ export function useWorksheetSheetStorage(
     async (snapshot: WorksheetSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:  engagementId,
-              firm_id:        firmId ?? null,
-              worksheet_json: snapshot,
-              updated_at:     new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "worksheet_json", snapshot);
         if (!silent) toast.success("Audit Worksheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -92,7 +73,7 @@ export function useWorksheetSheetStorage(
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   const debounce = useCallback(

@@ -65,9 +65,10 @@ const AUDIT_TYPES = [
   { value: "stock", label: "Stock Audit" },
 ];
 const PERIOD_TYPES = [
-  { value: "annual", label: "Annual" },
-  { value: "half_yearly", label: "Half-Yearly" },
-  { value: "quarterly", label: "Quarterly" },
+  { value: "annual",      label: "Full Year" },
+  { value: "half_yearly", label: "Half Year" },
+  { value: "quarterly",   label: "Quarter"   },
+  { value: "custom",      label: "Custom"    },
 ];
 const ENTITY_TYPES = [
   { value: "company", label: "Company (Pvt/Public)" },
@@ -85,6 +86,20 @@ const statusLabel: Record<string, string> = {
   complete: "Completed",
 };
 
+// ─── Filter audit types by client's audit setup ───
+function getAuditOptionsForClient(client: any) {
+  if (!client) return AUDIT_TYPES;
+  const opts: { value: string; label: string }[] = [];
+  const hasStat = !!client.statutory_audit_applicable;
+  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
+  if (hasStat)           opts.push({ value: "statutory",  label: "Statutory Audit" });
+  if (hasTax)            opts.push({ value: "tax_audit",  label: "Tax Audit" });
+  if (hasStat && hasTax) opts.push({ value: "both",       label: "Both (Statutory + Tax)" });
+  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
+  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  return opts;
+}
+
 export default function AuditIntelligence() {
   const { user } = useAuth();
   const { can } = usePermissions();
@@ -98,7 +113,11 @@ export default function AuditIntelligence() {
   } = useAuditContext();
 
   const [users, setUsers] = useState<{ id: string; name: string | null }[]>([]);
+  const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
+
+  // #1 — clients from context are already filtered to classification='Audit' (see useAuditContext)
+  const auditClients = clients;
 
   // Dialogs
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -115,7 +134,8 @@ export default function AuditIntelligence() {
 
   // Edit form
   const [engForm, setEngForm] = useState({
-    client_id: "", financial_year: "2024-25", audit_type: "statutory", entity_type: "company",
+    audit_firm_id: "", client_id: "", financial_year: "2024-25", audit_type: "statutory",
+    entity_type: "company", audit_period_type: "annual",
   });
 
   useEffect(() => {
@@ -123,6 +143,15 @@ export default function AuditIntelligence() {
     supabase.from("users").select("id, name").eq("firm_id", user.firm_id).eq("is_active", true)
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let q = supabase.from("audit_firms").select("id, name").neq("active", false).order("name");
+    if (user.role !== "superadmin" && user.firm_id) {
+      q = q.eq("firm_id", user.firm_id) as typeof q;
+    }
+    q.then(({ data }) => setAuditFirms(data || []));
+  }, [user?.id, user?.firm_id, user?.role]);
 
   useEffect(() => {
     if (!selectedEngagementId) return;
@@ -217,10 +246,12 @@ export default function AuditIntelligence() {
     const target = eng || selectedEngagement;
     if (!target) return;
     setEngForm({
+      audit_firm_id: target.audit_firm_id || "",
       client_id: target.client_id || "",
       financial_year: target.financial_year || "2024-25",
       audit_type: target.audit_type || "statutory",
       entity_type: target.entity_type || target.client_entity_type || "",
+      audit_period_type: target.audit_period_type || "annual",
     });
     setShowEditDialog(true);
   };
@@ -228,10 +259,12 @@ export default function AuditIntelligence() {
     if (!selectedEngagementId) return;
     setFormSaving(true);
     const { error } = await supabase.from("audit_engagements").update({
+      audit_firm_id: engForm.audit_firm_id || null,
       client_id: engForm.client_id,
       financial_year: engForm.financial_year,
       audit_type: engForm.audit_type,
       entity_type: engForm.entity_type,
+      audit_period_type: engForm.audit_period_type,
     } as any).eq("id", selectedEngagementId);
     setFormSaving(false);
     if (error) { toast.error(error.message); return; }
@@ -259,8 +292,8 @@ export default function AuditIntelligence() {
 
   const selectedClientName = useMemo(() => {
     if (!selectedClientId || selectedClientId === "all") return "";
-    return clients.find(c => c.id === selectedClientId)?.name || "";
-  }, [selectedClientId, clients]);
+    return auditClients.find(c => c.id === selectedClientId)?.name || "";
+  }, [selectedClientId, auditClients]);
 
   if (loading) {
     return (
@@ -321,7 +354,7 @@ export default function AuditIntelligence() {
                         <Check className={cn("mr-2 h-4 w-4", (!selectedClientId || selectedClientId === "all") ? "opacity-100" : "opacity-0")} />
                         All Clients
                       </CommandItem>
-                      {clients.map(c => (
+                      {auditClients.map(c => (
                         <CommandItem
                           key={c.id}
                           value={c.name || c.id}
@@ -642,6 +675,19 @@ export default function AuditIntelligence() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
+              <Label>Audit Firm <span className="text-destructive">*</span></Label>
+              <Select value={engForm.audit_firm_id} onValueChange={v => setEngForm(f => ({ ...f, audit_firm_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
+                <SelectContent>
+                  {auditFirms.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit firms found.</div>
+                  ) : (
+                    auditFirms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>Client *</Label>
               <Select value={engForm.client_id} onValueChange={v => {
                 const client = clients.find(c => c.id === v);
@@ -649,7 +695,7 @@ export default function AuditIntelligence() {
               }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {auditClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -662,9 +708,33 @@ export default function AuditIntelligence() {
             </div>
             <div>
               <Label>Audit Type</Label>
-              <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
+              {(() => {
+                const selClient = clients.find(c => c.id === engForm.client_id);
+                const opts = getAuditOptionsForClient(selClient);
+                if (engForm.client_id && opts.length === 0) {
+                  return (
+                    <p className="text-xs text-amber-600 mt-1">
+                      No audit services enabled for this client. Configure in Client → Audit Setup.
+                    </p>
+                  );
+                }
+                return (
+                  <Select value={engForm.audit_type} onValueChange={v => setEngForm(f => ({ ...f, audit_type: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {(opts.length === 0 ? AUDIT_TYPES : opts).map(t => (
+                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                );
+              })()}
+            </div>
+            <div>
+              <Label>Period Type</Label>
+              <Select value={engForm.audit_period_type} onValueChange={v => setEngForm(f => ({ ...f, audit_period_type: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{PERIOD_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>

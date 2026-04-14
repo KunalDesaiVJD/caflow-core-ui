@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { CalendarIcon } from "lucide-react";
+import { CalendarIcon, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,10 @@ import {
 import {
   Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
 } from "@/components/ui/tooltip";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 /* ───── Interface ───── */
@@ -94,15 +98,46 @@ interface Props {
   entityType: string; // from Step 1
   itrServiceActive: boolean;
   errors: Record<string, string>;
+  /** The classification value that was already saved to DB (edit mode only).
+   *  When provided and the user picks a different value, a warning modal fires
+   *  before the change is applied. */
+  savedClassification?: string;
 }
 
-export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive, errors }: Props) => {
+export const StepAdvancedInfo = ({
+  data, onChange, entityType, itrServiceActive, errors, savedClassification,
+}: Props) => {
   const { user } = useAuth();
 
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  /** Classification value waiting for user confirmation before being applied */
+  const [pendingClassification, setPendingClassification] = useState<string | null>(null);
 
   const set = <K extends keyof AdvancedInfoData>(key: K, val: AdvancedInfoData[K]) =>
     onChange({ ...data, [key]: val });
+
+  /** Apply a classification change, resetting dependent fields */
+  const applyClassificationChange = (v: string) => {
+    const updates: Partial<AdvancedInfoData> = { classification: v };
+    if (v !== "Audit")                                          updates.audit_firm_id = "";
+    if (v !== "Non-Audit" && v !== "Partner in Audited Firm")  updates.responsible_person_id = "";
+    onChange({ ...data, ...updates });
+  };
+
+  /** Handle classification dropdown change — show warning in edit mode when value differs from saved */
+  const handleClassificationChange = (v: string) => {
+    const isDifferentFromSaved =
+      savedClassification &&
+      savedClassification !== "" &&
+      v !== savedClassification;
+
+    if (isDifferentFromSaved) {
+      // Intercept: ask user to confirm before applying
+      setPendingClassification(v);
+    } else {
+      applyClassificationChange(v);
+    }
+  };
 
   /* Load users for responsible person */
   useEffect(() => {
@@ -152,15 +187,7 @@ export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive,
           {/* Classification */}
           <div className="space-y-1.5">
             <Label>Client Classification <span className="text-destructive">*</span></Label>
-            <Select
-              value={data.classification}
-              onValueChange={(v) => {
-                const updates: Partial<AdvancedInfoData> = { classification: v };
-                if (v !== "Audit") updates.audit_firm_id = "";
-                if (v !== "Non-Audit" && v !== "Partner in Audited Firm") updates.responsible_person_id = "";
-                onChange({ ...data, ...updates });
-              }}
-            >
+            <Select value={data.classification} onValueChange={handleClassificationChange}>
               <SelectTrigger><SelectValue placeholder="Select classification" /></SelectTrigger>
               <SelectContent>
                 {CLASSIFICATIONS.map((c) => (
@@ -299,6 +326,49 @@ export const StepAdvancedInfo = ({ data, onChange, entityType, itrServiceActive,
           </div>
         </div>
       </div>
+
+      {/* ── Classification Change Warning Modal ── */}
+      <Dialog
+        open={!!pendingClassification}
+        onOpenChange={(open) => { if (!open) setPendingClassification(null); }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Change Classification?
+            </DialogTitle>
+            <DialogDescription className="pt-2 space-y-2 text-sm">
+              <p>
+                You are changing the classification for FY{" "}
+                <strong>{data.financial_year}</strong> from{" "}
+                <strong className="text-indigo-600">{savedClassification}</strong> to{" "}
+                <strong className="text-indigo-600">{pendingClassification}</strong>.
+              </p>
+              <p className="text-muted-foreground">
+                Changing classification affects future FYs only. Historical data is preserved.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setPendingClassification(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-indigo-600 hover:bg-indigo-700"
+              onClick={() => {
+                if (pendingClassification) applyClassificationChange(pendingClassification);
+                setPendingClassification(null);
+              }}
+            >
+              Confirm Change
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── SECTION D: Work Group ── */}
       <div className="space-y-4">

@@ -1,22 +1,24 @@
 /**
  * Checklist — Sheet 6 "AUDIT DOCUMENTATION"
  *
- * 22 fixed document items with Page Number FROM / TO tracking.
+ * 20 fixed document items with Page Number FROM / TO tracking.
+ * Additional rows can be added dynamically via the "Add Row" button.
  *
- * Rows 1-20: predefined particulars (read-only label).
- * Rows 21-22: blank, user-editable particulars (custom items).
+ * All Particulars are editable; pre-populated rows show their static
+ * text as the default but allow override.
  *
  * Items 8, 10, 12 contain "{fyEndYear}" which is replaced at render
  * with the actual year derived from data.fyEndDate (Req #4).
  *
- * Header: 'Audit Documentation' + firm name + client name
+ * Each row has a Document upload column (PDF / image, 5 MB max).
  */
-import { cn } from "@/lib/utils";
+import { useRef, useState } from "react";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
-import { Badge }   from "@/components/ui/badge";
-import { Save, Loader2, ClipboardCheck } from "lucide-react";
+import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
+import { supabase } from "@/integrations/supabase/client";
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
 import type { AuditWorksheetData }  from "./hooks/useAuditWorksheetData";
 
@@ -89,20 +91,16 @@ const CHECKLIST_DEFS: ChecklistDef[] = [
     id: "stock_qty",        sr: 20,
     particulars: "Quantitative Details of Stock (if apply)",
   },
-  { id: "custom_1",         sr: 21, particulars: "", isCustom: true },
-  { id: "custom_2",         sr: 22, particulars: "", isCustom: true },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Extract the 4-digit year from an ISO date string like "2026-03-31" → "2026" */
 function fyEndYearFromDate(fyEndDate: string): string {
   if (!fyEndDate) return "____";
   const m = fyEndDate.match(/^(\d{4})/);
   return m ? m[1] : "____";
 }
 
-/** Replace all {fyEndYear} tokens in a particulars string with the real year */
 function injectYear(text: string, year: string): string {
   return text.replace(/\{fyEndYear\}/g, year);
 }
@@ -117,20 +115,112 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Checklist({ data, engagementId }: Props) {
-  const { getRow, setRowField, manualSave, saving } =
+  const { data: checklistData, getRow, setRowField, patchRowFields, addRow, manualSave, saving } =
     useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
   const fyEndYear = fyEndYearFromDate(data.fyEndDate);
 
-  // Count rows where at least one page number is filled
-  const filledCount = CHECKLIST_DEFS.filter(def => {
-    const row = getRow(def.id);
-    return row.page_from.trim() !== "" || row.page_to.trim() !== "";
-  }).length;
-  const pct = Math.round((filledCount / CHECKLIST_DEFS.length) * 100);
+  // All rows = static defs + dynamic rows added by user
+  const dynamicDefs: ChecklistDef[] = (checklistData.dynamicRowIds || []).map((id, i) => ({
+    id,
+    sr:          CHECKLIST_DEFS.length + i + 1,
+    particulars: "",
+    isCustom:    true,
+  }));
+  const allDefs = [...CHECKLIST_DEFS, ...dynamicDefs];
+
+  // Count rows that have a document attached
+  const filledCount = allDefs.filter(def => getRow(def.id).file_name?.trim()).length;
+
+  // ── Document upload state ──────────────────────────────────────────────────
+  const fileInputRef  = useRef<HTMLInputElement>(null);
+  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
+  const [uploadingRows, setUploadingRows] = useState<Record<string, boolean>>({});
+  const [deletingRows,  setDeletingRows]  = useState<Record<string, boolean>>({});
+
+  const openFilePicker = (rowId: string) => {
+    setPendingRowId(rowId);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !pendingRowId) return;
+
+    // 5 MB guard
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File exceeds 5MB limit");
+      setPendingRowId(null);
+      return;
+    }
+
+    const def    = allDefs.find(d => d.id === pendingRowId);
+    const srNo   = def?.sr ?? 0;
+    // Sanitise filename: replace spaces with underscores
+    const safeName = file.name.replace(/\s+/g, "_");
+    const filePath = `checklist/${engagementId}/${srNo}_${safeName}`;
+
+    setUploadingRows(prev => ({ ...prev, [pendingRowId]: true }));
+
+    const { error } = await supabase.storage
+      .from("documents")
+      .upload(filePath, file, { upsert: true });
+
+    setUploadingRows(prev => ({ ...prev, [pendingRowId]: false }));
+
+    if (error) {
+      toast.error(`Upload failed: ${error.message}`);
+      setPendingRowId(null);
+      return;
+    }
+
+    patchRowFields(pendingRowId, { file_path: filePath, file_name: file.name });
+    toast.success(`"${file.name}" uploaded`);
+    setPendingRowId(null);
+  };
+
+  const handlePreview = (rowId: string) => {
+    const row = getRow(rowId);
+    if (!row.file_path) return;
+    const { data: urlData } = supabase.storage
+      .from("documents")
+      .getPublicUrl(row.file_path);
+    window.open(urlData.publicUrl, "_blank", "noreferrer");
+  };
+
+  const handleDelete = async (rowId: string) => {
+    const row = getRow(rowId);
+    if (!row.file_path) return;
+
+    setDeletingRows(prev => ({ ...prev, [rowId]: true }));
+
+    const { error } = await supabase.storage
+      .from("documents")
+      .remove([row.file_path]);
+
+    setDeletingRows(prev => ({ ...prev, [rowId]: false }));
+
+    if (error) {
+      toast.error(`Delete failed: ${error.message}`);
+      return;
+    }
+
+    patchRowFields(rowId, { file_path: "", file_name: "" });
+    toast.success("Document removed");
+  };
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
+
+      {/* Hidden file input — shared by all rows */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.xlsx,.xls,.doc,.docx,.csv"
+        className="hidden"
+        onChange={handleFileChange}
+      />
 
       {/* ══════════ PAGE HEADER ══════════ */}
       <div className="bg-violet-700 text-white px-6 py-4 space-y-0.5">
@@ -146,28 +236,18 @@ export default function Checklist({ data, engagementId }: Props) {
         </p>
       </div>
 
-      {/* ══════════ PROGRESS BAR + SUB-HEADER ══════════ */}
-      <div className="border-b bg-muted/30 px-4 py-2.5 space-y-2">
-        {/* Progress row */}
+      {/* ══════════ TOOLBAR ══════════ */}
+      <div className="border-b bg-muted/30 px-4 py-2.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Badge
-              className={cn(
-                "text-xs",
-                pct === 100
-                  ? "bg-green-100 text-green-700"
-                  : pct >= 50
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-slate-100 text-slate-600"
-              )}
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1 h-7 text-xs border-violet-300 text-violet-700 hover:bg-violet-50"
+              onClick={addRow}
             >
-              {filledCount} / {CHECKLIST_DEFS.length} documented ({pct}%)
-            </Badge>
-            {pct === 100 && (
-              <span className="text-xs text-green-700 font-medium">
-                ✓ All documents page-numbered
-              </span>
-            )}
+              <Plus size={12} /> Add Row
+            </Button>
           </div>
           <Button
             size="sm"
@@ -182,50 +262,30 @@ export default function Checklist({ data, engagementId }: Props) {
             Save
           </Button>
         </div>
-
-        {/* Progress bar */}
-        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className={cn(
-              "h-full rounded-full transition-all duration-300",
-              pct === 100 ? "bg-green-500" : "bg-violet-500"
-            )}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
       </div>
 
       {/* ══════════ TABLE ══════════ */}
       <div className="overflow-auto">
-        <table className="w-full text-sm border-collapse min-w-[620px]">
+        <table className="w-full text-sm border-collapse min-w-[540px]">
           <thead>
             <tr className="bg-violet-700 text-white text-[11px] uppercase tracking-wide">
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-12">Sr.</th>
-              <th className="border border-violet-600 px-3 py-2.5 text-left">Particulars</th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-36">
-                Page Number From
-              </th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-36">
-                Page Number To
-              </th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center w-10">Sr.</th>
+              <th className="border border-violet-600 px-3 py-2.5 text-left w-full min-w-[380px]">Particulars</th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center w-48 min-w-[192px]">Document</th>
             </tr>
           </thead>
           <tbody>
-            {CHECKLIST_DEFS.map(def => {
+            {allDefs.map(def => {
               const row = getRow(def.id);
-              const hasBoth  = row.page_from.trim() !== "" && row.page_to.trim() !== "";
-              const hasEither = row.page_from.trim() !== "" || row.page_to.trim() !== "";
-              const labelText = def.isCustom
-                ? (row.particulars || "")
+              const defaultText = def.isCustom
+                ? ""
                 : injectYear(def.particulars, fyEndYear);
+              const displayValue = row.particulars !== "" ? row.particulars : defaultText;
 
               return (
                 <tr
                   key={def.id}
-                  className={cn(
-                    "align-middle hover:bg-muted/10 transition-colors",
-                    hasBoth && "bg-green-50/50"
-                  )}
+                  className="align-middle hover:bg-muted/10 transition-colors"
                 >
                   {/* Sr No */}
                   <td className="border border-border px-2 py-2 text-center">
@@ -234,58 +294,66 @@ export default function Checklist({ data, engagementId }: Props) {
                     </span>
                   </td>
 
-                  {/* Particulars */}
-                  <td className="border border-border px-3 py-2">
-                    {def.isCustom ? (
-                      <Input
-                        className="h-7 text-xs w-full border-dashed"
-                        placeholder="Enter custom item description…"
-                        value={row.particulars}
-                        onChange={e =>
-                          setRowField(def.id, "particulars", e.target.value)
-                        }
-                      />
+                  {/* Particulars — wide, text not clipped */}
+                  <td className="border border-border px-3 py-2 w-full">
+                    <Input
+                      className="h-7 text-xs w-full border-dashed whitespace-normal"
+                      placeholder={defaultText || "Enter item description…"}
+                      value={displayValue}
+                      onChange={e =>
+                        setRowField(def.id, "particulars", e.target.value)
+                      }
+                    />
+                  </td>
+
+                  {/* Document */}
+                  <td className="border border-border px-2 py-2 text-center w-48">
+                    {row.file_name ? (
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={row.file_name}>
+                          {row.file_name}
+                        </span>
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                            onClick={() => handlePreview(def.id)}
+                          >
+                            <Eye size={10} /> Preview
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-[10px] gap-0.5 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDelete(def.id)}
+                            disabled={deletingRows[def.id]}
+                          >
+                            {deletingRows[def.id]
+                              ? <Loader2 size={10} className="animate-spin" />
+                              : <Trash2 size={10} />
+                            }
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
                     ) : (
-                      <span
-                        className={cn(
-                          "text-xs leading-snug",
-                          hasEither
-                            ? "text-foreground font-medium"
-                            : "text-muted-foreground"
-                        )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                        onClick={() => openFilePicker(def.id)}
+                        disabled={uploadingRows[def.id]}
                       >
-                        {labelText}
-                      </span>
+                        {uploadingRows[def.id]
+                          ? <Loader2 size={10} className="animate-spin" />
+                          : <Paperclip size={10} />
+                        }
+                        {uploadingRows[def.id] ? "Uploading…" : "Upload"}
+                      </Button>
                     )}
                   </td>
 
-                  {/* Page From */}
-                  <td className="border border-border px-2 py-2 text-center">
-                    <Input
-                      type="number"
-                      min="1"
-                      className="h-7 text-xs text-center w-full"
-                      placeholder="—"
-                      value={row.page_from}
-                      onChange={e =>
-                        setRowField(def.id, "page_from", e.target.value)
-                      }
-                    />
-                  </td>
-
-                  {/* Page To */}
-                  <td className="border border-border px-2 py-2 text-center">
-                    <Input
-                      type="number"
-                      min="1"
-                      className="h-7 text-xs text-center w-full"
-                      placeholder="—"
-                      value={row.page_to}
-                      onChange={e =>
-                        setRowField(def.id, "page_to", e.target.value)
-                      }
-                    />
-                  </td>
                 </tr>
               );
             })}
@@ -296,9 +364,9 @@ export default function Checklist({ data, engagementId }: Props) {
       {/* ══════════ FOOTER ══════════ */}
       <div className="border-t bg-muted/20 px-4 py-2 flex items-center justify-between">
         <p className="text-[11px] text-muted-foreground">
-          {pct === 100
-            ? `✓ All ${CHECKLIST_DEFS.length} documents page-numbered`
-            : `${CHECKLIST_DEFS.length - filledCount} document(s) without page numbers`}
+          {filledCount === allDefs.length
+            ? `✓ All ${allDefs.length} documents uploaded`
+            : `${filledCount} / ${allDefs.length} documents uploaded`}
         </p>
         {saving && (
           <p className="text-xs text-muted-foreground flex items-center gap-1">

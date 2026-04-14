@@ -18,13 +18,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge }    from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, CheckCircle2, AlertCircle, ArrowRight,
+  Plus, Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
@@ -34,8 +30,6 @@ import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
-  /** Optional: called when user clicks "Proceed to Next Stage" and gate is open */
-  onProceed?:   () => void;
 }
 
 // ─── Correction Status Select ─────────────────────────────────────────────────
@@ -70,7 +64,7 @@ function CorrectionSelect({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function QuerySheet({ data, engagementId, onProceed }: Props) {
+export default function QuerySheet({ data, engagementId }: Props) {
   const {
     queries, addQuery, updateQuery, deleteQuery,
     manualSave, saving, allCorrected, pendingCount,
@@ -78,15 +72,6 @@ export default function QuerySheet({ data, engagementId, onProceed }: Props) {
 
   // Delete confirmation state: tracks which row is awaiting confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const handleProceed = () => {
-    if (!allCorrected) return;
-    if (onProceed) {
-      onProceed();
-    } else {
-      toast.success("All queries resolved — ready to proceed to next stage");
-    }
-  };
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
@@ -103,74 +88,6 @@ export default function QuerySheet({ data, engagementId, onProceed }: Props) {
           Query of Client
           {data.clientName ? ` — ${data.clientName}` : ""}
         </p>
-      </div>
-
-      {/* ══════════ CORRECTION STATUS GATE BANNER ══════════ */}
-      <div
-        className={cn(
-          "px-5 py-3 flex flex-wrap items-center justify-between gap-3 border-b",
-          allCorrected
-            ? "bg-green-50 border-green-200"
-            : "bg-red-50   border-red-200"
-        )}
-      >
-        <div className="flex items-center gap-2.5">
-          {allCorrected ? (
-            <CheckCircle2 size={20} className="text-green-600 flex-shrink-0" />
-          ) : (
-            <AlertCircle  size={20} className="text-red-600   flex-shrink-0" />
-          )}
-          <div>
-            {allCorrected ? (
-              <p className="text-sm font-semibold text-green-800">
-                All queries resolved — ready to proceed
-              </p>
-            ) : (
-              <p className="text-sm font-semibold text-red-800">
-                {pendingCount} of {queries.length}{" "}
-                {queries.length === 1 ? "query" : "queries"} pending correction
-                {" "}— resolve before proceeding
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {allCorrected
-                ? queries.length === 0
-                  ? "No queries raised — pipeline is unblocked."
-                  : "Every query has Correction Status = Yes."
-                : "Set Correction Status to Yes on every row to unblock the pipeline."
-              }
-            </p>
-          </div>
-        </div>
-
-        {/* Proceed button — gated */}
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span tabIndex={-1}>
-                <Button
-                  size="sm"
-                  className={cn(
-                    "gap-1.5 h-8 text-xs",
-                    allCorrected
-                      ? "bg-green-600 hover:bg-green-700 text-white"
-                      : "opacity-50 cursor-not-allowed"
-                  )}
-                  disabled={!allCorrected}
-                  onClick={handleProceed}
-                >
-                  Proceed to Next Stage
-                  <ArrowRight size={13} />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {!allCorrected && (
-              <TooltipContent side="left" className="max-w-[240px] text-xs">
-                All queries must have Correction Status = Yes before proceeding
-              </TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
       </div>
 
       {/* ══════════ SUB-HEADER (Add + counts + Save) ══════════ */}

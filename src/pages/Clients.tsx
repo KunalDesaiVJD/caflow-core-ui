@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -16,8 +16,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, ShieldCheck, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, Upload, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck } from "lucide-react";
 import * as XLSX from "xlsx";
+import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
+import { ClassificationByFYView } from "@/components/clients/ClassificationByFYView";
 
 interface Client {
   id: string;
@@ -28,6 +30,10 @@ interface Client {
   gstin: string[] | null;
   created_at: string | null;
   firm_id: string | null;
+  /** 'manual' | 'import' — requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual' */
+  source?: string | null;
+  /** Populated only when All Firms selected — joined from firms table */
+  firm_name?: string | null;
 }
 
 interface GroupInfo {
@@ -39,7 +45,7 @@ interface GroupInfo {
 const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
-type ViewMode = "it" | "table" | "card";
+type ViewMode = "it" | "table" | "card" | "classify";
 
 const VIEW_KEY = "caflow_client_view";
 
@@ -54,12 +60,17 @@ const Clients = () => {
   const isSuperadmin = user?.role === "superadmin";
   const [firmsList, setFirmsList] = useState<{ id: string; name: string }[]>([]);
   const [selectedFirmId, setSelectedFirmId] = useState<string | null>(null);
-  const effectiveFirmId = isSuperadmin ? selectedFirmId : (user?.firm_id || null);
+  // "__all__" sentinel = superadmin viewing all firms at once
+  const showAllFirms = isSuperadmin && selectedFirmId === "__all__";
+  const effectiveFirmId = showAllFirms ? null : (isSuperadmin ? selectedFirmId : (user?.firm_id || null));
+  const [showSyncDialog, setShowSyncDialog] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
+  // GAP-7: API vs Manual bifurcation
+  const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api">("all");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
@@ -74,19 +85,52 @@ const Clients = () => {
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
 
-  // Import state
-  const importRef = useRef<HTMLInputElement>(null);
-  const [importing, setImporting] = useState(false);
+  // GAP-6: draft management
+  const [drafts, setDrafts] = useState<Client[]>([]);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [deleteDraftCandidate, setDeleteDraftCandidate] = useState<Client | null>(null);
+  const [deleteDraftLoading, setDeleteDraftLoading] = useState(false);
 
   const fetchData = async () => {
-    const [clientsRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
-      supabase.from("clients").select("*", { count: "exact" }).eq("is_draft", false).is("deleted_at", null).order("created_at", { ascending: false }),
+    // GAP-1: scope to firm unless superadmin selected "All Firms"
+    if (!effectiveFirmId && !showAllFirms) {
+      setClients([]);
+      setLoading(false);
+      return;
+    }
+
+    // Build base selects — include firms(name) join when showing all firms
+    const clientSelect = showAllFirms
+      ? "*, firms(name)"
+      : "*";
+
+    let mainQuery = supabase.from("clients").select(clientSelect, { count: "exact" })
+      .eq("is_draft", false).is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    if (!showAllFirms && effectiveFirmId) mainQuery = mainQuery.eq("firm_id", effectiveFirmId);
+
+    let draftQuery = supabase.from("clients").select(clientSelect)
+      .eq("is_draft", true).eq("source", "api_import").is("deleted_at", null)
+      .order("created_at", { ascending: false }).limit(2000);
+    if (!showAllFirms && effectiveFirmId) draftQuery = draftQuery.eq("firm_id", effectiveFirmId);
+
+    const [clientsRes, apiDraftRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
+      mainQuery,
+      draftQuery,
       supabase.from("client_groups").select("id, name, color").order("name"),
       supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
       supabase.from("client_services").select("client_id, is_active"),
     ]);
 
-    setClients((clientsRes.data as Client[]) || []);
+    // Normalise firms(name) join → flat firm_name field
+    const normalise = (rows: any[]): Client[] =>
+      (rows || []).map(r => ({ ...r, firm_name: r.firms?.name ?? null }));
+
+    // Merge published clients + api_import drafts into one list
+    setClients([
+      ...normalise(clientsRes.data as any[]),
+      ...normalise(apiDraftRes.data as any[]),
+    ]);
     setGroups((groupsRes.data as GroupInfo[]) || []);
 
     const map: Record<string, GroupInfo[]> = {};
@@ -106,7 +150,9 @@ const Clients = () => {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  // GAP-2: re-fetch whenever effectiveFirmId or showAllFirms changes (superadmin firm selector, auth load)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); } }, [effectiveFirmId, showAllFirms]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -115,9 +161,55 @@ const Clients = () => {
     if (!isSuperadmin) return;
     supabase.from("firms").select("id, name").order("name").then(({ data }) => {
       setFirmsList(data || []);
-      if (data && data.length > 0 && !selectedFirmId) setSelectedFirmId(data[0].id);
+      if (data && data.length > 0 && !selectedFirmId) {
+        // Default to the user's own firm_id, otherwise first in list
+        const def = data.find(f => f.id === user?.firm_id) || data[0];
+        setSelectedFirmId(def.id);
+      }
     });
   }, [isSuperadmin]);
+
+  // GAP-6: load draft clients (is_draft=true, source='manual') for the draft management banner
+  // api_import drafts are shown in the "Clients via API" tab instead of the banner
+  const fetchDrafts = async () => {
+    if (!effectiveFirmId && !showAllFirms) { setDrafts([]); return; }
+    setDraftLoading(true);
+    try {
+      let q = supabase
+        .from("clients")
+        .select("id, name, pan, entity_type, created_at, source, firm_id")
+        .eq("is_draft", true)
+        .neq("source", "api_import")   // api_import drafts go in main list, not banner
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false });
+      if (!showAllFirms && effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+      const { data } = await q;
+      setDrafts((data as Client[]) || []);
+    } catch {}
+    setDraftLoading(false);
+  };
+
+  // GAP-6: hard-delete a draft client + companion records (called after confirmation)
+  const handleDeleteDraft = async () => {
+    if (!deleteDraftCandidate) return;
+    setDeleteDraftLoading(true);
+    try {
+      // Cascade-delete companion records first to avoid FK constraint issues
+      await Promise.all([
+        supabase.from("client_group_memberships").delete().eq("client_id", deleteDraftCandidate.id),
+        supabase.from("client_profiles").delete().eq("client_id", deleteDraftCandidate.id),
+      ]);
+      const { error } = await supabase.from("clients").delete().eq("id", deleteDraftCandidate.id);
+      if (error) throw error;
+      setDrafts(prev => prev.filter(d => d.id !== deleteDraftCandidate.id));
+      setDeleteDraftCandidate(null);
+      toast({ title: "Draft deleted", description: "The incomplete client record has been removed." });
+    } catch (e: any) {
+      toast({ title: "Error deleting draft", description: e.message, variant: "destructive" });
+    } finally {
+      setDeleteDraftLoading(false);
+    }
+  };
 
   const handleDeleteClient = async () => {
     if (!deleteClient) return;
@@ -175,6 +267,7 @@ const Clients = () => {
   const handleExportExcel = () => {
     const rows = filtered.map((c) => ({
       Name: c.name || "",
+      "Customer ID": (c as any).customer_id || "",
       PAN: c.pan || "",
       "Entity Type": c.entity_type || "",
       CIN: c.cin || "",
@@ -185,78 +278,12 @@ const Clients = () => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Clients");
-    XLSX.writeFile(wb, "clients-export.xlsx");
-    toast({ title: "Exported to Excel" });
-  };
-
-  // ── Bulk Import ──
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
-    try {
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-
-      if (rows.length === 0) { toast({ title: "No data found", variant: "destructive" }); return; }
-
-      // Get existing PANs for duplicate check
-      const { data: existingClients } = await supabase.from("clients").select("pan").not("pan", "is", null);
-      const existingPans = new Set((existingClients || []).map((c: any) => (c.pan || "").toUpperCase()).filter(Boolean));
-
-      let success = 0;
-      let failed = 0;
-      const errors: string[] = [];
-
-      for (const row of rows) {
-        const name = (row["Client Name"] || row["Name"] || row["name"] || "").trim();
-        if (!name) { failed++; errors.push("Empty name"); continue; }
-
-        const pan = (row["PAN"] || row["pan"] || "").toUpperCase().trim();
-        if (pan && existingPans.has(pan)) {
-          failed++;
-          errors.push(`Duplicate PAN: ${pan}`);
-          continue;
-        }
-
-        const gstinRaw = (row["GSTIN"] || row["gstin"] || "").trim();
-        const gstin = gstinRaw ? [gstinRaw] : null;
-
-        const { data: insertedClient, error } = await supabase.from("clients").insert({
-          name,
-          pan: pan || null,
-          entity_type: (row["Entity Type"] || row["entity_type"] || "").trim() || null,
-          gstin,
-          // TODO: Supabase RLS policy needs superadmin bypass for clients insert
-          firm_id: effectiveFirmId,
-          user_id: user?.id || null,
-          is_draft: false,
-        } as any).select("id").single();
-
-        if (error) {
-          failed++;
-          errors.push(`${name}: ${error.message}`);
-        } else {
-          // Create client_profiles row
-          await supabase.from("client_profiles").insert({ client_id: insertedClient.id, audit_questions: {} as any });
-          success++;
-          if (pan) existingPans.add(pan);
-        }
-      }
-
-      toast({
-        title: "Import Complete",
-        description: `Total: ${rows.length} | Success: ${success} | Failed: ${failed}`,
-      });
-      fetchData();
-    } catch (err: any) {
-      toast({ title: "Import failed", description: err.message, variant: "destructive" });
-    } finally {
-      setImporting(false);
-      if (importRef.current) importRef.current.value = "";
-    }
+    const filename =
+      sourceTab === "api" ? "clients-api.xlsx"
+      : sourceTab === "manual" ? "clients-manual.xlsx"
+      : "clients-export.xlsx";
+    XLSX.writeFile(wb, filename);
+    toast({ title: `Exported ${rows.length} client${rows.length !== 1 ? "s" : ""} to Excel` });
   };
 
   const filtered = clients.filter((c) => {
@@ -269,11 +296,16 @@ const Clients = () => {
       const cGroups = (clientGroupMap[c.id] || []).map(g => g.id);
       matchesGroup = groupFilter.every(gId => cGroups.includes(gId));
     }
-    return matchesSearch && matchesEntity && matchesGroup;
+    // Source tab bifurcation — NULL/undefined source treated as 'manual' (legacy clients)
+    const matchesSource =
+      sourceTab === "all" ||
+      (sourceTab === "manual" && (c.source === "manual" || !c.source)) ||
+      (sourceTab === "api" && c.source === "api_import");
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource;
   });
 
   // Reset page when filters change
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter]);
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -320,6 +352,33 @@ const Clients = () => {
 
   return (
     <div className="space-y-6">
+      {/* Superadmin firm selector — shown ONLY for superadmin, above everything */}
+      {isSuperadmin && (
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-2.5">
+          <span className="text-xs font-medium text-muted-foreground shrink-0">Filter by Firm:</span>
+          <Select
+            value={selectedFirmId || ""}
+            onValueChange={(v) => { setSelectedFirmId(v); setCurrentPage(1); }}
+          >
+            <SelectTrigger className="h-8 text-sm w-auto min-w-[220px]">
+              <SelectValue placeholder="Select a firm…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">🌐 All Firms</SelectItem>
+              {firmsList.map(f => (
+                <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {showAllFirms && (
+            <span className="text-xs text-primary font-medium">Showing clients from all firms</span>
+          )}
+          {firmsList.length === 0 && !showAllFirms && (
+            <span className="text-xs text-muted-foreground">Loading firms…</span>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -335,19 +394,137 @@ const Clients = () => {
             <button onClick={() => setViewMode("table")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <List className="h-3.5 w-3.5" />
             </button>
-            <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
+            <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
+            <button
+              onClick={() => setViewMode("classify")}
+              title="Classification by FY"
+              className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "classify" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              <BadgeCheck className="h-3.5 w-3.5" />
+            </button>
           </div>
-          {canCreate && <Button variant="outline" size="sm" onClick={() => importRef.current?.click()} disabled={importing} className="gap-1.5"><Upload className="h-4 w-4" /> Import</Button>}
-          <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
+          {canCreate && (
+            <Button variant="outline" size="sm" onClick={() => setShowSyncDialog(true)} className="gap-1.5">
+              <RefreshCw className="h-4 w-4" /> Sync from API
+            </Button>
+          )}
           <Button variant="outline" onClick={() => navigate("/clients/groups")} className="gap-2"><FolderOpen className="h-4 w-4" /> Groups</Button>
           {canCreate && <Button onClick={() => navigate("/clients/new")} className="gap-2"><Plus className="h-4 w-4" /> Add Client</Button>}
         </div>
       </div>
 
-      {/* Search & Filter */}
+      {/* Draft Clients Banner — hidden when zero drafts (must stay above tabs) */}
+      {drafts.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-4">
+          {/* Banner heading */}
+          <div className="flex items-center gap-2 mb-3">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-400 text-white text-[10px] font-bold shrink-0">
+              {drafts.length}
+            </span>
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              {drafts.length} Draft Client{drafts.length !== 1 ? "s" : ""} — Setup Incomplete
+            </p>
+          </div>
+
+          {/* Draft rows: Name | PAN | Created date | Actions */}
+          <div className="space-y-2">
+            {drafts.map(d => {
+              const createdLabel = d.created_at
+                ? new Date(d.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                : "—";
+              return (
+                <div
+                  key={d.id}
+                  className="flex items-center gap-3 rounded-md bg-white dark:bg-background border border-amber-200 dark:border-amber-800/60 px-3 py-2.5"
+                >
+                  {/* Name */}
+                  <span className="flex-1 text-sm font-medium text-foreground truncate min-w-0">
+                    {d.name || <span className="italic text-muted-foreground">Unnamed Draft</span>}
+                  </span>
+
+                  {/* PAN */}
+                  <span className="hidden sm:block text-xs font-mono text-muted-foreground w-24 shrink-0 truncate">
+                    {d.pan || "—"}
+                  </span>
+
+                  {/* Created date */}
+                  <span className="hidden md:block text-xs text-muted-foreground w-28 shrink-0">
+                    {createdLabel}
+                  </span>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-300"
+                      onClick={() => navigate(`/clients/edit/${d.id}`)}
+                    >
+                      Continue Setup
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeleteDraftCandidate(d)}
+                    >
+                      Delete Draft
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Source Tabs — ABOVE search/filter per spec */}
+      {(() => {
+        const allCount = clients.length;
+        const apiCount = clients.filter(c => c.source === "api_import").length;
+        const manualCount = clients.filter(c => c.source === "manual" || !c.source).length;
+        const tabs = [
+          { key: "all" as const,    label: "All Clients",             count: allCount },
+          { key: "api" as const,    label: "Clients via API",         count: apiCount },
+          { key: "manual" as const, label: "Clients added Manually",  count: manualCount },
+        ];
+        return (
+          <div className="flex items-center border-b border-border overflow-x-auto">
+            {tabs.map(({ key, label, count }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setSourceTab(key);
+                  // Reset search/filter state on tab switch (spec: "reset is simpler")
+                  setSearch("");
+                  setEntityFilter("all");
+                  setGroupFilter([]);
+                  setCurrentPage(1);
+                }}
+                className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                  sourceTab === key
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  sourceTab === key
+                    ? "bg-primary/10 text-primary"
+                    : "bg-muted text-muted-foreground"
+                }`}>
+                  {count}
+                </span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Search & Filter — BELOW tabs per spec */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -386,7 +563,18 @@ const Clients = () => {
       {loading ? (
         <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : filtered.length === 0 ? (
-        <Card><CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground"><Users className="h-10 w-10 mb-3 opacity-40" /><p>No clients found</p></CardContent></Card>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <Users className="h-10 w-10 mb-3 opacity-40" />
+            <p>
+              {sourceTab === "api"
+                ? "No clients imported via API"
+                : sourceTab === "manual"
+                ? "No manually added clients found"
+                : "No clients found"}
+            </p>
+          </CardContent>
+        </Card>
       ) : viewMode === "it" ? (
         /* IT VIEW */
         <>
@@ -397,6 +585,7 @@ const Clients = () => {
                   <TableHead className="text-xs">Client Name</TableHead>
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
+                  {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
                   <TableHead className="text-xs">Active Services</TableHead>
                   <TableHead className="text-xs w-12"></TableHead>
                 </TableRow>
@@ -406,9 +595,15 @@ const Clients = () => {
                   const svcCount = serviceCountMap[client.id] || 0;
                   return (
                     <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
-                      <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
+                      <TableCell className="font-medium text-sm">
+                        <span className="flex items-center gap-1.5">
+                          {client.name || "Unnamed"}
+                          {client.source === "api_import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                        </span>
+                      </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
+                      {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
                       <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                       <TableCell>
                         <DropdownMenu>
@@ -441,6 +636,7 @@ const Clients = () => {
                   <TableHead className="text-xs">Name</TableHead>
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Entity Type</TableHead>
+                  {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
                   <TableHead className="text-xs">CIN</TableHead>
                   <TableHead className="text-xs">GSTIN</TableHead>
                   <TableHead className="text-xs">Groups</TableHead>
@@ -455,6 +651,7 @@ const Clients = () => {
                       <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
                       <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
                       <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
+                      {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
                       <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
                       <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
                       <TableCell>
@@ -484,7 +681,7 @@ const Clients = () => {
           </div>
           <PaginationControls />
         </>
-      ) : (
+      ) : viewMode === "card" ? (
         /* CARD VIEW */
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -507,8 +704,9 @@ const Clients = () => {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
                           <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>
+                          {/* GAP-3: respect canEdit / canDelete in card view, same as IT + table views */}
+                          {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
+                          {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -530,9 +728,40 @@ const Clients = () => {
           </div>
           <PaginationControls />
         </>
-      )}
+      ) : viewMode === "classify" ? (
+        /* CLASSIFICATION BY FY VIEW */
+        <ClassificationByFYView
+          firmId={effectiveFirmId}
+          showAllFirms={showAllFirms}
+          canEdit={canEdit}
+        />
+      ) : null}
 
-      {/* Delete Confirmation */}
+      {/* Draft Delete Confirmation */}
+      <AlertDialog open={!!deleteDraftCandidate} onOpenChange={open => { if (!open) setDeleteDraftCandidate(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Draft Client?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the incomplete client record
+              {deleteDraftCandidate?.name ? <> <strong>{deleteDraftCandidate.name}</strong></> : ""} along with
+              all associated profiles and group memberships. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteDraftLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteDraft}
+              disabled={deleteDraftLoading}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteDraftLoading ? "Deleting…" : "Delete Draft"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Archive Client Confirmation */}
       <AlertDialog open={!!deleteClient} onOpenChange={open => { if (!open) setDeleteClient(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -566,6 +795,17 @@ const Clients = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Sync from API Dialog */}
+      <CustomerSyncDialog
+        open={showSyncDialog}
+        onOpenChange={setShowSyncDialog}
+        firmId={effectiveFirmId}
+        onComplete={() => {
+          setShowSyncDialog(false);
+          fetchData();  // Step 5: refresh client list after sync
+        }}
+      />
     </div>
   );
 };

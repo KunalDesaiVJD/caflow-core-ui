@@ -21,16 +21,17 @@ export default function PipelineStage7Combined({
   const [activeTab, setActiveTab] = useState('notes');
 
   // ─── Corporate entity check ───
-  // engagement.entity_type values (set at engagement creation): "company" | "llp" | "individual" | "firm" | "trust" | "huf" | "aop"
-  // engagement.clients.entity_type values (set at client creation): "Private Ltd" | "Public Ltd" | "LLP" | "Partnership" | etc.
-  // CARO 2020 applies ONLY to companies (Private/Public Limited). Enforce both entity-type signals
-  // so that even if the caro_applicable flag is misconfigured, non-corporates never see CARO.
+  // engagement.entity_type (set at creation): "company" | "llp" | "individual" | "firm" | "trust" | "huf" | "aop"
+  // engagement.clients.entity_type (from client profile): "Private Ltd" | "Public Ltd" | "Private Limited" |
+  //   "Public Limited" | "LLP" | "Partnership" | etc.
+  // Fix (Issue 4): CARO 2020 + full Notes apply ONLY to companies (Private/Public Ltd).
+  // Include all spelling variants; LLP is intentionally excluded from CARO scope.
   const engEntityType = (engagement?.entity_type || "").toLowerCase();
   const clientEntityType = (engagement?.clients?.entity_type || "");
+  const CORPORATE_CLIENT_TYPES = ["Private Ltd", "Public Ltd", "Private Limited", "Public Limited"];
   const isCorporate =
     engEntityType === "company" ||
-    clientEntityType === "Private Ltd" ||
-    clientEntityType === "Public Ltd";
+    CORPORATE_CLIENT_TYPES.includes(clientEntityType);
 
   const markComplete = async () => {
     setSaving(true);

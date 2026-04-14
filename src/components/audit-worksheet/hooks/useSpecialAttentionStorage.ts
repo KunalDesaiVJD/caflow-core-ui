@@ -14,14 +14,15 @@
  *  - manualSave() for explicit Save button
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
 export interface SARowState {
-  checked_by_id:   string;
-  checked_by_name: string;
+  /** ISSUE-17: multi-checker support — replaces single checked_by_id/name */
+  checked_by_ids:   string[];
+  checked_by_names: string[];
   verified_by_id:   string;
   verified_by_name: string;
   query:   "yes" | "no" | "";
@@ -29,17 +30,43 @@ export interface SARowState {
 }
 
 export const BLANK_ROW: SARowState = {
-  checked_by_id:   "",
-  checked_by_name: "",
+  checked_by_ids:   [],
+  checked_by_names: [],
   verified_by_id:   "",
   verified_by_name: "",
   query:   "",
   remarks: "",
 };
 
+/** Migrate a raw persisted row (may use old single-field format) to current shape */
+function migrateRow(r: any): SARowState {
+  const ids   = Array.isArray(r?.checked_by_ids)
+    ? r.checked_by_ids
+    : r?.checked_by_id ? [r.checked_by_id] : [];
+  const names = Array.isArray(r?.checked_by_names)
+    ? r.checked_by_names
+    : r?.checked_by_name ? [r.checked_by_name] : [];
+  return {
+    checked_by_ids:   ids,
+    checked_by_names: names,
+    verified_by_id:   r?.verified_by_id   ?? "",
+    verified_by_name: r?.verified_by_name ?? "",
+    query:            r?.query            ?? "",
+    remarks:          r?.remarks          ?? "",
+  };
+}
+
 // ─── Full form data ──────────────────────────────────────────────────────────
 
+export interface AuditorEntry {
+  id:   string;
+  name: string;
+}
+
 export interface SpecialAttentionFormData {
+  /** Dynamic auditor list — replaces fixed auditor1/2 slots */
+  audit_carried_by: AuditorEntry[];
+  /** Kept for backward-compat with existing localStorage data; not rendered in UI */
   auditor1_id:   string;
   auditor1_name: string;
   auditor2_id:   string;
@@ -48,6 +75,7 @@ export interface SpecialAttentionFormData {
 }
 
 export const BLANK_SA: SpecialAttentionFormData = {
+  audit_carried_by: [],
   auditor1_id:   "",
   auditor1_name: "",
   auditor2_id:   "",
@@ -69,23 +97,26 @@ export function useSpecialAttentionStorage(
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("special_attention_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
+    const saved = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
+    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
+      // Migration 1: pre-audit_carried_by data → convert auditor1/2 legacy fields to array
+      const carried: AuditorEntry[] =
+        Array.isArray((saved as any).audit_carried_by) && (saved as any).audit_carried_by.length > 0
+          ? (saved as any).audit_carried_by
+          : [
+              ...(saved.auditor1_id ? [{ id: saved.auditor1_id, name: saved.auditor1_name || "" }] : []),
+              ...(saved.auditor2_id ? [{ id: saved.auditor2_id, name: saved.auditor2_name || "" }] : []),
+            ];
 
-      const saved = row?.special_attention_json;
-      if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-        setData({
-          ...BLANK_SA,
-          ...(saved as Partial<SpecialAttentionFormData>),
-          rows: { ...(saved as SpecialAttentionFormData).rows },
-        });
+      // Migration 2 (ISSUE-17): per-row checked_by_id (single) → checked_by_ids (array)
+      const migratedRows: Record<string, SARowState> = {};
+      for (const [rowId, row] of Object.entries(saved.rows || {})) {
+        migratedRows[rowId] = migrateRow(row);
       }
-      setLoaded(true);
-    })();
+
+      setData({ ...BLANK_SA, ...saved, audit_carried_by: carried, rows: migratedRows });
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -93,18 +124,7 @@ export function useSpecialAttentionStorage(
     async (snapshot: SpecialAttentionFormData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:           engagementId,
-              firm_id:                 firmId ?? null,
-              special_attention_json:  snapshot,
-              updated_at:              new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "special_attention_json", snapshot);
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -112,7 +132,7 @@ export function useSpecialAttentionStorage(
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   // ── debounce helper ────────────────────────────────────────────────────────
@@ -124,9 +144,9 @@ export function useSpecialAttentionStorage(
     [persist]
   );
 
-  // ── setHeader — auditor1/2 ─────────────────────────────────────────────────
+  // ── setHeader — auditor list + legacy auditor1/2 ──────────────────────────
   const setHeader = useCallback(
-    (patch: Partial<Pick<SpecialAttentionFormData, "auditor1_id"|"auditor1_name"|"auditor2_id"|"auditor2_name">>) => {
+    (patch: Partial<Pick<SpecialAttentionFormData, "audit_carried_by"|"auditor1_id"|"auditor1_name"|"auditor2_id"|"auditor2_name">>) => {
       setData(prev => {
         const next = { ...prev, ...patch };
         debounce(next);

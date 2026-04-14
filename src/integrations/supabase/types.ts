@@ -1857,6 +1857,8 @@ export type Database = {
           tax_audit_type: string | null
           user_id: string | null
           work_group_type: string | null
+          /** GAP-7: origin tracking — 'manual' | 'import'. Requires migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual'; */
+          source: string | null
         }
         Insert: {
           address?: string | null
@@ -1891,6 +1893,7 @@ export type Database = {
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null
+          source?: string | null
         }
         Update: {
           address?: string | null
@@ -1925,6 +1928,7 @@ export type Database = {
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null
+          source?: string | null
         }
         Relationships: [
           {

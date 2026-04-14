@@ -11,20 +11,28 @@
  *  - Exposes manualSave() for the explicit Save button
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { awLoad, awSave } from "@/lib/awStorage";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
 
-export interface TaxMasterData {
-  // Field 2
-  proprietor_partner_name: string;
+export interface AuditorEntry {
+  id:   string;  // employee UUID
+  name: string;  // denormalised display name
+}
 
-  // Field 6 — Contact info
-  accountant_name: string;
-  mobile_no: string;
+export interface TaxMasterData {
+  // Audit Carried Out By — dynamic list of auditors
+  audit_carried_by: AuditorEntry[];
+
+  // Kept for backward compat with existing localStorage data; NOT rendered in UI
+  proprietor_partner_name: string;
   bank_ac_no: string;
   bank_branch: string;
+
+  // Field 5 — Contact info
+  accountant_name: string;
+  mobile_no: string;
 
   // Field 7 — Previous year documents checkboxes
   prev_moa_aoa_deed: boolean;
@@ -84,6 +92,7 @@ export interface TaxMasterData {
 }
 
 export const BLANK_TAX_MASTER: TaxMasterData = {
+  audit_carried_by: [],
   proprietor_partner_name: "",
   accountant_name: "",
   mobile_no: "",
@@ -140,19 +149,11 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    (async () => {
-      const { data: row } = await (supabase as any)
-        .from("audit_worksheet_master")
-        .select("tax_master_json")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-
-      const saved = row?.tax_master_json;
-      if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-        setData({ ...BLANK_TAX_MASTER, ...(saved as Partial<TaxMasterData>) });
-      }
-      setLoaded(true);
-    })();
+    const saved = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json");
+    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
+      setData({ ...BLANK_TAX_MASTER, ...saved });
+    }
+    setLoaded(true);
   }, [engagementId, loaded]);
 
   // ── Internal save ────────────────────────────────────────────────────────
@@ -160,18 +161,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
     async (snapshot: TaxMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        const { error } = await (supabase as any)
-          .from("audit_worksheet_master")
-          .upsert(
-            {
-              engagement_id:   engagementId,
-              firm_id:         firmId ?? null,
-              tax_master_json: snapshot,
-              updated_at:      new Date().toISOString(),
-            },
-            { onConflict: "engagement_id" }
-          );
-        if (error) throw error;
+        awSave(engagementId, "tax_master_json", snapshot);
         if (!silent) toast.success("Tax Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -179,7 +169,7 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
         setSaving(false);
       }
     },
-    [engagementId, firmId]
+    [engagementId]
   );
 
   // ── Set a single field + debounced auto-save ──────────────────────────────

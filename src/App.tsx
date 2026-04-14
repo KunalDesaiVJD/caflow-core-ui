@@ -35,7 +35,8 @@ import SettingsPage from "./pages/SettingsPage";
 import CoaMappings from "./pages/CoaMappings";
 import AuditFirms from "./pages/AuditFirms";
 import ClientGroups from "./pages/ClientGroups";
-import Form3CD from "./pages/Form3CD";
+import Form3CD      from "./pages/Form3CD";
+import Form3Reports from "./pages/Form3Reports";
 import NotesToAccounts from "./pages/NotesToAccounts";
 import ComparativeStatements from "./pages/ComparativeStatements";
 import UserManagement from "./pages/UserManagement";
@@ -61,11 +62,13 @@ import NoticeDetail from "./pages/NoticeDetail";
 import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
 import ServiceMasters from "./pages/ServiceMasters";
+import TaxAuditTemplateSettings from "./pages/TaxAuditTemplateSettings";
 import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
 import AuditMasterConfig from "./pages/AuditMasterConfig";
 import AuditWorksheetPageWrapper from "./pages/AuditWorksheetPageWrapper";
+import AuditTracker from "./pages/AuditTracker";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 
 const queryClient = new QueryClient({
@@ -166,8 +169,10 @@ const App = () => (
               <Route path="/audit/:clientId/import-trial-balance" element={<ImportTrialBalance />} />
               <Route path="/audit/3cd" element={<Form3CD />} />
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
+              <Route path="/audit/3reports" element={<Form3Reports />} />
               <Route path="/audit/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/master-config" element={<AuditMasterConfig />} />
+              <Route path="/audit/tracker" element={<AuditTracker />} />
               <Route path="/audit/:clientId/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />
@@ -196,6 +201,7 @@ const App = () => (
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
+              <Route path="/settings/tax-audit-templates" element={<TaxAuditTemplateSettings />} />
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />

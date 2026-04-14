@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.rollover-notes-previous-year]
 verify_jwt = false
+
+[functions.customer-sync]
+verify_jwt = false
+
+[functions.telegram-bot]
+verify_jwt = false

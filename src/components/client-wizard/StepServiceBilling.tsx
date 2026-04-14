@@ -82,10 +82,14 @@ interface Props {
   tanNumber: string;
   workGroupType: string;
   warnings: CrossStepWarning[];
+  /** Navigate to a wizard step by index (0 = Basic Info, 1 = Advanced Info, …) */
+  onGoToStep?: (stepIndex: number) => void;
+  /** Override firm_id for loading service categories (used when superadmin edits a client) */
+  firmId?: string;
 }
 
 export const StepServiceBilling = ({
-  data, onChange, errors, gstins, tanNumber, workGroupType, warnings,
+  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep, firmId: propFirmId,
 }: Props) => {
   const { user } = useAuth();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
@@ -96,6 +100,9 @@ export const StepServiceBilling = ({
   const set = <K extends keyof ServiceBillingData>(key: K, val: ServiceBillingData[K]) =>
     onChange({ ...data, [key]: val });
 
+  // Use the explicit firmId prop (for superadmin editing a client) or fall back to user's firm
+  const effectiveFirmId = propFirmId || user?.firm_id;
+
   /* Load service categories */
   useEffect(() => {
     const load = async () => {
@@ -105,13 +112,13 @@ export const StepServiceBilling = ({
         .select("id, name, frequency, linked_module")
         .eq("is_active", true)
         .order("sort_order", { ascending: true });
-      if (user?.firm_id) query = query.eq("firm_id", user.firm_id);
+      if (effectiveFirmId) query = query.eq("firm_id", effectiveFirmId);
       const { data: cats } = await query;
       if (cats) setCategories(cats);
       setLoading(false);
     };
     load();
-  }, [user?.firm_id]);
+  }, [effectiveFirmId]);
 
   /* ── Mode switch ── */
   const handleModeSwitch = (newMode: BillingMode) => {
@@ -183,15 +190,37 @@ export const StepServiceBilling = ({
 
   return (
     <div className="space-y-6">
-      {/* ── Cross-step warnings ── */}
-      {warnings.map((w) => (
-        <Alert key={w.type} variant="default" className="border-accent/50 bg-accent/10">
-          <AlertTriangle className="h-4 w-4 text-accent-foreground" />
-          <AlertDescription className="text-sm text-foreground">
-            {w.message}
-          </AlertDescription>
-        </Alert>
-      ))}
+      {/* ── Cross-step blocking errors (red — prevents saving until resolved) ── */}
+      {warnings.length > 0 && (
+        <div className="space-y-2">
+          {warnings.map((w) => (
+            <Alert key={w.type} variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span>{w.message}</span>
+                {onGoToStep && (w.type === "gst" || w.type === "tds") && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs font-semibold underline underline-offset-2 hover:no-underline"
+                    onClick={() => onGoToStep(0)}
+                  >
+                    ← Go to Step 1 — Basic Info
+                  </button>
+                )}
+                {onGoToStep && w.type === "itr" && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs font-semibold underline underline-offset-2 hover:no-underline"
+                    onClick={() => onGoToStep(1)}
+                  >
+                    ← Go to Step 2 — Advanced Info
+                  </button>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
+        </div>
+      )}
 
       {/* ── Mode toggle ── */}
       <div className="flex items-center gap-2">

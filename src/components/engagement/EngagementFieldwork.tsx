@@ -256,7 +256,7 @@ export function EngagementFieldwork({ engagement, client, teamUsers, currentUser
     <div className="flex gap-0 border rounded-lg overflow-hidden bg-card" style={{ minHeight: 600 }}>
       {/* LEFT: TREE */}
       <div className="w-[30%] min-w-[240px] border-r overflow-y-auto bg-muted/30 p-2">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Workpaper Index</h3>
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Audit Areas</h3>
         {SECTIONS.map(sec => {
           const isOpen = openSections.includes(sec.key);
           const allWPs = [...sec.wps, ...(customWPs[sec.key] || [])];

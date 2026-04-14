@@ -10,7 +10,6 @@
  *
  * Special row 8: Opening Balances
  *   — has sub-note "(Check With Previous Year Physical Audit Report Copy)"
- *   — immediately followed by a Closing Balances row (same structure)
  *
  * Header: '{auditTypeLabel} — YEAR {financialYear}'
  *         'Name of Client: {clientName}'
@@ -39,7 +38,6 @@ interface RowDef {
   label:       string;
   extentType:  ExtentType;
   subNote?:    string;       // note shown inside the row (italic text)
-  isSubRow?:   boolean;      // styling for closing-balances sub-row
   optional?:   boolean;
 }
 
@@ -54,10 +52,6 @@ const WORKSHEET_ROWS: RowDef[] = [
   {
     id: "opening_balances", sr: "8", label: "OPENING BALANCES",      extentType: "as_on",
     subNote: "(Check With Previous Year Physical Audit Report Copy)",
-  },
-  {
-    id: "closing_balances", sr: "↳", label: "CLOSING BALANCES",     extentType: "as_on",
-    isSubRow: true,
   },
   {
     id: "others",           sr: "9", label: "OTHERS",                extentType: "as_on",
@@ -193,20 +187,10 @@ export default function Worksheet({ data, engagementId }: Props) {
               return (
                 <React.Fragment key={row.id}>
                   {/* ── Main Row ── */}
-                  <tr
-                    className={cn(
-                      "align-top hover:bg-muted/10 transition-colors",
-                      row.isSubRow && "bg-teal-50/40"
-                    )}
-                  >
+                  <tr className="align-top hover:bg-muted/10 transition-colors">
                     {/* Sr.No */}
                     <td className="border border-border px-2 py-2 text-center align-middle">
-                      <span className={cn(
-                        "text-xs font-mono",
-                        row.isSubRow
-                          ? "text-teal-600 font-bold"
-                          : "text-muted-foreground"
-                      )}>
+                      <span className="text-xs font-mono text-muted-foreground">
                         {row.sr}
                       </span>
                     </td>
@@ -214,11 +198,8 @@ export default function Worksheet({ data, engagementId }: Props) {
                     {/* Name of Books */}
                     <td className="border border-border px-3 py-2 align-middle">
                       <div className="space-y-0.5">
-                        <p className={cn(
-                          "font-semibold text-xs uppercase tracking-wide",
-                          row.isSubRow ? "text-teal-700 pl-2" : "text-foreground"
-                        )}>
-                          {row.isSubRow && "↳ "}{row.label}
+                        <p className="font-semibold text-xs uppercase tracking-wide text-foreground">
+                          {row.label}
                           {row.optional && (
                             <span className="ml-1 text-[10px] font-normal normal-case text-muted-foreground">
                               (optional)

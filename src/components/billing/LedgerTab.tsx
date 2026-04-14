@@ -17,6 +17,10 @@ import { format } from "date-fns";
 import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -195,7 +199,7 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
@@ -206,10 +210,18 @@ function ClientLedgerView() {
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
+  // ── Email dialog state ────────────────────────────────────────────────
+  const [emailOpen,    setEmailOpen]    = useState(false);
+  const [emailTo,      setEmailTo]      = useState("");
+  const [emailCC,      setEmailCC]      = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailMsg,     setEmailMsg]     = useState("");
+  const [emailSending, setEmailSending] = useState(false);
+
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name"),
+        supabase.from("clients").select("id, name, email").eq("is_draft", false).is("deleted_at", null).order("name"),
         supabase.from("firms").select("id, name, logo_url").order("name"),
       ]);
       setClients(c || []);
@@ -402,6 +414,161 @@ function ClientLedgerView() {
     doc.save(`Ledger_${cName}_${fromDate}_${toDate}.pdf`);
   };
 
+  // ── Build PDF as Blob (shared by email send) ──────────────────────────
+  const buildClientLedgerPdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const DARK_BLUE = [26, 58, 92] as [number, number, number];
+    const cName = clients.find(c => c.id === clientId)?.name || "Client";
+    const isAllFirms = firmId === "all";
+    const fName = isAllFirms ? "All Firms" : (firms.find(f => f.id === firmId)?.name || "");
+    const selectedFirm = !isAllFirms ? firms.find(f => f.id === firmId) : null;
+    const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    await ensurePdfUnicodeFont(doc);
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 210, 22, "F");
+
+    let textStartX = 14;
+    if (logoBase64) {
+      try {
+        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
+        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
+        textStartX = 48;
+      } catch { /* ignore logo error */ }
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(13);
+    setPdfUnicodeFont(doc, "bold");
+    doc.text("CLIENT LEDGER STATEMENT", textStartX, 9);
+    doc.setFontSize(8);
+    setPdfUnicodeFont(doc, "normal");
+    doc.text(`Firm: ${fName}   |   Client: ${cName}`, textStartX, 15);
+    doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, textStartX, 20);
+
+    const head = isAllFirms
+      ? [["Firm", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
+      : [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
+
+    const tableRows: any[][] = rows.map(r => {
+      const baseRow = [
+        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
+        r.docNo, r.narration,
+        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
+        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
+        formatPdfCurrency(r.balance),
+      ];
+      return isAllFirms ? [r.firmName, ...baseRow] : baseRow;
+    });
+
+    const closingColSpan = isAllFirms ? 4 : 3;
+    tableRows.push([
+      { content: "CLOSING BALANCE", colSpan: closingColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: formatPdfCurrency(totalDebit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(totalCredit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(closingBalance), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+    ]);
+
+    const colStylesNormal = {
+      0: { cellWidth: 22, halign: "center" as const },
+      1: { cellWidth: 22, halign: "center" as const },
+      2: { cellWidth: 80 },
+      3: { cellWidth: 24, halign: "right" as const },
+      4: { cellWidth: 24, halign: "right" as const },
+      5: { cellWidth: 24, halign: "right" as const },
+    };
+    const colStylesAllFirms = {
+      0: { cellWidth: 28 },
+      1: { cellWidth: 20, halign: "center" as const },
+      2: { cellWidth: 18, halign: "center" as const },
+      3: { cellWidth: 58 },
+      4: { cellWidth: 22, halign: "right" as const },
+      5: { cellWidth: 22, halign: "right" as const },
+      6: { cellWidth: 22, halign: "right" as const },
+    };
+
+    autoTable(doc, {
+      startY: 26,
+      head,
+      body: tableRows,
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [248, 251, 255] },
+      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
+      margin: { left: 10, right: 10 },
+      didDrawPage: (hookData) => {
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        setPdfUnicodeFont(doc, "normal");
+        doc.setFontSize(7); doc.setTextColor(120, 130, 145);
+        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
+        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
+        doc.line(10, 287, 200, 287);
+      },
+    });
+
+    const pdfBlob = doc.output("blob");
+    const filename = `Ledger_${cName}_${fromDate}_${toDate}.pdf`;
+    return { blob: pdfBlob, filename };
+  };
+
+  // ── Open email compose dialog ─────────────────────────────────────────
+  const openEmailDialog = () => {
+    const cName = clients.find(c => c.id === clientId)?.name || "Client";
+    const clientEmail = clients.find(c => c.id === clientId)?.email || "";
+    setEmailTo(clientEmail);
+    setEmailCC("");
+    setEmailSubject(`Ledger Statement — ${cName} — ${fy}`);
+    setEmailMsg(
+      `Dear Sir/Madam,\n\nPlease find attached the Ledger Statement for ${cName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly review and confirm the balances at your earliest convenience.\n\nRegards`
+    );
+    setEmailOpen(true);
+  };
+
+  // ── Send ledger by email ──────────────────────────────────────────────
+  const handleEmailLedger = async () => {
+    if (!emailTo.trim()) {
+      toast({ title: "Please enter a recipient email address", variant: "destructive" });
+      return;
+    }
+    setEmailSending(true);
+    try {
+      const { blob: pdfBlob, filename: pdfFilename } = await buildClientLedgerPdfBlob();
+      const arrayBuffer = await pdfBlob.arrayBuffer();
+      const pdfBase64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+      );
+      const cName = clients.find(c => c.id === clientId)?.name || "Client";
+      const safeClient = cName.replace(/[^a-zA-Z0-9]/g, "_");
+      const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
+
+      for (const addr of toAddresses) {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type: "ledger_statement",
+            firm_id: firmId !== "all" ? firmId : undefined,
+            direct_email: addr,
+            payload: {
+              client_name: cName,
+              custom_subject: emailSubject || `Ledger Statement — ${cName} — ${fy}`,
+              custom_message: emailMsg,
+              pdf_base64: pdfBase64,
+              pdf_filename: pdfFilename || `Ledger_${safeClient}_${fromDate}_${toDate}.pdf`,
+              cc_note: emailCC.trim() ? `CC: ${emailCC}` : undefined,
+            },
+          },
+        });
+      }
+      toast({ title: `Ledger emailed to ${toAddresses.join(", ")}` });
+      setEmailOpen(false);
+    } catch (err: any) {
+      console.error("[ClientLedgerEmail]", err);
+      toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
+    }
+    setEmailSending(false);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-end">
@@ -498,12 +665,88 @@ function ClientLedgerView() {
                   handleDownloadPdf();
                 }
               }}>
-                <Share2 size={14} /> Send Ledger
+                <Share2 size={14} /> Send via WhatsApp
+              </Button>
+              <Button
+                size="sm"
+                className="gap-1 bg-[#1A2744] hover:bg-[#243460] text-white"
+                onClick={openEmailDialog}
+              >
+                <Mail size={14} /> Send via Email
               </Button>
             </div>
           )}
         </>
       )}
+
+      {/* ── Email Ledger Dialog ──────────────────────────────────────────── */}
+      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail size={18} /> Email Ledger Statement
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="cl-email-to">To <span className="text-destructive">*</span></Label>
+              <Input
+                id="cl-email-to"
+                type="email"
+                placeholder="client@example.com"
+                value={emailTo}
+                onChange={e => setEmailTo(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cl-email-cc">CC <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input
+                id="cl-email-cc"
+                type="email"
+                placeholder="cc@example.com"
+                value={emailCC}
+                onChange={e => setEmailCC(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cl-email-subject">Subject</Label>
+              <Input
+                id="cl-email-subject"
+                value={emailSubject}
+                onChange={e => setEmailSubject(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="cl-email-msg">Message</Label>
+              <Textarea
+                id="cl-email-msg"
+                rows={5}
+                value={emailMsg}
+                onChange={e => setEmailMsg(e.target.value)}
+                className="text-sm"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Download size={12} /> PDF ledger will be auto-attached.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSending}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-[#1A2744] hover:bg-[#243460] text-white gap-1"
+              onClick={handleEmailLedger}
+              disabled={emailSending}
+            >
+              {emailSending
+                ? <><span className="animate-spin mr-1">⏳</span> Sending…</>
+                : <><Mail size={14} /> Send Email</>
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -524,6 +767,14 @@ function GroupLedgerView() {
   const [data, setData] = useState<{ clientName: string; entries: any[] }[]>([]);
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+
+  // ── Email dialog state ──────────────────────────────────────────────
+  const [emailOpen, setEmailOpen]       = useState(false);
+  const [emailTo, setEmailTo]           = useState("");
+  const [emailCC, setEmailCC]           = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailMsg, setEmailMsg]         = useState("");
+  const [emailSending, setEmailSending] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -585,6 +836,193 @@ function GroupLedgerView() {
     if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
     if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
     return "";
+  };
+
+  // ── Shared PDF builder — used by both Download and Email ──────────
+  const buildGroupLedgerPdfBlob = async (): Promise<Blob> => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+    const isAllFirms = firmIds[0] === "all" || firmIds.length === 0;
+    const selectedFirmNames = isAllFirms
+      ? "All Firms"
+      : firms.filter(f => firmIds.includes(f.id)).map(f => f.name).join(", ");
+
+    const singleFirm = !isAllFirms && firmIds.length === 1 ? firms.find(f => f.id === firmIds[0]) : null;
+    const logoBase64 = singleFirm?.logo_url ? await loadLogoBase64(singleFirm.logo_url) : null;
+
+    const firmNameMap: Record<string, string> = {};
+    firms.forEach(f => { firmNameMap[f.id] = f.name; });
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    await ensurePdfUnicodeFont(doc);
+    const DARK_BLUE = [26, 58, 92] as [number, number, number];
+    const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 297, 22, "F");
+
+    let textStartX = 14;
+    if (logoBase64) {
+      try {
+        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
+        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
+        textStartX = 48;
+      } catch { /* ignore logo error */ }
+    }
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    setPdfUnicodeFont(doc, "bold");
+    doc.text("GROUP LEDGER STATEMENT", textStartX, 10);
+    doc.setFontSize(9);
+    setPdfUnicodeFont(doc, "normal");
+    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
+    doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
+
+    const tableHead = isAllFirms
+      ? [["Firm", "Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
+      : [["Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
+
+    const subtotalColSpan = isAllFirms ? 5 : 4;
+    const getDocNoLocal = (e: any) => {
+      if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
+      if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
+      return "";
+    };
+
+    const tableRows: any[][] = [];
+    data.forEach(({ clientName, entries }) => {
+      let bal = 0;
+      entries.forEach((e: any) => {
+        const d = Number(e.debit_amount) || 0;
+        const c = Number(e.credit_amount) || 0;
+        bal += d - c;
+        const rowBase = [
+          clientName,
+          e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
+          getDocNoLocal(e),
+          e.narration || "",
+          d > 0 ? formatPdfCurrency(d) : "—",
+          c > 0 ? formatPdfCurrency(c) : "—",
+          formatPdfCurrency(bal),
+        ];
+        if (isAllFirms) tableRows.push([firmNameMap[e.firm_id || ""] || "", ...rowBase]);
+        else tableRows.push(rowBase);
+      });
+      const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
+      const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
+      tableRows.push([
+        { content: `Subtotal — ${clientName}`, colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
+        { content: formatPdfCurrency(subtotalD), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency(subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency(subtotalD - subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+      ]);
+    });
+
+    const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
+    const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
+    tableRows.push([
+      { content: "GRAND TOTAL", colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
+      { content: formatPdfCurrency(grandD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandD - grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+    ]);
+
+    const colStylesNormal = {
+      0: { cellWidth: 40 }, 1: { cellWidth: 22, halign: "center" as const }, 2: { cellWidth: 22, halign: "center" as const },
+      3: { cellWidth: 70 }, 4: { cellWidth: 28, halign: "right" as const }, 5: { cellWidth: 28, halign: "right" as const }, 6: { cellWidth: 30, halign: "right" as const },
+    };
+    const colStylesAllFirms = {
+      0: { cellWidth: 30 }, 1: { cellWidth: 35 }, 2: { cellWidth: 20, halign: "center" as const }, 3: { cellWidth: 20, halign: "center" as const },
+      4: { cellWidth: 60 }, 5: { cellWidth: 27, halign: "right" as const }, 6: { cellWidth: 27, halign: "right" as const }, 7: { cellWidth: 28, halign: "right" as const },
+    };
+
+    autoTable(doc, {
+      startY: 26,
+      head: tableHead,
+      body: tableRows,
+      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
+      alternateRowStyles: { fillColor: [248, 251, 255] },
+      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
+      margin: { left: 10, right: 10 },
+      didDrawPage: (hookData) => {
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        setPdfUnicodeFont(doc, "normal");
+        doc.setFontSize(7);
+        doc.setTextColor(120, 130, 145);
+        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
+        doc.setDrawColor(...DARK_BLUE);
+        doc.setLineWidth(0.5);
+        doc.line(10, 202, 287, 202);
+      },
+    });
+
+    return doc.output("blob");
+  };
+
+  // ── Open email dialog — pre-fill subject ────────────────────────────
+  const openEmailDialog = () => {
+    const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+    setEmailSubject(`Group Ledger Statement — ${groupName}`);
+    setEmailMsg(`Dear Sir/Madam,\n\nPlease find attached the Group Ledger Statement for ${groupName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly confirm the balances at your earliest.\n\nRegards,\nV J Desai & Co.`);
+    setEmailTo("");
+    setEmailCC("");
+    setEmailOpen(true);
+  };
+
+  // ── Send group ledger by email ──────────────────────────────────────
+  const handleEmailLedger = async () => {
+    if (!emailTo.trim()) {
+      toast({ title: "Please enter a recipient email address", variant: "destructive" });
+      return;
+    }
+    setEmailSending(true);
+    try {
+      toast({ title: "Generating PDF…" });
+      const pdfBlob = await buildGroupLedgerPdfBlob();
+
+      // Convert Blob → base64 string
+      const pdfBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(pdfBlob);
+      });
+
+      const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+      const firmId = (firmIds.length > 0 && firmIds[0] !== "all") ? firmIds[0] : (firms[0]?.id ?? "");
+      const safeGroup = groupName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40);
+
+      const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
+      const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
+
+      // Send to each To address (CC is included in the message text for now)
+      for (const addr of toAddresses) {
+        await supabase.functions.invoke("send-notification", {
+          body: {
+            type: "ledger_statement",
+            firm_id: firmId,
+            direct_email: addr,
+            payload: {
+              client_name: groupName,
+              custom_subject: emailSubject || `Group Ledger Statement — ${groupName}`,
+              custom_message: emailMsg,
+              pdf_base64: pdfBase64,
+              pdf_filename: `GroupLedger_${safeGroup}_${fromDate}_${toDate}.pdf`,
+              ...(ccAddresses.length > 0 ? { cc_note: `CC: ${ccAddresses.join(", ")}` } : {}),
+            },
+          },
+        });
+      }
+
+      toast({ title: `Ledger emailed to ${toAddresses.join(", ")}` });
+      setEmailOpen(false);
+    } catch (err: any) {
+      console.error("[GroupLedgerEmail]", err);
+      toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
+    }
+    setEmailSending(false);
   };
 
   const handleDownloadXlsx = () => {
@@ -930,7 +1368,67 @@ function GroupLedgerView() {
             <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadZip} className="gap-1"><Archive size={14} /> Download All Invoices (ZIP)</Button>
+            <Button variant="outline" size="sm" onClick={openEmailDialog} className="gap-1"><Mail size={14} /> Email Ledger</Button>
           </div>
+
+          {/* ── Email Ledger Dialog ─────────────────────────────────────── */}
+          <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2"><Mail size={18} /> Email Group Ledger</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-1">
+                  <Label htmlFor="gl-email-to">To <span className="text-destructive">*</span></Label>
+                  <Input
+                    id="gl-email-to"
+                    type="text"
+                    placeholder="email@example.com, another@example.com"
+                    value={emailTo}
+                    onChange={e => setEmailTo(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Separate multiple addresses with commas</p>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="gl-email-cc">CC <span className="text-muted-foreground">(optional)</span></Label>
+                  <Input
+                    id="gl-email-cc"
+                    type="text"
+                    placeholder="cc@example.com"
+                    value={emailCC}
+                    onChange={e => setEmailCC(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="gl-email-subject">Subject</Label>
+                  <Input
+                    id="gl-email-subject"
+                    type="text"
+                    value={emailSubject}
+                    onChange={e => setEmailSubject(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="gl-email-msg">Message</Label>
+                  <Textarea
+                    id="gl-email-msg"
+                    rows={5}
+                    value={emailMsg}
+                    onChange={e => setEmailMsg(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  📎 The Group Ledger PDF will be attached automatically.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSending}>Cancel</Button>
+                <Button onClick={handleEmailLedger} disabled={emailSending || !emailTo.trim()} className="gap-1">
+                  {emailSending ? "Sending…" : <><Mail size={14} /> Send Email</>}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>

@@ -19,7 +19,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Building, Bell, Shield, Users, BookOpen, CreditCard,
-  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink,
+  Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink, FileSpreadsheet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -315,12 +315,13 @@ const SettingsPage = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="team" className="text-xs">Team</TabsTrigger>
           <TabsTrigger value="notifications" className="text-xs">Notifications</TabsTrigger>
           <TabsTrigger value="scrutiny-rules" className="text-xs">Scrutiny Rules</TabsTrigger>
           <TabsTrigger value="coa" className="text-xs">COA Mappings</TabsTrigger>
           <TabsTrigger value="billing" className="text-xs">Billing</TabsTrigger>
+          <TabsTrigger value="tax-audit" className="text-xs">Tax Audit</TabsTrigger>
         </TabsList>
 
         {/* ─── TAB 1: Team ─── */}
@@ -554,6 +555,31 @@ const SettingsPage = () => {
                   {billingSaving ? "Saving…" : "Save Billing Settings"}
                 </Button>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ─── TAB 6: Tax Audit Templates ─── */}
+        <TabsContent value="tax-audit">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="h-5 w-5" /> Tax Audit Templates</CardTitle>
+              <CardDescription>Manage master XLSX templates for Form 3CA-3CD and 3CB-3CD exports.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link
+                to="/settings/tax-audit-templates"
+                className="flex items-center gap-3 p-4 border border-border rounded-lg hover:border-primary/40 transition-colors group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center text-emerald-600">
+                  <FileSpreadsheet size={20} />
+                </div>
+                <div className="flex-1">
+                  <p className="font-medium text-foreground">Go to Tax Audit Templates</p>
+                  <p className="text-sm text-muted-foreground">View template details, cell-map counts, and test XLSX export.</p>
+                </div>
+                <ChevronRight className="text-muted-foreground group-hover:text-primary transition-colors" size={18} />
+              </Link>
             </CardContent>
           </Card>
         </TabsContent>

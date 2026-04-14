@@ -22,3 +22,24 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment / secrets — never commit these
+.env
+.env.*
+**/.env
+tally-xml-service/.env
+
+# Claude Code local settings (personal, not for team)
+.claude/settings.local.json
+.claude/launch.json
+
+# Supabase temp build files
+supabase/.temp/
+
+# Temp / scratch files
+public/tb_b64.txt
+test_export_v2.xlsx
+excel_screenshot.png
+export_screenshot.png
+export_verification.html
+CAFlow_3CD_Clause_Mapping_Implementation_Prompt.docx

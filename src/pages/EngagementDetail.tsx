@@ -98,6 +98,16 @@ export default function EngagementDetail() {
     return map[s] ?? 0;
   }
 
+  // Fix (Issue 4): isCorporate computed from BOTH engagement.entity_type and client.entity_type.
+  // engagement.clients is NOT available here (fetched with select("*"), no join), so use
+  // the separate `client` state variable that IS populated.
+  const isCorporate = (() => {
+    const engEt = (engagement?.entity_type || "").toLowerCase();
+    const clientEt = (client?.entity_type || "");
+    const CORPORATE_CLIENT_TYPES = ["Private Ltd", "Public Ltd", "Private Limited", "Public Limited"];
+    return engEt === "company" || CORPORATE_CLIENT_TYPES.includes(clientEt);
+  })();
+
   if (loading) {
     return (
       <div className="p-6 space-y-4">
@@ -183,11 +193,16 @@ export default function EngagementDetail() {
           <TabsTrigger value="risk">Risk Assessment</TabsTrigger>
           <TabsTrigger value="programme">Audit Programme</TabsTrigger>
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
-          {/* Fix (Issue 12): Show CARO tab for all corporate entities — don't gate on caro_applicable flag */}
-          {(engagement.entity_type === "company" || engagement.clients?.entity_type === "Private Ltd" || engagement.clients?.entity_type === "Public Ltd") && (
-            <TabsTrigger value="caro">CARO</TabsTrigger>
+          {/* Fix (Issue 4): Show CARO tab only for corporate entities (Private/Public Ltd) */}
+          {isCorporate && (
+            <TabsTrigger value="caro">CARO 2020</TabsTrigger>
           )}
-          <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+          {/* Fix (Issue 4): Notes to Accounts — show for corporate; non-corporate gets
+              a simplified version. Only render once client is loaded to ensure isCorporate
+              is computed correctly. */}
+          <TabsTrigger value="notes">
+            {isCorporate ? "Notes to Accounts" : "Notes to Accounts"}
+          </TabsTrigger>
           <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
 
@@ -217,7 +232,8 @@ export default function EngagementDetail() {
           />
         </TabsContent>
 
-        {(engagement.entity_type === "company" || engagement.clients?.entity_type === "Private Ltd" || engagement.clients?.entity_type === "Public Ltd") && (
+        {/* Fix (Issue 4): CARO tab content — gated on isCorporate */}
+        {isCorporate && (
           <TabsContent value="caro">
             <EngagementCARO
               engagement={engagement}
@@ -228,9 +244,11 @@ export default function EngagementDetail() {
         )}
 
         <TabsContent value="notes">
+          {/* Fix (Issue 4): Pass isCorporate so component can filter corporate-only notes */}
           <EngagementNotesToAccounts
             engagement={engagement}
             client={client}
+            isCorporate={isCorporate}
             onUpdate={fetchData}
           />
         </TabsContent>

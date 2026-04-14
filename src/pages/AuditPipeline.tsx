@@ -37,7 +37,7 @@ import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
 import PipelineStage7Combined from "@/components/pipeline/PipelineStage7Combined";
-import Form3CD from "@/pages/Form3CD";
+import Form3Reports from "@/pages/Form3Reports";
 
 // ─── Constants ───
 const STAGES = [
@@ -73,10 +73,25 @@ const AUDIT_TYPES = [
 ];
 
 const PERIOD_TYPES = [
-  { value: "annual", label: "Annual" },
-  { value: "half_yearly", label: "Half-Yearly" },
-  { value: "quarterly", label: "Quarterly" },
+  { value: "annual",     label: "Full Year"  },
+  { value: "half_yearly", label: "Half Year" },
+  { value: "quarterly",  label: "Quarter"    },
+  { value: "custom",     label: "Custom"     },
 ];
+
+// ─── Filter audit types by client's audit setup ───
+function getAuditOptionsForClient(client: any) {
+  if (!client) return AUDIT_TYPES;
+  const opts: { value: string; label: string }[] = [];
+  const hasStat = !!client.statutory_audit_applicable;
+  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
+  if (hasStat)          opts.push({ value: "statutory",  label: "Statutory Audit" });
+  if (hasTax)           opts.push({ value: "tax_audit",  label: "Tax Audit" });
+  if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
+  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
+  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  return opts;
+}
 
 type StageStatus = "not_started" | "in_progress" | "complete" | "locked";
 
@@ -158,24 +173,67 @@ export default function AuditPipeline() {
     enabled: !!user?.firm_id,
   });
 
-  // ─── Audit-eligible clients ───
+  // ─── Stage 1 form state — must be declared before any useQuery that references form1A ───
+  const [form1A, setForm1A] = useState({
+    client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
+  });
+  const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
+  const [planning, setPlanning] = useState({
+    materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
+    key_areas: "", risk_profile: "medium", risk_justification: "",
+    expected_completion: "", review_dates: "",
+  });
+
+  // ─── Audit-eligible clients — two-step query for reliability ───
+  // Step 1: Fetch client_ids from client_fy_classifications with classification = 'Audit'
+  //         for the selected FY (case-insensitive via ilike).
+  // Step 2: Fetch matching client rows directly — avoids nested-join filtering issues
+  //         that can silently drop the `name` field in Supabase PostgREST.
+  // Fallback: also include clients with statutory_audit_applicable = true on the
+  //           clients table (for clients saved before FY-classification was introduced).
   const { data: eligibleClients } = useQuery({
-    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
+    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id, form1A.financial_year],
     queryFn: async () => {
-      let query = supabase
+      const firmId = user?.firm_id ?? "";
+
+      // ── Step 1a: IDs from FY classification table ──────────────────────────
+      let classQuery = supabase
+        .from("client_fy_classifications")
+        .select("client_id")
+        .ilike("classification", "audit")
+        .eq("financial_year", form1A.financial_year);
+      const { data: classRows } = await classQuery;
+      const fyClientIds = (classRows || []).map((r: any) => r.client_id as string).filter(Boolean);
+
+      // ── Step 2: Fetch client rows with name, entity_type ──────────────────
+      let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
         .eq("is_draft", false)
+        .eq("is_active", true)
         .is("deleted_at", null)
-        .order("name");
+        .order("name", { ascending: true });
 
-      if (user?.firm_id) {
-        query = query.eq("firm_id", user.firm_id);
-      }
+      if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
 
-      const { data, error } = await query;
-      if (error) throw error;
-      return data || [];
+      const { data: allFirmClients } = await clientQuery;
+
+      const allClients = (allFirmClients || []) as any[];
+
+      // Include client if: in FY classification set OR has audit-applicable flags
+      const eligible = allClients.filter(
+        (c: any) =>
+          fyClientIds.includes(c.id) ||
+          c.statutory_audit_applicable === true ||
+          (c.tax_audit_type != null && c.tax_audit_type !== ""),
+      );
+
+      return eligible.map((c: any) => ({
+        id:          c.id as string,
+        name:        (c.name as string) ?? "",
+        entity_type: (c.entity_type as string) ?? "",
+      }));
     },
     enabled: !!user?.id,
   });
@@ -203,6 +261,30 @@ export default function AuditPipeline() {
       return data || [];
     },
     enabled: !!user?.id,
+  });
+
+  // ─── Partners from the PRACTICE FIRM's user list ───────────────────────────
+  // Shows all users with role partner_ca or firm_admin in the current firm.
+  // This drives the "Engagement Partner" dropdown — it is NOT tied to the
+  // selected audit_firm (which is the external audit firm, not the practice firm).
+  const { data: partnersForFirm = [] } = useQuery({
+    queryKey: ["practice-firm-partners", user?.firm_id],
+    queryFn: async () => {
+      if (!user?.firm_id) return [];
+      const { data } = await supabase
+        .from("users")
+        .select("id, name, role")
+        .eq("firm_id", user.firm_id)
+        .in("role", ["partner_ca", "firm_admin"])
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+      return (data || []).map((u: any) => ({
+        id:           u.id as string,
+        partner_name: (u.name as string) ?? u.id,
+        membership_no: null as string | null,
+      }));
+    },
+    enabled: !!user?.firm_id,
   });
 
   // ─── Selected engagement detail ───
@@ -250,18 +332,6 @@ export default function AuditPipeline() {
     setActiveStage(currentStage);
   }, [currentStage, searchParams]);
 
-  // ─── Stage 1 form state ───
-  const [form1A, setForm1A] = useState({
-    client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "",
-  });
-  const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
-  const [planning, setPlanning] = useState({
-    materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
-    key_areas: "", risk_profile: "medium", risk_justification: "",
-    expected_completion: "", review_dates: "",
-  });
-
   // Load form from engagement
   useEffect(() => {
     if (!engagement) return;
@@ -273,6 +343,7 @@ export default function AuditPipeline() {
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
       audit_firm_id: engagement.audit_firm_id || "",
+      partner_id: engagement.partner_id || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -371,6 +442,8 @@ export default function AuditPipeline() {
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
         audit_firm_id: form1A.audit_firm_id || null,
+        // partner_id FK → users; only set when partner is a system user (audit_registration IDs may differ)
+        partner_id: form1A.partner_id || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -437,7 +510,7 @@ export default function AuditPipeline() {
     setSaving(false);
   }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses]);
 
-  const partners = (firmUsers || []).filter(u => u.role === "partner");
+  const partners = (firmUsers || []).filter(u => ["partner_ca", "firm_admin"].includes(u.role));
   const grouped = useMemo(() => {
     const map = new Map<string, any[]>();
     (engagements || []).forEach(e => {
@@ -917,8 +990,17 @@ export default function AuditPipeline() {
                   )}
                 </Tabs>
               </div>
+<<<<<<< HEAD
             );
           })()
+=======
+              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+              </Button>
+            </div>
+            <Form3Reports engagementIdProp={selectedEngId} />
+          </div>
+>>>>>>> 5aa85d0b47649aede9868d861433879624b3a82c
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-6">
@@ -941,7 +1023,10 @@ export default function AuditPipeline() {
           <div className="grid gap-4">
             <div>
               <Label>Audit Firm <span className="text-destructive">*</span></Label>
-              <Select value={form1A.audit_firm_id} onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v }))}>
+              <Select
+                value={form1A.audit_firm_id}
+                onValueChange={v => setForm1A(f => ({ ...f, audit_firm_id: v, partner_id: "" }))}
+              >
                 <SelectTrigger><SelectValue placeholder="Select audit firm" /></SelectTrigger>
                 <SelectContent>
                   {(auditFirmsForEng || []).length === 0 ? (
@@ -954,6 +1039,33 @@ export default function AuditPipeline() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Engagement Partner — from practice firm's users (role: partner_ca / firm_admin) */}
+            <div>
+              <Label>Engagement Partner</Label>
+              <Select
+                value={form1A.partner_id}
+                onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
+                disabled={partnersForFirm.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners found" : "Select partner"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {partnersForFirm.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.partner_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {partnersForFirm.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Add partners in Settings → Users (role: Partner/CA)
+                </p>
+              )}
+            </div>
+
             <div>
               <Label>Client *</Label>
               <Select value={form1A.client_id} onValueChange={v => {
@@ -982,11 +1094,36 @@ export default function AuditPipeline() {
               </Select>
             </div>
             <div>
-              <Label>Audit Type</Label>
-              <Select value={form1A.audit_type} onValueChange={v => setForm1A(f => ({ ...f, audit_type: v }))}>
+              <Label>Period Type</Label>
+              <Select value={form1A.audit_period_type} onValueChange={v => setForm1A(f => ({ ...f, audit_period_type: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{PERIOD_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div>
+              <Label>Audit Type</Label>
+              {(() => {
+                const selClient = (eligibleClients || []).find(c => c.id === form1A.client_id);
+                const opts = getAuditOptionsForClient(selClient);
+                if (form1A.client_id && opts.length === 0) {
+                  return (
+                    <p className="text-xs text-amber-600 mt-1">
+                      No audit services enabled for this client. Configure in Client → Audit Setup.
+                    </p>
+                  );
+                }
+                return (
+                  <Select value={form1A.audit_type} onValueChange={v => setForm1A(f => ({ ...f, audit_type: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select audit type" /></SelectTrigger>
+                    <SelectContent>
+                      {opts.length === 0
+                        ? AUDIT_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)
+                        : opts.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)
+                      }
+                    </SelectContent>
+                  </Select>
+                );
+              })()}
             </div>
             <div>
               <Label>Entity Type</Label>
