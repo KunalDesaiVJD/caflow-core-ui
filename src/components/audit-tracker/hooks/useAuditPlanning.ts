@@ -164,23 +164,20 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       if (commErr) console.warn("[useAuditPlanning] audit_communication auto-create:", commErr.message);
     }
 
-    // Part B — Auto-create audit_status row as "Scheduled" (ON CONFLICT DO NOTHING)
-    // Uses upsert with ignoreDuplicates so re-scheduling the same client never throws.
+    // Part B — Auto-create audit_status row as "Scheduled".
+    // Plain INSERT so we don't depend on a specific DB unique-constraint name
+    // existing.  Duplicate-key (23505) is silently ignored — the client already
+    // has a status row and we must not overwrite existing data.
     {
-      const { error: statusErr } = await supabase.from("audit_status").upsert(
-        {
-          firm_id:                  firmId,
-          client_id:                input.client_id,
-          party_name:               input.client_name,
-          audit_status:             "Scheduled",
-          physical_audit_conducted: "No",
-          accounting_data:          "No",
-          scanned:                  "No",
-        },
-        { onConflict: "firm_id,client_id", ignoreDuplicates: true }
-      );
-      // If the table has no (firm_id, client_id) unique index, fall back to a
-      // plain insert and silently ignore duplicate-key errors (code 23505).
+      const { error: statusErr } = await supabase.from("audit_status").insert({
+        firm_id:                  firmId,
+        client_id:                input.client_id,
+        party_name:               input.client_name,
+        audit_status:             "Scheduled",
+        physical_audit_conducted: "No",
+        accounting_data:          "No",
+        scanned:                  "No",
+      });
       if (statusErr && (statusErr as any).code !== "23505") {
         console.warn("[useAuditPlanning] audit_status auto-create:", statusErr.message);
       }
