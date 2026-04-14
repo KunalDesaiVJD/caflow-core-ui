@@ -200,7 +200,6 @@ export default function AuditPipeline() {
         .from("clients")
         .select("id, name, entity_type")
         .eq("is_draft", false)
-        .eq("is_active", true)
         .is("deleted_at", null)
         .order("name", { ascending: true });
 
