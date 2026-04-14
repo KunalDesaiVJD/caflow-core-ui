@@ -225,11 +225,20 @@ export default function AuditPipeline() {
       const allClients = (allFirmClients || []) as any[];
 
       // Include client if: in FY classification set OR has audit-applicable flags
+      // OR has client_classification containing "audit" (case-insensitive)
       const eligible = allClients.filter(
-        (c: any) =>
-          fyClientIds.includes(c.id) ||
-          c.statutory_audit_applicable === true ||
-          (c.tax_audit_type != null && c.tax_audit_type !== ""),
+        (c: any) => {
+          if (fyClientIds.includes(c.id)) return true;
+          if (c.statutory_audit_applicable === true) return true;
+          if (c.tax_audit_type != null && c.tax_audit_type !== "") return true;
+          // Check client_classification JSON field (may be string "audit" or array)
+          const cc = c.client_classification;
+          if (cc) {
+            const ccStr = typeof cc === "string" ? cc : JSON.stringify(cc);
+            if (ccStr.toLowerCase().includes("audit")) return true;
+          }
+          return false;
+        }
       );
 
       return eligible.map((c: any) => ({
@@ -267,9 +276,8 @@ export default function AuditPipeline() {
   });
 
   // ─── Partners from the PRACTICE FIRM's user list ───────────────────────────
-  // Shows all users with role partner_ca or firm_admin in the current firm.
-  // This drives the "Engagement Partner" dropdown — it is NOT tied to the
-  // selected audit_firm (which is the external audit firm, not the practice firm).
+  // Shows ALL users with partner/admin role — is_active intentionally NOT
+  // filtered here so that partners marked inactive still appear in the dropdown.
   const { data: partnersForFirm = [] } = useQuery({
     queryKey: ["practice-firm-partners", user?.firm_id],
     queryFn: async () => {
@@ -278,8 +286,7 @@ export default function AuditPipeline() {
         .from("users")
         .select("id, name, role")
         .eq("firm_id", user.firm_id)
-        .in("role", ["partner_ca", "firm_admin"])
-        .eq("is_active", true)
+        .in("role", ["partner_ca", "firm_admin", "ca", "partner"])
         .order("name", { ascending: true });
       return (data || []).map((u: any) => ({
         id:           u.id as string,
@@ -584,7 +591,7 @@ export default function AuditPipeline() {
                       <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                       <SelectContent>
                         {(eligibleClients || []).length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Add a client first.</div>
+                          <div className="px-3 py-2 text-sm text-muted-foreground">No audit clients found. Set Classification = Audit in Client Setup.</div>
                         ) : (
                           (eligibleClients || []).map(c => (
                             <SelectItem key={c.id} value={c.id}>
@@ -1082,7 +1089,7 @@ export default function AuditPipeline() {
               </Select>
               {partnersForFirm.length === 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  Add partners in Settings → Users (role: Partner/CA)
+                  No partners found. Ensure users have role Partner/CA or Firm Admin in Settings → Users.
                 </p>
               )}
             </div>
@@ -1096,7 +1103,7 @@ export default function AuditPipeline() {
                 <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
                   {(eligibleClients || []).length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Add a client first.</div>
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit clients found. Set Classification = Audit in Client Setup.</div>
                   ) : (
                     (eligibleClients || []).map(c => (
                       <SelectItem key={c.id} value={c.id}>
