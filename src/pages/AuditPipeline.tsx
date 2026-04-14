@@ -835,6 +835,12 @@ export default function AuditPipeline() {
             const engClient = engagement?.clients as any;
             const et = (engagement?.entity_type || engClient?.entity_type || "").toLowerCase().trim();
             const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+            // Extract FY end year: "2025-26" → "2026", "2024-25" → "2025"
+            const fyEndYear = (() => {
+              const fy = engagement?.financial_year || "";
+              const m = fy.match(/\d{4}-(\d{2})/);
+              return m ? `20${m[1]}` : (fy || "—");
+            })();
             const isTaxAuditEng = engagement?.requires_3ca || engagement?.requires_3cb || engagement?.requires_3cd;
 
             // Companies: always 3CA + 3CD. Non-companies: user chooses via radio.
@@ -934,7 +940,7 @@ export default function AuditPipeline() {
                               <input type="date" defaultValue={new Date().toISOString().slice(0, 10)} className="border-b border-input bg-transparent text-sm px-1 focus:outline-none" />{" "}
                               together with a copy of the audited Profit and Loss Account (or Income and Expenditure
                               Account) for the year ended{" "}
-                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong> and the Balance
+                              <strong>31st March, {fyEndYear}</strong> and the Balance
                               Sheet as at that date.
                             </p>
                             <p>
@@ -969,7 +975,7 @@ export default function AuditPipeline() {
                           <div className="max-w-3xl mx-auto space-y-4 text-sm leading-relaxed text-justify">
                             <p>
                               <strong>1.</strong> I/We have examined the balance sheet as at{" "}
-                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong>, and the
+                              <strong>31st March, {fyEndYear}</strong>, and the
                               Profit and Loss Account for the year ended on that date, attached herewith, of{" "}
                               <span className="font-semibold text-primary">{engClient?.name || "—"}</span>
                               {engClient?.pan && (
@@ -980,7 +986,7 @@ export default function AuditPipeline() {
                               <strong>2.</strong> In my/our opinion and to the best of my/our information and according
                               to explanations given to me/us, the said accounts give a true and fair view of the state of
                               the affairs of the assessee as at 31st March,{" "}
-                              {engagement?.financial_year?.slice(-4) || "—"} and of its profit/loss for the year ended on
+                              {fyEndYear} and of its profit/loss for the year ended on
                               that date.
                             </p>
                             <p>
