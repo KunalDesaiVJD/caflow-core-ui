@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2, History } from "lucide-react";
+import { Check, X, Trash2, Loader2, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
@@ -43,7 +43,14 @@ const STATUS_COLORS: Record<string, string> = {
   "OTHERS (SPECIFY)":        "bg-pink-100 text-pink-700",
 };
 
-/** ISSUE-19d: broad company/corporate check — matches all common entity-type formats */
+/** CP-07 BUG D: statutory / both engagement type → always show UDIN Statutory */
+function isStatutoryOrBoth(engType: string | null | undefined) {
+  if (!engType) return false;
+  const t = engType.toLowerCase().trim();
+  return t === "statutory" || t === "both";
+}
+
+/** Fallback: corporate entity type also shows UDIN Statutory */
 function isCorporate(entityType: string | null | undefined) {
   if (!entityType) return false;
   const et = entityType.toLowerCase().replace(/_/g, " ").trim();
@@ -276,10 +283,9 @@ export default function AuditStatusRow({
 }: Props) {
 
   // ── Edit state ───────────────────────────────────────────────────────────────
-  const [editing,    setEditing]    = useState(!!isNew);
-  const [draft,      setDraft]      = useState<RowDraft>(buildDraft(row, clients));
-  const [saving,     setSaving]     = useState(false);
-  const [confirmDel, setConfirmDel] = useState(false);
+  const [editing, setEditing] = useState(!!isNew);
+  const [draft,   setDraft]   = useState<RowDraft>(buildDraft(row, clients));
+  const [saving,  setSaving]  = useState(false);
 
   // Auto-start edit for new rows
   useEffect(() => {
@@ -312,7 +318,8 @@ export default function AuditStatusRow({
 
   // ── View-mode entity type (from persisted client_id) ─────────────────────────
   const viewEntityType = clients.find(c => c.id === row.client_id)?.entity_type ?? null;
-  const showUdinStatutoryView = isCorporate(viewEntityType);
+  // CP-07 BUG D: show for statutory/both engagement_type OR corporate entity
+  const showUdinStatutoryView = isStatutoryOrBoth(row.engagement_type) || isCorporate(viewEntityType);
 
   // ── Edit handlers ─────────────────────────────────────────────────────────────
 
@@ -382,7 +389,8 @@ export default function AuditStatusRow({
   }
 
   // ── Convenience aliases ───────────────────────────────────────────────────────
-  const showUdinStatutoryEdit = isCorporate(draft.entityType);
+  // CP-07 BUG D: show for statutory/both engagement_type OR corporate entity
+  const showUdinStatutoryEdit = isStatutoryOrBoth(row.engagement_type) || isCorporate(draft.entityType);
   const showOther = draft.audit_status === "OTHERS (SPECIFY)";
 
   const statusColor = STATUS_COLORS[row.audit_status || ""] || "bg-gray-100 text-gray-600";
@@ -592,46 +600,46 @@ export default function AuditStatusRow({
         )}
       </TCell>
 
-      {/* 20 · Actions: History + Delete (ISSUE-19b) */}
+      {/* 20 · Actions */}
       <TCell className="w-16 text-center">
-        {!isNew && (
+        {isNew ? (
+          /* BUG A — new row: explicit Save + Cancel buttons */
+          <div className="flex items-center justify-center gap-1">
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+              onClick={commitSave}
+              disabled={saving}
+              title="Save new row"
+            >
+              {saving
+                ? <Loader2 size={10} className="animate-spin" />
+                : <Check size={11} />}
+            </Button>
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
+              onClick={cancelEdit}
+              title="Discard new row"
+            >
+              <X size={11} />
+            </Button>
+          </div>
+        ) : (
+          /* BUG B + C — existing rows: Clock (history) + Trash (direct delete, no 2-step) */
           <div className="flex items-center justify-center gap-0.5">
-            {/* History */}
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
               onClick={() => onHistory?.(row.id)}
-              title="View change history"
+              title="View snapshot history"
             >
-              <History size={12} />
+              <Clock size={12} />
             </Button>
-
-            {/* Delete — two-step confirmation */}
-            {!confirmDel ? (
-              <Button size="sm" variant="ghost"
-                className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-                onClick={() => setConfirmDel(true)}
-                title="Delete row"
-              >
-                <Trash2 size={12} />
-              </Button>
-            ) : (
-              <>
-                <Button size="sm" variant="ghost"
-                  className="h-5 w-5 p-0 text-red-600 hover:bg-red-50"
-                  onClick={() => { onDelete(row.id); setConfirmDel(false); }}
-                  title="Confirm delete"
-                >
-                  <Check size={10} />
-                </Button>
-                <Button size="sm" variant="ghost"
-                  className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
-                  onClick={() => setConfirmDel(false)}
-                  title="Cancel delete"
-                >
-                  <X size={10} />
-                </Button>
-              </>
-            )}
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+              onClick={() => onDelete(row.id)}
+              title="Delete row"
+            >
+              <Trash2 size={12} />
+            </Button>
           </div>
         )}
       </TCell>

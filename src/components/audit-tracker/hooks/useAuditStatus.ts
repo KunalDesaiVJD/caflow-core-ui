@@ -37,6 +37,8 @@ export interface StatusEntry {
   remarks:                      string | null;
   engagement_id:                string | null;
   created_at:                   string;
+  // Joined from audit_engagements — used for UDIN Statutory visibility (BUG D)
+  engagement_type?:             string | null;
 }
 
 export type StatusPatch = Partial<Omit<StatusEntry, "id"|"firm_id"|"created_at">>;
@@ -64,9 +66,10 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
     if (!firmId && !isSuperadmin) { setLoading(false); return; }
     setLoading(true);
 
-    let q = supabase
+    let q = (supabase as any)
       .from("audit_status")
-      .select("*")
+      // left-join engagement_type for UDIN Statutory visibility (CP-07 BUG D)
+      .select("*, audit_engagements!left(engagement_type)")
       .order("created_at", { ascending: true });
     if (!isSuperadmin) q = q.eq("firm_id", firmId);
     const { data, error } = await q;
@@ -78,7 +81,12 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
       return;
     }
     setUseLs(false);
-    setRows((data as StatusEntry[]) || []);
+    // Flatten the nested engagement_type into each row
+    const rows: StatusEntry[] = ((data as any[]) || []).map(r => ({
+      ...r,
+      engagement_type: (r.audit_engagements as any)?.engagement_type ?? null,
+    }));
+    setRows(rows);
     setLoading(false);
   }, [firmId]);
 

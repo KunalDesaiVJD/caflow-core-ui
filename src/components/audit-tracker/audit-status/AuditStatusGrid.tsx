@@ -218,8 +218,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   const endIdx   = Math.min(page * PAGE_SIZE, filtered.length);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
+  // BUG A: keep form open on failure so the user can retry; only close on success.
   async function handleAddNew(patch: StatusPatch) {
-    await addRow({
+    const result = await addRow({
       client_id:                     patch.client_id                     ?? null,
       party_name:                    patch.party_name                    ?? null,
       physical_audit_conducted:      patch.physical_audit_conducted      ?? "No",
@@ -242,7 +243,11 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       remarks:                       patch.remarks                       ?? null,
       engagement_id:                 null,
     });
-    setAddingNew(false);
+    // Only close the new-row form when the insert actually succeeded
+    if (result !== null) {
+      setAddingNew(false);
+      setPage(1); // navigate to first page so user can see the new row
+    }
   }
 
   // ── Sort icon helper ──────────────────────────────────────────────────────
