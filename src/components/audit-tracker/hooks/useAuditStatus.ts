@@ -2,7 +2,9 @@
  * useAuditStatus
  *
  * CRUD for audit_status rows.
- * Falls back to localStorage when Supabase table doesn't exist yet.
+ * - Accepts selectedFY (e.g. "2024-25") to filter rows
+ * - Auto-populates virtual rows for audit_engagements that have no status row yet
+ * - Falls back to localStorage when Supabase table doesn't exist yet.
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -17,8 +19,8 @@ export interface StatusEntry {
   firm_id:                      string;
   client_id:                    string | null;
   party_name:                   string | null;
-  physical_audit_conducted:     string;   // "Yes" | "No"
-  accounting_data:              string;   // "Yes" | "No"
+  physical_audit_conducted:     string;
+  accounting_data:              string;
   audit_employees:              string | null;
   audit_report_prepared_by:     string | null;
   audit_status:                 string | null;
@@ -30,18 +32,21 @@ export interface StatusEntry {
   udin_statutory_audit:         string | null;
   udin_date:                    string | null;
   physical_report_received_date:string | null;
-  scanned:                      string;   // "Yes" | "No"
+  scanned:                      string;
   prepared_by:                  string | null;
   checked_by:                   string | null;
   uploaded_by:                  string | null;
   remarks:                      string | null;
   engagement_id:                string | null;
+  financial_year:               string | null;
   created_at:                   string;
-  // Joined from audit_engagements — used for UDIN Statutory visibility (BUG D)
+  // Joined from audit_engagements
   engagement_type?:             string | null;
+  /** true = row sourced from audit_engagement with no saved status yet */
+  isVirtual?:                   boolean;
 }
 
-export type StatusPatch = Partial<Omit<StatusEntry, "id"|"firm_id"|"created_at">>;
+export type StatusPatch = Partial<Omit<StatusEntry, "id"|"firm_id"|"created_at"|"isVirtual">>;
 
 // ─── localStorage helpers ────────────────────────────────────────────────────
 
@@ -56,7 +61,7 @@ function lsSave(firmId: string, data: StatusEntry[]) {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
+export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedFY?: string) {
   const { user } = useAuth();
   const [rows,    setRows]    = useState<StatusEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,13 +71,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
     if (!firmId && !isSuperadmin) { setLoading(false); return; }
     setLoading(true);
 
+    // ── 1. Fetch actual audit_status rows ──────────────────────────────────
     let q = (supabase as any)
       .from("audit_status")
-      // left-join engagement_type for UDIN Statutory visibility (CP-07 BUG D)
-      .select("*, audit_engagements!left(engagement_type)")
+      .select("*, audit_engagements!left(engagement_type, financial_year, client_id)")
       .order("created_at", { ascending: true });
     if (!isSuperadmin) q = q.eq("firm_id", firmId);
-    const { data, error } = await q;
+
+    const { data: rawData, error } = await q;
 
     if (error) {
       setUseLs(true);
@@ -80,19 +86,98 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
       setLoading(false);
       return;
     }
+
     setUseLs(false);
-    // Flatten the nested engagement_type into each row
-    const rows: StatusEntry[] = ((data as any[]) || []).map(r => ({
+
+    // Flatten nested engagement fields
+    let statusRows: StatusEntry[] = ((rawData as any[]) || []).map(r => ({
       ...r,
       engagement_type: (r.audit_engagements as any)?.engagement_type ?? null,
+      financial_year:  r.financial_year ?? (r.audit_engagements as any)?.financial_year ?? null,
     }));
-    setRows(rows);
+
+    // ── 2. Filter by selected FY if provided ──────────────────────────────
+    if (selectedFY) {
+      statusRows = statusRows.filter(r => {
+        // Match via own financial_year OR via joined engagement's financial_year
+        const engFY = (r as any).audit_engagements?.financial_year;
+        return r.financial_year === selectedFY || engFY === selectedFY;
+      });
+    }
+
+    const engagementIdsWithStatus = new Set(
+      statusRows.filter(r => r.engagement_id).map(r => r.engagement_id!)
+    );
+
+    // ── 3. Auto-populate virtual rows from audit_engagements ──────────────
+    if (selectedFY) {
+      let engQ = (supabase as any)
+        .from("audit_engagements")
+        .select("id, client_id, financial_year, engagement_type")
+        .eq("financial_year", selectedFY);
+      if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
+      const { data: engData } = await engQ;
+
+      if (engData?.length) {
+        // Fetch client names for the engagement client_ids
+        const engClientIds = [...new Set((engData as any[]).map((e: any) => e.client_id).filter(Boolean))];
+        const { data: clientsData } = await (supabase as any)
+          .from("clients")
+          .select("id, name")
+          .in("id", engClientIds);
+        const clientNameMap = new Map((clientsData || []).map((c: any) => [c.id, c.name]));
+
+        // Create virtual rows for engagements that don't have a status row
+        for (const eng of (engData as any[])) {
+          if (engagementIdsWithStatus.has(eng.id)) continue;
+          const virtualRow: StatusEntry = {
+            id:                           `virtual_${eng.id}`,
+            firm_id:                      firmId,
+            client_id:                    eng.client_id ?? null,
+            party_name:                   clientNameMap.get(eng.client_id) ?? null,
+            physical_audit_conducted:     "No",
+            accounting_data:              "No",
+            audit_employees:              null,
+            audit_report_prepared_by:     null,
+            audit_status:                 null,
+            audit_status_other:           null,
+            report_print_date:            null,
+            firm:                         null,
+            partner:                      null,
+            udin_tax_audit:               null,
+            udin_statutory_audit:         null,
+            udin_date:                    null,
+            physical_report_received_date:null,
+            scanned:                      "No",
+            prepared_by:                  null,
+            checked_by:                   null,
+            uploaded_by:                  null,
+            remarks:                      null,
+            engagement_id:                eng.id,
+            financial_year:               selectedFY,
+            created_at:                   "",
+            engagement_type:              eng.engagement_type ?? null,
+            isVirtual:                    true,
+          };
+          statusRows.push(virtualRow);
+        }
+      }
+    }
+
+    // Sort: virtual rows last (pending), then alphabetically by party_name
+    statusRows.sort((a, b) => {
+      if (a.isVirtual && !b.isVirtual) return 1;
+      if (!a.isVirtual && b.isVirtual) return -1;
+      return (a.party_name || "").localeCompare(b.party_name || "");
+    });
+
+    setRows(statusRows);
     setLoading(false);
-  }, [firmId]);
+  }, [firmId, selectedFY]);
 
   useEffect(() => { load(); }, [load]);
 
-  async function addRow(input: Omit<StatusEntry, "id"|"firm_id"|"created_at">): Promise<StatusEntry | null> {
+  async function addRow(input: Omit<StatusEntry, "id"|"firm_id"|"created_at"|"isVirtual">): Promise<StatusEntry | null> {
     const draft: StatusEntry = {
       ...input,
       id:         crypto.randomUUID(),
@@ -109,6 +194,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
     }
 
     const payload: any = { ...input, firm_id: firmId };
+    delete payload.isVirtual;
+    delete payload.engagement_type;
     const { data, error } = await supabase.from("audit_status").insert(payload).select().single();
     if (error) { toast.error(error.message); return null; }
     toast.success("Row added");
@@ -117,6 +204,19 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
   }
 
   async function updateRow(id: string, patch: StatusPatch) {
+    // If this is a virtual row being saved for the first time
+    if (id.startsWith("virtual_")) {
+      const virtualRow = rows.find(r => r.id === id);
+      if (!virtualRow) return;
+      const result = await addRow({
+        ...virtualRow,
+        ...patch,
+        id: undefined as any,
+        isVirtual: undefined as any,
+      });
+      return;
+    }
+
     if (useLs) {
       const updated = rows.map(r => r.id === id ? { ...r, ...patch } : r);
       setRows(updated);
@@ -124,21 +224,23 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
       toast.success("Saved (offline)");
       return;
     }
-    // Capture old row snapshot before applying the update
+
     const oldRow = rows.find(r => r.id === id);
-    const { error } = await supabase.from("audit_status").update(patch as any).eq("id", id);
+    const cleanPatch: any = { ...patch };
+    delete cleanPatch.isVirtual;
+    delete cleanPatch.engagement_type;
+
+    const { error } = await supabase.from("audit_status").update(cleanPatch).eq("id", id);
     if (error) { toast.error(error.message); return; }
+
     if (oldRow) {
-      // ISSUE-19c: write a full row-level snapshot to audit_status_history
       (supabase as any).from("audit_status_history").insert({
         audit_status_id: id,
         changed_by:      user?.id ?? null,
         changed_by_name: user?.name ?? user?.email ?? null,
         previous_data:   oldRow,
         new_data:        { ...oldRow, ...patch },
-      }).then(() => {}); // best-effort: no await, silent failure if table absent
-
-      // Log field-level changes to audit_change_log (modal reads from here)
+      }).then(() => {});
       logChanges("audit_status", id, oldRow as any, patch as any, user?.id, user?.name ?? user?.email ?? null);
     }
     toast.success("Saved");
@@ -146,6 +248,10 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
   }
 
   async function removeRow(id: string) {
+    if (id.startsWith("virtual_")) {
+      setRows(prev => prev.filter(r => r.id !== id));
+      return;
+    }
     if (useLs) {
       const updated = rows.filter(r => r.id !== id);
       setRows(updated);

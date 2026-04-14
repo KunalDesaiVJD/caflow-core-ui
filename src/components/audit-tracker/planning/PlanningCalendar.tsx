@@ -14,11 +14,13 @@
  */
 import { useState, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
 import type { UserOption }   from "../hooks/useUsers";
+import type { PlanningStaffMember } from "../hooks/usePlanningStaff";
 import PlanningEntryDialog, { type PlanSaveData } from "./PlanningEntryDialog";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -204,17 +206,21 @@ interface Props {
   entries:         PlanEntry[];
   loading:         boolean;
   clients:         ClientOption[];
-  users:           UserOption[];
+  users:           UserOption[];          // all firm users (for add-employee picker)
+  planningStaff:   PlanningStaffMember[]; // only these show as calendar columns
   onAddEntry:      (data: PlanSaveData) => Promise<void>;
   onUpdateEntry:   (id: string, data: Partial<PlanEntry>) => Promise<void>;
   onDeleteEntry:   (id: string) => Promise<void>;
+  onAddStaff:      (userId: string, userName: string) => Promise<void>;
+  onRemoveStaff:   (staffId: string) => Promise<void>;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PlanningCalendar({
-  entries, loading, clients, users,
+  entries, loading, clients, users, planningStaff,
   onAddEntry, onUpdateEntry, onDeleteEntry,
+  onAddStaff, onRemoveStaff,
 }: Props) {
   const now = new Date();
 
@@ -230,6 +236,24 @@ export default function PlanningCalendar({
   const [dialogDate,        setDialogDate]        = useState<string>("");
   const [dialogEmpId,       setDialogEmpId]       = useState<string>("");
   const [dialogEmpName,     setDialogEmpName]     = useState<string>("");
+
+  // ── Add employee picker state ───────────────────────────────────────────────
+  const [addingEmployee, setAddingEmployee] = useState(false);
+  const [addEmpValue,    setAddEmpValue]    = useState("");
+
+  // Users not yet in planningStaff
+  const availableToAdd = useMemo(() =>
+    users.filter(u => !planningStaff.some(s => s.user_id === u.id)),
+    [users, planningStaff]
+  );
+
+  async function handleAddEmployee(userId: string) {
+    const u = users.find(u => u.id === userId);
+    if (!u) return;
+    await onAddStaff(userId, u.name);
+    setAddEmpValue("");
+    setAddingEmployee(false);
+  }
 
   // ── Dates to render ────────────────────────────────────────────────────────
   const dates = useMemo<Date[]>(() => {
@@ -309,8 +333,8 @@ export default function PlanningCalendar({
           </Button>
         </div>
 
-        {/* Right: view toggle + add */}
-        <div className="flex items-center gap-1.5">
+        {/* Right: view toggle + add new + add employee */}
+        <div className="flex items-center gap-1.5 flex-wrap">
           <Button size="sm" variant={view === "month" ? "default" : "outline"}
             className="h-8 text-xs gap-1" onClick={() => setView("month")}>
             <AlignJustify size={12} /> Month
@@ -323,6 +347,33 @@ export default function PlanningCalendar({
             onClick={() => { setDialogEntry(null); setDialogDate(""); setDialogEmpId(""); setDialogEmpName(""); setDialogOpen(true); }}>
             <Plus size={12} /> New
           </Button>
+
+          {/* Add employee to calendar */}
+          {addingEmployee ? (
+            <div className="flex items-center gap-1">
+              <Select value={addEmpValue} onValueChange={handleAddEmployee}>
+                <SelectTrigger className="h-8 text-xs w-[160px]">
+                  <SelectValue placeholder="Select employee…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableToAdd.length === 0
+                    ? <SelectItem value="__none__" disabled className="text-xs">All employees added</SelectItem>
+                    : availableToAdd.map(u => (
+                        <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>
+                      ))
+                  }
+                </SelectContent>
+              </Select>
+              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setAddingEmployee(false)}>
+                <XIcon size={13} />
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="h-8 text-xs gap-1"
+              onClick={() => setAddingEmployee(true)}>
+              <UserPlus size={12} /> Add Employee
+            </Button>
+          )}
         </div>
       </div>
 
@@ -340,14 +391,29 @@ export default function PlanningCalendar({
                 <th className="sticky left-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
                   Date
                 </th>
-                {/* Employee columns */}
-                {users.map(u => (
-                  <th key={u.id}
-                    className="border border-indigo-600 px-2 py-2.5 text-center w-[90px] min-w-[90px] truncate"
-                    title={u.name}>
-                    {u.name.split(" ")[0].toUpperCase()}
+                {/* Employee columns — only planning staff */}
+                {planningStaff.map(s => (
+                  <th key={s.user_id}
+                    className="border border-indigo-600 px-1 py-2.5 text-center w-[90px] min-w-[90px]"
+                    title={s.name}>
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="truncate text-[11px]">{s.name.split(" ")[0].toUpperCase()}</span>
+                      <button
+                        onClick={() => onRemoveStaff(s.id)}
+                        title={`Remove ${s.name} from planning`}
+                        className="shrink-0 text-indigo-300 hover:text-red-300 transition-colors"
+                      >
+                        <XIcon size={10} />
+                      </button>
+                    </div>
                   </th>
                 ))}
+                {/* Hint when no staff added yet */}
+                {planningStaff.length === 0 && (
+                  <th className="border border-indigo-600 px-2 py-2.5 text-center w-48 text-indigo-300 text-[10px] italic">
+                    Click "Add Employee" to add staff columns
+                  </th>
+                )}
               </tr>
             </thead>
 
@@ -355,14 +421,14 @@ export default function PlanningCalendar({
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={users.length + 1}
+                    <td colSpan={Math.max(planningStaff.length, 1) + 1}
                       className="border border-border/60 h-8 px-3 bg-muted/20 animate-pulse" />
                   </tr>
                 ))
-              ) : users.length === 0 ? (
+              ) : planningStaff.length === 0 ? (
                 <tr>
                   <td colSpan={2} className="py-12 text-center text-muted-foreground text-sm">
-                    No employees found — check user management
+                    No employees added yet — click <strong>Add Employee</strong> above to add planning staff columns
                   </td>
                 </tr>
               ) : (
@@ -387,16 +453,19 @@ export default function PlanningCalendar({
                         </div>
                       </td>
 
-                      {/* Employee cells */}
-                      {users.map(emp => (
-                        <CellComponent
-                          key={emp.id}
-                          dateISO={iso}
-                          employee={emp}
-                          entries={entries}
-                          onClick={handleCellClick}
-                        />
-                      ))}
+                      {/* Only planning-staff columns */}
+                      {planningStaff.map(staff => {
+                        const emp: UserOption = { id: staff.user_id, name: staff.name };
+                        return (
+                          <CellComponent
+                            key={staff.user_id}
+                            dateISO={iso}
+                            employee={emp}
+                            entries={entries}
+                            onClick={handleCellClick}
+                          />
+                        );
+                      })}
                     </tr>
                   );
                 })

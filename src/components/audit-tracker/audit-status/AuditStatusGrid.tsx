@@ -38,33 +38,31 @@ const PAGE_SIZE = 25;
 
 const YES_NO_OPTIONS = ["Yes", "No"];
 
-// Column definitions — id maps to StatusEntry field (or "" for computed)
+// ─── Redesigned columns: 13 (was 20) ─────────────────────────────────────────
+// Combined: Physical+Accounting → "Data ✓"
+//           Report Print Date + Phys. Received → "Report Dates"
+//           Firm + Partner → "Firm / Partner"
+//           UDIN Tax + Statutory + Date → "UDIN"
+//           3CA Prepared By + Checked By → "3CA" (Uploaded By removed from view)
 const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"|"select"|"date"|"yesno"|"status"|"none" }[] = [
-  { label: "Sr No",             id: "_srno",                      filterType: "none"   },
-  { label: "Party Name",        id: "party_name",     sortable: true, filterType: "text"   },
-  { label: "Physical Audit",    id: "physical_audit_conducted",   filterType: "yesno"  },
-  { label: "Accounting Data",   id: "accounting_data",            filterType: "yesno"  },
-  { label: "Audit Employees",   id: "audit_employees",            filterType: "text"   },
-  { label: "Report Prep. By",   id: "audit_report_prepared_by",   filterType: "text"   },
-  { label: "Audit Status",      id: "audit_status",   sortable: true, filterType: "status" },
-  { label: "Report Print Date", id: "report_print_date", sortable: true, filterType: "date" },
-  { label: "Firm",              id: "firm",                       filterType: "text"   },
-  { label: "Partner",           id: "partner",                    filterType: "text"   },
-  { label: "UDIN (Tax)",        id: "udin_tax_audit",             filterType: "text"   },
-  { label: "UDIN (Statutory)",  id: "udin_statutory_audit",       filterType: "text"   },
-  { label: "UDIN Date",         id: "udin_date",      sortable: true, filterType: "date" },
-  { label: "Phys. Report Recd", id: "physical_report_received_date", sortable: true, filterType: "date" },
-  { label: "Scanned",           id: "scanned",                    filterType: "yesno"  },
-  { label: "3CA Prepared By",   id: "prepared_by",                filterType: "text"   },
-  { label: "3CA Checked By",    id: "checked_by",                 filterType: "text"   },
-  { label: "3CA Uploaded By",   id: "uploaded_by",                filterType: "text"   },
-  { label: "Remarks",           id: "remarks",                    filterType: "text"   },
-  { label: "",                  id: "_actions",                   filterType: "none"   },
+  { label: "Sr No",             id: "_srno",                        filterType: "none"   },
+  { label: "Party Name",        id: "party_name",       sortable: true, filterType: "text" },
+  { label: "Data ✓",            id: "_data_check",                  filterType: "none"   },
+  { label: "Audit Employees",   id: "audit_employees",              filterType: "text"   },
+  { label: "Report Prep. By",   id: "audit_report_prepared_by",     filterType: "text"   },
+  { label: "Audit Status",      id: "audit_status",     sortable: true, filterType: "status" },
+  { label: "Report Dates",      id: "report_print_date", sortable: true, filterType: "date" },
+  { label: "Firm / Partner",    id: "firm",                         filterType: "text"   },
+  { label: "UDIN",              id: "udin_tax_audit",               filterType: "text"   },
+  { label: "3CA Prep / Checked",id: "prepared_by",                  filterType: "text"   },
+  { label: "Scanned",           id: "scanned",                      filterType: "yesno"  },
+  { label: "Remarks",           id: "remarks",                      filterType: "text"   },
+  { label: "",                  id: "_actions",                     filterType: "none"   },
 ];
 
 // ─── Blank template for a new row ─────────────────────────────────────────────
 
-const BLANK_ROW: StatusEntry = {
+const makeBlankRow = (fy?: string): StatusEntry => ({
   id: "__new__", firm_id: "", client_id: null, party_name: null,
   physical_audit_conducted: "No", accounting_data: "No",
   audit_employees: null, audit_report_prepared_by: null,
@@ -73,8 +71,8 @@ const BLANK_ROW: StatusEntry = {
   udin_tax_audit: null, udin_statutory_audit: null, udin_date: null,
   physical_report_received_date: null, scanned: "No",
   prepared_by: null, checked_by: null, uploaded_by: null,
-  remarks: null, engagement_id: null, created_at: "",
-};
+  remarks: null, engagement_id: null, financial_year: fy ?? null, created_at: "",
+});
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -87,12 +85,14 @@ interface Props {
   isSuperadmin?:   boolean;
   /** When set, only rows matching this client_id are shown (Select Client mode) */
   clientIdFilter?: string | null;
+  /** Financial year filter e.g. "2024-25" — auto-populates from audit_engagements */
+  selectedFY?:     string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter }: Props) {
-  const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin);
+export default function AuditStatusGrid({ firmId, clients, users, auditFirms, planEntries, isSuperadmin, clientIdFilter, selectedFY }: Props) {
+  const { rows, loading, useLs, reload, addRow, updateRow, removeRow } = useAuditStatus(firmId, isSuperadmin, selectedFY);
 
   // ── Search (debounced 300 ms) ──────────────────────────────────────────────
   const [searchRaw, setSearchRaw] = useState("");
@@ -241,7 +241,8 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       checked_by:                    patch.checked_by                    ?? null,
       uploaded_by:                   patch.uploaded_by                   ?? null,
       remarks:                       patch.remarks                       ?? null,
-      engagement_id:                 null,
+      engagement_id:                 patch.engagement_id                 ?? null,
+      financial_year:                patch.financial_year                ?? selectedFY ?? null,
     });
     // Only close the new-row form when the insert actually succeeded
     if (result !== null) {
@@ -302,7 +303,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       {/* Table */}
       <div className="border rounded-lg overflow-hidden w-full">
         <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
-          <table className="border-collapse text-xs" style={{ minWidth: 2240, tableLayout: "fixed" }}>
+          <table className="border-collapse text-xs" style={{ minWidth: 1480, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}
             <thead className="sticky top-0 z-30">
@@ -436,7 +437,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
               {addingNew && (
                 <AuditStatusRow
                   key="__new__"
-                  row={BLANK_ROW}
+                  row={makeBlankRow(selectedFY)}
                   srNo={0}
                   clients={clients}
                   users={users}
@@ -464,7 +465,9 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                 <tr>
                   <td colSpan={COLS.length} className="py-16 text-center text-muted-foreground">
                     {rows.length === 0
-                      ? "No rows yet — click Add New Audit to begin"
+                      ? selectedFY
+                        ? `No audit engagements found for FY ${selectedFY}. Create engagements in Engagement Setup first.`
+                        : "Select an Assessment Year above to see audit clients"
                       : "No rows match the current filters"}
                   </td>
                 </tr>
