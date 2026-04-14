@@ -118,6 +118,14 @@ function getClientSubTab(classification: string | undefined): FilingSubTab {
   return "non_audited";
 }
 
+/** Convert Assessment Year (e.g. "2025-26") → Financial Year (e.g. "2024-25") */
+function ayToFy(ay: string): string {
+  const [start] = ay.split("-");
+  const fyStart = String(Number(start) - 1);
+  const fyEnd = String(Number(start)).slice(-2);
+  return `${fyStart}-${fyEnd}`;
+}
+
 function isUnsavedItrProfile(profile: Pick<ItrProfile, "id">): boolean {
   return profile.id.startsWith("virtual_") || profile.id.startsWith("new_");
 }
@@ -176,6 +184,22 @@ const ItReturns = () => {
     },
   });
 
+  // ─── Fetch clients with an audit engagement for the selected AY ───
+  const { data: auditClientIds = [] } = useQuery({
+    queryKey: ["audit_engaged_client_ids", firmId, selectedAY],
+    queryFn: async () => {
+      const fy = ayToFy(selectedAY);
+      let q = supabase
+        .from("audit_engagements")
+        .select("client_id")
+        .eq("financial_year", fy);
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      return [...new Set((data || []).map((e: any) => e.client_id).filter(Boolean))] as string[];
+    },
+    enabled: !!user?.id,
+  });
+
   // ─── Fetch staff ───
   const { data: staffUsers = [] } = useQuery({
     queryKey: ["staff_users", firmId],
@@ -200,32 +224,47 @@ const ItReturns = () => {
 
   // ─── Fetch profiles with enrichment ───
   const { data: profiles = [], isLoading } = useQuery({
-    queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds],
+    queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds, auditClientIds],
     queryFn: async () => {
-      if (itrClientIds.length === 0) return [];
+      // Combined pool: audit-engaged clients (always shown in Audited tab) + ITR-service clients
+      const auditSet = new Set(auditClientIds);
+      const allClientIds = [...new Set([...auditClientIds, ...itrClientIds])];
+      if (allClientIds.length === 0) return [];
+
       let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-      q = q.in("client_id", itrClientIds);
+      q = q.in("client_id", allClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details
+      // Fetch client details for the combined pool
       const { data: cData } = await supabase
         .from("clients")
         .select("id, name, pan, entity_type, responsible_person_id")
         .eq("is_draft", false)
         .is("deleted_at", null)
-        .in("id", itrClientIds)
+        .in("id", allClientIds)
         .order("name");
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
-      // Fetch FY classifications for the selected AY
-      const fyFromAY = selectedAY ? `20${selectedAY.split("-")[0].slice(-2)}-${selectedAY.split("-")[1]?.slice(-2) || ""}` : "";
+      // Fetch "Partner in Audited Firm" classifications from client_fy_classifications
+      // Note: client_fy_classifications stores financial_year in same format as AY (e.g. "2025-26")
       const { data: fyClassData } = await supabase
         .from("client_fy_classifications")
         .select("client_id, classification")
-        .in("client_id", itrClientIds)
-        .eq("financial_year", fyFromAY);
+        .in("client_id", allClientIds)
+        .eq("financial_year", selectedAY);
       const classMap = new Map((fyClassData || []).map(c => [c.client_id, c.classification]));
+
+      // Classification logic:
+      // 1. Client has audit engagement for this AY → "Audit" (Audited tab)
+      // 2. client_fy_classifications says "Partner in Audited Firm" → partner tab
+      // 3. Everything else (ITR-service clients) → Non-Audited
+      const resolveClassification = (clientId: string): string => {
+        if (auditSet.has(clientId)) return "Audit";
+        const cls = classMap.get(clientId) || "";
+        if (cls.toLowerCase().includes("partner")) return cls;
+        return "";
+      };
 
       // Fetch users
       const { data: uData } = await supabase.from("users").select("id, name");
@@ -235,7 +274,7 @@ const ItReturns = () => {
       const { data: wgMembers } = await supabase
         .from("work_group_memberships")
         .select("client_id, group_id, work_groups(name)")
-        .in("client_id", itrClientIds);
+        .in("client_id", allClientIds);
       const clientWgMap = new Map<string, string>();
       for (const m of (wgMembers || [])) {
         clientWgMap.set(m.client_id, (m as any).work_groups?.name || "");
@@ -266,7 +305,7 @@ const ItReturns = () => {
           entity_type: cl?.entity_type || "",
           group_name: (wg as any)?.name || "",
           assigned_name: userMap.get(p.assigned_to || "") || "",
-          client_classification: classMap.get(p.client_id || "") || "",
+          client_classification: resolveClassification(p.client_id || ""),
           work_group_name: clientWgMap.get(p.client_id || "") || "",
         });
       }
@@ -277,7 +316,7 @@ const ItReturns = () => {
           id: `virtual_${client.id}_${selectedAY}`,
           client_id: client.id,
           firm_id: firmId,
-          financial_year: fyFromAY || null,
+          financial_year: ayToFy(selectedAY),
           itr_form: null,
           filing_status: "Data Pending",
           itr_work_group_id: null,
@@ -293,14 +332,14 @@ const ItReturns = () => {
           client_name: client.name || "Unknown",
           client_pan: client.pan || "",
           entity_type: client.entity_type || "",
-          client_classification: classMap.get(client.id) || "",
+          client_classification: resolveClassification(client.id),
           work_group_name: clientWgMap.get(client.id) || "",
         });
       }
 
       return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
-    enabled: itrClientIds.length > 0,
+    enabled: !!user?.id && (itrClientIds.length > 0 || auditClientIds.length > 0),
   });
 
   // ─── Filtered profiles ───
@@ -541,7 +580,7 @@ function FilingTab({
         client_id: addRowClientId,
         firm_id: firmId,
         assessment_year: selectedAY,
-        financial_year: selectedAY.split("-").map((v, i) => i === 0 ? String(Number(v) - 1) : v).join("-"),
+        financial_year: ayToFy(selectedAY),
         filing_status: "Data Pending",
         assigned_to: assignedTo,
       });
