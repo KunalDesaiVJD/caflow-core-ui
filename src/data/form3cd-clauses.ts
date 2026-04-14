@@ -541,10 +541,8 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
               { key: 'pan', label: 'PAN', type: 'pan' as const, width: 110 },
             ],
           },
-          // (iv) — Single field
-          { key: 'cl_21b_iv', heading: '(iv) — Fringe benefit tax under sub-clause (ic)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
-          // (v) — Single field
-          { key: 'cl_21b_v', heading: '(v) — Wealth tax under sub-clause (iia)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+          // (iv) FBT — abolished by Finance Act 2009 — REMOVED
+          // (v) Wealth Tax — repealed w.e.f. 1 Apr 2016 — REMOVED
           // (vi) — Single field
           { key: 'cl_21b_vi', heading: '(vi) — Royalty, license fee, service fee etc. under sub-clause (iib)', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
           // (vii) — Salary payable
