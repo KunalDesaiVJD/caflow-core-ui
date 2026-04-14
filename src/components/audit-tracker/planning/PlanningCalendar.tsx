@@ -109,7 +109,7 @@ interface CellProps {
   onClick:   (dateISO: string, emp: UserOption, entry: PlanEntry | null) => void;
 }
 
-/** ISSUE-20: All entries stacked vertically. Click chip → edit; click empty area → create new. */
+/** CP-08: All entries stacked vertically. Click chip → edit; click empty area → create new. */
 function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
 
@@ -129,8 +129,11 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
     >
       <div className="space-y-[2px]">
         {hits.map(entry => {
-          const isLeave = entry.client_name?.toLowerCase() === "leave";
-          const color   = clientColor(entry.client_name || "");
+          const isLeave  = entry.client_name?.toLowerCase() === "leave";
+          const color    = clientColor(entry.client_name || "");
+          const dateHint = entry.planned_from === entry.planned_to
+            ? entry.planned_from
+            : `${entry.planned_from} → ${entry.planned_to}`;
           return (
             <div
               key={entry.id}
@@ -139,7 +142,7 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
                 color
               )}
               onClick={e => { e.stopPropagation(); onClick(dateISO, employee, entry); }}
-              title={`${entry.client_name || ""} — click to edit`}
+              title={`${entry.client_name || "—"}  ·  ${dateHint}  —  click to edit`}
             >
               <span className="truncate">{isLeave ? "Leave" : entry.client_name}</span>
             </div>
@@ -152,7 +155,7 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
 
 // ─── Week-view cell (taller, shows date range info) ──────────────────────────
 
-/** ISSUE-20: All entries stacked in week view too. */
+/** CP-08: All entries stacked in week view too — each card: client name + date range label. */
 function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
 
