@@ -188,31 +188,17 @@ export default function AuditPipeline() {
   // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
-  // ─── Audit-eligible clients — two-step query for reliability ───
-  // Step 1: Fetch client_ids from client_fy_classifications with classification = 'Audit'
-  //         for the selected FY (case-insensitive via ilike).
-  // Step 2: Fetch matching client rows directly — avoids nested-join filtering issues
-  //         that can silently drop the `name` field in Supabase PostgREST.
-  // Fallback: also include clients with statutory_audit_applicable = true on the
-  //           clients table (for clients saved before FY-classification was introduced).
+  // ─── All active firm clients for new engagement ───
+  // Show all active, non-draft clients for the firm so users can create
+  // engagements for any client regardless of audit flags.
   const { data: eligibleClients } = useQuery({
-    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id, form1A.financial_year],
+    queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // ── Step 1a: IDs from FY classification table ──────────────────────────
-      let classQuery = supabase
-        .from("client_fy_classifications")
-        .select("client_id")
-        .ilike("classification", "audit")
-        .eq("financial_year", form1A.financial_year);
-      const { data: classRows } = await classQuery;
-      const fyClientIds = (classRows || []).map((r: any) => r.client_id as string).filter(Boolean);
-
-      // ── Step 2: Fetch client rows with name, entity_type ──────────────────
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+        .select("id, name, entity_type")
         .eq("is_draft", false)
         .eq("is_active", true)
         .is("deleted_at", null)
@@ -222,26 +208,7 @@ export default function AuditPipeline() {
 
       const { data: allFirmClients } = await clientQuery;
 
-      const allClients = (allFirmClients || []) as any[];
-
-      // Include client if: in FY classification set OR has audit-applicable flags
-      // OR has client_classification containing "audit" (case-insensitive)
-      const eligible = allClients.filter(
-        (c: any) => {
-          if (fyClientIds.includes(c.id)) return true;
-          if (c.statutory_audit_applicable === true) return true;
-          if (c.tax_audit_type != null && c.tax_audit_type !== "") return true;
-          // Check client_classification JSON field (may be string "audit" or array)
-          const cc = c.client_classification;
-          if (cc) {
-            const ccStr = typeof cc === "string" ? cc : JSON.stringify(cc);
-            if (ccStr.toLowerCase().includes("audit")) return true;
-          }
-          return false;
-        }
-      );
-
-      return eligible.map((c: any) => ({
+      return (allFirmClients || []).map((c: any) => ({
         id:          c.id as string,
         name:        (c.name as string) ?? "",
         entity_type: (c.entity_type as string) ?? "",
@@ -591,7 +558,7 @@ export default function AuditPipeline() {
                       <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                       <SelectContent>
                         {(eligibleClients || []).length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">No audit clients found. Set Classification = Audit in Client Setup.</div>
+                          <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Please add clients first from the Clients section.</div>
                         ) : (
                           (eligibleClients || []).map(c => (
                             <SelectItem key={c.id} value={c.id}>
@@ -1103,7 +1070,7 @@ export default function AuditPipeline() {
                 <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
                   {(eligibleClients || []).length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">No audit clients found. Set Classification = Audit in Client Setup.</div>
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Please add clients first from the Clients section.</div>
                   ) : (
                     (eligibleClients || []).map(c => (
                       <SelectItem key={c.id} value={c.id}>
