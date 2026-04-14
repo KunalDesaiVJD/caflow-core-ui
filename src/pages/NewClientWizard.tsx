@@ -564,13 +564,20 @@ const NewClientWizard = () => {
 
     // Skip history insert when the value hasn't actually changed (e.g. save on same classification).
     if (oldClassification !== advancedInfo.classification) {
+      // Compute the FY from which the new classification takes effect (= next FY).
+      const fyMatch = advancedInfo.financial_year.match(/^(\d{4})-(\d{2})$/);
+      const effectiveFromFY = fyMatch
+        ? (() => { const y = parseInt(fyMatch[1]) + 1; return `${y}-${String(y + 1).slice(2)}`; })()
+        : null;
+
       // Append-only history row — preserves every old→new transition with actor + timestamp.
       try {
         await (supabase as any).from("client_classification_history").insert({
           client_id:          targetClientId,
           financial_year:     advancedInfo.financial_year,
-          old_classification: oldClassification,   // ISSUE-21: before-state
+          old_classification: oldClassification,
           classification:     advancedInfo.classification,
+          effective_from_fy:  effectiveFromFY,     // CP-09: first FY the new classification is active
           changed_by:         authUserId ?? null,
           changed_at:         new Date().toISOString(),
         });

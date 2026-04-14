@@ -46,6 +46,14 @@ function getCurrentFY(): string {
   return `${startYear}-${String(startYear + 1).slice(2)}`;
 }
 
+/** "2024-25" → "2025-26" */
+function nextFY(fy: string): string {
+  const m = fy.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return "";
+  const y = parseInt(m[1]) + 1;
+  return `${y}-${String(y + 1).slice(2)}`;
+}
+
 function generateFYOptions(): string[] {
   const today = new Date();
   const currentStartYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
@@ -340,13 +348,18 @@ export const StepAdvancedInfo = ({
             </DialogTitle>
             <DialogDescription className="pt-2 space-y-2 text-sm">
               <p>
-                You are changing the classification for FY{" "}
+                Changing classification for FY{" "}
                 <strong>{data.financial_year}</strong> from{" "}
                 <strong className="text-indigo-600">{savedClassification}</strong> to{" "}
                 <strong className="text-indigo-600">{pendingClassification}</strong>.
               </p>
+              {nextFY(data.financial_year) && (
+                <p className="font-medium text-amber-700">
+                  Classification change applies from FY <strong>{nextFY(data.financial_year)}</strong> only.
+                </p>
+              )}
               <p className="text-muted-foreground">
-                Changing classification affects future FYs only. Historical data is preserved.
+                All historical data for FY <strong>{data.financial_year}</strong> and earlier is preserved.
               </p>
             </DialogDescription>
           </DialogHeader>
