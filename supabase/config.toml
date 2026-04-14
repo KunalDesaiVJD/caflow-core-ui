@@ -6,6 +6,9 @@ verify_jwt = false
 [functions.user-management]
 verify_jwt = false
 
+[functions.otp-auth]
+verify_jwt = false
+
 [functions.send-notification]
 verify_jwt = false
 
