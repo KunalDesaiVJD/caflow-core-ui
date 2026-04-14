@@ -40,24 +40,30 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
 
   const [requires3CA, setRequires3CA] = useState<boolean | null>(null);
   const [requires3CB, setRequires3CB] = useState<boolean | null>(null);
+  const [entityType,  setEntityType]  = useState<string | null>(null);
   const [flagsLoading, setFlagsLoading] = useState(true);
 
-  // Load requires_3ca / requires_3cb flags from the engagement
+  // Load requires_3ca / requires_3cb flags + entity_type from the engagement
   useEffect(() => {
     if (!engagementId) { setFlagsLoading(false); return; }
     supabase
       .from("audit_engagements")
-      .select("requires_3ca, requires_3cb")
+      .select("requires_3ca, requires_3cb, clients(entity_type)")
       .eq("id", engagementId)
       .single()
       .then(({ data }) => {
         if (data) {
           setRequires3CA(!!(data as any).requires_3ca);
           setRequires3CB(!!(data as any).requires_3cb);
+          const et = ((data as any).clients as any)?.entity_type ?? null;
+          setEntityType(typeof et === "string" ? et.toLowerCase() : null);
         }
         setFlagsLoading(false);
       });
   }, [engagementId]);
+
+  // Companies (audited under Companies Act) only use Form 3CA — never 3CB
+  const isCompany = entityType === "company";
 
   if (!engagementId) {
     return (
@@ -84,15 +90,18 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
             )}
           </TabsTrigger>
 
-          <TabsTrigger value="3cb" className="text-xs gap-1.5">
-            Form 3CB
-            {!flagsLoading && requires3CB === true && (
-              <Badge className="h-4 text-[9px] px-1 bg-indigo-600 text-white ml-1">Required</Badge>
-            )}
-            {!flagsLoading && requires3CB === false && (
-              <Badge variant="outline" className="h-4 text-[9px] px-1 ml-1 text-muted-foreground">Optional</Badge>
-            )}
-          </TabsTrigger>
+          {/* Form 3CB — hidden for Company entities (Companies Act audit uses 3CA only) */}
+          {!isCompany && (
+            <TabsTrigger value="3cb" className="text-xs gap-1.5">
+              Form 3CB
+              {!flagsLoading && requires3CB === true && (
+                <Badge className="h-4 text-[9px] px-1 bg-indigo-600 text-white ml-1">Required</Badge>
+              )}
+              {!flagsLoading && requires3CB === false && (
+                <Badge variant="outline" className="h-4 text-[9px] px-1 ml-1 text-muted-foreground">Optional</Badge>
+              )}
+            </TabsTrigger>
+          )}
 
           <TabsTrigger value="3cd" className="text-xs gap-1.5">
             Form 3CD
@@ -108,14 +117,16 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
           </ScrollArea>
         </TabsContent>
 
-        {/* ── Tab 2: Form 3CB ── */}
-        <TabsContent value="3cb">
-          <ScrollArea className="h-[calc(100vh-220px)]">
-            <div className="pr-3">
-              <Form3CBTab engagementId={engagementId} />
-            </div>
-          </ScrollArea>
-        </TabsContent>
+        {/* ── Tab 2: Form 3CB — only for non-Company entities ── */}
+        {!isCompany && (
+          <TabsContent value="3cb">
+            <ScrollArea className="h-[calc(100vh-220px)]">
+              <div className="pr-3">
+                <Form3CBTab engagementId={engagementId} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        )}
 
         {/* ── Tab 3: Form 3CD (existing — untouched) ── */}
         <TabsContent value="3cd">

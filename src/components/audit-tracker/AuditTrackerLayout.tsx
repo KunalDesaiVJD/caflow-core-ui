@@ -2,17 +2,13 @@
  * AuditTrackerLayout
  * Two-tab layout:
  *  Tab 1 "Planning & Communication" — Google Calendar grid + comm table
- *  Tab 2 "Audit Status"             — Summary overview OR per-client detail grid
- *
- * Audit Status tab has two view modes:
- *  • All Clients  — compact colour-coded summary table for every client
- *  • Select Client — client picker + full editable detail grid for that client
+ *  Tab 2 "Audit Status"             — Per-client editable detail grid
+ *                                     (client dropdown to filter; shows all when none selected)
  */
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CalendarDays, TableProperties, LayoutList, User } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { CalendarDays, TableProperties } from "lucide-react";
 
 import { useAuditPlanning }   from "./hooks/useAuditPlanning";
 import { useClients }          from "./hooks/useClients";
@@ -22,13 +18,8 @@ import { useFirms }            from "./hooks/useFirms";
 import PlanningCalendar        from "./planning/PlanningCalendar";
 import CommunicationTable      from "./planning/CommunicationTable";
 import AuditStatusGrid         from "./audit-status/AuditStatusGrid";
-import AuditStatusSummaryView  from "./audit-status/AuditStatusSummaryView";
 import type { PlanEntry }      from "./hooks/useAuditPlanning";
 import type { PlanSaveData }   from "./planning/PlanningEntryDialog";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type AuditViewMode = "all" | "client";
 
 interface Props {
   firmId:       string;
@@ -49,16 +40,9 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
     addComm, updateComm, removeComm,
   } = useAuditPlanning(firmId, userId, isSuperadmin);
 
-  // ── Audit Status view-mode state ───────────────────────────────────────────
-  const [auditViewMode,      setAuditViewMode]      = useState<AuditViewMode>("all");
+  // ── Audit Status client filter ─────────────────────────────────────────────
   const [selectedClientId,   setSelectedClientId]   = useState<string | null>(null);
   const [selectedClientName, setSelectedClientName] = useState<string | null>(null);
-
-  function switchToClient(clientId: string | null, clientName: string | null) {
-    setSelectedClientId(clientId);
-    setSelectedClientName(clientName);
-    setAuditViewMode("client");
-  }
 
   function handleClientDropdown(value: string) {
     if (value === "__all__") {
@@ -123,62 +107,28 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
         {/* ── Tab 2: Audit Status ── */}
         <TabsContent value="status" className="mt-4 space-y-3">
 
-          {/* ── View-mode toggle bar ── */}
+          {/* ── Client filter bar ── */}
           <div className="flex flex-wrap items-center gap-3">
-
-            {/* Segmented toggle */}
-            <div className="inline-flex items-center rounded-lg border border-border bg-muted/50 p-0.5 gap-0.5">
-              <button
-                onClick={() => setAuditViewMode("all")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-all",
-                  auditViewMode === "all"
-                    ? "bg-white shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <LayoutList size={12} />
-                All Clients
-              </button>
-
-              <button
-                onClick={() => setAuditViewMode("client")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-all",
-                  auditViewMode === "client"
-                    ? "bg-white shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <User size={12} />
-                Select Client
-              </button>
-            </div>
-
-            {/* Client dropdown — only visible in "client" mode */}
-            {auditViewMode === "client" && (
-              <Select
-                value={selectedClientId ?? "__all__"}
-                onValueChange={handleClientDropdown}
-              >
-                <SelectTrigger className="h-8 text-xs w-[220px]">
-                  <SelectValue placeholder="Choose a client…" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__" className="text-xs text-muted-foreground">
-                    — Show all rows —
+            <Select
+              value={selectedClientId ?? "__all__"}
+              onValueChange={handleClientDropdown}
+            >
+              <SelectTrigger className="h-8 text-xs w-[220px]">
+                <SelectValue placeholder="Filter by client…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__" className="text-xs text-muted-foreground">
+                  — All clients —
+                </SelectItem>
+                {clients.map(c => (
+                  <SelectItem key={c.id} value={c.id} className="text-xs">
+                    {c.name}
                   </SelectItem>
-                  {clients.map(c => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs">
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+                ))}
+              </SelectContent>
+            </Select>
 
-            {/* Hint label when a client is selected */}
-            {auditViewMode === "client" && selectedClientName && (
+            {selectedClientName && (
               <span className="text-xs text-muted-foreground">
                 Showing rows for{" "}
                 <span className="font-semibold text-indigo-700">{selectedClientName}</span>
@@ -186,24 +136,16 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             )}
           </div>
 
-          {/* ── Conditional view ── */}
-          {auditViewMode === "all" ? (
-            <AuditStatusSummaryView
-              firmId={firmId}
-              isSuperadmin={isSuperadmin}
-              onSelectClient={switchToClient}
-            />
-          ) : (
-            <AuditStatusGrid
-              firmId={firmId}
-              clients={clients}
-              users={users}
-              auditFirms={auditFirms}
-              planEntries={entries}
-              isSuperadmin={isSuperadmin}
-              clientIdFilter={selectedClientId}
-            />
-          )}
+          {/* ── Audit Status grid (always visible) ── */}
+          <AuditStatusGrid
+            firmId={firmId}
+            clients={clients}
+            users={users}
+            auditFirms={auditFirms}
+            planEntries={entries}
+            isSuperadmin={isSuperadmin}
+            clientIdFilter={selectedClientId}
+          />
 
         </TabsContent>
       </Tabs>

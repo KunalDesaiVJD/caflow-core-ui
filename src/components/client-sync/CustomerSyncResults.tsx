@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function CustomerSyncResults({ results, onClose }: Props) {
-  const { created, skipped, failed, errors, wasCancelled } = results;
+  const { created, updated, inactive, failed, errors, wasCancelled } = results;
 
   return (
     <div className="space-y-4 py-1">
@@ -19,7 +19,7 @@ export function CustomerSyncResults({ results, onClose }: Props) {
         <div className="flex items-center gap-2">
           <AlertCircle className="h-5 w-5 text-amber-500 shrink-0" />
           <div>
-            <p className="text-base font-semibold">Import Cancelled</p>
+            <p className="text-base font-semibold">Sync Cancelled</p>
             <p className="text-xs text-muted-foreground mt-0.5">
               {created} client{created !== 1 ? "s were" : " was"} created before cancellation.
               Already-created drafts are kept and can be deleted from the Clients page.
@@ -44,11 +44,19 @@ export function CustomerSyncResults({ results, onClose }: Props) {
               </td>
             </tr>
             <tr className="border-b">
-              <td className="px-4 py-2.5 text-muted-foreground">Skipped</td>
-              <td className="px-4 py-2.5 font-semibold text-amber-600">
-                {skipped} (already exist)
+              <td className="px-4 py-2.5 text-muted-foreground">Updated</td>
+              <td className="px-4 py-2.5 font-semibold text-blue-600">
+                {updated} existing client{updated !== 1 ? "s" : ""} refreshed
               </td>
             </tr>
+            {inactive > 0 && (
+              <tr className="border-b">
+                <td className="px-4 py-2.5 text-muted-foreground">Inactive (skipped)</td>
+                <td className="px-4 py-2.5 font-semibold text-muted-foreground">
+                  {inactive}
+                </td>
+              </tr>
+            )}
             <tr className={failed > 0 ? "border-b" : ""}>
               <td className="px-4 py-2.5 text-muted-foreground">Failed</td>
               <td className={`px-4 py-2.5 font-semibold ${
@@ -88,7 +96,7 @@ export function CustomerSyncResults({ results, onClose }: Props) {
         </div>
       )}
 
-      {/* ── Guidance note (only when records were created) ── */}
+      {/* ── Guidance note (only when new records were created) ── */}
       {created > 0 && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-3 flex gap-2">
           <Users className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />

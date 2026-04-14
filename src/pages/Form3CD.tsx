@@ -9,7 +9,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { Save, Loader2, CheckCircle2, Circle, Download, Printer, FileSpreadsheet } from "lucide-react";
+import { Save, Loader2, CheckCircle2, Circle, Download, Printer, FileSpreadsheet, History } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -23,6 +23,7 @@ import { FORM_3CD_CLAUSES } from "@/data/form3cd-clauses";
 import type { ClauseDefinition } from "@/data/form3cd-master";
 import ClauseRenderer from "@/components/form3cd/ClauseRenderer";
 import Form3CDReport from "@/components/form3cd/Form3CDReport";
+import TaxAuditVersionHistoryPanel from "@/components/form3cd/TaxAuditVersionHistoryPanel";
 
 /* ──────── types ──────── */
 interface ClauseData { [key: string]: any; }
@@ -93,6 +94,7 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [exportingXlsx, setExportingXlsx] = useState(false);
   const [engagement, setEngagement] = useState<any>(null);
   const [client, setClient] = useState<any>(null);
   const [formRow, setFormRow] = useState<any>(null);
@@ -118,6 +120,66 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Version history panel state
+  const [historyPanel, setHistoryPanel] = useState<{ clauseNo: string } | null>(null);
+
+  // ── Templated XLSX export via edge function ──────────────────────────────
+  async function exportTemplatedXlsx() {
+    if (!engagementId) return;
+    setExportingXlsx(true);
+    try {
+      // Determine form_type from engagement flags + entity_type
+      // 3CA is for entities whose accounts are audited under another law (Companies Act etc.)
+      // 3CB is for all others. Default to 3CA for Companies/LLPs, 3CB for Firms/Individuals.
+      const { data: flags } = await supabase
+        .from("audit_engagements")
+        .select("requires_3ca, requires_3cb, entity_type")
+        .eq("id", engagementId)
+        .single();
+      const entityType = (flags as any)?.entity_type ?? "";
+      const companiesActEntities = ["Private Ltd", "Public Ltd", "OPC", "LLP", "Company"];
+      const isCompaniesAct = companiesActEntities.some(t => entityType.includes(t));
+      // Explicit flag takes priority; fall back to entity-type heuristic
+      const formType = (flags as any)?.requires_3ca
+        ? "3CA-3CD"
+        : (flags as any)?.requires_3cb
+          ? "3CB-3CD"
+          : isCompaniesAct ? "3CA-3CD" : "3CB-3CD";
+
+      // Get the current session token
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not authenticated");
+
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+
+      // Use an iframe pointed at a GET URL — this is the most reliable download
+      // method in Chrome: the browser treats iframe navigation as a user-initiated
+      // download and respects Content-Disposition: attachment without any gesture
+      // timeout restrictions.
+      const params = new URLSearchParams({
+        engagement_id: engagementId,
+        form_type: formType,
+        token,
+      });
+      const downloadUrl = `${SUPABASE_URL}/functions/v1/export_tax_audit?${params}`;
+
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = downloadUrl;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        if (iframe.parentNode) document.body.removeChild(iframe);
+      }, 30000);
+
+      toast.success(`${formType} template — downloading…`);
+    } catch (e: any) {
+      toast.error(`Export failed: ${e.message}`);
+    } finally {
+      setExportingXlsx(false);
+    }
+  }
 
   // Fetch dynamic titles
   useEffect(() => {
@@ -335,29 +397,11 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
                 }}>
                   <Download className="h-4 w-4 mr-2" /> Export PDF
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => {
-                  const excelRows = activeClauses.map(c => {
-                    const key = clauseStateKey(c.clauseNo);
-                    const data = clauseData[key] || {};
-                    const filled = isClauseFilled(data);
-                    let answer = '';
-                    if (filled) {
-                      const entries = Object.entries(data).filter(([k]) => !k.startsWith('_'));
-                      answer = entries
-                        .filter(([, v]) => typeof v === 'string' && v.trim())
-                        .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-                        .join('\n');
-                    }
-                    return {
-                      "Clause Number": c.clauseNo.replace('_', '-'),
-                      "Clause Heading": c.title,
-                      "Description": filled ? 'Filled' : 'Not Applicable / NIL',
-                      "Answer": answer || (filled ? 'See detailed entries' : 'N/A'),
-                    };
-                  });
-                  exportToExcel([{ sheetName: "Form 3CD", rows: excelRows }], `Form-3CD_${client?.name || 'report'}_${fy}.xlsx`);
-                }}>
-                  <FileSpreadsheet className="h-4 w-4 mr-2" /> Export Excel
+                <DropdownMenuItem onClick={exportTemplatedXlsx} disabled={exportingXlsx}>
+                  {exportingXlsx
+                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Exporting…</>
+                    : <><FileSpreadsheet className="h-4 w-4 mr-2" /> Export Excel (Template)</>
+                  }
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -531,6 +575,18 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
                           rows={2}
                         />
                       </div>
+                      {/* Version history */}
+                      <div className="flex justify-end pt-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => setHistoryPanel({ clauseNo: clause.clauseNo })}
+                        >
+                          <History className="h-3.5 w-3.5" />
+                          History
+                        </Button>
+                      </div>
                     </AccordionContent>
                   </AccordionItem>
                 </div>
@@ -549,6 +605,17 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
           ay={ay}
           clauseData={clauseData}
           onClose={() => setShowPrintView(false)}
+        />
+      )}
+
+      {/* VERSION HISTORY PANEL */}
+      {engagementId && (
+        <TaxAuditVersionHistoryPanel
+          open={!!historyPanel}
+          onClose={() => setHistoryPanel(null)}
+          engagementId={engagementId}
+          elementType="clause"
+          label={historyPanel ? `Clause ${historyPanel.clauseNo.replace('_', '-')}` : ""}
         />
       )}
     </div>

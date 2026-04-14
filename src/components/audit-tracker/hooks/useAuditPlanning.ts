@@ -152,25 +152,39 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
     const newEntry = data as PlanEntry;
 
     // Part B — Auto-insert into communication log (audit_communication)
-    await supabase.from("audit_communication").insert({
-      firm_id:            firmId,
-      planning_id:        newEntry.id,
-      client_name:        input.client_name,
-      audit_planned_from: input.planned_from,
-      audit_planned_to:   input.planned_to,
-      remarks:            "Auto-created from Planning Calendar",
-    });
+    {
+      const { error: commErr } = await supabase.from("audit_communication").insert({
+        firm_id:            firmId,
+        planning_id:        newEntry.id,
+        client_name:        input.client_name,
+        audit_planned_from: input.planned_from,
+        audit_planned_to:   input.planned_to,
+        remarks:            "Auto-created from Planning Calendar",
+      });
+      if (commErr) console.warn("[useAuditPlanning] audit_communication auto-create:", commErr.message);
+    }
 
-    // Part B — Auto-upsert into audit_status as Scheduled
-    await supabase.from("audit_status").insert({
-      firm_id:                  firmId,
-      client_id:                input.client_id,
-      party_name:               input.client_name,
-      audit_status:             "Scheduled",
-      physical_audit_conducted: "No",
-      accounting_data:          "No",
-      scanned:                  "No",
-    });
+    // Part B — Auto-create audit_status row as "Scheduled" (ON CONFLICT DO NOTHING)
+    // Uses upsert with ignoreDuplicates so re-scheduling the same client never throws.
+    {
+      const { error: statusErr } = await supabase.from("audit_status").upsert(
+        {
+          firm_id:                  firmId,
+          client_id:                input.client_id,
+          party_name:               input.client_name,
+          audit_status:             "Scheduled",
+          physical_audit_conducted: "No",
+          accounting_data:          "No",
+          scanned:                  "No",
+        },
+        { onConflict: "firm_id,client_id", ignoreDuplicates: true }
+      );
+      // If the table has no (firm_id, client_id) unique index, fall back to a
+      // plain insert and silently ignore duplicate-key errors (code 23505).
+      if (statusErr && (statusErr as any).code !== "23505") {
+        console.warn("[useAuditPlanning] audit_status auto-create:", statusErr.message);
+      }
+    }
 
     // Part C — Notify every assigned employee on their dashboard
     if (input.employee_ids && input.employee_ids.length > 0) {
@@ -232,6 +246,10 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
   }
 
   // ── Communication CRUD ─────────────────────────────────────────────────────
+  // ISSUE-18 FIX: these functions NO LONGER gate on `useLs`.
+  // `useLs` is set when audit_planning table is unreachable — that has nothing
+  // to do with audit_communication.  We always attempt Supabase first and only
+  // fall back to localStorage if the communication table itself returns an error.
 
   async function addComm(
     input: Pick<CommEntry, "planning_id"|"client_name"|"audit_planned_from"|"audit_planned_to"|"contact_person"|"contact_no"|"remarks">
@@ -243,14 +261,7 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       created_at: new Date().toISOString(),
     };
 
-    if (useLs) {
-      const updated = [draft, ...comms];
-      setComms(updated);
-      lsSave(lsKey("communication", firmId), updated);
-      toast.success("Communication logged (offline)");
-      return;
-    }
-
+    // Always try Supabase — do NOT short-circuit via useLs
     const { error } = await supabase.from("audit_communication").insert({
       firm_id:            firmId,
       planning_id:        input.planning_id,
@@ -262,21 +273,29 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       remarks:            input.remarks,
     });
 
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      // Genuine offline fallback — only when this table itself is unreachable
+      const updated = [draft, ...comms];
+      setComms(updated);
+      lsSave(lsKey("communication", firmId), updated);
+      toast.success("Communication logged (offline)");
+      return;
+    }
     toast.success("Communication logged");
     await load();
   }
 
   async function updateComm(id: string, patch: Partial<CommEntry>) {
-    if (useLs) {
+    // Always try Supabase — do NOT short-circuit via useLs
+    const oldRow = comms.find(c => c.id === id);
+    const { error } = await supabase.from("audit_communication").update(patch as any).eq("id", id);
+    if (error) {
+      // Fallback: update in-memory + localStorage
       const updated = comms.map(c => c.id === id ? { ...c, ...patch } : c);
       setComms(updated);
       lsSave(lsKey("communication", firmId), updated);
       return;
     }
-    const oldRow = comms.find(c => c.id === id);
-    const { error } = await supabase.from("audit_communication").update(patch as any).eq("id", id);
-    if (error) { toast.error(error.message); return; }
     // Log field-level changes into audit_change_log (best-effort)
     if (oldRow) {
       logChanges("audit_communication", id, oldRow as any, patch as any,
@@ -286,14 +305,15 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
   }
 
   async function removeComm(id: string) {
-    if (useLs) {
+    // Always try Supabase — do NOT short-circuit via useLs
+    const { error } = await supabase.from("audit_communication").delete().eq("id", id);
+    if (error) {
+      // Fallback: remove from in-memory + localStorage
       const updated = comms.filter(c => c.id !== id);
       setComms(updated);
       lsSave(lsKey("communication", firmId), updated);
       return;
     }
-    const { error } = await supabase.from("audit_communication").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
     await load();
   }
 

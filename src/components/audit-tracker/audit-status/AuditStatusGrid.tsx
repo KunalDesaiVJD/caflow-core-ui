@@ -59,7 +59,7 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "3CA Checked By",    id: "checked_by",                 filterType: "text"   },
   { label: "3CA Uploaded By",   id: "uploaded_by",                filterType: "text"   },
   { label: "Remarks",           id: "remarks",                    filterType: "text"   },
-  { label: "",                  id: "_history",                   filterType: "none"   },
+  { label: "",                  id: "_actions",                   filterType: "none"   },
 ];
 
 // ─── Blank template for a new row ─────────────────────────────────────────────
@@ -313,7 +313,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                         "border border-indigo-600 px-2 py-2.5 text-left whitespace-nowrap select-none",
                         col.id === "_srno"      && "sticky left-0 z-40 bg-indigo-700 w-10",
                         col.id === "party_name" && "sticky left-10 z-40 bg-indigo-700 min-w-[140px]",
-                        col.id === "_history"   && "w-9 text-center",
+                        col.id === "_actions"   && "w-16 text-center",
                         col.sortable && "cursor-pointer hover:bg-indigo-600",
                       )}
                     >

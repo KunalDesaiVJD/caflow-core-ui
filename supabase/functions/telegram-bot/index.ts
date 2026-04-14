@@ -57,7 +57,13 @@ RULES:
 - All firms are treated as ONE unit (no firm filter)
 - Always use tools to fetch real data — never make up information
 - When user asks for PDF, USE the send_pdf_to_telegram tool
-- When user asks to email, USE the send_email_with_attachments tool
+  • If user says "ledger PDF" / "download ledger" without specifying type, ask:
+    "Which ledger would you like?\n1️⃣ Client Ledger\n2️⃣ Group Ledger\n3️⃣ Firm Revenue Ledger\nReply 1, 2, or 3."
+    Then call send_pdf_to_telegram with ledger_type = client/group/firm_revenue accordingly
+- When user asks to EMAIL/MAIL: ALWAYS USE the send_email_with_attachments tool
+  • "mail ledger" / "send khata by email" / "account statement bhejo" → include_invoice=false, include_ledger=true
+  • "mail invoice" / "bill email karo" → include_invoice=true, include_ledger=false
+  • "mail both" / "send everything" → both defaults true
 - Respond in friendly, concise format with emojis
 - Use Markdown formatting for lists and tables
 - If a client name is ambiguous, show top matches and ask user to clarify
@@ -135,29 +141,43 @@ const BILLING_TOOLS = [
   },
   {
     name: "send_pdf_to_telegram",
-    description: "Generate and send PDF files directly to the Telegram chat. Use when user asks for PDF.",
+    description: `Generate and send PDF files directly to the Telegram chat. Use when user asks for PDF.
+For ledger PDFs, ledger_type specifies which ledger to generate:
+  - "client"       → client account statement (requires client_name)
+  - "group"        → group/consolidated ledger across clients in a group (requires group_name or client_name)
+  - "firm_revenue" → firm-wide income/revenue summary for the FY
+If user says "download ledger" / "ledger PDF" without specifying type, ask: "Which ledger type?\\n1. Client Ledger\\n2. Group Ledger\\n3. Firm Revenue Ledger\\nReply 1, 2, or 3."`,
     input_schema: {
       type: "object",
       properties: {
         document_type: { type: "string", enum: ["invoice", "ledger"], description: "Type of PDF to generate" },
+        ledger_type:   { type: "string", enum: ["client", "group", "firm_revenue"],
+                         description: "For ledger PDFs: client | group | firm_revenue" },
         invoice_ids:   { type: "array",  items: { type: "string" }, description: "Specific invoice UUIDs to generate PDFs for" },
         client_name:   { type: "string", description: "Client name — used when no invoice_ids provided" },
+        group_name:    { type: "string", description: "Group name for group ledger" },
         doc_no:        { type: "string", description: "Invoice doc number (partial match ok)" },
+        financial_year: { type: "string", description: "FY e.g. 2026-27 (optional, defaults to current FY)" },
       },
       required: ["document_type"],
     },
   },
   {
     name: "send_email_with_attachments",
-    description: "Send email to client with invoice PDF and/or ledger PDF attached.",
+    description: `Send email to client with invoice PDF and/or ledger (account statement) PDF attached.
+USAGE RULES:
+- User says "mail ledger / send ledger / email khata / account statement bhejo" → set include_invoice=false, include_ledger=true
+- User says "mail invoice / send invoice / email bill" → set include_invoice=true, include_ledger=false
+- User says "mail everything / send both / invoice aur ledger" → use defaults (both true)
+- Always try to resolve client email from DB; use email_to only if user explicitly provides one`,
     input_schema: {
       type: "object",
       properties: {
         client_name:     { type: "string",  description: "Client name to send email to" },
-        invoice_doc_no:  { type: "string",  description: "Invoice doc number to attach (partial match ok)" },
-        include_invoice: { type: "boolean", description: "Attach invoice PDF (default true)" },
-        include_ledger:  { type: "boolean", description: "Attach current-FY ledger PDF (default true)" },
-        email_to:        { type: "string",  description: "Override recipient email (optional)" },
+        invoice_doc_no:  { type: "string",  description: "Invoice doc number to attach (partial match ok). Only needed when include_invoice=true." },
+        include_invoice: { type: "boolean", description: "Attach invoice PDF. Set false for ledger-only requests. Default true." },
+        include_ledger:  { type: "boolean", description: "Attach current-FY ledger PDF. Set false for invoice-only requests. Default true." },
+        email_to:        { type: "string",  description: "Override recipient email address (optional — use only when user provides explicit email)" },
       },
       required: ["client_name"],
     },
@@ -241,11 +261,40 @@ Deno.serve(async (req: Request) => {
   const message: TgMessage = body.message || body.edited_message;
   if (!message?.text) return new Response("ok");
 
-  const chatId = message.chat.id;
-  const userId = message.from.id;    // kept for logging only, not for auth
-  const text   = message.text.trim();
+  const chatId   = message.chat.id;
+  const userId   = message.from.id;
+  const text     = message.text.trim();
+  const updateId: number = body.update_id ?? 0;
 
   console.log(`[Bot] Message from ${message.from.first_name ?? "?"} (${userId}): ${text.slice(0, 80)}`);
+
+  // ── Deduplication: skip if Telegram re-sent this webhook ─────────────────
+  // Telegram resends a webhook after ~15 s if the bot hasn't responded.
+  // Slow PDF generation (Gotenberg) can exceed that threshold, causing the
+  // same message to be processed twice and the same PDF sent twice.
+  // Fix: claim the update_id in DB before starting heavy work.
+  if (updateId) {
+    try {
+      const { data: ctx } = await (supabase as any)
+        .from("telegram_context")
+        .select("last_update_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (ctx?.last_update_id && Number(ctx.last_update_id) >= updateId) {
+        console.log(`[Bot] Duplicate update_id=${updateId} — skipping`);
+        return new Response("ok");
+      }
+
+      // Claim immediately so a concurrent duplicate sees it and skips
+      await (supabase as any)
+        .from("telegram_context")
+        .upsert(
+          { user_id: userId, last_update_id: updateId, updated_at: new Date().toISOString() },
+          { onConflict: "user_id" }
+        );
+    } catch { /* non-fatal — proceed anyway */ }
+  }
 
   // ONLY /start bypasses Claude — simple welcome, nothing else
   if (text === "/start") {
@@ -280,6 +329,31 @@ async function handleHelpDynamic(chatId: number): Promise<void> {
   );
 }
 
+// ─── claudeFetch — fetch wrapper with exponential-backoff retry on 529 ───────
+// Anthropic returns HTTP 529 ("Overloaded") during peak load.  Without retry the
+// bot immediately shows ❌ An error occurred.  Three retries (1 s → 2 s → 4 s)
+// cover the typical transient overload window without exceeding Supabase's 10 s
+// function timeout on the first attempt, and 26 s total on a worst-case third.
+async function claudeFetch(url: string, init: RequestInit, maxRetries = 3): Promise<Response> {
+  let lastRes: Response | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      // 529 Overloaded: short backoff (1 s, 2 s, 4 s)
+      // 429 Rate-limit:  longer backoff (5 s, 10 s, 20 s)
+      const is429  = lastRes?.status === 429;
+      const delayMs = is429
+        ? Math.pow(2, attempt - 1) * 5000   // 5 s → 10 s → 20 s
+        : Math.pow(2, attempt - 1) * 1000;  // 1 s →  2 s →  4 s
+      console.log(`[Bot] claudeFetch: ${lastRes?.status} — retry ${attempt}/${maxRetries} in ${delayMs}ms`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+    const res = await fetch(url, init);
+    if (res.status !== 529 && res.status !== 429) return res;
+    lastRes = res;
+  }
+  return lastRes!;
+}
+
 // ─── handleWithClaude — full Claude tool-use loop ──────────────────────────────
 async function handleWithClaude(chatId: number, userId: number, userText: string): Promise<void> {
   if (!ANTHROPIC_API_KEY) {
@@ -295,7 +369,16 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
       .select("history")
       .eq("user_id", userId)
       .maybeSingle();
-    history = ctx?.history ?? [];
+    const raw: any[] = ctx?.history ?? [];
+    // Defensive clean: keep ONLY pure-text messages.
+    // "some text block" is NOT enough — an assistant msg can have BOTH a text block
+    // AND a tool_use block; keeping it while dropping the paired tool_result produces
+    // the same "unexpected tool_use_id" 400. We need ALL blocks to be text.
+    history = raw.filter((m: any) => {
+      if (typeof m.content === "string") return true;
+      if (!Array.isArray(m.content) || m.content.length === 0) return false;
+      return (m.content as any[]).every((b: any) => b.type === "text");
+    });
   } catch { /* table may not exist yet — degrade gracefully */ }
 
   history.push({ role: "user", content: userText });
@@ -315,7 +398,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
   });
 
   try {
-    let res = await fetch("https://api.anthropic.com/v1/messages", {
+    let res = await claudeFetch("https://api.anthropic.com/v1/messages", {
       method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
     });
     if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -345,7 +428,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
       history.push({ role: "assistant", content: msg.content });
       history.push({ role: "user",      content: toolResults });
 
-      res = await fetch("https://api.anthropic.com/v1/messages", {
+      res = await claudeFetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: CLAUDE_HEADERS, body: makeBody(history),
       });
       if (!res.ok) throw new Error(`Claude API (round ${rounds + 1}) ${res.status}`);
@@ -360,10 +443,24 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
     // ── Persist updated history ────────────────────────────────────────────────
     history.push({ role: "assistant", content: msg.content });
     try {
+      // Persist ONLY pure-text exchanges — no tool_use, no tool_result blocks at all.
+      // Rule: keep a message only if EVERY content block is type "text".
+      //
+      // Why "every" not "some":
+      //   An assistant turn can be [{type:"text",...},{type:"tool_use",...}].
+      //   "some" kept it while dropping the matching tool_result user turn,
+      //   producing orphaned tool_use_id → 400 on next load.
+      //   "every" drops the whole mixed turn, so stored history is always clean
+      //   user-text → assistant-text pairs with zero tool internals.
+      const cleanHistory = history.filter((m: any) => {
+        if (typeof m.content === "string") return true;
+        if (!Array.isArray(m.content) || m.content.length === 0) return false;
+        return (m.content as any[]).every((b: any) => b.type === "text");
+      });
       await (supabase as any)
         .from("telegram_context")
         .upsert(
-          { user_id: userId, history: history.slice(-20), updated_at: new Date().toISOString() },
+          { user_id: userId, history: cleanHistory.slice(-20), updated_at: new Date().toISOString() },
           { onConflict: "user_id" }
         );
     } catch { /* non-fatal */ }
@@ -371,7 +468,15 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error("[Bot] handleWithClaude error:", errMsg);
-    await sendMsg(chatId, `❌ An error occurred\\. Please try again\\.\n_${escMd(errMsg.slice(0, 120))}_`);
+    // 529 overloaded — show a friendly retry message instead of a raw API error
+    const isOverloaded = errMsg.includes("529") || errMsg.toLowerCase().includes("overloaded");
+    if (isOverloaded) {
+      await sendMsg(chatId,
+        "⏳ The AI service is under high load right now\\. Please send your message again in a moment\\."
+      );
+    } else {
+      await sendMsg(chatId, `❌ An error occurred\\. Please try again\\.\n_${escMd(errMsg.slice(0, 120))}_`);
+    }
   }
 }
 
@@ -859,9 +964,12 @@ async function handleSendEmail(chatId: number, intent: Intent) {
       ledgerEntries = le ?? [];
     }
 
+    // ── Fetch firm details for enriched invoice PDF ─────────────────────────
+    const invFirmData = await fetchFirmForInvoice(invoice);
+
     // ── Generate PDFs in parallel ────────────────────────────────────────────
     const [invPdfBytes, ledgerPdfBytes] = await Promise.all([
-      generateInvoicePdf(invoice, firmName, clientName),
+      generateInvoicePdf(invoice, firmName, clientName, invFirmData ?? undefined),
       generateLedgerPdf(clientName, firmName, ledgerEntries, fyLabel),
     ]);
     const invB64    = uint8ToBase64(invPdfBytes);
@@ -1267,24 +1375,126 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
 
   // ── Ledger PDF ─────────────────────────────────────────────────────────────
   if (docType === "ledger") {
-    if (!input.client_name) return { error: "client_name is required for ledger PDF" };
+    const now    = new Date();
+    const fyYear = (() => {
+      if (input.financial_year) {
+        const m = String(input.financial_year).match(/^(\d{4})/);
+        return m ? parseInt(m[1]) : (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1);
+      }
+      return now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    })();
+    const fyLabel  = `${fyYear}-${String(fyYear + 1).slice(2)}`;
+    const fyStart  = `${fyYear}-04-01`;
+    const fyEnd    = `${fyYear + 1}-03-31`;
+    const ledgerType = input.ledger_type ?? "client";
 
-    const ledgerResult = await getLedger({ client_name: input.client_name });
-    if (ledgerResult.error) return ledgerResult;
+    // ── CLIENT LEDGER ──────────────────────────────────────────────────────
+    if (ledgerType === "client") {
+      if (!input.client_name) return { error: "client_name is required for client ledger PDF" };
 
-    const { client_name, total_entries, closing_balance, recent_entries } = ledgerResult;
-    const entries    = recent_entries ?? [];
-    const now        = new Date();
-    const fyYear     = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-    const fyLabel    = `${fyYear}-${String(fyYear + 1).slice(2)}`;
-    const safeClient = client_name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-    const caption    = `📒 Account Statement: ${client_name}\nFY ${fyLabel} | ${total_entries} entries | Balance: Rs.${fmtNum(closing_balance)}`;
+      // Find client
+      const { data: clients } = await supabase.from("clients")
+        .select("id,name").ilike("name", `%${input.client_name}%`)
+        .eq("is_draft", false).is("deleted_at", null).limit(1);
+      if (!clients?.length)
+        return { error: `Client '${input.client_name}' not found.` };
 
-    await sendTelegram(chatId, `⏳ Generating ledger PDF for ${client_name}…`);
-    const pdfBytes = await generateLedgerPdf(client_name, FIRM_DISPLAY_NAME, entries, fyLabel);
-    await deliverPdf(pdfBytes, `Ledger_${safeClient}_FY${fyLabel}.pdf`, caption);
+      const client = clients[0];
+      // Fetch ALL ledger entries for the FY (not capped at 15)
+      const { data: allEntries } = await supabase
+        .from("client_ledger_entries")
+        .select("*")
+        .eq("client_id", client.id)
+        .gte("entry_date", fyStart)
+        .lte("entry_date", fyEnd)
+        .order("entry_date", { ascending: true });
 
-    return { ok: true, document_type: "ledger", client_name, fy_label: fyLabel };
+      const entries = allEntries ?? [];
+      const safeClient = client.name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+
+      let closing = 0;
+      for (const e of entries) closing += (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0);
+      const caption = `📒 Client Ledger: ${client.name}\nFY ${fyLabel} | ${entries.length} entries | Balance: Rs.${fmtNum(Math.abs(closing))} ${closing >= 0 ? "Dr" : "Cr"}`;
+
+      await sendTelegram(chatId, `⏳ Generating client ledger PDF for ${client.name} (FY ${fyLabel}, ${entries.length} entries)…`);
+      const pdfBytes = await generateLedgerPdf(client.name, FIRM_DISPLAY_NAME, entries, fyLabel);
+      await deliverPdf(pdfBytes, `ClientLedger_${safeClient}_FY${fyLabel}.pdf`, caption);
+      return { ok: true, ledger_type: "client", client_name: client.name, fy_label: fyLabel, entry_count: entries.length };
+    }
+
+    // ── GROUP LEDGER ───────────────────────────────────────────────────────
+    if (ledgerType === "group") {
+      const groupName = input.group_name ?? input.client_name ?? null;
+      if (!groupName) return { error: "group_name is required for group ledger PDF" };
+
+      // Find all clients matching the group name (by client_group table or name pattern)
+      const { data: groupRows } = await supabase
+        .from("client_groups").select("id,name,client_ids")
+        .ilike("name", `%${groupName}%`).limit(1);
+
+      let clientIds: string[] = [];
+      let resolvedGroupName = groupName;
+      if (groupRows?.length) {
+        resolvedGroupName = groupRows[0].name;
+        clientIds = Array.isArray(groupRows[0].client_ids) ? groupRows[0].client_ids : [];
+      }
+      // Fallback: find clients whose name matches
+      if (!clientIds.length) {
+        const { data: matchedClients } = await supabase.from("clients")
+          .select("id,name").ilike("name", `%${groupName}%`)
+          .eq("is_draft", false).is("deleted_at", null).limit(10);
+        clientIds = (matchedClients ?? []).map((c: any) => c.id);
+      }
+      if (!clientIds.length) return { error: `No clients found for group '${groupName}'.` };
+
+      const { data: allEntries } = await supabase
+        .from("client_ledger_entries")
+        .select("*")
+        .in("client_id", clientIds)
+        .gte("entry_date", fyStart)
+        .lte("entry_date", fyEnd)
+        .order("entry_date", { ascending: true });
+
+      const entries = allEntries ?? [];
+      await sendTelegram(chatId, `⏳ Generating group ledger PDF for ${resolvedGroupName} (${clientIds.length} clients, ${entries.length} entries, FY ${fyLabel})…`);
+      const pdfBytes = await generateLedgerPdf(resolvedGroupName, FIRM_DISPLAY_NAME, entries, fyLabel);
+      const safeGrp  = resolvedGroupName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+      const caption  = `📒 Group Ledger: ${resolvedGroupName}\nFY ${fyLabel} | ${clientIds.length} clients | ${entries.length} entries`;
+      await deliverPdf(pdfBytes, `GroupLedger_${safeGrp}_FY${fyLabel}.pdf`, caption);
+      return { ok: true, ledger_type: "group", group_name: resolvedGroupName, fy_label: fyLabel, entry_count: entries.length };
+    }
+
+    // ── FIRM REVENUE LEDGER ─────────────────────────────────────────────────
+    if (ledgerType === "firm_revenue") {
+      const { data: invoices } = await supabase
+        .from("invoices")
+        .select("invoice_no,invoice_date,to_name,total_amount,gst_amount,amount,status")
+        .neq("status", "draft")
+        .gte("invoice_date", fyStart)
+        .lte("invoice_date", fyEnd)
+        .order("invoice_date", { ascending: true });
+
+      const invList = invoices ?? [];
+      // Build synthetic ledger entries from invoices
+      const entries = invList.map((inv: any) => ({
+        entry_date:    inv.invoice_date,
+        narration:     `Invoice ${inv.invoice_no ?? "—"} — ${inv.to_name ?? "Client"}`,
+        debit_amount:  Number(inv.total_amount ?? inv.amount ?? 0),
+        credit_amount: 0,
+        entry_type:    "invoice",
+        balance:       0,
+      }));
+      let running = 0;
+      for (const e of entries) { running += Number(e.debit_amount); (e as any).balance = running; }
+
+      await sendTelegram(chatId, `⏳ Generating Firm Revenue Ledger FY ${fyLabel} (${entries.length} invoices)…`);
+      const pdfBytes = await generateLedgerPdf(`Firm Revenue Summary`, FIRM_DISPLAY_NAME, entries, fyLabel);
+      const caption  = `📊 Firm Revenue Ledger — FY ${fyLabel}\n${entries.length} invoices | Total: Rs.${fmtNum(running)}`;
+      await deliverPdf(pdfBytes, `FirmRevenue_FY${fyLabel}.pdf`, caption);
+      return { ok: true, ledger_type: "firm_revenue", fy_label: fyLabel, invoice_count: entries.length, total_revenue: running };
+    }
+
+    return { error: "Invalid ledger_type. Use: client | group | firm_revenue" };
   }
 
   // ── Invoice PDF(s) ─────────────────────────────────────────────────────────
@@ -1320,9 +1530,10 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
       if (cl?.name) clientName = cl.name;
     }
 
-    const firmName = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
-    const pdfBytes = await generateInvoicePdf(inv, firmName, clientName);
-    const safeNo   = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
+    const firmName  = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
+    const invFirm   = await fetchFirmForInvoice(inv);
+    const pdfBytes  = await generateInvoicePdf(inv, firmName, clientName, invFirm ?? undefined);
+    const safeNo    = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
     const caption  = `📄 Invoice ${inv.invoice_no ?? ""} | ${clientName}\n` +
                      `Rs.${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${capitalize(inv.status ?? "draft")} | ${fmtDate(inv.invoice_date)}`;
 
@@ -1340,8 +1551,10 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   // ── 1. Resolve client ──────────────────────────────────────────────────────
   const { data: clients } = await supabase.from("clients").select("id,name,email")
     .ilike("name", `%${input.client_name}%`).limit(1);
-  if (!clients?.length || !clients[0].email)
-    return { error: "Client not found or no email" };
+  if (!clients?.length)
+    return { error: `Client '${input.client_name}' not found. Please check the name and try again.` };
+  if (!clients[0].email && !input.email_to)
+    return { error: `No email address on file for '${clients[0].name}'. Please update client details in the portal, or specify an email address.` };
 
   const clientId       = clients[0].id;
   const clientName     = clients[0].name ?? "Client";
@@ -1384,7 +1597,8 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   const attachments: { filename: string; content: string }[] = [];
 
   if (includeInvoice && inv) {
-    const pdfBytes  = await generateInvoicePdf(inv, firmName, clientName);
+    const invFirm   = await fetchFirmForInvoice(inv);
+    const pdfBytes  = await generateInvoicePdf(inv, firmName, clientName, invFirm ?? undefined);
     const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
     attachments.push({ filename: `Invoice_${safeInvNo}.pdf`, content: uint8ToBase64(pdfBytes) });
   }
@@ -1394,8 +1608,16 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
     attachments.push({ filename: `Ledger_${safeClient}.pdf`, content: uint8ToBase64(pdfBytes) });
   }
 
+  // If no invoice attached but ledger was requested and has no entries, still
+  // generate a blank ledger PDF so the user gets something actionable.
+  if (!attachments.length && includeLedger) {
+    const pdfBytes   = await generateLedgerPdf(clientName, firmName, [], fyLabel);
+    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+    attachments.push({ filename: `Ledger_${safeClient}_FY${fyLabel}.pdf`, content: uint8ToBase64(pdfBytes) });
+    await sendTelegram(chatId, `ℹ️ No ledger entries found for ${clientName} — sending blank statement.`);
+  }
   if (!attachments.length)
-    return { error: "Nothing to attach — no invoice found and no ledger entries exist." };
+    return { error: "Nothing to send — no invoice found and ledger is empty. Please check the client name or create entries in the portal." };
 
   // ── 5. Build email ─────────────────────────────────────────────────────────
   const subject = inv
@@ -1644,7 +1866,7 @@ function normaliseIntent(parsed: any): Intent {
 
 async function callClaude(systemPrompt: string, userText: string, maxTokens = 300): Promise<any | null> {
   if (!ANTHROPIC_API_KEY) return null;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await claudeFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key":         ANTHROPIC_API_KEY,
@@ -1673,7 +1895,7 @@ async function callClaude(systemPrompt: string, userText: string, maxTokens = 30
 
 async function callClaudeRaw(systemPrompt: string, userText: string, maxTokens = 200): Promise<string | null> {
   if (!ANTHROPIC_API_KEY) return null;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await claudeFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key":         ANTHROPIC_API_KEY,
@@ -1791,10 +2013,11 @@ async function handleSendPdf(chatId: number, intent: Intent, ctx: TgContext | nu
         if (cl?.name) clientName = cl.name;
       }
 
-      const firmName = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
+      const firmName   = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
+      const invFirmDat = await fetchFirmForInvoice(inv);
 
       // Generate PDF bytes directly — no Storage upload needed
-      const pdfBytes = await generateInvoicePdf(inv, firmName, clientName);
+      const pdfBytes = await generateInvoicePdf(inv, firmName, clientName, invFirmDat ?? undefined);
 
       const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
       const caption   =
@@ -1857,97 +2080,396 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Simple invoice PDF — firm header, invoice meta, line-items table, totals */
+/** Fetch firm details for PDF generation */
+async function fetchFirmForInvoice(invoice: any): Promise<any> {
+  const firmId = invoice?.firm_id ?? null;
+  if (!firmId) return null;
+  const { data } = await supabase.from("firms")
+    .select("id,name,gstin,pan,address,city,state,pincode,phone,email,registration_no")
+    .eq("id", firmId).maybeSingle();
+  return data ?? null;
+}
+
+/**
+ * CAFlow-standard Tax Invoice PDF — matches portal invoice format.
+ * Includes: firm GSTIN/PAN/address, From/To sections, SAC codes,
+ * GST breakup (CGST+SGST or IGST), bank details, CAFlow footer.
+ */
+// ── PDF helpers ───────────────────────────────────────────────────────────────
+
+/** Format a number with 2 decimal places in Indian locale (e.g. 25,000.00) */
+function fmtAmt(n: number): string {
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Format date as DD/MM/YYYY to match app invoice format */
+function fmtDateDMY(d: string | null | undefined): string {
+  if (!d) return "—";
+  try {
+    const dt = new Date(d);
+    const dd   = String(dt.getDate()).padStart(2, "0");
+    const mm   = String(dt.getMonth() + 1).padStart(2, "0");
+    const yyyy = dt.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  } catch { return d ?? "—"; }
+}
+
+/** Wrap a string into lines of ≤ maxChars characters on word boundaries */
+function wrapText(text: string, maxChars: number): string[] {
+  if (!text) return [];
+  if (text.length <= maxChars) return [text];
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const candidate = cur ? `${cur} ${w}` : w;
+    if (candidate.length <= maxChars) { cur = candidate; }
+    else { if (cur) lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+/** Convert a rupee amount to English words (Indian system) */
+function numberToWords(amount: number): string {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+                "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+                "Seventeen", "Eighteen", "Nineteen"];
+  const tensW = ["", "", "Twenty", "Thirty", "Forty", "Fifty",
+                 "Sixty", "Seventy", "Eighty", "Ninety"];
+  function cvt(n: number): string {
+    if (n === 0) return "";
+    if (n < 20)  return ones[n] + " ";
+    if (n < 100) return tensW[Math.floor(n / 10)] + " " + (n % 10 ? ones[n % 10] + " " : "");
+    return ones[Math.floor(n / 100)] + " Hundred " + cvt(n % 100);
+  }
+  const rounded = Math.round(amount);
+  if (rounded === 0) return "Zero";
+  let result = "";
+  let num = rounded;
+  if (num >= 10000000) { result += cvt(Math.floor(num / 10000000)) + "Crore "; num %= 10000000; }
+  if (num >= 100000)   { result += cvt(Math.floor(num / 100000))   + "Lakh ";  num %= 100000;   }
+  if (num >= 1000)     { result += cvt(Math.floor(num / 1000))     + "Thousand "; num %= 1000;  }
+  result += cvt(num);
+  return result.trim().replace(/\s{2,}/g, " ");
+}
+
+// ─── buildInvoiceHtml — ported verbatim from src/lib/invoicePdfGenerator.ts ──
+// (Pure TypeScript, no browser APIs — same HTML the billing module renders)
+
+const DOC_HEADINGS_MAP: Record<string, string> = {
+  invoice:     "TAX INVOICE",
+  credit_note: "CREDIT NOTE",
+  quotation:   "QUOTATION",
+  proforma:    "PROFORMA INVOICE",
+};
+
+const fmtINR = (n: number) =>
+  n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function escHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function normAddrSegs(addr: string): string[] {
+  return addr
+    .replace(/<br\s*\/?/gi, ",").replace(/[\n\r]+/g, ",")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .filter((s, i, a) => i === 0 || s.toLowerCase() !== a[i - 1].toLowerCase());
+}
+
+function fmtFirmAddrHtml(address: string): string {
+  const segs = normAddrSegs(address);
+  if (!segs.length) return "";
+  let lines: string[];
+  if (segs.length >= 5) {
+    lines = [
+      segs.slice(0, 2).join(", "),
+      segs.slice(2, 4).join(", "),
+      segs.slice(4).join(", "),
+    ].filter(Boolean);
+  } else {
+    lines = [segs.join(", ")];
+  }
+  return lines
+    .map((ln, i) => {
+      const clean = escHtml(ln.replace(/\s+,/g, ",").replace(/,{2,}/g, ",").trim());
+      const suf = i < lines.length - 1 && !clean.endsWith(",") ? "," : "";
+      return `<span>${clean}${suf}</span>`;
+    })
+    .join("<br/>");
+}
+
+function numToWords(num: number): string {
+  if (num === 0) return "Zero Only";
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
+    "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const scales = ["", "Thousand", "Lakh", "Crore"];
+  function cvtGroup(n: number): string {
+    if (n === 0) return "";
+    if (n < 20) return ones[n];
+    if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
+    return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " and " + cvtGroup(n % 100) : "");
+  }
+  const groups: number[] = [];
+  let tmp = num;
+  groups.push(tmp % 1000); tmp = Math.floor(tmp / 1000);
+  while (tmp > 0) { groups.push(tmp % 100); tmp = Math.floor(tmp / 100); }
+  const parts: string[] = [];
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (groups[i] > 0) parts.push(cvtGroup(groups[i]) + (scales[i] ? " " + scales[i] : ""));
+  }
+  return (parts.join(" ") + " Only").replace(/\s+/g, " ").trim();
+}
+
+function buildInvoiceHtml(inv: any): string {
+  const docType   = inv.document_type || "invoice";
+  const heading   = DOC_HEADINGS_MAP[docType] || "TAX INVOICE";
+  const firmName  = inv.from_firm_name || "Firm";
+  const firmGstin = inv.from_gstin     || "";
+  const firmPan   = inv.from_pan       || "";
+  const firmAddr  = inv.from_address   || "";
+  const firmEmail = inv.from_email     || "";
+  const firmPhone = inv.from_phone     || "";
+  const toName    = inv.to_name        || "";
+  const toGstin   = inv.to_gstin       || "";
+  const toAddress = inv.to_address     || "";
+  const invoiceNo = inv.invoice_no     || "";
+  const invoiceDate = inv.invoice_date;
+  const referenceNo = inv.reference_no || "";
+  const isIntraState = inv.is_intra_state !== false;
+  const remarksConditions = inv.remarks_conditions || "";
+  const bankDetails = inv.bank_details_snapshot || {};
+  const firmAddressHtml = fmtFirmAddrHtml(firmAddr);
+  const items: any[] = Array.isArray(inv.line_items) ? inv.line_items : [];
+  const hasGst = !!firmGstin;
+
+  const totalTaxable = inv.subtotal || inv.amount ||
+    items.reduce((s: number, li: any) => s + (li.taxable_value || li.rate || 0), 0);
+  const totalGst   = inv.gst_amount   || 0;
+  const grandTotal = inv.total_amount || totalTaxable + totalGst;
+
+  const thGst = hasGst
+    ? `<th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">GST %</th>`
+    : "";
+
+  const identityMarkup =
+    `<p style="font-weight:800;font-size:14px;margin:0 0 2px">${firmName.toUpperCase()}</p>`;
+
+  const itemRows = items.map((item: any, i: number) => {
+    const gstCol = hasGst
+      ? `<td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.gst_percent || 0}%</td>`
+      : "";
+    const itemTotal = hasGst
+      ? (item.total || item.taxable_value || 0)
+      : (item.taxable_value || item.rate || 0);
+    return `<tr>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${i + 1}.</td>
+      <td style="border:1px solid #bbb;padding:0;vertical-align:middle;font-size:11px">
+        <div style="display:flex;flex-direction:column;align-items:flex-start;justify-content:center;min-height:38px;padding:8px;line-height:1.4">
+          <div>${item.description || ""}</div>
+          ${item.description_details ? `<div style="font-size:10px;color:#555;white-space:pre-line">${item.description_details}</div>` : ""}
+        </div>
+      </td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:center;vertical-align:middle;font-size:11px">${item.hsn_sac_code || ""}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${Number(item.quantity || 1).toFixed(2)}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(item.rate || 0)}</td>
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(item.taxable_value || 0)}</td>
+      ${gstCol}
+      <td style="border:1px solid #bbb;padding:6px 8px;text-align:right;vertical-align:middle;font-size:11px;font-weight:600">${fmtINR(itemTotal)}</td>
+    </tr>`;
+  }).join("");
+
+  const colSpan = hasGst ? 5 : 4;
+  const totalRow = `<tr style="background:#f0f0f0;font-weight:700">
+    <td style="border:1px solid #bbb;padding:8px;vertical-align:middle" colspan="${colSpan}">Total</td>
+    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:11px">${fmtINR(totalTaxable)}</td>
+    ${hasGst ? `<td style="border:1px solid #bbb;padding:8px;vertical-align:middle"></td>` : ""}
+    <td style="border:1px solid #bbb;padding:8px;text-align:right;vertical-align:middle;font-size:12px">${fmtINR(grandTotal)}</td>
+  </tr>`;
+
+  const halfGst = totalGst / 2;
+  let totalsSummary = `<tr><td style="padding:3px 8px;vertical-align:middle">Taxable Amount</td><td style="padding:3px 8px;text-align:right;font-weight:600;vertical-align:middle">&#8377;${fmtINR(totalTaxable)}</td></tr>`;
+  if (hasGst) {
+    if (isIntraState) {
+      totalsSummary += `
+        <tr><td style="padding:3px 8px;vertical-align:middle">CGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">&#8377;${fmtINR(halfGst)}</td></tr>
+        <tr><td style="padding:3px 8px;vertical-align:middle">SGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">&#8377;${fmtINR(halfGst)}</td></tr>`;
+    } else {
+      totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">IGST</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">&#8377;${fmtINR(totalGst)}</td></tr>`;
+    }
+    const roundOffVal = Math.round(grandTotal) - grandTotal;
+    const roundOffStr = (roundOffVal >= 0 ? "+" : "") + "&#8377;" + roundOffVal.toFixed(2);
+    totalsSummary += `<tr><td style="padding:3px 8px;vertical-align:middle">Round Off</td><td style="padding:3px 8px;text-align:right;vertical-align:middle">${roundOffStr}</td></tr>`;
+  }
+  totalsSummary += `<tr style="font-weight:700;font-size:13px;border-top:2px solid #333"><td style="padding:6px 8px;vertical-align:middle">Grand Total</td><td style="padding:6px 8px;text-align:right;vertical-align:middle">&#8377;${Math.round(grandTotal).toLocaleString("en-IN")}</td></tr>`;
+
+  const docLabel = heading === "TAX INVOICE"
+    ? "Invoice"
+    : heading.charAt(0) + heading.slice(1).toLowerCase();
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${heading} ${invoiceNo}</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; font-size: 12px; background: #ffffff; }
+      table { width: 100%; border-collapse: collapse; }
+      td, th { vertical-align: middle !important; }
+      @page { size: A4; margin: 20mm 15mm 20mm 15mm; }
+      body { padding: 10mm 12mm; }
+    </style></head><body>
+      <div style="border:1px solid #bbb;padding:12px 14px">
+
+    <div style="text-align:center;margin-bottom:16px;padding:6px 0;line-height:1.2">
+      <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;margin-bottom:14px">
+      <div style="flex:1;max-width:55%">
+        ${identityMarkup}
+        ${firmAddressHtml ? `<p style="margin:1px 0;font-size:11px;line-height:1.5;max-width:340px">${firmAddressHtml}</p>` : ""}
+      </div>
+      <div style="text-align:right;font-size:11px;min-width:280px">
+        <div style="display:flex;justify-content:space-between;gap:20px">
+          <div style="text-align:left">
+            ${firmGstin ? `<p style="margin:2px 0"><strong>GSTIN:</strong> ${firmGstin}</p>` : ""}
+            ${firmPan   ? `<p style="margin:2px 0"><strong>PAN:</strong> ${firmPan}</p>`     : ""}
+            ${firmEmail ? `<p style="margin:2px 0"><strong>Email:</strong> ${firmEmail}</p>` : ""}
+            ${firmPhone ? `<p style="margin:2px 0"><strong>Contact No:</strong> ${firmPhone}</p>` : ""}
+          </div>
+          <div style="text-align:right">
+            <p style="margin:2px 0"><strong>${docLabel} Date:</strong> ${invoiceDate ? fmtDateDMY(invoiceDate) : "&#8212;"}</p>
+            <p style="margin:2px 0"><strong>${docLabel} No:</strong> ${invoiceNo}</p>
+            ${referenceNo ? `<p style="margin:2px 0"><strong>Ref No:</strong> ${referenceNo}</p>` : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border:1px solid #bbb;margin-bottom:12px;padding:10px">
+      <p style="font-size:10px;font-weight:700;color:#666;text-transform:uppercase;margin:0 0 4px">Bill To</p>
+      <p style="font-weight:600;margin:0;font-size:13px">${toName}</p>
+      ${toAddress ? `<p style="margin:2px 0;font-size:11px">${toAddress}</p>` : ""}
+      ${toGstin   ? `<p style="margin:4px 0;font-size:11px"><strong>GSTIN:</strong> ${toGstin}</p>` : ""}
+    </div>
+
+    <table>
+      <thead>
+        <tr style="background:#e2e8f0">
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;width:30px;vertical-align:middle">#</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;text-align:left;vertical-align:middle">Item</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">HSN/SAC</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Quantity</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Rate / Item (&#8377;)</th>
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Taxable Value (&#8377;)</th>
+          ${thGst}
+          <th style="border:1px solid #bbb;padding:7px;font-size:10px;vertical-align:middle">Total (&#8377;)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemRows}
+        ${totalRow}
+      </tbody>
+    </table>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:10px">
+      <table style="width:320px;font-size:12px">${totalsSummary}</table>
+    </div>
+
+    <div style="margin:8px 0;padding:6px 8px;background:#f9f9f9;border:1px solid #ddd;font-size:11px">
+      <strong>Amount in words:</strong> ${numToWords(Math.round(grandTotal))}
+    </div>
+
+    ${remarksConditions ? `<div style="margin:8px 0;padding:6px 8px;font-size:11px;border:1px solid #ddd">
+      <strong>Remarks / Terms &amp; Conditions:</strong><br/>
+      <span style="white-space:pre-line;word-wrap:break-word">${remarksConditions}</span>
+    </div>` : ""}
+
+    <div style="display:flex;justify-content:space-between;margin-top:16px">
+      <div style="border:1px solid #bbb;padding:10px;font-size:11px;min-width:300px">
+        <p style="font-weight:700;margin:0 0 4px;font-size:12px">Bank Details:</p>
+        ${bankDetails?.account_number || bankDetails?.account_no
+          ? `<p style="margin:2px 0"><strong>Account No:</strong> ${bankDetails.account_number || bankDetails.account_no}</p>`
+          : ""}
+        ${bankDetails?.ifsc      ? `<p style="margin:2px 0"><strong>IFSC:</strong> ${bankDetails.ifsc}</p>`         : ""}
+        ${bankDetails?.bank_name ? `<p style="margin:2px 0"><strong>Bank:</strong> ${bankDetails.bank_name}</p>`    : ""}
+        ${bankDetails?.branch    ? `<p style="margin:2px 0"><strong>Branch:</strong> ${bankDetails.branch}</p>`     : ""}
+      </div>
+      <div style="text-align:right;padding-top:8px">
+        <p style="margin:0;font-size:12px;font-weight:600">For ${firmName.toUpperCase()}</p>
+        <div style="height:50px"></div>
+        <p style="margin:0;font-size:11px;border-top:1px solid #333;padding-top:4px">Authorised Signatory</p>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;padding-top:8px;padding-bottom:10px;border-top:1px solid #ddd;font-size:10px;color:#555">
+      <p style="font-weight:700;margin:0 0 4px">Terms &amp; Conditions:</p>
+      <p style="margin:0;font-weight:700;letter-spacing:0.5px">PAYMENT TERMS: PAYMENT IS DUE WITHIN 45 DAYS FROM THE INVOICE DATE</p>
+    </div>
+
+    </div>
+  </body></html>`;
+}
+
+/**
+ * Convert HTML string → PDF bytes.
+ *
+ * Uses Gotenberg (open-source Chrome-based PDF service) via multipart/form-data.
+ * Default endpoint: https://demo.gotenberg.dev  (free public demo — low volume)
+ * Override with env var GOTENBERG_URL for self-hosted / production instance.
+ */
+async function htmlToPdfBytes(html: string): Promise<Uint8Array> {
+  const base = (Deno.env.get("GOTENBERG_URL") ?? "https://demo.gotenberg.dev")
+    .replace(/\/$/, "");
+  const endpoint = `${base}/forms/chromium/convert/html`;
+
+  // Gotenberg expects multipart/form-data with the HTML as a file named "index.html"
+  const form = new FormData();
+  form.append("files", new Blob([html], { type: "text/html" }), "index.html");
+
+  // Optional page properties
+  form.append("paperWidth",   "8.27");   // A4 width in inches
+  form.append("paperHeight",  "11.69");  // A4 height in inches
+  form.append("marginTop",    "0.79");   // 20 mm
+  form.append("marginBottom", "0.79");
+  form.append("marginLeft",   "0.59");   // 15 mm
+  form.append("marginRight",  "0.59");
+  form.append("printBackground", "true");
+
+  const resp = await fetch(endpoint, { method: "POST", body: form });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`Gotenberg PDF error ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+// ─── generateInvoicePdf — now uses buildInvoiceHtml + htmlToPdfBytes ──────────
 async function generateInvoicePdf(
   invoice: any,
   firmName: string,
   clientName: string,
+  firm?: any,
 ): Promise<Uint8Array> {
-  const pdfDoc   = await PDFDocument.create();
-  const font     = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  // Merge firm DB record into the invoice's from_* fields so buildInvoiceHtml
+  // picks up GSTIN/PAN/address even when the invoice row itself lacks them.
+  const inv = {
+    ...invoice,
+    from_firm_name: invoice.from_firm_name || firmName,
+    from_gstin:     invoice.from_gstin  || firm?.gstin  || "",
+    from_pan:       invoice.from_pan    || firm?.pan     || "",
+    from_address:   invoice.from_address ||
+      [firm?.address, firm?.city, firm?.state, firm?.pincode ? `- ${firm.pincode}` : ""]
+        .filter(Boolean).join(", "),
+    from_email:     invoice.from_email  || firm?.email   || "",
+    from_phone:     invoice.from_phone  || firm?.phone   || "",
+  };
 
-  const W = 595, H = 842, M = 40;
-  let page = pdfDoc.addPage([W, H]);
-  let y = H - M;
-
-  // ── Dark header bar ──
-  page.drawRectangle({ x: 0, y: H - 68, width: W, height: 68, color: rgb(0.1, 0.22, 0.36) });
-  page.drawText(firmName.slice(0, 50),
-    { x: M, y: H - 36, font: fontBold, size: 15, color: rgb(1, 1, 1) });
-  page.drawText("TAX INVOICE",
-    { x: W - M - 88, y: H - 36, font: fontBold, size: 12, color: rgb(1, 1, 1) });
-  page.drawText("Chartered Accountants",
-    { x: M, y: H - 55, font, size: 9, color: rgb(0.75, 0.82, 0.9) });
-  y = H - 86;
-
-  // ── Invoice meta ──
-  page.drawText(`Invoice No: ${invoice.invoice_no ?? "—"}`, { x: M, y, font: fontBold, size: 10 });
-  page.drawText(`Date: ${fmtDate(invoice.invoice_date)}`,   { x: M + 200, y, font, size: 10 });
-  page.drawText(`Due:  ${fmtDate(invoice.due_date ?? "")}`, { x: M + 360, y, font, size: 10 });
-  y -= 14;
-  page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.4 });
-  y -= 14;
-
-  // ── Bill To ──
-  page.drawText("Bill To:", { x: M, y, font: fontBold, size: 8, color: rgb(0.45, 0.45, 0.45) });
-  y -= 13;
-  page.drawText(String(clientName || invoice.to_name || "Client").slice(0, 60),
-    { x: M, y, font: fontBold, size: 11 });
-  if (invoice.to_address) {
-    y -= 13;
-    page.drawText(String(invoice.to_address).slice(0, 75), { x: M, y, font, size: 9 });
-  }
-  if (invoice.to_gstin) {
-    y -= 12;
-    page.drawText(`GSTIN: ${invoice.to_gstin}`, { x: M, y, font, size: 9, color: rgb(0.4, 0.4, 0.4) });
-  }
-  y -= 18;
-  page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.4 });
-  y -= 14;
-
-  // ── Line items table ──
-  const cDesc = M, cQty = M + 240, cRate = M + 285, cTax = M + 345, cGst = M + 415, cTot = M + 460;
-
-  page.drawRectangle({ x: M, y: y - 2, width: W - 2 * M, height: 16, color: rgb(0.91, 0.95, 1) });
-  page.drawText("Description",  { x: cDesc, y: y + 2, font: fontBold, size: 8 });
-  page.drawText("Qty",          { x: cQty,  y: y + 2, font: fontBold, size: 8 });
-  page.drawText("Rate",         { x: cRate, y: y + 2, font: fontBold, size: 8 });
-  page.drawText("Taxable",      { x: cTax,  y: y + 2, font: fontBold, size: 8 });
-  page.drawText("GST%",         { x: cGst,  y: y + 2, font: fontBold, size: 8 });
-  page.drawText("Total",        { x: cTot,  y: y + 2, font: fontBold, size: 8 });
-  y -= 18;
-
-  const items: any[] = Array.isArray(invoice.line_items) ? invoice.line_items : [];
-  for (const item of items) {
-    if (y < M + 60) { page = pdfDoc.addPage([W, H]); y = H - M; }
-    page.drawText(String(item.description ?? "").slice(0, 38), { x: cDesc, y, font, size: 8 });
-    page.drawText(String(item.quantity ?? 1),                  { x: cQty,  y, font, size: 8 });
-    page.drawText(fmtNum(item.rate ?? 0),                      { x: cRate, y, font, size: 8 });
-    page.drawText(fmtNum(item.taxable_value ?? 0),             { x: cTax,  y, font, size: 8 });
-    page.drawText(`${item.gst_percent ?? 18}%`,                { x: cGst,  y, font, size: 8 });
-    page.drawText(fmtNum(item.total ?? 0),                     { x: cTot,  y, font, size: 8 });
-    y -= 14;
-  }
-
-  // ── Totals ──
-  y -= 6;
-  page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.4 });
-  y -= 14;
-  const total   = Number(invoice.total_amount ?? invoice.amount ?? 0);
-  const gstAmt  = Number(invoice.gst_amount ?? 0);
-  const taxable = total - gstAmt;
-  page.drawText(`Taxable: Rs.${fmtNum(taxable)}`, { x: cTax - 70, y, font, size: 9 });
-  page.drawText(`GST: Rs.${fmtNum(gstAmt)}`,      { x: cGst - 20, y, font, size: 9 });
-  y -= 16;
-  page.drawText(`TOTAL: Rs.${fmtNum(total)}`,
-    { x: cTot - 50, y, font: fontBold, size: 12, color: rgb(0.1, 0.22, 0.36) });
-
-  // ── Footer ──
-  page.drawText("Computer-generated document — no signature required.",
-    { x: M, y: 28, font, size: 7, color: rgb(0.6, 0.6, 0.6) });
-
-  return pdfDoc.save();
+  const html = buildInvoiceHtml(inv);
+  return htmlToPdfBytes(html);
 }
 
 /** Ledger statement PDF — firm header, entry rows with running balance */

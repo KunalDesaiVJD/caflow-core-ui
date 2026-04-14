@@ -109,12 +109,11 @@ interface CellProps {
   onClick:   (dateISO: string, emp: UserOption, entry: PlanEntry | null) => void;
 }
 
+/** ISSUE-20: All entries stacked vertically. Click chip → edit; click empty area → create new. */
 function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
-  const primary = hits[0] || null;
-  const extra   = hits.length - 1;
 
-  if (!primary) {
+  if (hits.length === 0) {
     return (
       <td
         onClick={() => onClick(dateISO, employee, null)}
@@ -123,20 +122,29 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
     );
   }
 
-  const isLeave = primary.client_name?.toLowerCase() === "leave";
-  const color   = clientColor(primary.client_name || "");
-
   return (
     <td
-      onClick={() => onClick(dateISO, employee, primary)}
-      className="border border-border/60 w-[90px] min-w-[90px] h-8 p-[2px] cursor-pointer"
+      onClick={() => onClick(dateISO, employee, null)}
+      className="border border-border/60 w-[90px] min-w-[90px] p-[2px] cursor-pointer align-top hover:bg-muted/10 transition-colors"
     >
-      <div className={cn(
-        "h-full px-1.5 rounded border text-[10px] font-medium flex items-center gap-0.5 overflow-hidden",
-        color
-      )}>
-        <span className="truncate flex-1">{isLeave ? "Leave" : primary.client_name}</span>
-        {extra > 0 && <span className="shrink-0 text-[9px] opacity-70">+{extra}</span>}
+      <div className="space-y-[2px]">
+        {hits.map(entry => {
+          const isLeave = entry.client_name?.toLowerCase() === "leave";
+          const color   = clientColor(entry.client_name || "");
+          return (
+            <div
+              key={entry.id}
+              className={cn(
+                "px-1.5 rounded border text-[10px] font-medium flex items-center overflow-hidden h-5",
+                color
+              )}
+              onClick={e => { e.stopPropagation(); onClick(dateISO, employee, entry); }}
+              title={`${entry.client_name || ""} — click to edit`}
+            >
+              <span className="truncate">{isLeave ? "Leave" : entry.client_name}</span>
+            </div>
+          );
+        })}
       </div>
     </td>
   );
@@ -144,11 +152,11 @@ function CalCell({ dateISO, employee, entries, onClick }: CellProps) {
 
 // ─── Week-view cell (taller, shows date range info) ──────────────────────────
 
+/** ISSUE-20: All entries stacked in week view too. */
 function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
   const hits = cellEntries(entries, dateISO, employee.id);
-  const primary = hits[0] || null;
 
-  if (!primary) {
+  if (hits.length === 0) {
     return (
       <td
         onClick={() => onClick(dateISO, employee, null)}
@@ -157,24 +165,31 @@ function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
     );
   }
 
-  const isLeave = primary.client_name?.toLowerCase() === "leave";
-  const color   = clientColor(primary.client_name || "");
-
   return (
     <td
-      onClick={() => onClick(dateISO, employee, primary)}
-      className="border border-border/60 w-[90px] min-w-[90px] h-16 cursor-pointer p-1 align-top"
+      onClick={() => onClick(dateISO, employee, null)}
+      className="border border-border/60 w-[90px] min-w-[90px] min-h-[64px] cursor-pointer p-1 align-top hover:bg-muted/10 transition-colors"
     >
-      <div className={cn(
-        "h-full px-1.5 py-1 rounded border text-[10px] font-medium space-y-0.5",
-        color
-      )}>
-        <p className="truncate font-semibold">{isLeave ? "Leave" : primary.client_name}</p>
-        <p className="text-[9px] opacity-70">
-          {primary.planned_from === primary.planned_to
-            ? primary.planned_from
-            : `${primary.planned_from} → ${primary.planned_to}`}
-        </p>
+      <div className="space-y-[3px]">
+        {hits.map(entry => {
+          const isLeave = entry.client_name?.toLowerCase() === "leave";
+          const color   = clientColor(entry.client_name || "");
+          return (
+            <div
+              key={entry.id}
+              className={cn("px-1.5 py-0.5 rounded border text-[10px] font-medium space-y-0.5", color)}
+              onClick={e => { e.stopPropagation(); onClick(dateISO, employee, entry); }}
+              title={`${entry.client_name || ""} — click to edit`}
+            >
+              <p className="truncate font-semibold">{isLeave ? "Leave" : entry.client_name}</p>
+              <p className="text-[9px] opacity-70">
+                {entry.planned_from === entry.planned_to
+                  ? entry.planned_from
+                  : `${entry.planned_from} → ${entry.planned_to}`}
+              </p>
+            </div>
+          );
+        })}
       </div>
     </td>
   );

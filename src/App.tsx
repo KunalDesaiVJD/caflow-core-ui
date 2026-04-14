@@ -62,6 +62,7 @@ import NoticeDetail from "./pages/NoticeDetail";
 import RolesPermissions from "./pages/RolesPermissions";
 import FirmSettings from "./pages/FirmSettings";
 import ServiceMasters from "./pages/ServiceMasters";
+import TaxAuditTemplateSettings from "./pages/TaxAuditTemplateSettings";
 import Chat from "./pages/Chat";
 import Depreciation from "./pages/Depreciation";
 import AuditPipeline from "./pages/AuditPipeline";
@@ -200,6 +201,7 @@ const App = () => (
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
+              <Route path="/settings/tax-audit-templates" element={<TaxAuditTemplateSettings />} />
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />

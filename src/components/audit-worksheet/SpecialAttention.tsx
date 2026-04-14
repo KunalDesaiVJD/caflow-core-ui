@@ -285,47 +285,77 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
 
   const { employees } = useEmployeeDropdown();
 
-  // #3 — Auto-fetch Audit Carried Out By from master (statutory → tax fallback)
-  // One-way: only fills when the Special Attention list is empty (user override preserved).
-  // Source priority: (1) local Special Attention data → (2) localStorage master → (3) Supabase audit_worksheet_master
+  // #3 — Auto-fetch Audit Carried Out By (one-way: only fills when list is empty)
+  // Source priority:
+  //   1. Local Special Attention data (already in `m.audit_carried_by`) — skip if present
+  //   2. localStorage master (statutory_master_json → tax_master_json)
+  //   3. Supabase audit_worksheet_master (cross-session DB copy)
+  //   4. Engagement partner_id + team_members → resolved from users table (ISSUE-16 fix)
   useEffect(() => {
     if (!loaded) return;
     if (m.audit_carried_by.length > 0) return; // user has saved data — don't overwrite
 
-    // ── Step 1: try localStorage (same-session or previously cached master) ──
-    const statutory = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "statutory_master_json");
-    const tax       = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "tax_master_json");
-
-    const lsSource =
-      (statutory?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
-        ? statutory!.audit_carried_by!
-        : (tax?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
-          ? tax!.audit_carried_by!
-          : null;
-
-    if (lsSource) { setHeader({ audit_carried_by: lsSource }); return; }
-
-    // ── Step 2: fallback to Supabase audit_worksheet_master (cross-session / saved to DB) ──
     (async () => {
-      const { data } = await (supabase as any)
+      // ── Step 1: localStorage master ──
+      const statutory = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "statutory_master_json");
+      const tax       = awLoad<{ audit_carried_by?: AuditorEntry[] }>(engagementId, "tax_master_json");
+
+      const lsSource =
+        (statutory?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+          ? statutory!.audit_carried_by!
+          : (tax?.audit_carried_by?.filter(e => e.id).length ?? 0) > 0
+            ? tax!.audit_carried_by!
+            : null;
+
+      if (lsSource) { setHeader({ audit_carried_by: lsSource }); return; }
+
+      // ── Step 2: Supabase audit_worksheet_master ──
+      const { data: masterRow } = await (supabase as any)
         .from("audit_worksheet_master")
         .select("statutory_master_json, tax_master_json")
         .eq("engagement_id", engagementId)
         .maybeSingle();
 
-      if (!data) return;
+      if (masterRow) {
+        const dbStatutory = (masterRow.statutory_master_json as any)?.audit_carried_by;
+        const dbTax       = (masterRow.tax_master_json as any)?.audit_carried_by;
+        const dbSource: AuditorEntry[] | null =
+          (Array.isArray(dbStatutory) && dbStatutory.filter((e: any) => e.id).length > 0)
+            ? dbStatutory
+            : (Array.isArray(dbTax) && dbTax.filter((e: any) => e.id).length > 0)
+              ? dbTax
+              : null;
+        if (dbSource) { setHeader({ audit_carried_by: dbSource }); return; }
+      }
 
-      const dbStatutory = (data.statutory_master_json as any)?.audit_carried_by;
-      const dbTax       = (data.tax_master_json as any)?.audit_carried_by;
+      // ── Step 3: fall back to engagement partner + team members (ISSUE-16) ──
+      // Collects partner_id (FK → users) and team_members (UUID[]) from the engagement,
+      // resolves names from the users table, and uses them as the default auditor list.
+      const engAuditorIds: string[] = [
+        ...(data.engagement?.partner_id ? [data.engagement.partner_id] : []),
+        ...(Array.isArray(data.engagement?.team_members) ? data.engagement!.team_members as string[] : []),
+      ].filter(Boolean);
+      const uniqueIds = [...new Set(engAuditorIds)];
 
-      const dbSource: AuditorEntry[] | null =
-        (Array.isArray(dbStatutory) && dbStatutory.filter((e: any) => e.id).length > 0)
-          ? dbStatutory
-          : (Array.isArray(dbTax) && dbTax.filter((e: any) => e.id).length > 0)
-            ? dbTax
-            : null;
+      if (uniqueIds.length > 0) {
+        // CONFLICT-1 FIX: scope to the engagement's firm so cross-firm UUIDs
+        // (which should never occur, but could via data corruption) are excluded.
+        const engFirmId = data.engagement?.firm_id;
+        let userQ = supabase
+          .from("users" as any)
+          .select("id, name")
+          .in("id", uniqueIds);
+        if (engFirmId) userQ = (userQ as any).eq("firm_id", engFirmId);
+        const { data: userRows } = await userQ;
 
-      if (dbSource) setHeader({ audit_carried_by: dbSource });
+        if (userRows && (userRows as any[]).length > 0) {
+          const userMap = new Map((userRows as any[]).map(u => [u.id, (u.name as string) ?? u.id]));
+          const engAuditors: AuditorEntry[] = uniqueIds
+            .filter(id => userMap.has(id))
+            .map(id => ({ id, name: userMap.get(id)! }));
+          if (engAuditors.length > 0) setHeader({ audit_carried_by: engAuditors });
+        }
+      }
     })();
   }, [loaded, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -510,21 +540,54 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
                     </p>
                   </td>
 
-                  {/* Checked By */}
-                  <td className="border border-border px-2 py-1.5 align-top">
-                    <EmpSelect
-                      value={rs.checked_by_id}
-                      placeholder="Checked by…"
-                      onChange={(id, name) => patchRow(row.id, {
-                        checked_by_id: id, checked_by_name: name,
-                      })}
-                      employees={employees}
-                    />
-                    {rs.checked_by_name && (
-                      <p className="text-[10px] text-green-700 mt-0.5 font-medium truncate">
-                        ✓ {rs.checked_by_name}
-                      </p>
+                  {/* Checked By — multi-select chips (ISSUE-17) */}
+                  <td className="border border-border px-2 py-1.5 align-top min-w-[140px]">
+                    {/* Existing checker chips */}
+                    {rs.checked_by_names.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {rs.checked_by_names.map((name, ci) => name ? (
+                          <span
+                            key={ci}
+                            className="inline-flex items-center gap-0.5 bg-green-50 border border-green-200 rounded-full px-1.5 py-0.5 text-[10px] text-green-800 font-medium"
+                          >
+                            ✓ {name}
+                            <button
+                              type="button"
+                              className="text-green-400 hover:text-red-600 leading-none font-bold ml-0.5"
+                              onClick={() => patchRow(row.id, {
+                                checked_by_ids:   rs.checked_by_ids.filter((_, j) => j !== ci),
+                                checked_by_names: rs.checked_by_names.filter((_, j) => j !== ci),
+                              })}
+                            >×</button>
+                          </span>
+                        ) : null)}
+                      </div>
                     )}
+                    {/* Add-another dropdown — value stays "" so placeholder always shows */}
+                    <Select
+                      value=""
+                      onValueChange={id => {
+                        if (!id || rs.checked_by_ids.includes(id)) return;
+                        const emp = employees.find(e => e.id === id);
+                        patchRow(row.id, {
+                          checked_by_ids:   [...rs.checked_by_ids, id],
+                          checked_by_names: [...rs.checked_by_names, emp?.name || ""],
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-6 text-[10px] border-dashed border-green-300 text-green-600 hover:bg-green-50">
+                        <SelectValue placeholder="+ Add checker" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employees
+                          .filter(e => !rs.checked_by_ids.includes(e.id))
+                          .map(e => (
+                            <SelectItem key={e.id} value={e.id} className="text-xs">
+                              {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </td>
 
                   {/* Verified By */}

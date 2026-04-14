@@ -496,7 +496,14 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           });
         }
       } catch (pdfErr) {
-        console.warn("[SharePDF] PDF generation failed — sending without attachment:", pdfErr);
+        console.error("[SharePDF] PDF generation failed:", pdfErr);
+        toast({
+          title: "PDF generation failed",
+          description: "The invoice PDF could not be generated. Please try again.",
+          variant: "destructive",
+        });
+        setShareSending(false);
+        return;
       }
 
       if (shareViaEmail && shareEmail) {
@@ -580,7 +587,13 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           pdfFilename = `${(inv.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
         }
       } catch (pdfErr) {
-        console.warn("[SendPDF] PDF generation failed — sending without attachment:", pdfErr);
+        console.error("[SendPDF] PDF generation failed:", pdfErr);
+        toast({
+          title: "PDF generation failed",
+          description: "Unable to generate the invoice PDF. Please try again.",
+          variant: "destructive",
+        });
+        return;
       }
     }
 
@@ -651,7 +664,9 @@ function DocumentListTab({ documentType }: { documentType: "invoice" | "quotatio
           });
           pdfFilename = `${(inv.invoice_no || "Invoice").replace(/\//g, "-")}.pdf`;
         } catch (pdfErr) {
-          console.warn("[BulkSendPDF] PDF failed for", inv.invoice_no, pdfErr);
+          console.error("[BulkSendPDF] PDF failed for", inv.invoice_no, pdfErr);
+          // Skip this invoice in bulk — individual failures shouldn't abort the whole batch
+          // but DO record the skip in progress
         }
       }
 

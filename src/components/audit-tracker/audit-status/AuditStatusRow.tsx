@@ -43,8 +43,15 @@ const STATUS_COLORS: Record<string, string> = {
   "OTHERS (SPECIFY)":        "bg-pink-100 text-pink-700",
 };
 
+/** ISSUE-19d: broad company/corporate check — matches all common entity-type formats */
 function isCorporate(entityType: string | null | undefined) {
-  return entityType === "private_limited" || entityType === "public_limited";
+  if (!entityType) return false;
+  const et = entityType.toLowerCase().replace(/_/g, " ").trim();
+  return (
+    et === "private ltd" || et === "public ltd" ||
+    et === "private limited" || et === "public limited" ||
+    et === "company" || et === "llp"
+  );
 }
 
 function todayISO() {
@@ -277,6 +284,17 @@ export default function AuditStatusRow({
   // Auto-start edit for new rows
   useEffect(() => {
     if (isNew) { setEditing(true); setDraft(buildDraft(row, clients)); }
+  }, [isNew]); // eslint-disable-line
+
+  // ISSUE-19a: register this new row's save fn with the "Save All" registry immediately.
+  // Uses a ref so the closure always captures the latest draft state.
+  const commitSaveRef = useRef<() => Promise<void>>();
+  commitSaveRef.current = commitSave; // updated every render
+  useEffect(() => {
+    if (!isNew) return;
+    const stableSave = async () => { await commitSaveRef.current?.(); };
+    onRegisterSave?.(row.id, stableSave);
+    return () => onUnregisterSave?.(row.id);
   }, [isNew]); // eslint-disable-line
 
   // ── Firm options ─────────────────────────────────────────────────────────────
@@ -550,19 +568,14 @@ export default function AuditStatusRow({
           : <span>{row.uploaded_by || "—"}</span>}
       </TCell>
 
-      {/* 19 · Remarks — inline save/cancel appended when editing (Actions column removed per Issue #8D) */}
+      {/* 19 · Remarks — tick/save removed (ISSUE-19b); use "Save All" button at top */}
       <TCell className="min-w-[130px]">
         {editing ? (
           <div className="flex items-center gap-1">
             <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
             <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 shrink-0 text-green-600 hover:bg-green-50"
-              onClick={commitSave} disabled={saving} title="Save row">
-              {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
-            </Button>
-            <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 shrink-0 text-red-500 hover:bg-red-50"
-              onClick={cancelEdit} title="Cancel">
+              className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
+              onClick={cancelEdit} title="Cancel edits">
               <X size={11} />
             </Button>
           </div>
@@ -579,18 +592,47 @@ export default function AuditStatusRow({
         )}
       </TCell>
 
-      {/* 20 · Version history — clock icon, always visible for saved rows */}
-      <TCell className="w-9 text-center">
+      {/* 20 · Actions: History + Delete (ISSUE-19b) */}
+      <TCell className="w-16 text-center">
         {!isNew && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
-            onClick={() => onHistory?.(row.id)}
-            title="View change history"
-          >
-            <History size={12} />
-          </Button>
+          <div className="flex items-center justify-center gap-0.5">
+            {/* History */}
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
+              onClick={() => onHistory?.(row.id)}
+              title="View change history"
+            >
+              <History size={12} />
+            </Button>
+
+            {/* Delete — two-step confirmation */}
+            {!confirmDel ? (
+              <Button size="sm" variant="ghost"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+                onClick={() => setConfirmDel(true)}
+                title="Delete row"
+              >
+                <Trash2 size={12} />
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="ghost"
+                  className="h-5 w-5 p-0 text-red-600 hover:bg-red-50"
+                  onClick={() => { onDelete(row.id); setConfirmDel(false); }}
+                  title="Confirm delete"
+                >
+                  <Check size={10} />
+                </Button>
+                <Button size="sm" variant="ghost"
+                  className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
+                  onClick={() => setConfirmDel(false)}
+                  title="Cancel delete"
+                >
+                  <X size={10} />
+                </Button>
+              </>
+            )}
+          </div>
         )}
       </TCell>
     </tr>

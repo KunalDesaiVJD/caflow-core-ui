@@ -185,34 +185,57 @@ export default function AuditPipeline() {
     expected_completion: "", review_dates: "",
   });
 
-  // ─── Audit-eligible clients — filtered by classification FY ───
-  // Queries client_fy_classifications (FY-aware) instead of the legacy JSONB field.
-  // Re-fetches automatically when form1A.financial_year changes so the dropdown
-  // always shows clients classified as Audit for the engagement's chosen FY.
+  // ─── Audit-eligible clients — two-step query for reliability ───
+  // Step 1: Fetch client_ids from client_fy_classifications with classification = 'Audit'
+  //         for the selected FY (case-insensitive via ilike).
+  // Step 2: Fetch matching client rows directly — avoids nested-join filtering issues
+  //         that can silently drop the `name` field in Supabase PostgREST.
+  // Fallback: also include clients with statutory_audit_applicable = true on the
+  //           clients table (for clients saved before FY-classification was introduced).
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id, form1A.financial_year],
     queryFn: async () => {
-      let query = (supabase as any)
+      const firmId = user?.firm_id ?? "";
+
+      // ── Step 1a: IDs from FY classification table ──────────────────────────
+      let classQuery = supabase
         .from("client_fy_classifications")
-        .select("client_id, clients!inner(id, name, entity_type, is_active, firm_id)")
-        .eq("classification", "Audit")
-        .eq("financial_year", form1A.financial_year)
-        .eq("clients.is_active", true);
+        .select("client_id")
+        .ilike("classification", "audit")
+        .eq("financial_year", form1A.financial_year);
+      const { data: classRows } = await classQuery;
+      const fyClientIds = (classRows || []).map((r: any) => r.client_id as string).filter(Boolean);
 
-      if (user?.firm_id) {
-        query = query.eq("clients.firm_id", user.firm_id);
-      }
+      // ── Step 2: Fetch client rows with name, entity_type ──────────────────
+      let clientQuery = supabase
+        .from("clients")
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
+        .eq("is_draft", false)
+        .eq("is_active", true)
+        .is("deleted_at", null)
+        .order("name", { ascending: true });
 
-      const { data, error } = await query;
-      if (error) throw error;
-      // Flatten: return array of { id, name, entity_type } matching old shape
-      return ((data || []) as any[]).map((r: any) => ({
-        id:          r.clients?.id,
-        name:        r.clients?.name,
-        entity_type: r.clients?.entity_type,
-      })).filter((c: any) => c.id);
+      if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
+
+      const { data: allFirmClients } = await clientQuery;
+
+      const allClients = (allFirmClients || []) as any[];
+
+      // Include client if: in FY classification set OR has audit-applicable flags
+      const eligible = allClients.filter(
+        (c: any) =>
+          fyClientIds.includes(c.id) ||
+          c.statutory_audit_applicable === true ||
+          (c.tax_audit_type != null && c.tax_audit_type !== ""),
+      );
+
+      return eligible.map((c: any) => ({
+        id:          c.id as string,
+        name:        (c.name as string) ?? "",
+        entity_type: (c.entity_type as string) ?? "",
+      }));
     },
-    enabled: !!user?.id && !!form1A.financial_year,
+    enabled: !!user?.id,
   });
 
   // ─── Staff ───
@@ -240,29 +263,28 @@ export default function AuditPipeline() {
     enabled: !!user?.id,
   });
 
-  // ─── Partners for selected audit firm (New Engagement modal) ───
+  // ─── Partners from the PRACTICE FIRM's user list ───────────────────────────
+  // Shows all users with role partner_ca or firm_admin in the current firm.
+  // This drives the "Engagement Partner" dropdown — it is NOT tied to the
+  // selected audit_firm (which is the external audit firm, not the practice firm).
   const { data: partnersForFirm = [] } = useQuery({
-    queryKey: ["audit-firm-partners", form1A.audit_firm_id],
+    queryKey: ["practice-firm-partners", user?.firm_id],
     queryFn: async () => {
-      if (!form1A.audit_firm_id) return [];
-      // Try audit_registration table first (spec); fall back to audit_firms.partner_name
-      const { data: regData, error: regErr } = await supabase
-        .from("audit_registration" as any)
-        .select("id, partner_name, membership_no")
-        .eq("firm_id", form1A.audit_firm_id);
-      if (!regErr && regData?.length) return regData as { id: string; partner_name: string; membership_no: string | null }[];
-      // Fallback: single partner stored directly on audit_firms row
-      const { data: firmData } = await supabase
-        .from("audit_firms")
-        .select("id, partner_name, partner_icai_no")
-        .eq("id", form1A.audit_firm_id)
-        .single();
-      if (firmData?.partner_name) {
-        return [{ id: firmData.id, partner_name: firmData.partner_name, membership_no: firmData.partner_icai_no ?? null }];
-      }
-      return [];
+      if (!user?.firm_id) return [];
+      const { data } = await supabase
+        .from("users")
+        .select("id, name, role")
+        .eq("firm_id", user.firm_id)
+        .in("role", ["partner_ca", "firm_admin"])
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+      return (data || []).map((u: any) => ({
+        id:           u.id as string,
+        partner_name: (u.name as string) ?? u.id,
+        membership_no: null as string | null,
+      }));
     },
-    enabled: !!form1A.audit_firm_id,
+    enabled: !!user?.firm_id,
   });
 
   // ─── Selected engagement detail ───
@@ -485,7 +507,7 @@ export default function AuditPipeline() {
     setSaving(false);
   }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses]);
 
-  const partners = (firmUsers || []).filter(u => u.role === "partner");
+  const partners = (firmUsers || []).filter(u => ["partner_ca", "firm_admin"].includes(u.role));
   const grouped = useMemo(() => {
     const map = new Map<string, any[]>();
     (engagements || []).forEach(e => {
@@ -853,34 +875,31 @@ export default function AuditPipeline() {
               </Select>
             </div>
 
-            {/* Partner — auto-populated from selected audit firm */}
-            {form1A.audit_firm_id && (
-              <div>
-                <Label>Partner</Label>
-                <Select
-                  value={form1A.partner_id}
-                  onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
-                  disabled={partnersForFirm.length === 0}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners on file" : "Select partner"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {partnersForFirm.map(p => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.partner_name}
-                        {p.membership_no ? ` (${p.membership_no})` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {partnersForFirm.length === 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Add partners in Settings → Audit Firms
-                  </p>
-                )}
-              </div>
-            )}
+            {/* Engagement Partner — from practice firm's users (role: partner_ca / firm_admin) */}
+            <div>
+              <Label>Engagement Partner</Label>
+              <Select
+                value={form1A.partner_id}
+                onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
+                disabled={partnersForFirm.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners found" : "Select partner"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {partnersForFirm.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.partner_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {partnersForFirm.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Add partners in Settings → Users (role: Partner/CA)
+                </p>
+              )}
+            </div>
 
             <div>
               <Label>Client *</Label>

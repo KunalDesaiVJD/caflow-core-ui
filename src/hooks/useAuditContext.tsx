@@ -41,18 +41,24 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     }
 
     // Fetch client IDs that have classification = 'Audit' in client_fy_classifications
+    // Use ilike for case-insensitive match (handles legacy lowercase values)
     let classQuery: any = supabase
       .from("client_fy_classifications")
       .select("client_id")
-      .eq("classification", "Audit");
+      .ilike("classification", "audit");
 
     const [engRes, clientRes, classRes] = await Promise.all([engQuery, clientQuery, classQuery]);
-    // Only show clients whose classification is 'Audit'
+    // Show clients whose classification is 'Audit' in client_fy_classifications
+    // OR who have audit-applicable flags set directly on the clients table
+    // (fallback for clients saved without a financial_year where saveFYClassification exited early)
     const auditClientIdSet = new Set(
       (classRes.data || []).map((r: any) => r.client_id)
     );
     const auditClients = (clientRes.data || []).filter(
-      (c: any) => auditClientIdSet.has(c.id)
+      (c: any) =>
+        auditClientIdSet.has(c.id) ||
+        c.statutory_audit_applicable === true ||
+        (c.tax_audit_type != null && c.tax_audit_type !== "")
     );
 
     const clientMap = new Map((clientRes.data || []).map((c: any) => [c.id, c]));

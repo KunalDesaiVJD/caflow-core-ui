@@ -51,7 +51,7 @@ const MODULE_LABELS: Record<string, string> = {
   "Service Masters": "Service Masters",
   "IT Returns": "IT Returns + Compliance",
   "TDS": "TDS Management",
-  "Billing": "Billing & Timesheet",
+  "Billing": "Billing",
   "Depreciation": "Depreciation Module",
   "Audit Intelligence": "Audit Intelligence (1-10)",
   "Chat": "Chat & Collaboration",
@@ -82,7 +82,9 @@ const RolesPermissions = () => {
 
   const isSuperadmin = user?.role === "superadmin";
   const canViewSettings = isSuperadmin || can("Settings", "can_view");
-  const canEdit = isSuperadmin || can("Settings", "can_edit");
+  // Global permissions (firm_id = NULL) can only be changed by superadmins.
+  // Firm admins see read-only view; RLS also enforces this at the DB level.
+  const canEdit = isSuperadmin;
 
   useEffect(() => {
     loadGrid();
@@ -204,7 +206,12 @@ const RolesPermissions = () => {
       await refreshCtx();
       await loadGrid();
     } catch (e: any) {
-      toast({ title: "Error saving permissions", description: e.message, variant: "destructive" });
+      console.error("saveAll error:", e);
+      toast({
+        title: "Error saving permissions",
+        description: e?.message ?? e?.details ?? String(e),
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -269,7 +276,7 @@ const RolesPermissions = () => {
           <p className="text-sm text-muted-foreground mt-1">
             {canEdit
               ? "Global permission matrix — applies to all firms."
-              : "View-only. Contact your firm admin to change permissions."}
+              : "Read-only. Only Super Admins can modify global permissions."}
           </p>
         </div>
         <div className="flex items-center gap-2">

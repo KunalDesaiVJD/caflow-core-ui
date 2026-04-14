@@ -116,12 +116,21 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean) {
       toast.success("Saved (offline)");
       return;
     }
-    // Capture old row before updating, for change-log comparison
+    // Capture old row snapshot before applying the update
     const oldRow = rows.find(r => r.id === id);
     const { error } = await supabase.from("audit_status").update(patch as any).eq("id", id);
     if (error) { toast.error(error.message); return; }
-    // Log field-level changes (best-effort; silent failure if table absent)
     if (oldRow) {
+      // ISSUE-19c: write a full row-level snapshot to audit_status_history
+      (supabase as any).from("audit_status_history").insert({
+        audit_status_id: id,
+        changed_by:      user?.id ?? null,
+        changed_by_name: user?.name ?? user?.email ?? null,
+        previous_data:   oldRow,
+        new_data:        { ...oldRow, ...patch },
+      }).then(() => {}); // best-effort: no await, silent failure if table absent
+
+      // Log field-level changes to audit_change_log (modal reads from here)
       logChanges("audit_status", id, oldRow as any, patch as any, user?.id, user?.name ?? user?.email ?? null);
     }
     toast.success("Saved");

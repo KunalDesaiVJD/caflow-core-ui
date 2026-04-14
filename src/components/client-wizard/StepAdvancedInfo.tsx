@@ -346,9 +346,7 @@ export const StepAdvancedInfo = ({
                 <strong className="text-indigo-600">{pendingClassification}</strong>.
               </p>
               <p className="text-muted-foreground">
-                The previous <strong>{savedClassification}</strong> record for FY{" "}
-                <strong>{data.financial_year}</strong> will be preserved in history and
-                can be viewed at any time. This action only affects future operations.
+                Changing classification affects future FYs only. Historical data is preserved.
               </p>
             </DialogDescription>
           </DialogHeader>

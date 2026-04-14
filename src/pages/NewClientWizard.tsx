@@ -17,6 +17,7 @@ import {
   type ServiceBillingData,
   type CrossStepWarning,
   defaultServiceBilling,
+  emptyPackageConfig,
 } from "@/components/client-wizard/StepServiceBilling";
 import { StepAuditSetup, type AuditSetupData, defaultAuditSetup } from "@/components/client-wizard/StepAuditSetup";
 
@@ -35,6 +36,7 @@ const defaultBasicInfo: BasicInfoData = {
   pan: "",
   entity_type: "",
   email: "",
+  contact_person: "",
   mobile: "",
   address: "",
   gstins: [""],
@@ -260,6 +262,7 @@ const NewClientWizard = () => {
         entity_type: client.entity_type || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
         email: client.email || "",
+        contact_person: client.contact_person || "",
         mobile: client.mobile || "",
         address: client.address || "",
         tan_number: client.tan_number || "",
@@ -292,6 +295,33 @@ const NewClientWizard = () => {
           internal_audit_applicable: fyAudit.internal_audit_applicable || false,
           stock_audit_applicable: fyAudit.stock_audit_applicable || false,
           audit_billing_amount: fyAudit.audit_billing_amount?.toString() || "",
+        });
+      }
+
+      // ── FIX: Load existing client_services so the Services tab is pre-populated ──
+      // Without this, activeServices was always {}, making services appear lost on reload.
+      const { data: existingServices } = await supabase
+        .from("client_services")
+        .select("*")
+        .eq("client_id", clientId!)
+        .eq("is_active", true);
+
+      if (existingServices && existingServices.length > 0) {
+        const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
+        for (const svc of existingServices as any[]) {
+          activeServicesMap[svc.service_category_id] = {
+            frequency: svc.frequency_override || "monthly",
+            reminder_date: svc.reminder_date ?? 1,
+            billing_amount: svc.billing_amount ?? 0,
+            invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+          };
+        }
+        setServiceBilling({
+          billingMode: ((existingServices[0] as any).billing_mode === "package_wise"
+            ? "package_wise"
+            : "service_specific") as "service_specific" | "package_wise",
+          activeServices: activeServicesMap,
+          packageConfig: { ...emptyPackageConfig },
         });
       }
 
@@ -402,6 +432,7 @@ const NewClientWizard = () => {
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
       email: basicInfo.email || null,
+      contact_person: basicInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
       tan_number: basicInfo.tan_number || null,
@@ -420,9 +451,29 @@ const NewClientWizard = () => {
   };
 
   const saveServiceBillingData = async (targetClientId: string) => {
-    // TODO: Supabase RLS policy needs superadmin bypass for billing_reminders insert
-    const firmId = effectiveFirmId;
+    // FIX: use loadedClientFirmId as fallback so superadmin can save services
+    const firmId = effectiveFirmId ?? loadedClientFirmId;
     if (!firmId) return;
+
+    const newActiveIds = Object.keys(serviceBilling.activeServices);
+
+    // FIX: deactivate any services removed from the wizard (previously active but no longer selected)
+    if (newActiveIds.length > 0) {
+      // Deactivate existing rows whose service_category_id is NOT in the new active list
+      await supabase
+        .from("client_services")
+        .update({ is_active: false, deactivated_at: new Date().toISOString() } as any)
+        .eq("client_id", targetClientId)
+        .eq("is_active", true)
+        .not("service_category_id", "in", `(${newActiveIds.join(",")})`);
+    } else {
+      // All services removed — deactivate everything for this client
+      await supabase
+        .from("client_services")
+        .update({ is_active: false, deactivated_at: new Date().toISOString() } as any)
+        .eq("client_id", targetClientId)
+        .eq("is_active", true);
+    }
 
     // Save active individual services
     const serviceEntries = Object.entries(serviceBilling.activeServices);
@@ -492,30 +543,44 @@ const NewClientWizard = () => {
   const saveFYClassification = async (targetClientId: string, authUserId?: string) => {
     if (!advancedInfo.classification || !advancedInfo.financial_year) return;
 
-    // Upsert current classification (single source of truth per client+FY)
+    // ISSUE-21: Read the current DB value BEFORE the upsert so we can record old → new in history.
+    const { data: existingFYRow } = await (supabase as any)
+      .from("client_fy_classifications")
+      .select("classification")
+      .eq("client_id", targetClientId)
+      .eq("financial_year", advancedInfo.financial_year)
+      .maybeSingle();
+    const oldClassification: string | null = existingFYRow?.classification ?? null;
+
+    // Upsert current classification (single source of truth per client+FY).
+    // onConflict targets only the exact (client_id, financial_year) row — other FY rows are untouched.
     const { error } = await supabase.from("client_fy_classifications").upsert({
-      client_id: targetClientId,
+      client_id:      targetClientId,
       financial_year: advancedInfo.financial_year,
       classification: advancedInfo.classification,
-      audit_firm_id: advancedInfo.audit_firm_id || null,
+      audit_firm_id:  advancedInfo.audit_firm_id || null,
     } as any, { onConflict: "client_id,financial_year" });
     if (error) throw error;
 
-    // Append-only history row — preserves every change with actor + timestamp
-    try {
-      await (supabase as any).from("client_classification_history").insert({
-        client_id:      targetClientId,
-        financial_year: advancedInfo.financial_year,
-        classification: advancedInfo.classification,
-        changed_by:     authUserId ?? null,
-        changed_at:     new Date().toISOString(),
-      });
-    } catch (histErr) {
-      // History is non-fatal — log but do not abort the save
-      console.warn("[Wizard] Could not write classification history:", histErr);
+    // Skip history insert when the value hasn't actually changed (e.g. save on same classification).
+    if (oldClassification !== advancedInfo.classification) {
+      // Append-only history row — preserves every old→new transition with actor + timestamp.
+      try {
+        await (supabase as any).from("client_classification_history").insert({
+          client_id:          targetClientId,
+          financial_year:     advancedInfo.financial_year,
+          old_classification: oldClassification,   // ISSUE-21: before-state
+          classification:     advancedInfo.classification,
+          changed_by:         authUserId ?? null,
+          changed_at:         new Date().toISOString(),
+        });
+      } catch (histErr) {
+        // History is non-fatal — log but do not abort the save.
+        console.warn("[Wizard] Could not write classification history:", histErr);
+      }
     }
 
-    // Keep local savedClassification in sync so the warning modal reflects the new state
+    // Keep local savedClassification in sync so the warning modal reflects the new state.
     setSavedClassification(advancedInfo.classification);
   };
 

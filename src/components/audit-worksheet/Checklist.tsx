@@ -13,7 +13,6 @@
  * Each row has a Document upload column (PDF / image, 5 MB max).
  */
 import { useRef, useState } from "react";
-import { cn } from "@/lib/utils";
 import { Button }  from "@/components/ui/button";
 import { Input }   from "@/components/ui/input";
 import { Save, Loader2, ClipboardCheck, Plus, Paperclip, Eye, Trash2 } from "lucide-react";
@@ -130,12 +129,8 @@ export default function Checklist({ data, engagementId }: Props) {
   }));
   const allDefs = [...CHECKLIST_DEFS, ...dynamicDefs];
 
-  // Count rows where at least one page number is filled
-  const filledCount = allDefs.filter(def => {
-    const row = getRow(def.id);
-    return row.page_from.trim() !== "" || row.page_to.trim() !== "";
-  }).length;
-  const pct = Math.round((filledCount / allDefs.length) * 100);
+  // Count rows that have a document attached
+  const filledCount = allDefs.filter(def => getRow(def.id).file_name?.trim()).length;
 
   // ── Document upload state ──────────────────────────────────────────────────
   const fileInputRef  = useRef<HTMLInputElement>(null);
@@ -271,24 +266,17 @@ export default function Checklist({ data, engagementId }: Props) {
 
       {/* ══════════ TABLE ══════════ */}
       <div className="overflow-auto">
-        <table className="w-full text-sm border-collapse min-w-[820px]">
+        <table className="w-full text-sm border-collapse min-w-[540px]">
           <thead>
             <tr className="bg-violet-700 text-white text-[11px] uppercase tracking-wide">
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-12">Sr.</th>
-              <th className="border border-violet-600 px-3 py-2.5 text-left">Particulars</th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center min-w-[180px]">Document</th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-36">
-                Page Number From
-              </th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-36">
-                Page Number To
-              </th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center w-10">Sr.</th>
+              <th className="border border-violet-600 px-3 py-2.5 text-left w-full min-w-[380px]">Particulars</th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center w-48 min-w-[192px]">Document</th>
             </tr>
           </thead>
           <tbody>
             {allDefs.map(def => {
               const row = getRow(def.id);
-              const hasBoth   = row.page_from.trim() !== "" && row.page_to.trim() !== "";
               const defaultText = def.isCustom
                 ? ""
                 : injectYear(def.particulars, fyEndYear);
@@ -297,10 +285,7 @@ export default function Checklist({ data, engagementId }: Props) {
               return (
                 <tr
                   key={def.id}
-                  className={cn(
-                    "align-middle hover:bg-muted/10 transition-colors",
-                    hasBoth && "bg-green-50/50"
-                  )}
+                  className="align-middle hover:bg-muted/10 transition-colors"
                 >
                   {/* Sr No */}
                   <td className="border border-border px-2 py-2 text-center">
@@ -309,10 +294,10 @@ export default function Checklist({ data, engagementId }: Props) {
                     </span>
                   </td>
 
-                  {/* Particulars */}
-                  <td className="border border-border px-3 py-2">
+                  {/* Particulars — wide, text not clipped */}
+                  <td className="border border-border px-3 py-2 w-full">
                     <Input
-                      className="h-7 text-xs w-full border-dashed"
+                      className="h-7 text-xs w-full border-dashed whitespace-normal"
                       placeholder={defaultText || "Enter item description…"}
                       value={displayValue}
                       onChange={e =>
@@ -322,7 +307,7 @@ export default function Checklist({ data, engagementId }: Props) {
                   </td>
 
                   {/* Document */}
-                  <td className="border border-border px-2 py-2 text-center">
+                  <td className="border border-border px-2 py-2 text-center w-48">
                     {row.file_name ? (
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={row.file_name}>
@@ -369,33 +354,6 @@ export default function Checklist({ data, engagementId }: Props) {
                     )}
                   </td>
 
-                  {/* Page From */}
-                  <td className="border border-border px-2 py-2 text-center">
-                    <Input
-                      type="number"
-                      min="1"
-                      className="h-7 text-xs text-center w-full"
-                      placeholder="—"
-                      value={row.page_from}
-                      onChange={e =>
-                        setRowField(def.id, "page_from", e.target.value)
-                      }
-                    />
-                  </td>
-
-                  {/* Page To */}
-                  <td className="border border-border px-2 py-2 text-center">
-                    <Input
-                      type="number"
-                      min="1"
-                      className="h-7 text-xs text-center w-full"
-                      placeholder="—"
-                      value={row.page_to}
-                      onChange={e =>
-                        setRowField(def.id, "page_to", e.target.value)
-                      }
-                    />
-                  </td>
                 </tr>
               );
             })}
@@ -406,9 +364,9 @@ export default function Checklist({ data, engagementId }: Props) {
       {/* ══════════ FOOTER ══════════ */}
       <div className="border-t bg-muted/20 px-4 py-2 flex items-center justify-between">
         <p className="text-[11px] text-muted-foreground">
-          {pct === 100
-            ? `✓ All ${allDefs.length} documents page-numbered`
-            : `${allDefs.length - filledCount} document(s) without page numbers`}
+          {filledCount === allDefs.length
+            ? `✓ All ${allDefs.length} documents uploaded`
+            : `${filledCount} / ${allDefs.length} documents uploaded`}
         </p>
         {saving && (
           <p className="text-xs text-muted-foreground flex items-center gap-1">

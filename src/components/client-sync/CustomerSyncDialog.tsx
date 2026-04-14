@@ -98,17 +98,24 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
                       {sync.apiRecords.length}
                     </td>
                   </tr>
+                  {sync.inactiveCount > 0 && (
+                    <tr className="border-b">
+                      <td className="px-4 py-2.5 text-muted-foreground">Inactive (skipped)</td>
+                      <td className="px-4 py-2.5 font-semibold text-right text-muted-foreground">
+                        {sync.inactiveCount}
+                      </td>
+                    </tr>
+                  )}
                   <tr className="border-b">
-                    <td className="px-4 py-2.5 text-muted-foreground">Already in CaFlow</td>
-                    <td className="px-4 py-2.5 font-semibold text-right text-amber-600">
-                      {sync.skippedRecords.length}{" "}
-                      <span className="text-xs font-normal">(skipped)</span>
+                    <td className="px-4 py-2.5 text-muted-foreground">New to add</td>
+                    <td className="px-4 py-2.5 font-semibold text-right text-emerald-600">
+                      {sync.newRecords.length}
                     </td>
                   </tr>
                   <tr className={sync.invalidCount > 0 ? "border-b" : ""}>
-                    <td className="px-4 py-2.5 text-muted-foreground">New to import</td>
-                    <td className="px-4 py-2.5 font-semibold text-right text-emerald-600">
-                      {sync.newRecords.length}
+                    <td className="px-4 py-2.5 text-muted-foreground">Existing (will update)</td>
+                    <td className="px-4 py-2.5 font-semibold text-right text-blue-600">
+                      {sync.updatedRecords.length}
                     </td>
                   </tr>
                   {sync.invalidCount > 0 && (
@@ -123,75 +130,85 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
               </table>
             </div>
 
-            {/* Nothing to import */}
-            {sync.newRecords.length === 0 && (
+            {/* Nothing to do */}
+            {sync.newRecords.length === 0 && sync.updatedRecords.length === 0 && (
               <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 flex gap-2">
                 <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-sm text-amber-700 dark:text-amber-300">
-                  All customers already exist in CaFlow — nothing to import.
+                  All active customers are already up-to-date in CaFlow — nothing to sync.
                 </p>
               </div>
             )}
 
-            {/* Warning + collapsible preview */}
-            {sync.newRecords.length > 0 && (
+            {/* Info banner when there's work to do */}
+            {(sync.newRecords.length > 0 || sync.updatedRecords.length > 0) && (
               <>
                 <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 flex gap-2">
                   <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                   <p className="text-sm text-amber-700 dark:text-amber-300">
-                    New customers will be created as <strong>DRAFTS</strong>.
-                    Complete setup via <strong>Continue Setup</strong> in the draft banner.
+                    {sync.newRecords.length > 0 && (
+                      <>New customers will be created as <strong>DRAFTS</strong>. </>
+                    )}
+                    {sync.updatedRecords.length > 0 && (
+                      <>Existing records will be refreshed with the latest API data.</>
+                    )}
                   </p>
                 </div>
 
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowPreview((p) => !p)}
-                    className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-                  >
-                    Preview New Customers{" "}
-                    <span className="text-xs">{showPreview ? "▲" : "▾"}</span>
-                  </button>
+                {sync.newRecords.length > 0 && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowPreview((p) => !p)}
+                      className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                    >
+                      Preview New Customers{" "}
+                      <span className="text-xs">{showPreview ? "▲" : "▾"}</span>
+                    </button>
 
-                  {showPreview && (
-                    <div className="mt-2 rounded-md border overflow-hidden max-h-52 overflow-y-auto">
-                      <table className="w-full text-xs">
-                        <thead className="bg-muted/50 sticky top-0">
-                          <tr>
-                            <th className="text-left px-3 py-2 font-medium w-20">ID</th>
-                            <th className="text-left px-3 py-2 font-medium">Name</th>
-                            <th className="text-left px-3 py-2 font-medium w-28">PAN</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sync.newRecords.map((r) => (
-                            <tr key={r.CustomerId} className="border-t hover:bg-muted/20">
-                              <td className="px-3 py-1.5 font-mono text-muted-foreground">
-                                {r.CustomerCode || String(r.CustomerId)}
-                              </td>
-                              <td className="px-3 py-1.5 max-w-[180px] truncate">
-                                {r.ClientName || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 font-mono">
-                                {r.PanCard || "—"}
-                              </td>
+                    {showPreview && (
+                      <div className="mt-2 rounded-md border overflow-hidden max-h-52 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-muted/50 sticky top-0">
+                            <tr>
+                              <th className="text-left px-3 py-2 font-medium w-20">ID</th>
+                              <th className="text-left px-3 py-2 font-medium">Name</th>
+                              <th className="text-left px-3 py-2 font-medium w-28">PAN</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+                          </thead>
+                          <tbody>
+                            {sync.newRecords.map((r) => (
+                              <tr key={r.CustomerId} className="border-t hover:bg-muted/20">
+                                <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                                  {r.CustomerCode || String(r.CustomerId)}
+                                </td>
+                                <td className="px-3 py-1.5 max-w-[180px] truncate">
+                                  {r.ClientName || "—"}
+                                </td>
+                                <td className="px-3 py-1.5 font-mono">
+                                  {r.PanCard || "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
             <DialogFooter>
               <Button variant="outline" onClick={handleClose}>Cancel</Button>
-              {sync.newRecords.length > 0 ? (
+              {(sync.newRecords.length > 0 || sync.updatedRecords.length > 0) ? (
                 <Button onClick={handleImport} className="gap-2">
                   <Upload className="h-4 w-4" />
-                  Import {sync.newRecords.length} Clients
+                  {sync.newRecords.length > 0 && sync.updatedRecords.length > 0
+                    ? `Sync (${sync.newRecords.length} new · ${sync.updatedRecords.length} update)`
+                    : sync.newRecords.length > 0
+                      ? `Import ${sync.newRecords.length} Clients`
+                      : `Update ${sync.updatedRecords.length} Clients`}
                 </Button>
               ) : (
                 <Button onClick={handleClose}>Close</Button>

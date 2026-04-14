@@ -98,10 +98,10 @@ const FirmSettings = () => {
   }, [user]);
 
   useEffect(() => {
-    if (user?.role === "superadmin" && firmsList.length > 0 && !selectedFirmId) {
-      setSelectedFirmId(firmsList[0].id);
-    } else if (user?.firm_id && !selectedFirmId) {
-      setSelectedFirmId(user.firm_id);
+    if (!selectedFirmId) {
+      // Default to user's own firm_id (V J Desai & Co. for superadmin), else first in list
+      const def = firmsList.find(f => f.id === user?.firm_id) || firmsList[0];
+      if (def) setSelectedFirmId(def.id);
     }
   }, [user, firmsList, selectedFirmId]);
 
