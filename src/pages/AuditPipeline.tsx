@@ -307,7 +307,8 @@ export default function AuditPipeline() {
   const autoFlags = useMemo(() => {
     const et = (form1A.entity_type || "").toLowerCase().trim();
     const at = form1A.audit_type;
-    const isCompany = ["company", "private ltd", "public ltd"].includes(et);
+    // Companies (Pvt Ltd, Public Ltd, OPC) always use Form 3CA — mandatory under Companies Act
+    const isCompany = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
     const isLLP = ["llp"].includes(et);
     const isStatutory = at === "statutory" || at === "both";
     const isTaxAudit = at === "tax_audit" || at === "both";
@@ -315,7 +316,9 @@ export default function AuditPipeline() {
 
     return {
       requires_caro: isCompany && isStatutory,
-      requires_3ca: questionnaire.audited_under_other_act === "yes",
+      // Companies: 3CA always mandatory. Non-companies: only if radio = "yes" (audited under other act)
+      requires_3ca: isCompany ? isTaxAudit : (isTaxAudit && questionnaire.audited_under_other_act === "yes"),
+      // 3CB only for non-companies who are NOT audited under any other law
       requires_3cb: !isCompany && isTaxAudit && questionnaire.audited_under_other_act !== "yes",
       requires_3cd: isTaxAudit,
       requires_cash_flow: isCompany || (isLLP && turnover > 4000000),
@@ -751,18 +754,171 @@ export default function AuditPipeline() {
           />
         ) : activeStage === 8 ? (
           /* STAGE 8 — 3CA / 3CB / 3CD Reports */
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
-                <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+          (() => {
+            // Use engagement.entity_type first; fall back to clients.entity_type
+            // (clients table uses "Private Ltd"/"Public Ltd"; pipeline uses "company")
+            const engClient = engagement?.clients as any;
+            const et = (engagement?.entity_type || engClient?.entity_type || "").toLowerCase().trim();
+            const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+            const show3ca = isCompanyEng || (engagement?.requires_3ca ?? false);
+            // 3CB must NEVER show for companies, regardless of DB flag
+            const show3cb = !isCompanyEng && (engagement?.requires_3cb ?? false);
+            const show3cd = engagement?.requires_3cd ?? false;
+            const defaultTab = show3cd ? "3cd" : show3ca ? "3ca" : "3cb";
+
+            return (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                    <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
+                    <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
+                  </Button>
+                </div>
+
+                <Tabs defaultValue={defaultTab}>
+                  <TabsList>
+                    {show3ca && (
+                      <TabsTrigger value="3ca" className="gap-1.5">
+                        Form 3CA
+                        {!isCompanyEng && (
+                          <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
+                        )}
+                      </TabsTrigger>
+                    )}
+                    {show3cb && (
+                      <TabsTrigger value="3cb" className="gap-1.5">
+                        Form 3CB
+                        <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
+                      </TabsTrigger>
+                    )}
+                    {show3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
+                  </TabsList>
+
+                  {/* ── Form 3CA ── */}
+                  {show3ca && (
+                    <TabsContent value="3ca" className="mt-4">
+                      <Card>
+                        <CardContent className="p-6 space-y-4">
+                          <div className="text-center space-y-1">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">FORM NO. 3CA</p>
+                            <p className="text-xs text-muted-foreground">[See rule 6G(1)(b)]</p>
+                            <p className="text-sm font-semibold leading-snug max-w-2xl mx-auto">
+                              Audit report under section 44AB of the Income-tax Act, 1961, in a case where the accounts of
+                              the business or profession of a person have been audited under any other law
+                            </p>
+                          </div>
+                          <Separator />
+                          <div className="max-w-3xl mx-auto space-y-4 text-sm leading-relaxed text-justify">
+                            <p>
+                              <strong>1.</strong> We report that the statutory audit of M/s.{" "}
+                              <span className="font-semibold text-primary">{engClient?.name || "—"}</span>
+                              {engClient?.pan && (
+                                <span> (PAN: <span className="font-mono text-primary">{engClient.pan}</span>)</span>
+                              )}{" "}
+                              was conducted by <strong>{(engagement as any)?.audit_firms?.name || "—"}</strong> in pursuance
+                              of the provisions of the{" "}
+                              <Select defaultValue={(engagement as any)?.questionnaire_answers?.applicable_law || "Companies Act, 2013"} onValueChange={() => {}}>
+                                <SelectTrigger className="inline-flex h-7 w-auto min-w-[180px] text-sm px-2 py-0 border-dashed">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="Companies Act, 2013">Companies Act, 2013</SelectItem>
+                                  <SelectItem value="Banking Regulation Act, 1949">Banking Regulation Act, 1949</SelectItem>
+                                  <SelectItem value="Insurance Act, 1938">Insurance Act, 1938</SelectItem>
+                                  <SelectItem value="Electricity Act, 2003">Electricity Act, 2003</SelectItem>
+                                  <SelectItem value="Co-operative Societies Act">Co-operative Societies Act</SelectItem>
+                                  <SelectItem value="Other law">Other law</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              , and we annex hereto a copy of our audit report dated{" "}
+                              <input type="date" defaultValue={new Date().toISOString().slice(0, 10)} className="border-b border-input bg-transparent text-sm px-1 focus:outline-none" />{" "}
+                              together with a copy of the audited Profit and Loss Account (or Income and Expenditure
+                              Account) for the year ended{" "}
+                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong> and the Balance
+                              Sheet as at that date.
+                            </p>
+                            <p>
+                              <strong>2.</strong> The statement of particulars required to be furnished under section 44AB
+                              is annexed herewith in Form No. 3CD.
+                            </p>
+                            <p>
+                              <strong>3.</strong> In our opinion and to the best of our information and according to the
+                              explanations given to us, the particulars given in Form No. 3CD and the Annexure thereto are
+                              true and correct.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  )}
+
+                  {/* ── Form 3CB (non-companies only) ── */}
+                  {show3cb && (
+                    <TabsContent value="3cb" className="mt-4">
+                      <Card>
+                        <CardContent className="p-6 space-y-4">
+                          <div className="text-center space-y-1">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">FORM NO. 3CB</p>
+                            <p className="text-xs text-muted-foreground">[See rule 6G(1)(a)]</p>
+                            <p className="text-sm font-semibold leading-snug max-w-2xl mx-auto">
+                              Audit report under section 44AB of the Income-tax Act, 1961, in a case where the accounts
+                              of the business or profession of a person have not been audited under any other law
+                            </p>
+                          </div>
+                          <Separator />
+                          <div className="max-w-3xl mx-auto space-y-4 text-sm leading-relaxed text-justify">
+                            <p>
+                              <strong>1.</strong> I/We have examined the balance sheet as at{" "}
+                              <strong>31st March, {engagement?.financial_year?.slice(-4) || "—"}</strong>, and the
+                              Profit and Loss Account for the year ended on that date, attached herewith, of{" "}
+                              <span className="font-semibold text-primary">{engClient?.name || "—"}</span>
+                              {engClient?.pan && (
+                                <span> (PAN: <span className="font-mono text-primary">{engClient.pan}</span>)</span>
+                              )}.
+                            </p>
+                            <p>
+                              <strong>2.</strong> In my/our opinion and to the best of my/our information and according
+                              to explanations given to me/us, the said accounts give a true and fair view of the state of
+                              the affairs of the assessee as at 31st March,{" "}
+                              {engagement?.financial_year?.slice(-4) || "—"} and of its profit/loss for the year ended on
+                              that date.
+                            </p>
+                            <p>
+                              <strong>3.</strong> The statement of particulars required to be furnished under section 44AB
+                              is annexed herewith in Form No. 3CD.
+                            </p>
+                            <p>
+                              <strong>4.</strong> In my/our opinion and to the best of my/our information and according
+                              to the explanations given to me/us, the particulars given in the said Form No. 3CD and the
+                              Annexure thereto are true and correct.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  )}
+
+                  {/* ── Form 3CD ── */}
+                  {show3cd && (
+                    <TabsContent value="3cd" className="mt-0 p-0">
+                      <Form3CD engagementIdProp={selectedEngId} />
+                    </TabsContent>
+                  )}
+
+                  {!show3ca && !show3cb && !show3cd && (
+                    <div className="mt-6 p-8 text-center text-muted-foreground border rounded-lg">
+                      <FileText size={32} className="mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No tax audit forms required for this engagement.</p>
+                      <p className="text-xs mt-1">Forms 3CA / 3CB / 3CD apply only to engagements with a tax audit component.</p>
+                    </div>
+                  )}
+                </Tabs>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
-                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
-              </Button>
-            </div>
-            <Form3CD engagementIdProp={selectedEngId} />
-          </div>
+            );
+          })()
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-6">

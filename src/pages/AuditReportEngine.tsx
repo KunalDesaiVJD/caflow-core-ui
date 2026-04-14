@@ -270,12 +270,20 @@ export default function AuditReportEngine() {
         <Card><CardContent className="py-12 text-center text-muted-foreground">Select an engagement to generate reports.</CardContent></Card>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="iar">Independent Auditor's Report</TabsTrigger>
-            {engagement?.requires_3ca && <TabsTrigger value="3ca">Form 3CA</TabsTrigger>}
-            {engagement?.requires_3cb && <TabsTrigger value="3cb">Form 3CB</TabsTrigger>}
-            {engagement?.requires_3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
-          </TabsList>
+          {(() => {
+            const et = (engagement?.entity_type || (client as any)?.entity_type || "").toLowerCase().trim();
+            const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+            const show3ca = isCompanyEng || (engagement?.requires_3ca ?? false);
+            const show3cb = !isCompanyEng && (engagement?.requires_3cb ?? false);
+            return (
+              <TabsList>
+                <TabsTrigger value="iar">Independent Auditor's Report</TabsTrigger>
+                {show3ca && <TabsTrigger value="3ca">Form 3CA</TabsTrigger>}
+                {show3cb && <TabsTrigger value="3cb">Form 3CB</TabsTrigger>}
+                {engagement?.requires_3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
+              </TabsList>
+            );
+          })()}
 
           {/* IAR Tab */}
           <TabsContent value="iar">
@@ -347,8 +355,8 @@ export default function AuditReportEngine() {
             </TabsContent>
           )}
 
-          {/* 3CB Tab */}
-          {engagement?.requires_3cb && (
+          {/* 3CB Tab — non-companies only */}
+          {engagement?.requires_3cb && !(["company","private ltd","public ltd","opc","pvt_ltd","public_ltd"].includes(((engagement?.entity_type)||(client as any)?.entity_type||"").toLowerCase().trim())) && (
             <TabsContent value="3cb">
               <Card>
                 <CardHeader><CardTitle className="text-base">Form 3CB — Audit Report u/s 44AB (Non-Companies)</CardTitle></CardHeader>
