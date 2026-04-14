@@ -1636,56 +1636,72 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   });
 
   // ── 6. Send — Resend primary, Graph API fallback ───────────────────────────
-  const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-  if (RESEND_API_KEY) {
-    const r = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from:        `${firmName} <${EMAIL_FROM}>`,
-        to:          recipientEmail,
-        subject,
-        html:        emailHtml,
-        attachments,
-      }),
-    });
-    if (!r.ok) {
-      const errText = await r.text();
-      throw new Error(`Resend failed (${r.status}): ${errText.slice(0, 200)}`);
+  try {
+    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+    if (RESEND_API_KEY) {
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from:        `${firmName} <${EMAIL_FROM}>`,
+          to:          recipientEmail,
+          subject,
+          html:        emailHtml,
+          attachments,
+        }),
+      });
+      if (!r.ok) {
+        const errText = await r.text();
+        throw new Error(`Email service error (${r.status}): ${errText.slice(0, 120)}`);
+      }
+    } else {
+      const graphAttachments = attachments.map(a => ({
+        "@odata.type": "#microsoft.graph.fileAttachment" as const,
+        name:          a.filename,
+        contentType:   "application/pdf",
+        contentBytes:  a.content,
+      }));
+      await sendEmailViaGraph(recipientEmail, subject, emailHtml, graphAttachments);
     }
-  } else {
-    const graphAttachments = attachments.map(a => ({
-      "@odata.type": "#microsoft.graph.fileAttachment" as const,
-      name:          a.filename,
-      contentType:   "application/pdf",
-      contentBytes:  a.content,
-    }));
-    await sendEmailViaGraph(recipientEmail, subject, emailHtml, graphAttachments);
+  } catch (sendErr: unknown) {
+    const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+    await sendTelegram(chatId, `❌ Failed to send email to ${recipientEmail}.\nReason: ${msg.slice(0, 200)}\n\nPlease check email credentials in Supabase env vars (RESEND_API_KEY or Graph API).`);
+    return { error: `Email delivery failed: ${msg.slice(0, 150)}` };
   }
 
-  // ── 7. Post-send: update invoice status + notification log ─────────────────
-  if (inv?.status === "finalized") {
-    await supabase.from("invoices")
-      .update({ status: "sent", sent_at: now.toISOString() })
-      .eq("id", inv.id);
+  // ── 7. Post-send: confirm to user, update invoice status, log (all non-fatal) ─
+  await sendTelegram(chatId,
+    `✅ Email sent to *${recipientEmail}*!\n` +
+    `📎 Attachments: ${attachments.map(a => a.filename).join(", ")}`
+  );
+
+  // Non-fatal post-send operations
+  try {
+    if (inv?.status === "finalized") {
+      await supabase.from("invoices")
+        .update({ status: "sent", sent_at: now.toISOString() })
+        .eq("id", inv.id);
+    }
+    await supabase.from("notification_log").insert({
+      recipient_id: clientId,
+      channel:      "email",
+      type:         "invoice_generated",
+      status:       "sent",
+      sent_at:      now.toISOString(),
+      content: {
+        subject,
+        to:          recipientEmail,
+        invoice_id:  inv?.id ?? null,
+        source:      "telegram_bot_v5",
+        attachments: attachments.map(a => a.filename),
+      },
+    });
+  } catch (logErr) {
+    console.warn("[Bot] sendEmail post-send log error (non-fatal):", logErr);
   }
-  await supabase.from("notification_log").insert({
-    recipient_id: clientId,
-    channel:      "email",
-    type:         "invoice_generated",
-    status:       "sent",
-    sent_at:      now.toISOString(),
-    content: {
-      subject,
-      to:          recipientEmail,
-      invoice_id:  inv?.id ?? null,
-      source:      "telegram_bot_v5",
-      attachments: attachments.map(a => a.filename),
-    },
-  });
 
   return {
     success:     true,
