@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { supabase } from "@/integrations/supabase/client";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import {
   LayoutDashboard, Users, Receipt, FileText, CreditCard, BookOpen,
   Search, Settings, LogOut, PanelLeftClose, PanelLeft, Shield,
@@ -401,9 +402,13 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-3 overflow-hidden w-full text-left hover:opacity-80 transition-opacity">
-              <div className="w-9 h-9 rounded-full bg-sidebar-gold/20 flex items-center justify-center text-sidebar-gold font-semibold text-sm shrink-0">
-                {initials}
-              </div>
+              <UserAvatar
+                name={user?.name}
+                avatarUrl={user?.avatar_url}
+                size="sm"
+                ring
+                className="shrink-0 border-2 border-sidebar-gold/30"
+              />
               {!collapsed && (
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-sidebar-foreground truncate">{displayName}</p>

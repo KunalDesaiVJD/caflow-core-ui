@@ -264,6 +264,45 @@ Deno.serve(async (req) => {
       });
     }
 
+    // CHANGE EMAIL
+    if (req.method === "POST" && action === "change-email") {
+      const body = await req.json();
+      const { user_id, new_email } = body;
+      if (!user_id || !new_email) {
+        return new Response(JSON.stringify({ error: "user_id and new_email required" }), { status: 400, headers: corsHeaders });
+      }
+      // Check no other user has this email
+      const { data: existing } = await adminClient.from("users").select("id").eq("email", new_email).neq("id", user_id).maybeSingle();
+      if (existing) {
+        return new Response(JSON.stringify({ error: "Email already in use by another account" }), { status: 409, headers: corsHeaders });
+      }
+      // Update auth email
+      const { error: authErr } = await adminClient.auth.admin.updateUserById(user_id, { email: new_email, email_confirm: true });
+      if (authErr) throw authErr;
+      // Update public.users
+      const { data, error } = await adminClient.from("users").update({ email: new_email }).eq("id", user_id).select().single();
+      if (error) throw error;
+      // Audit log
+      await adminClient.from("version_history").insert({
+        operation: "UPDATE", user_name: requestingUser.name || "Unknown", user_role: requestingUser.role,
+        table_name: "users", record_id: user_id,
+        old_data: { email: body.old_email }, new_data: { email: new_email }, changed_fields: ["email"],
+      });
+      return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // UPDATE AVATAR
+    if (req.method === "POST" && action === "update-avatar") {
+      const body = await req.json();
+      const { user_id, avatar_url } = body;
+      if (!user_id) {
+        return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: corsHeaders });
+      }
+      const { data, error } = await adminClient.from("users").update({ avatar_url: avatar_url || null }).eq("id", user_id).select().single();
+      if (error) throw error;
+      return new Response(JSON.stringify(data), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // DELETE USER
     if (req.method === "POST" && action === "delete") {
       const body = await req.json();

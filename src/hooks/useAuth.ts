@@ -8,6 +8,7 @@ interface AuthUser {
   role: string | null;
   firm_id: string | null;
   must_change_password: boolean;
+  avatar_url: string | null;
 }
 
 interface AuthContextValue {
@@ -41,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const { data: profile } = await supabase
           .from("users")
-          .select("id, email, name, role, firm_id, must_change_password")
+          .select("id, email, name, role, firm_id, must_change_password, avatar_url")
           .eq("id", session.user.id)
           .maybeSingle();
 
@@ -51,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser({
             ...profile,
             must_change_password: (profile as any).must_change_password ?? false,
+            avatar_url: (profile as any).avatar_url ?? null,
           });
 
           void supabase.rpc("set_user_context", {
@@ -66,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             role: session.user.user_metadata?.role || null,
             firm_id: null,
             must_change_password: false,
+            avatar_url: null,
           });
         }
       } finally {
