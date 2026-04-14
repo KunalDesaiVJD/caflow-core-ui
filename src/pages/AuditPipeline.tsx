@@ -184,6 +184,8 @@ export default function AuditPipeline() {
     key_areas: "", risk_profile: "medium", risk_justification: "",
     expected_completion: "", review_dates: "",
   });
+  // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
+  const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
   // ─── Audit-eligible clients — two-step query for reliability ───
   // Step 1: Fetch client_ids from client_fy_classifications with classification = 'Audit'
@@ -829,15 +831,17 @@ export default function AuditPipeline() {
           /* STAGE 8 — 3CA / 3CB / 3CD Reports */
           (() => {
             // Use engagement.entity_type first; fall back to clients.entity_type
-            // (clients table uses "Private Ltd"/"Public Ltd"; pipeline uses "company")
             const engClient = engagement?.clients as any;
             const et = (engagement?.entity_type || engClient?.entity_type || "").toLowerCase().trim();
             const isCompanyEng = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
-            const show3ca = isCompanyEng || (engagement?.requires_3ca ?? false);
-            // 3CB must NEVER show for companies, regardless of DB flag
-            const show3cb = !isCompanyEng && (engagement?.requires_3cb ?? false);
-            const show3cd = engagement?.requires_3cd ?? false;
-            const defaultTab = show3cd ? "3cd" : show3ca ? "3ca" : "3cb";
+            const isTaxAuditEng = engagement?.requires_3ca || engagement?.requires_3cb || engagement?.requires_3cd;
+
+            // Companies: always 3CA + 3CD. Non-companies: user chooses via radio.
+            const show3ca = isCompanyEng || (!isCompanyEng && nonCorpFormChoice === "3ca");
+            const show3cb = !isCompanyEng && nonCorpFormChoice === "3cb";
+            // 3CD always accompanies 3CA or 3CB whenever tax audit applies
+            const show3cd = isCompanyEng ? show3ca : (show3ca || show3cb);
+            const defaultTab = show3ca ? "3ca" : show3cb ? "3cb" : "3cd";
 
             return (
               <div className="space-y-4">
@@ -851,22 +855,41 @@ export default function AuditPipeline() {
                   </Button>
                 </div>
 
-                <Tabs defaultValue={defaultTab}>
+                {/* Non-company: radio to choose 3CA+3CD or 3CB+3CD */}
+                {!isCompanyEng && (
+                  <div className="flex items-center gap-4 p-3 bg-muted/40 rounded-lg border text-sm">
+                    <span className="font-medium text-muted-foreground">Audit Report Form:</span>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="formChoice"
+                        value="3cb"
+                        checked={nonCorpFormChoice === "3cb"}
+                        onChange={() => setNonCorpFormChoice("3cb")}
+                        className="accent-primary"
+                      />
+                      <span>Form 3CB + 3CD</span>
+                      <span className="text-xs text-muted-foreground">(accounts NOT audited under any other law)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="formChoice"
+                        value="3ca"
+                        checked={nonCorpFormChoice === "3ca"}
+                        onChange={() => setNonCorpFormChoice("3ca")}
+                        className="accent-primary"
+                      />
+                      <span>Form 3CA + 3CD</span>
+                      <span className="text-xs text-muted-foreground">(accounts audited under another law)</span>
+                    </label>
+                  </div>
+                )}
+
+                <Tabs key={defaultTab} defaultValue={defaultTab}>
                   <TabsList>
-                    {show3ca && (
-                      <TabsTrigger value="3ca" className="gap-1.5">
-                        Form 3CA
-                        {!isCompanyEng && (
-                          <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
-                        )}
-                      </TabsTrigger>
-                    )}
-                    {show3cb && (
-                      <TabsTrigger value="3cb" className="gap-1.5">
-                        Form 3CB
-                        <Badge variant="secondary" className="text-[9px] px-1 h-4 ml-1">Optional</Badge>
-                      </TabsTrigger>
-                    )}
+                    {show3ca && <TabsTrigger value="3ca">Form 3CA</TabsTrigger>}
+                    {show3cb && <TabsTrigger value="3cb">Form 3CB</TabsTrigger>}
                     {show3cd && <TabsTrigger value="3cd">Form 3CD</TabsTrigger>}
                   </TabsList>
 
@@ -981,7 +1004,7 @@ export default function AuditPipeline() {
                     </TabsContent>
                   )}
 
-                  {!show3ca && !show3cb && !show3cd && (
+                  {!isTaxAuditEng && !isCompanyEng && (
                     <div className="mt-6 p-8 text-center text-muted-foreground border rounded-lg">
                       <FileText size={32} className="mx-auto mb-2 opacity-30" />
                       <p className="text-sm">No tax audit forms required for this engagement.</p>
