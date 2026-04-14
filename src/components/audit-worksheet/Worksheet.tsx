@@ -68,36 +68,72 @@ function expandFY(fy: string): string {
   return `${y}-${y + 1}`;
 }
 
-// ─── Employee dropdown ────────────────────────────────────────────────────────
+// ─── Multi-select chip employee picker (CP-06) ───────────────────────────────
 
-function EmpSelect({
-  value, onChange, employees,
+function MultiEmpSelect({
+  ids, names, onChange, employees,
 }: {
-  value:     string;
-  onChange:  (id: string, name: string) => void;
+  ids:       string[];
+  names:     string[];
+  onChange:  (ids: string[], names: string[]) => void;
   employees: { id: string; name: string | null; role: string | null }[];
 }) {
+  const unselected = employees.filter(e => !ids.includes(e.id));
+
+  function add(empId: string) {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp || ids.includes(empId)) return;
+    onChange([...ids, empId], [...names, emp.name || ""]);
+  }
+
+  function remove(empId: string) {
+    const idx = ids.indexOf(empId);
+    if (idx === -1) return;
+    onChange(
+      ids.filter(x => x !== empId),
+      names.filter((_, i) => i !== idx)
+    );
+  }
+
   return (
-    <Select
-      value={value || "__none__"}
-      onValueChange={id => {
-        const realId = id === "__none__" ? "" : id;
-        const emp = employees.find(e => e.id === realId);
-        onChange(realId, emp?.name || "");
-      }}
-    >
-      <SelectTrigger className="h-7 text-xs w-full min-w-[115px]">
-        <SelectValue placeholder="Assign…" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="__none__">— Unassigned —</SelectItem>
-        {employees.map(e => (
-          <SelectItem key={e.id} value={e.id}>
-            {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="space-y-1 min-w-[140px]">
+      {/* Selected checkers as removable chips */}
+      {ids.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {ids.map((id, i) => (
+            <span
+              key={id}
+              className="inline-flex items-center gap-0.5 bg-teal-100 text-teal-800 text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+            >
+              {names[i] || "—"}
+              <button
+                type="button"
+                onClick={() => remove(id)}
+                className="ml-0.5 text-teal-600 hover:text-red-600 leading-none"
+                aria-label={`Remove ${names[i]}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Add-more dropdown — hidden once all employees selected */}
+      {unselected.length > 0 && (
+        <Select value="" onValueChange={add}>
+          <SelectTrigger className="h-6 text-[10px] w-full border-dashed">
+            <SelectValue placeholder={ids.length === 0 ? "Assign…" : "+ Add checker…"} />
+          </SelectTrigger>
+          <SelectContent>
+            {unselected.map(e => (
+              <SelectItem key={e.id} value={e.id} className="text-xs">
+                {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
 
@@ -116,10 +152,10 @@ export default function Worksheet({ data, engagementId }: Props) {
 
   const fyExpanded = expandFY(data.financialYear);
 
-  // Count how many rows have a checked-by assigned
+  // Count how many rows have at least one checker assigned
   const assignedCount = WORKSHEET_ROWS.filter(r => {
     const rs = getRow(r.id);
-    return !!rs.checked_by_id;
+    return (rs.checked_by_ids?.length ?? 0) > 0 || !!rs.checked_by_id;
   }).length;
 
   return (
@@ -248,20 +284,19 @@ export default function Worksheet({ data, engagementId }: Props) {
                       />
                     </td>
 
-                    {/* Checked By */}
-                    <td className="border border-border px-2 py-2 align-middle">
-                      <EmpSelect
-                        value={rs.checked_by_id}
-                        onChange={(id, name) =>
-                          patchRow(row.id, { checked_by_id: id, checked_by_name: name })
+                    {/* Checked By — multi-select chips (CP-06) */}
+                    <td className="border border-border px-2 py-2 align-top">
+                      <MultiEmpSelect
+                        ids={rs.checked_by_ids ?? []}
+                        names={rs.checked_by_names ?? []}
+                        onChange={(ids, names) =>
+                          patchRow(row.id, {
+                            checked_by_ids:   ids,
+                            checked_by_names: names,
+                          })
                         }
                         employees={employees}
                       />
-                      {rs.checked_by_name && (
-                        <p className="text-[10px] text-teal-700 mt-0.5 font-medium truncate">
-                          ✓ {rs.checked_by_name}
-                        </p>
-                      )}
                     </td>
                   </tr>
 

@@ -17,8 +17,12 @@ export interface WsRowState {
   extent_text: string;       // free text "MM/YY TO MM/YY"  (rows 1-3, 5-7)
   extent_date: string;       // ISO date for "AS ON" rows  (rows 4, 8, 9)
   date:        string;       // work date (ISO)
+  // Legacy single-checker fields — retained for backward-compat / migration
   checked_by_id:   string;
   checked_by_name: string;
+  // Multi-checker fields (CP-06)
+  checked_by_ids:   string[];
+  checked_by_names: string[];
   notes: string;             // 2-3 sub-row area for additional notes
 }
 
@@ -28,6 +32,8 @@ export const BLANK_ROW: WsRowState = {
   date:        "",
   checked_by_id:   "",
   checked_by_name: "",
+  checked_by_ids:   [],
+  checked_by_names: [],
   notes: "",
 };
 
@@ -120,7 +126,17 @@ export function useWorksheetSheetStorage(
   }, [data, persist]);
 
   const getRow = useCallback(
-    (rowId: string): WsRowState => data.rows[rowId] ?? { ...BLANK_ROW },
+    (rowId: string): WsRowState => {
+      const raw = data.rows[rowId];
+      if (!raw) return { ...BLANK_ROW };
+      const base: WsRowState = { ...BLANK_ROW, ...raw };
+      // Migrate legacy single-checker → arrays
+      if ((!base.checked_by_ids || base.checked_by_ids.length === 0) && base.checked_by_id) {
+        base.checked_by_ids   = [base.checked_by_id];
+        base.checked_by_names = base.checked_by_name ? [base.checked_by_name] : [];
+      }
+      return base;
+    },
     [data.rows]
   );
 
