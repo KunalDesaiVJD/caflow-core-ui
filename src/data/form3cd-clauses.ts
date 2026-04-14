@@ -622,10 +622,10 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
       },
 
       // ── 21(e) — Gratuity provision ──
-      { key: 'cl_21e', heading: '21(e) — Provision for payment of gratuity not allowable under section 40A(7).', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+      { key: 'cl_21e', heading: '21(e) — Provision for payment of gratuity not allowable under section 40A(7).', control: 'amount_remarks' },
 
       // ── 21(f) — Employer payment u/s 40A(9) ──
-      { key: 'cl_21f', heading: '21(f) — Any sum paid by the assessee as an employer not allowable under section 40A(9).', control: 'single_field', defaultValue: 'Nil', fieldType: 'number' },
+      { key: 'cl_21f', heading: '21(f) — Any sum paid by the assessee as an employer not allowable under section 40A(9).', control: 'amount_remarks' },
 
       // ── 21(g) — Contingent liabilities ──
       {

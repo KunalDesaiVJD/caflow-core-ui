@@ -30,6 +30,7 @@ export type ControlType =
   | 'not_applicable_annexure'   // Not Applicable checkbox + As Per Annexure checkbox
   | 'dropdown'                  // Single dropdown field
   | 'single_field'              // Single numeric/text field with Reset button
+  | 'amount_remarks'            // Amount (number) + Remarks (text) — two-field row
   | 'structured_table'          // Fixed-row structured table (Cl.27a, Cl.40)
   | 'matrix'                    // Matrix/Annexure-6 style (Cl.34a)
   | 'note_reference'            // Note reference + optional annexure (Cl.9a)

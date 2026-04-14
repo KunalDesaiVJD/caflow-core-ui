@@ -422,6 +422,45 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
+    case 'amount_remarks':
+      return (
+        <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
+          {headingEl}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1">
+              <Label className="text-xs text-muted-foreground shrink-0">Amount (₹)</Label>
+              <Input
+                type="number"
+                className="w-36"
+                value={data._value ?? ''}
+                onChange={e => update('_value', e.target.value)}
+                disabled={isLocked}
+                placeholder="0"
+              />
+            </div>
+            <div className="flex items-center gap-1 flex-1 min-w-48">
+              <Label className="text-xs text-muted-foreground shrink-0">Remarks</Label>
+              <Input
+                type="text"
+                className="flex-1"
+                value={data._remarks ?? ''}
+                onChange={e => update('_remarks', e.target.value)}
+                disabled={isLocked}
+                placeholder="If applicable, enter remarks"
+              />
+            </div>
+            <Button
+              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+              onClick={() => { update('_value', ''); update('_remarks', ''); }}
+              disabled={isLocked}
+              title="Reset"
+            >
+              <RotateCcw className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      );
+
     case 'structured_table':
       return (
         <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
