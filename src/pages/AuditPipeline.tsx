@@ -990,17 +990,8 @@ export default function AuditPipeline() {
                   )}
                 </Tabs>
               </div>
-<<<<<<< HEAD
             );
           })()
-=======
-              <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
-                <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
-              </Button>
-            </div>
-            <Form3Reports engagementIdProp={selectedEngId} />
-          </div>
->>>>>>> 5aa85d0b47649aede9868d861433879624b3a82c
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-6">
