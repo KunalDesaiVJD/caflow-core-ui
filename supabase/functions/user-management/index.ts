@@ -323,6 +323,14 @@ Deno.serve(async (req) => {
         return new Response(JSON.stringify({ error: "Cannot delete user from another firm" }), { status: 403, headers: corsHeaders });
       }
 
+      // Nullify FK references that lack ON DELETE SET NULL so the users row
+      // can be deleted without a foreign-key violation.
+      await Promise.all([
+        adminClient.from("ai_usage_log").update({ user_id: null } as any).eq("user_id", user_id),
+        adminClient.from("feedback").update({ user_id: null }     as any).eq("user_id", user_id),
+        adminClient.from("clients").update({ user_id: null }      as any).eq("user_id", user_id),
+      ]);
+
       // Delete from users table first, then auth
       const { error: dbError } = await adminClient.from("users").delete().eq("id", user_id);
       if (dbError) throw dbError;
