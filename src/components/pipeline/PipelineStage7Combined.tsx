@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
+import { NCENotesToAccounts } from '@/components/stage7/NotesToAccounts';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 
@@ -114,8 +115,8 @@ export default function PipelineStage7Combined({
           </TabsContent>
         </Tabs>
       ) : (
-        /* Non-corporate: Notes to Accounts only — no CARO or MRL tabs */
-        <NotesToAccounts engagementIdProp={engagementId} isCorporate={false} />
+        /* Non-corporate: NCE Notes to Accounts — no CARO or MRL */
+        <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
       )}
     </div>
   );
