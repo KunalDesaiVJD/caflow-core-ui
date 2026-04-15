@@ -32,6 +32,8 @@ interface Client {
   firm_id: string | null;
   /** 'manual' | 'import' — requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual' */
   source?: string | null;
+  /** Whether this record is a draft (incomplete wizard) */
+  is_draft?: boolean | null;
   /** Populated only when All Firms selected — joined from firms table */
   firm_name?: string | null;
 }
@@ -71,6 +73,8 @@ const Clients = () => {
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
   // GAP-7: API vs Manual bifurcation
   const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api">("all");
+  // Sub-tab within "Clients via API": draft = is_draft true, final = is_draft false
+  const [apiSubTab, setApiSubTab] = useState<"draft" | "final">("final");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
@@ -301,11 +305,16 @@ const Clients = () => {
       sourceTab === "all" ||
       (sourceTab === "manual" && (c.source === "manual" || !c.source)) ||
       (sourceTab === "api" && c.source === "api_import");
-    return matchesSearch && matchesEntity && matchesGroup && matchesSource;
+    // API sub-tab: draft vs final (only applied when sourceTab === "api")
+    const matchesApiSub =
+      sourceTab !== "api" ||
+      (apiSubTab === "draft" && c.is_draft === true) ||
+      (apiSubTab === "final" && !c.is_draft);
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub;
   });
 
   // Reset page when filters change
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab]);
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab, apiSubTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -524,6 +533,36 @@ const Clients = () => {
         );
       })()}
 
+      {/* API sub-tabs: Draft vs Final — only shown when "Clients via API" is active */}
+      {sourceTab === "api" && (() => {
+        const apiClients = clients.filter(c => c.source === "api_import");
+        const draftCount = apiClients.filter(c => c.is_draft === true).length;
+        const finalCount = apiClients.filter(c => !c.is_draft).length;
+        return (
+          <div className="flex items-center gap-1 px-1 pt-1">
+            {([
+              { key: "final" as const, label: "Final", count: finalCount },
+              { key: "draft" as const, label: "Drafts", count: draftCount },
+            ]).map(({ key, label, count }) => (
+              <button
+                key={key}
+                onClick={() => { setApiSubTab(key); setCurrentPage(1); }}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                  apiSubTab === key
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                {label}
+                <span className={`ml-1.5 ${apiSubTab === key ? "opacity-80" : "opacity-60"}`}>
+                  {count}
+                </span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* Search & Filter — BELOW tabs per spec */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -598,7 +637,8 @@ const Clients = () => {
                       <TableCell className="font-medium text-sm">
                         <span className="flex items-center gap-1.5">
                           {client.name || "Unnamed"}
-                          {client.source === "api_import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                          {client.source === "api_import" && !client.is_draft && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                          {client.source === "api_import" && client.is_draft && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500 text-amber-600">Draft</Badge>}
                         </span>
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
