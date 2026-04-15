@@ -323,12 +323,58 @@ Deno.serve(async (req) => {
         return new Response(JSON.stringify({ error: "Cannot delete user from another firm" }), { status: 403, headers: corsHeaders });
       }
 
-      // Nullify FK references that lack ON DELETE SET NULL so the users row
-      // can be deleted without a foreign-key violation.
+      // Pre-nullify every FK referencing public.users(id) so the delete cannot
+      // be blocked by a missing ON DELETE SET NULL on any referencing table.
+      // (Migration 20260415000006 adds the constraints permanently; this block
+      //  is belt-and-suspenders for environments where that migration is pending.)
       await Promise.all([
-        adminClient.from("ai_usage_log").update({ user_id: null } as any).eq("user_id", user_id),
-        adminClient.from("feedback").update({ user_id: null }     as any).eq("user_id", user_id),
-        adminClient.from("clients").update({ user_id: null }      as any).eq("user_id", user_id),
+        // log / audit tables
+        adminClient.from("ai_usage_log")                   .update({ user_id:      null } as any).eq("user_id",      user_id),
+        adminClient.from("feedback")                       .update({ user_id:      null } as any).eq("user_id",      user_id),
+        adminClient.from("role_permission_audit_log")      .update({ changed_by:   null } as any).eq("changed_by",   user_id),
+        adminClient.from("tds_filing_audit_log")           .update({ changed_by:   null } as any).eq("changed_by",   user_id),
+        adminClient.from("demand_notice_status_history")   .update({ changed_by:   null } as any).eq("changed_by",   user_id),
+        // engagements
+        adminClient.from("audit_engagements")              .update({ manager_id:   null } as any).eq("manager_id",   user_id),
+        adminClient.from("audit_engagements")              .update({ partner_id:   null } as any).eq("partner_id",   user_id),
+        adminClient.from("audit_engagements")              .update({ sign_off_by:  null } as any).eq("sign_off_by",  user_id),
+        adminClient.from("audit_engagements")              .update({ signed_by:    null } as any).eq("signed_by",    user_id),
+        // clients / groups
+        adminClient.from("client_groups")                  .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("client_group_memberships")       .update({ added_by:     null } as any).eq("added_by",     user_id),
+        adminClient.from("client_auditor_assignments")     .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("clients")                        .update({ user_id:      null } as any).eq("user_id",      user_id),
+        adminClient.from("clients")                        .update({ responsible_person_id: null } as any).eq("responsible_person_id", user_id),
+        // demand notices
+        adminClient.from("demand_notices")                 .update({ assigned_to:  null } as any).eq("assigned_to",  user_id),
+        adminClient.from("demand_notices")                 .update({ created_by:   null } as any).eq("created_by",   user_id),
+        // itr profiles
+        adminClient.from("itr_profiles")                   .update({ assigned_to:  null } as any).eq("assigned_to",  user_id),
+        adminClient.from("itr_profiles")                   .update({ prepared_by:  null } as any).eq("prepared_by",  user_id),
+        adminClient.from("itr_profiles")                   .update({ checked_by:   null } as any).eq("checked_by",   user_id),
+        adminClient.from("itr_profiles")                   .update({ upload_by:    null } as any).eq("upload_by",    user_id),
+        // tds filings
+        adminClient.from("tds_filings")                    .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("tds_filings")                    .update({ checker_id:   null } as any).eq("checker_id",   user_id),
+        adminClient.from("tds_filings")                    .update({ approver_id:  null } as any).eq("approver_id",  user_id),
+        adminClient.from("tds_filings")                    .update({ preparer_id:  null } as any).eq("preparer_id",  user_id),
+        // fa (fixed assets)
+        adminClient.from("fa_assets")                      .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("fa_asset_additions")             .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("fa_asset_disposals")             .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("fa_import_batches")              .update({ imported_by:  null } as any).eq("imported_by",  user_id),
+        // misc
+        adminClient.from("audit_firms")                    .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("billing_receipts")               .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("carry_forward_queries")          .update({ carried_by:   null } as any).eq("carried_by",   user_id),
+        adminClient.from("chat_conversations")             .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("chat_messages")                  .update({ sender_id:    null } as any).eq("sender_id",    user_id),
+        adminClient.from("chat_participants")              .delete()                             .eq("user_id",      user_id),
+        adminClient.from("documents")                      .update({ signed_by:    null } as any).eq("signed_by",    user_id),
+        adminClient.from("role_permissions")               .update({ updated_by:   null } as any).eq("updated_by",   user_id),
+        adminClient.from("scrutiny_rules")                 .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("service_categories")             .update({ created_by:   null } as any).eq("created_by",   user_id),
+        adminClient.from("timesheets")                     .update({ user_id:      null } as any).eq("user_id",      user_id),
       ]);
 
       // Delete from users table first, then auth
