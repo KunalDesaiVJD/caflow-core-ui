@@ -153,11 +153,6 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
       if (!token) throw new Error("Not authenticated");
 
       const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-
-      // Use an iframe pointed at a GET URL — this is the most reliable download
-      // method in Chrome: the browser treats iframe navigation as a user-initiated
-      // download and respects Content-Disposition: attachment without any gesture
-      // timeout restrictions.
       const params = new URLSearchParams({
         engagement_id: engagementId,
         form_type: formType,
@@ -165,15 +160,28 @@ export default function Form3CD({ engagementIdProp }: { engagementIdProp?: strin
       });
       const downloadUrl = `${SUPABASE_URL}/functions/v1/export_tax_audit?${params}`;
 
-      const iframe = document.createElement("iframe");
-      iframe.style.display = "none";
-      iframe.src = downloadUrl;
-      document.body.appendChild(iframe);
-      setTimeout(() => {
-        if (iframe.parentNode) document.body.removeChild(iframe);
-      }, 30000);
+      // fetch → blob → <a> click: works reliably in all Chrome versions
+      // (iframes are blocked by Chrome's download-security model for programmatic navigation)
+      const resp = await fetch(downloadUrl);
+      if (!resp.ok) {
+        let errMsg = `HTTP ${resp.status}`;
+        try { const j = await resp.json(); errMsg = j.error || errMsg; } catch { /* ignore */ }
+        throw new Error(errMsg);
+      }
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      // Prefer filename from Content-Disposition header; fall back to a safe default
+      const cd = resp.headers.get("content-disposition") ?? "";
+      const nameMatch = cd.match(/filename="([^"]+)"/);
+      a.download = nameMatch?.[1] ?? `${formType}_export.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
 
-      toast.success(`${formType} template — downloading…`);
+      toast.success(`${formType} downloaded successfully!`);
     } catch (e: any) {
       toast.error(`Export failed: ${e.message}`);
     } finally {
