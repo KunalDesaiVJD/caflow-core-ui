@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.telegram-bot]
 verify_jwt = false
+
+[functions.export_tax_audit]
+verify_jwt = false
