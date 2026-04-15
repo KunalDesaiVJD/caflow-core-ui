@@ -358,10 +358,20 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
-    case 'not_applicable_annexure':
+    case 'not_applicable_annexure': {
+      // CP-14: detect if this clause has a TAN column to auto-populate
+      const hasTanColumn = definition.annexureColumns?.some(c => c.key === 'tan');
+      const clientTanValue = (hasTanColumn && client?.tan_number) ? client.tan_number : undefined;
       return (
         <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
+          {clientTanValue && (
+            <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+              <span className="font-medium">TAN:</span>
+              <span className="font-mono">{clientTanValue}</span>
+              <span className="text-blue-500 dark:text-blue-400">— Auto-fetched from Client Details. Click Edit in a row to override.</span>
+            </div>
+          )}
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 cursor-pointer text-sm">
               <Checkbox
@@ -399,6 +409,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
               isLocked={isLocked}
               showTotals={'showTotals' in definition ? definition.showTotals : false}
               totalColumns={'totalColumns' in definition ? definition.totalColumns : undefined}
+              clientTan={clientTanValue}
             />
           )}
           {!data._notApplicable && !data._asPerAnnexure && definition.annexureColumns && (
@@ -409,10 +420,12 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
               isLocked={isLocked}
               showTotals={'showTotals' in definition ? definition.showTotals : false}
               totalColumns={'totalColumns' in definition ? definition.totalColumns : undefined}
+              clientTan={clientTanValue}
             />
           )}
         </div>
       );
+    }
 
     case 'dropdown':
       return (
@@ -854,20 +867,23 @@ function RadioControl({ name, options, value, onChange, disabled }: {
 }
 
 // ─── Annexure Table (Generic) ───
-function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalColumns }: {
+function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalColumns, clientTan }: {
   columns: AnnexureColumn[];
   rows: Record<string, any>[];
   onChange: (rows: Record<string, any>[]) => void;
   isLocked?: boolean;
   showTotals?: boolean;
   totalColumns?: string[];
+  clientTan?: string;           // CP-14: auto-seed TAN column on new rows
 }) {
   function addRow() {
     const emptyRow: Record<string, any> = {};
-    columns.forEach((c, i) => {
-      // Auto-fill serial number for readonly sr_no columns
+    columns.forEach((c) => {
       if (c.key === 'sr_no' && c.type === 'readonly') {
         emptyRow[c.key] = String(rows.length + 1);
+      } else if (c.key === 'tan' && clientTan) {
+        // CP-14: pre-populate TAN from client record
+        emptyRow[c.key] = clientTan;
       } else {
         emptyRow[c.key] = '';
       }
@@ -1039,6 +1055,40 @@ function CellInput({ column, value, onChange, onRowChange, disabled, row }: {
   disabled?: boolean;
   row?: Record<string, any>;
 }) {
+  // CP-14: TAN column — read-only by default, toggleable to editable
+  if (column.key === 'tan') {
+    const editable = row?._tan_editable === true;
+    return (
+      <div className="flex items-center gap-1">
+        {editable ? (
+          <Input
+            value={value || ''}
+            onChange={e => onChange(e.target.value.toUpperCase())}
+            disabled={disabled}
+            maxLength={10}
+            placeholder="AAAAA0000A"
+            className="h-8 text-xs font-mono"
+          />
+        ) : (
+          <span className="text-xs px-2 py-1 font-mono text-muted-foreground">
+            {value || '—'}
+          </span>
+        )}
+        {!disabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-[11px] shrink-0"
+            onClick={() => onRowChange?.({ _tan_editable: !editable })}
+          >
+            {editable ? 'Lock' : 'Edit'}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   if (column.key === 'nature_of_payment') {
     const editable = row?._nature_of_payment_editable === true;
     return (
