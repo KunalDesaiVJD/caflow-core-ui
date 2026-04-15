@@ -329,12 +329,38 @@ const NewClientWizard = () => {
             invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
           };
         }
+
+        const billingMode = ((existingServices[0] as any).billing_mode === "package_wise"
+          ? "package_wise"
+          : "service_specific") as "service_specific" | "package_wise";
+
+        // Load package config if billing mode is package_wise
+        let loadedPkg = { ...emptyPackageConfig };
+        if (billingMode === "package_wise") {
+          const { data: pkgRow } = await supabase
+            .from("client_service_packages")
+            .select("*")
+            .eq("client_id", clientId!)
+            .eq("is_active", true)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle() as any;
+          if (pkgRow) {
+            loadedPkg = {
+              package_name: pkgRow.package_name || "",
+              service_ids: Array.isArray(pkgRow.service_category_ids) ? pkgRow.service_category_ids : [],
+              frequency: pkgRow.frequency || "monthly",
+              reminder_date: pkgRow.reminder_date ?? 1,
+              billing_amount: pkgRow.billing_amount ?? 0,
+              invoice_gen_type: (pkgRow.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+            };
+          }
+        }
+
         setServiceBilling({
-          billingMode: ((existingServices[0] as any).billing_mode === "package_wise"
-            ? "package_wise"
-            : "service_specific") as "service_specific" | "package_wise",
+          billingMode,
           activeServices: activeServicesMap,
-          packageConfig: { ...emptyPackageConfig },
+          packageConfig: loadedPkg,
         });
       }
 
@@ -510,9 +536,16 @@ const NewClientWizard = () => {
       }
     }
 
-    // Save package if package mode
+    // Save package if package mode — deactivate old packages first, then upsert
     if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
       const pkg = serviceBilling.packageConfig;
+      // Deactivate any existing packages for this client
+      await supabase
+        .from("client_service_packages")
+        .update({ is_active: false, updated_at: new Date().toISOString() } as any)
+        .eq("client_id", targetClientId)
+        .eq("is_active", true);
+      // Insert the new/updated package
       const { error: pkgError } = await supabase.from("client_service_packages").insert({
         client_id: targetClientId,
         package_name: pkg.package_name,
@@ -521,11 +554,19 @@ const NewClientWizard = () => {
         reminder_date: pkg.reminder_date,
         billing_amount: pkg.billing_amount,
         invoice_gen_type: pkg.invoice_gen_type,
+        is_active: true,
       } as any);
       if (pkgError) {
         console.error("[Services] package insert error:", pkgError);
         throw pkgError;
       }
+    } else if (serviceBilling.billingMode === "service_specific") {
+      // Switching back from package mode — deactivate all packages
+      await supabase
+        .from("client_service_packages")
+        .update({ is_active: false, updated_at: new Date().toISOString() } as any)
+        .eq("client_id", targetClientId)
+        .eq("is_active", true);
     }
 
     // Create billing reminders
@@ -658,14 +699,12 @@ const NewClientWizard = () => {
       .limit(1);
     const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
 
-    // ── 3. Check at least one active service ──
-    const { data: svcRows } = await supabase
-      .from("client_services")
-      .select("id")
-      .eq("client_id", clientId)
-      .eq("is_active", true)
-      .limit(1);
-    const svcOk = (svcRows?.length ?? 0) > 0;
+    // ── 3. Check at least one active service (service_specific) OR active package (package_wise) ──
+    const [svcRes, pkgRes] = await Promise.all([
+      supabase.from("client_services").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
+      supabase.from("client_service_packages").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
+    ]);
+    const svcOk = (svcRes.data?.length ?? 0) > 0 || (pkgRes.data?.length ?? 0) > 0;
 
     console.log("[Wizard] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
 

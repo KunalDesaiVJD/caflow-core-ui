@@ -118,8 +118,23 @@ export default function AuditIntelligence() {
   const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
-  // #1 — clients from context are already filtered to classification='Audit' (see useAuditContext)
+  // #1 — clients from context are already filtered to audit-eligible (see useAuditContext)
   const auditClients = clients;
+
+  // For the Edit Engagement dialog: always include the existing engagement's client
+  // even if it no longer passes the audit eligibility filter (e.g. services were removed).
+  const editDialogClients = useMemo(() => {
+    if (!engForm.client_id) return auditClients;
+    const alreadyIncluded = auditClients.some(c => c.id === engForm.client_id);
+    if (alreadyIncluded) return auditClients;
+    // Append the current client (name from engagement) so it appears in the dropdown
+    const engClientName = selectedEngagement?.client_name || selectedEngagement?.clients?.name || "";
+    const engClientType = selectedEngagement?.client_entity_type || selectedEngagement?.entity_type || "";
+    return [
+      { id: engForm.client_id, name: engClientName, entity_type: engClientType },
+      ...auditClients,
+    ];
+  }, [auditClients, engForm.client_id, selectedEngagement]);
 
   // Dialogs
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -692,12 +707,12 @@ export default function AuditIntelligence() {
             <div>
               <Label>Client *</Label>
               <Select value={engForm.client_id} onValueChange={v => {
-                const client = clients.find(c => c.id === v);
+                const client = editDialogClients.find(c => c.id === v);
                 setEngForm(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
               }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
-                  {auditClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {editDialogClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
