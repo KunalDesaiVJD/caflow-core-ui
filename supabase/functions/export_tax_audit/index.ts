@@ -108,6 +108,143 @@ function xmlEsc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// ── AUTO-marker resolution ────────────────────────────────────────────────────
+//
+// Templates contain literal "AUTO" text as placeholders.  These three functions
+// scan the sheet XML for those cells, identify each field from the label text in
+// the same row, and return (address → value) pairs for the main update pass.
+//
+// Why labels work: every "AUTO" cell in the template sits on the same row as a
+// label cell — e.g. "Name of the assessee | AUTO" or "Firm Regi. No.: | AUTO".
+// Pattern-matching the row's non-AUTO text against LABEL_MAP resolves the field.
+
+/** Parse xl/sharedStrings.xml → indexed array of plain-text string values. */
+function parseSharedStrings(zip: Record<string, Uint8Array>): string[] {
+  const buf = zip["xl/sharedStrings.xml"];
+  if (!buf) return [];
+  const xml = _dec.decode(buf);
+  const ss: string[] = [];
+  const siRe = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+  let m: RegExpExecArray | null;
+  while ((m = siRe.exec(xml)) !== null) {
+    // Handles rich-text <r><t>…</t></r> by joining all <t> fragments
+    const texts: string[] = [];
+    const tRe = /<t[^>]*>([^<]*)<\/t>/g;
+    let tm: RegExpExecArray | null;
+    while ((tm = tRe.exec(m[1])) !== null) texts.push(tm[1]);
+    ss.push(texts.join(""));
+  }
+  return ss;
+}
+
+/** Extract the visible text value of one cell from its attribute string + inner XML. */
+function cellTextValue(attrs: string, inner: string, ss: string[]): string {
+  const typeM = attrs.match(/\bt="([^"]+)"/);
+  const t = typeM?.[1] ?? "";
+  if (t === "inlineStr" || (!t && inner.includes("<is>"))) {
+    const m = inner.match(/<t[^>]*>([^<]*)<\/t>/);
+    return m?.[1] ?? "";
+  }
+  if (t === "str") {
+    const m = inner.match(/<v>([^<]*)<\/v>/);
+    return m?.[1] ?? "";
+  }
+  if (t === "s") {
+    const m = inner.match(/<v>(\d+)<\/v>/);
+    if (!m) return "";
+    return ss[parseInt(m[1])] ?? "";
+  }
+  // Fallback: inline string without explicit type
+  const tM = inner.match(/<t[^>]*>([^<]*)<\/t>/);
+  return tM?.[1] ?? "";
+}
+
+/**
+ * Scan one sheet XML for cells whose text value is "AUTO".
+ * For each such cell, look at all other text in the same row (plus the row
+ * immediately above) to find a label, then pattern-match to a field key.
+ *
+ * Returns a Map<cellAddr, replacementValue> — only entries where a value is
+ * known are included.
+ */
+function resolveAutoMarkers(
+  sheetXml: string,
+  ss: string[],
+  autoValues: Record<string, string>,
+): Map<string, string> {
+  // ORDER MATTERS: more specific patterns first so "Assessment year" wins
+  // over the bare "\byear\b" that would otherwise match "previous year" too.
+  const LABEL_MAP: [RegExp, string][] = [
+    [/name\s+of\s+the\s+assessee/i,             "ENTITY_NAME"],
+    [/assessment\s+year/i,                       "ASSESSMENT_YEAR"],
+    [/previous\s+year/i,                         "PREVIOUS_YEAR"],
+    [/permanent\s+account\s+number|^\s*pan\b/i,  "PAN"],
+    [/status\s+of\s+the\s+assessee/i,            "ENTITY_TYPE"],
+    [/nature\s+of\s+business/i,                  "BUSINESS_NATURE"],
+    [/\bgstin\b|\bgst[- ]no/i,                   "GSTIN"],
+    [/\btan\b/i,                                 "TAN"],
+    [/reg(?:istration)?[\s.]*no|frn\b/i,         "FRN"],
+    [/\budin\b/i,                                "UDIN"],
+    [/membership[\s.]*no/i,                      "MEMBERSHIP_NO"],
+    [/\bplace\b/i,                               "PLACE"],
+    // "Date" is intentionally AFTER more specific items
+    [/\bdate\b/i,                                "SIGN_DATE"],
+    [/\bpartner\b/i,                             "PARTNER_NAME"],
+    [/name.*\bfirm\b|\bfirm\b.*name|chartered\s+accountants/i, "FIRM_NAME"],
+    [/\baddress\b/i,                             "ENTITY_ADDRESS"],
+  ];
+
+  // ── Pass 1: collect per-row text and AUTO-cell addresses ──────────────────
+  const rowTexts  = new Map<number, string[]>();  // rowNum → label texts
+  const rowAutos  = new Map<number, string[]>();  // rowNum → AUTO cell addresses
+
+  // Parse all cells with regex (handles self-closing and full-element variants)
+  const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = cellRe.exec(sheetXml)) !== null) {
+    const attrs = cm[1];
+    const inner = cm[2] ?? "";
+    const addrM = attrs.match(/\br="([A-Z]+(\d+))"/);
+    if (!addrM) continue;
+    const addr   = addrM[1];
+    const rowNum = parseInt(addrM[2], 10);
+
+    const text = cellTextValue(attrs, inner, ss).trim();
+    if (text === "AUTO") {
+      if (!rowAutos.has(rowNum)) rowAutos.set(rowNum, []);
+      rowAutos.get(rowNum)!.push(addr);
+    } else if (text) {
+      if (!rowTexts.has(rowNum)) rowTexts.set(rowNum, []);
+      rowTexts.get(rowNum)!.push(text);
+    }
+  }
+
+  // ── Pass 2: match each AUTO row to a field using label text ───────────────
+  const result = new Map<string, string>();
+
+  for (const [rowNum, autoAddrs] of rowAutos) {
+    // Combine label texts from this row + the row above for context
+    const combined = [
+      ...(rowTexts.get(rowNum - 1) ?? []),
+      ...(rowTexts.get(rowNum)     ?? []),
+    ].join(" ");
+
+    if (!combined) continue;
+
+    for (const [pattern, fieldKey] of LABEL_MAP) {
+      if (pattern.test(combined)) {
+        const value = autoValues[fieldKey];
+        if (value) {
+          for (const addr of autoAddrs) result.set(addr, value);
+        }
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
 /**
  * Replace a single cell's content in raw sheet XML with an inline string value,
  * preserving the cell's existing `s` (style) attribute so all formatting stays.
@@ -330,7 +467,21 @@ serve(async (req) => {
       updates.get(sheet)!.set(addr, value);
     }
 
-    // 1. Header values from cell_map
+    // 0. AUTO-marker scan — scans every sheet for cells containing the literal
+    //    text "AUTO" and maps them to field values via label-text pattern matching.
+    //    Runs FIRST so that cell_map entries (step 1) can override if needed.
+    const sharedStrings = parseSharedStrings(zip);
+    for (const [sheetName, sheetPath] of sheetPaths) {
+      if (!zip[sheetPath]) continue;
+      const sheetXml = _dec.decode(zip[sheetPath]);
+      const autoMappings = resolveAutoMarkers(sheetXml, sharedStrings, autoValues);
+      console.log(`[AUTO-scan] ${sheetName}: ${autoMappings.size} AUTO marker(s) resolved`);
+      for (const [addr, value] of autoMappings) {
+        addUpdate(sheetName, addr, value);
+      }
+    }
+
+    // 1. Header values from cell_map (overrides AUTO scan where both match)
     for (const cm of cellMapRows ?? []) {
       if (cm.formula_cell) continue;
       const v = autoValues[cm.field_key];
