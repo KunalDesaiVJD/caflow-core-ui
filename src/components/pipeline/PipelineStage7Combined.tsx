@@ -3,8 +3,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2 } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
+import { EngagementMRL } from '@/components/engagement/EngagementMRL';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 
 interface Props {
@@ -68,11 +69,11 @@ export default function PipelineStage7Combined({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            {isCorporate ? 'Stage 7 — Notes to Accounts & CARO' : 'Stage 7 — Notes to Accounts'}
+            {isCorporate ? 'Stage 7 — Notes, CARO & MRL' : 'Stage 7 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isCorporate
-              ? 'Notes to financial statements and CARO 2020 reporting'
+              ? 'Notes to financial statements, CARO 2020 reporting and Management Representation Letter'
               : 'Notes to financial statements'}
           </p>
         </div>
@@ -95,6 +96,9 @@ export default function PipelineStage7Combined({
             <TabsTrigger value="caro" className="gap-1">
               <Shield size={14} /> CARO 2020
             </TabsTrigger>
+            <TabsTrigger value="mrl" className="gap-1">
+              <ClipboardList size={14} /> MRL
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="notes" className="mt-4">
@@ -108,9 +112,13 @@ export default function PipelineStage7Combined({
               onUpdate={() => {}}
             />
           </TabsContent>
+
+          <TabsContent value="mrl" className="mt-4">
+            <EngagementMRL engagementId={engagementId} engagement={engagement} />
+          </TabsContent>
         </Tabs>
       ) : (
-        /* Non-corporate: Notes to Accounts only — no CARO tab at all */
+        /* Non-corporate: Notes to Accounts only — no CARO or MRL tabs */
         <NotesToAccounts engagementIdProp={engagementId} isCorporate={false} />
       )}
     </div>
