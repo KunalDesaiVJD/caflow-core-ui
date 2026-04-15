@@ -38,7 +38,6 @@ export interface BasicInfoData {
   pan: string;
   entity_type: string;
   email: string;
-  contact_person: string;
   mobile: string;
   address: string;
   gstins: string[];
@@ -212,19 +211,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 
-      {/* 7. Contact Person */}
-      <div className="space-y-1.5">
-        <Label>Contact Person</Label>
-        <Input
-          value={data.contact_person}
-          onChange={(e) => update("contact_person", e.target.value)}
-          placeholder="e.g. Ramesh Kumar (MD)"
-        />
-        <p className="text-xs text-muted-foreground">Name of the authorised signatory or primary contact</p>
-        {errors.contact_person && <p className="text-xs text-destructive">{errors.contact_person}</p>}
-      </div>
-
-      {/* 8. Mobile Number */}
+      {/* 7. Mobile Number */}
       <div className="space-y-1.5">
         <Label>Mobile Number</Label>
         <Input

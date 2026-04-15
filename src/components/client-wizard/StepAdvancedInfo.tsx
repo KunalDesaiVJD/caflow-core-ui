@@ -28,6 +28,7 @@ export interface AdvancedInfoData {
   classification: string;
   audit_firm_id: string;
   responsible_person_id: string;
+  contact_person: string;
   date_of_incorporation: Date | undefined;
   registered_state: string;
   business_nature: string;
@@ -70,6 +71,7 @@ export const defaultAdvancedInfo: AdvancedInfoData = {
   classification: "",
   audit_firm_id: "",
   responsible_person_id: "",
+  contact_person: "",
   date_of_incorporation: undefined,
   registered_state: "",
   business_nature: "",
@@ -229,6 +231,17 @@ export const StepAdvancedInfo = ({
       {/* ── SECTION B: Legal Registration ── */}
       <div className="space-y-4">
         <h3 className="text-sm font-semibold text-foreground">Legal Registration</h3>
+
+        {/* Contact Person */}
+        <div className="space-y-1.5">
+          <Label>Contact Person</Label>
+          <Input
+            value={data.contact_person}
+            onChange={(e) => set("contact_person", e.target.value)}
+            placeholder="e.g. Ramesh Kumar (MD)"
+          />
+          <p className="text-xs text-muted-foreground">Name of the authorised signatory or primary contact</p>
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Date of Incorporation */}

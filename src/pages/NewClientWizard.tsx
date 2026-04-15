@@ -50,7 +50,6 @@ const defaultBasicInfo: BasicInfoData = {
   pan: "",
   entity_type: "",
   email: "",
-  contact_person: "",
   mobile: "",
   address: "",
   gstins: [""],
@@ -276,7 +275,6 @@ const NewClientWizard = () => {
         entity_type: client.entity_type || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
         email: client.email || "",
-        contact_person: client.contact_person || "",
         mobile: client.mobile || "",
         address: client.address || "",
         tan_number: client.tan_number || "",
@@ -291,6 +289,7 @@ const NewClientWizard = () => {
         classification: fyClass?.classification || "",
         audit_firm_id: fyClass?.audit_firm_id || "",
         responsible_person_id: client.responsible_person_id || "",
+        contact_person: client.contact_person || "",
         date_of_incorporation: client.date_of_incorporation ? parseLocalDate(client.date_of_incorporation) : undefined,
         registered_state: client.registered_state || "",
         business_nature: client.business_activity || "",
@@ -446,7 +445,7 @@ const NewClientWizard = () => {
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
       email: basicInfo.email || null,
-      contact_person: basicInfo.contact_person?.trim() || null,
+      contact_person: advancedInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
       tan_number: basicInfo.tan_number || null,
@@ -757,6 +756,7 @@ const NewClientWizard = () => {
         const { error } = await supabase
           .from("clients")
           .update({
+            contact_person: advancedInfo.contact_person?.trim() || null,
             dsc_number: advancedInfo.dsc_number || null,
             dsc_expiry_date: advancedInfo.dsc_expiry_date ? toLocalDateStr(advancedInfo.dsc_expiry_date) : null,
             work_group_type: advancedInfo.work_group_type || null,

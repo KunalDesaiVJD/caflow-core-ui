@@ -1,95 +1,66 @@
 /**
  * Vercel serverless function — proxy for eofficeportal FillCustomerlist API.
  *
- * Runs in Node.js (not Deno), so process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
- * actually works and bypasses the expired SSL certificate on eofficeportal.com.
+ * Runs in Node.js (not Deno), so rejectUnauthorized:false actually works
+ * and bypasses the expired SSL certificate on eofficeportal.com.
  *
  * Route: GET /api/eoffice
- * Used by: src/components/client-sync/useCustomerSync.ts  (Tier 0)
+ * Used by: src/components/client-sync/useCustomerSync.ts (Tier 0)
  */
 
-const https = require("https");
+import https from "https";
+
+// Disable TLS cert verification — eofficeportal.com has an expired cert
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
 const API_PATH =
   "/Company/SmartService.asmx/FillCustomerlist" +
   "?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf";
 
-// Disable TLS certificate verification for this process — required because
-// eofficeportal.com's SSL certificate is expired.
-process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+function fetchXml(hostname, path) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname,
+      port: 443,
+      path,
+      method: "GET",
+      timeout: 30_000,
+      rejectUnauthorized: false,
+      checkServerIdentity: () => undefined,
+      agent: new https.Agent({ rejectUnauthorized: false }),
+    };
 
-module.exports = async function handler(req, res) {
-  // CORS headers so the browser fetch from any origin is allowed
+    const req = https.request(options, (res) => {
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers?.location) {
+        res.resume();
+        const loc = res.headers.location;
+        const redir = new URL(loc.startsWith("http") ? loc : "https://" + hostname + loc);
+        fetchXml(redir.hostname, redir.pathname + redir.search).then(resolve).catch(reject);
+        return;
+      }
+      if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => resolve(data));
+    });
+
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("Request timed out (30 s)")); });
+    req.end();
+  });
+}
+
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
 
-  if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === "OPTIONS") { res.status(200).end(); return; }
 
   try {
-    const xmlText = await new Promise((resolve, reject) => {
-      const options = {
-        hostname: "eofficeportal.com",
-        port: 443,
-        path: API_PATH,
-        method: "GET",
-        timeout: 30_000,
-        rejectUnauthorized: false,       // Node.js respects this
-        checkServerIdentity: () => undefined, // Skip identity check
-        agent: new https.Agent({ rejectUnauthorized: false }),
-      };
-
-      const reqOut = https.request(options, (upstream) => {
-        // Follow one redirect
-        if (
-          (upstream.statusCode === 301 || upstream.statusCode === 302) &&
-          upstream.headers?.location
-        ) {
-          upstream.resume();
-          const loc = upstream.headers.location;
-          const redir = new URL(loc.startsWith("http") ? loc : "https://eofficeportal.com" + loc);
-          const redirOpts = {
-            hostname: redir.hostname,
-            port: redir.port || 443,
-            path: redir.pathname + redir.search,
-            method: "GET",
-            timeout: 30_000,
-            rejectUnauthorized: false,
-            checkServerIdentity: () => undefined,
-            agent: new https.Agent({ rejectUnauthorized: false }),
-          };
-          const reqR = https.request(redirOpts, (r2) => {
-            if (r2.statusCode !== 200) { reject(new Error(`HTTP ${r2.statusCode}`)); return; }
-            let data = "";
-            r2.on("data", (c) => { data += c; });
-            r2.on("end", () => resolve(data));
-          });
-          reqR.on("error", reject);
-          reqR.on("timeout", () => { reqR.destroy(); reject(new Error("Redirect timed out")); });
-          reqR.end();
-          return;
-        }
-
-        if (upstream.statusCode !== 200) {
-          reject(new Error(`HTTP ${upstream.statusCode}`));
-          return;
-        }
-
-        let data = "";
-        upstream.on("data", (chunk) => { data += chunk; });
-        upstream.on("end", () => resolve(data));
-      });
-
-      reqOut.on("error", reject);
-      reqOut.on("timeout", () => { reqOut.destroy(); reject(new Error("Request timed out (30 s)")); });
-      reqOut.end();
-    });
-
+    const xmlText = await fetchXml("eofficeportal.com", API_PATH);
     res.setHeader("Content-Type", "text/xml; charset=utf-8");
     res.status(200).send(xmlText);
   } catch (err) {
     res.status(502).json({ error: err.message || "Upstream request failed" });
   }
-};
+}
