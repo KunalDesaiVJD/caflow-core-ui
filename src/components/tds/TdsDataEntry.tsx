@@ -29,8 +29,9 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet,
 } from "lucide-react";
+import { generateGeniusExport } from "@/lib/genius-export";
 
 // ─── Types ───
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
@@ -264,6 +265,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [carryForwardChallans, setCarryForwardChallans] = useState<{ challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
 
   // Challan dialog
@@ -884,6 +886,50 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     return Math.max(0, allocatable - bd.applied);
   }, [selectedChallan, getChallanBreakdownAll]);
 
+  // ─── CP-05: Generate Genius Excel ────────────────────────────────────────
+  const handleGeniusExport = async () => {
+    if (!filing || !client) return;
+
+    // Validation — per CP-05 Step 4
+    const tan = client.tan_number || filing.tan;
+    if (!tan) {
+      toast({ title: "TAN is required.", description: "Update the client's TAN before exporting.", variant: "destructive" });
+      return;
+    }
+    if (challans.length === 0) {
+      toast({ title: "No challans found.", description: "Add at least one challan before exporting.", variant: "destructive" });
+      return;
+    }
+    const allDeductees = Object.values(allChallanDeductees).flat();
+    if (allDeductees.length === 0) {
+      toast({ title: "No deductee entries found.", description: "Add at least one deductee entry before exporting.", variant: "destructive" });
+      return;
+    }
+    const invalidPans = allDeductees.filter(d => d.deductee_pan && !isValidPan(d.deductee_pan));
+    if (invalidPans.length > 0) {
+      toast({ title: `Invalid PAN in ${invalidPans.length} entry(s).`, description: `Fix PAN format before exporting. First invalid: ${invalidPans[0].deductee_name}`, variant: "destructive" });
+      return;
+    }
+    const invalidAmts = allDeductees.filter(
+      d => (d.tds_amount !== null && (d.tds_amount ?? 0) < 0) ||
+           (d.amount_paid_credited !== null && (d.amount_paid_credited ?? 0) < 0)
+    );
+    if (invalidAmts.length > 0) {
+      toast({ title: "Negative amounts found.", description: "All TDS amounts must be non-negative.", variant: "destructive" });
+      return;
+    }
+
+    setExportLoading(true);
+    try {
+      await generateGeniusExport(selForm, filing, client, challans, allDeductees);
+      toast({ title: "Genius Excel generated successfully! File downloaded." });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   // ─── Render ───
   return (
     <div className="space-y-4">
@@ -957,6 +1003,19 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <Lock size={10} /> Data Entry Locked — Filed
                 </Badge>
               )}
+              {/* CP-05: Generate Genius Excel */}
+              <Button
+                size="sm"
+                className="ml-auto gap-1.5"
+                style={{ backgroundColor: "#1A2744", color: "#C9A84C" }}
+                disabled={exportLoading}
+                onClick={handleGeniusExport}
+              >
+                {exportLoading
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <FileSpreadsheet size={14} />}
+                Generate Genius Excel
+              </Button>
             </div>
           ) : (
             <div className="pt-2 border-t">
