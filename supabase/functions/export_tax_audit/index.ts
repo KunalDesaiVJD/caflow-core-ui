@@ -452,20 +452,68 @@ serve(async (req) => {
       if (af) firm = af as Record<string, any>;
     }
 
+    // ── Fallback: load firms table (user's own CA practice) ───────────────────
+    // Used when audit_firms fields are not set (FRN, city, etc.)
+    let caFirm: Record<string, any> = {};
+    const firmId = (eng as any).firm_id;
+    if (firmId) {
+      const { data: cf } = await supabase
+        .from("firms")
+        .select("name, display_name, icai_firm_reg_no, icai_reg_no, address")
+        .eq("id", firmId)
+        .single();
+      if (cf) caFirm = cf as Record<string, any>;
+    }
+
+    // ── Fallback: load signing partner from users table ───────────────────────
+    let partnerUser: Record<string, any> = {};
+    const partnerId = (eng as any).partner_id;
+    if (partnerId) {
+      const { data: pu } = await supabase
+        .from("users")
+        .select("name, icai_reg_no")
+        .eq("id", partnerId)
+        .single();
+      if (pu) partnerUser = pu as Record<string, any>;
+    }
+
     const { prev, ay, bsDate } = fyToRange(fy);
 
     // ── Load form_3ca_3cb (UDIN / dates) ─────────────────────────────────────
+    // NOTE: udin, signature_date, audit_report_date are stored inside the
+    // "data" JSONB column, not as top-level columns.
     const tab = form_type.startsWith("3CA") ? "3ca" : "3cb";
     const { data: form3 } = await supabase
       .from("form_3ca_3cb" as any)
-      .select("udin, audit_report_date, signature_date")
+      .select("data")
       .eq("engagement_id", engagement_id)
       .eq("tab", tab)
       .maybeSingle();
 
-    const udin       = (form3 as any)?.udin ?? "";
-    const reportDate = formatDate((form3 as any)?.audit_report_date);
-    const signDate   = formatDate((form3 as any)?.signature_date);
+    const form3Data = (form3 as any)?.data ?? {};
+
+    // UDIN: form_3ca_3cb.data.udin → engagement.udin
+    const udin = form3Data?.udin || (eng as any).udin || "";
+    // Report date: form_3ca_3cb.data.audit_report_date → engagement.sign_off_date
+    const reportDate = formatDate(
+      form3Data?.audit_report_date || (eng as any).sign_off_date || ""
+    );
+    // Sign date: form_3ca_3cb.data.signature_date → engagement.sign_off_date
+    const signDate = formatDate(
+      form3Data?.signature_date || (eng as any).sign_off_date || ""
+    );
+
+    // ── Resolve firm-level sign-off fields with fallbacks ─────────────────────
+    // Priority: audit_firms → firms (CA practice) → partnerUser (signing user)
+    const firmName    = firm.name        || caFirm.display_name || caFirm.name || "";
+    const partnerName = firm.partner_name || partnerUser.name   || "";
+    const frn         = firm.icai_reg_no  || caFirm.icai_firm_reg_no || caFirm.icai_reg_no || "";
+    const membershipNo= firm.partner_icai_no || partnerUser.icai_reg_no || "";
+    // City: from audit_firms, or from firms.address JSON (may have a "city" key)
+    const firmsAddress = (typeof caFirm.address === "object" && caFirm.address !== null)
+      ? (caFirm.address as Record<string, any>)
+      : {};
+    const place       = firm.city || firmsAddress.city || firmsAddress.district || "";
 
     // ── Build auto-value map ──────────────────────────────────────────────────
     const gstin   = Array.isArray(client.gstin) ? client.gstin[0] ?? "" : (client.gstin ?? "");
@@ -483,13 +531,13 @@ serve(async (req) => {
       ASSESSMENT_YEAR: ay,
       BS_DATE:        bsDate,
       COMP_YEAR_END:  bsDate,
-      FIRM_NAME:      firm.name ?? "",
-      PARTNER_NAME:   firm.partner_name ?? "",
-      FRN:            firm.icai_reg_no ?? "",
-      MEMBERSHIP_NO:  firm.partner_icai_no ?? "",
+      FIRM_NAME:      firmName,
+      PARTNER_NAME:   partnerName,
+      FRN:            frn,
+      MEMBERSHIP_NO:  membershipNo,
       UDIN:           udin,
       REPORT_DATE:    reportDate,
-      PLACE:          firm.city ?? "",
+      PLACE:          place,
       SIGN_DATE:      signDate,
     };
 
