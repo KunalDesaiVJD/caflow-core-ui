@@ -101,6 +101,52 @@ function evaluateFormula(formula: string, row: Record<string, any>): number | st
   }
 }
 
+// ── NumericField ────────────────────────────────────────────────────────────────
+// Isolated component so it can hold its own dirty-state for inline validation
+// without lifting state into the top-level ClauseRenderer.
+// Fixes: defaultValue 'Nil' was being passed to type="number", triggering the
+// browser-native "Alphabets are not allowed, only Numbers" validation message.
+interface NumericFieldProps {
+  value: any;
+  onChange: (v: string) => void;
+  onReset: () => void;
+  isLocked: boolean;
+  placeholder?: string;
+}
+function NumericField({ value, onChange, onReset, isLocked, placeholder }: NumericFieldProps) {
+  const [dirty, setDirty] = useState(false);
+  // Never pass 'Nil' or non-numeric strings to type="number" — use '' instead.
+  const numVal = (value !== undefined && value !== null && value !== 'Nil') ? String(value) : '';
+  const invalid = dirty && numVal !== '' && (isNaN(Number(numVal)) || Number(numVal) < 0);
+  return (
+    <div className="flex-1 space-y-1">
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          inputMode="decimal"
+          min="0"
+          value={numVal}
+          onChange={e => { setDirty(true); onChange(e.target.value); }}
+          disabled={isLocked}
+          placeholder={placeholder || '0'}
+          className={invalid ? 'border-destructive focus-visible:ring-destructive' : ''}
+        />
+        <Button
+          variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+          onClick={() => { setDirty(false); onReset(); }}
+          disabled={isLocked}
+          title="Reset"
+        >
+          <RotateCcw className="h-3 w-3" />
+        </Button>
+      </div>
+      {invalid && (
+        <p className="text-xs text-destructive">Please enter a valid positive number.</p>
+      )}
+    </div>
+  );
+}
+
 export default function ClauseRenderer({ definition, value, onChange, isLocked = false, client, parentValues, depth = 0 }: ClauseRendererProps) {
   const data = value || {};
   const control = definition.control;
@@ -390,51 +436,73 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
-    case 'single_field':
+    case 'single_field': {
+      const isNumeric = 'fieldType' in definition && definition.fieldType === 'number';
+      const isTextarea = 'fieldType' in definition && definition.fieldType === 'textarea';
+      const ph = ('placeholder' in definition && definition.placeholder) || '';
       return (
         <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
           <div className="flex items-center gap-2">
-            {('fieldType' in definition && definition.fieldType === 'textarea') ? (
-              <Textarea
-                value={data._value || definition.defaultValue || ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
-                placeholder={('placeholder' in definition && definition.placeholder) || ''}
+            {isNumeric ? (
+              <NumericField
+                value={data._value}
+                onChange={v => update('_value', v)}
+                onReset={() => update('_value', '')}
+                isLocked={isLocked}
+                placeholder={ph || '0'}
               />
+            ) : isTextarea ? (
+              <>
+                <Textarea
+                  value={data._value || definition.defaultValue || ''}
+                  onChange={e => update('_value', e.target.value)}
+                  disabled={isLocked}
+                  placeholder={ph}
+                />
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                  onClick={() => update('_value', definition.defaultValue || '')}
+                  disabled={isLocked}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+              </>
             ) : (
-              <Input
-                type={('fieldType' in definition && definition.fieldType === 'number') ? 'number' : 'text'}
-                value={data._value || definition.defaultValue || ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
-                placeholder={('placeholder' in definition && definition.placeholder) || ''}
-              />
+              <>
+                <Input
+                  type="text"
+                  value={data._value || definition.defaultValue || ''}
+                  onChange={e => update('_value', e.target.value)}
+                  disabled={isLocked}
+                  placeholder={ph}
+                />
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                  onClick={() => update('_value', definition.defaultValue || '')}
+                  disabled={isLocked}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+              </>
             )}
-            <Button
-              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
-              onClick={() => update('_value', definition.defaultValue || '')}
-              disabled={isLocked}
-            >
-              <RotateCcw className="h-3 w-3" />
-            </Button>
           </div>
         </div>
       );
+    }
 
     case 'amount_remarks':
       return (
         <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-start gap-3">
             <div className="flex items-center gap-1">
               <Label className="text-xs text-muted-foreground shrink-0">Amount (₹)</Label>
-              <Input
-                type="number"
-                className="w-36"
-                value={data._value ?? ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
+              <NumericField
+                value={data._value}
+                onChange={v => update('_value', v)}
+                onReset={() => update('_value', '')}
+                isLocked={isLocked}
                 placeholder="0"
               />
             </div>
@@ -449,14 +517,6 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
                 placeholder="If applicable, enter remarks"
               />
             </div>
-            <Button
-              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
-              onClick={() => { update('_value', ''); update('_remarks', ''); }}
-              disabled={isLocked}
-              title="Reset"
-            >
-              <RotateCcw className="h-3 w-3" />
-            </Button>
           </div>
         </div>
       );
