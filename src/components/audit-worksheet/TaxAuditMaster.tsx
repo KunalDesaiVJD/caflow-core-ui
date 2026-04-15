@@ -44,8 +44,9 @@ import { useEmployeeDropdown }  from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 interface Props {
-  data: AuditWorksheetData;     // from useAuditWorksheetData
-  engagementId: string;
+  data:          AuditWorksheetData;     // from useAuditWorksheetData
+  engagementId:  string;
+  onSaved?:      () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ function EmpSelect({
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export default function TaxAuditMaster({ data, engagementId }: Props) {
+export default function TaxAuditMaster({ data, engagementId, onSaved }: Props) {
   const { data: m, setField, patchFields, manualSave, saving, loaded } =
     useTaxMasterStorage(engagementId, data.engagement?.firm_id);
 
@@ -235,7 +236,7 @@ export default function TaxAuditMaster({ data, engagementId }: Props) {
           <Button
             size="sm"
             className="gap-1 h-7 text-xs"
-            onClick={manualSave}
+            onClick={async () => { await manualSave(); onSaved?.(); }}
             disabled={saving}
           >
             {saving

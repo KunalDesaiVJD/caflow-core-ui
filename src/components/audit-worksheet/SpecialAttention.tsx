@@ -275,9 +275,10 @@ interface Props {
   /** Issue #10: When true (tax_audit for non-corporate entity),
    *  hide section 10 "Private Ltd / Ltd Company — Specific Audit Points" */
   taxAuditMode?: boolean;
+  onSaved?:      () => void;
 }
 
-export default function SpecialAttention({ data, engagementId, taxAuditMode = false }: Props) {
+export default function SpecialAttention({ data, engagementId, taxAuditMode = false, onSaved }: Props) {
   const {
     data: m, setHeader, setRowField, patchRow, getRow,
     manualSave, saving, loaded,
@@ -412,7 +413,7 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
             <Button
               size="sm"
               className="gap-1 h-7 text-xs bg-indigo-700 hover:bg-indigo-800"
-              onClick={manualSave}
+              onClick={async () => { await manualSave(); onSaved?.(); }}
               disabled={saving}
             >
               {saving

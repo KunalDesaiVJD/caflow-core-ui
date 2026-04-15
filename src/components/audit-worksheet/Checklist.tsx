@@ -110,11 +110,12 @@ function injectYear(text: string, year: string): string {
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
+  onSaved?:     () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function Checklist({ data, engagementId }: Props) {
+export default function Checklist({ data, engagementId, onSaved }: Props) {
   const { data: checklistData, getRow, setRowField, patchRowFields, addRow, manualSave, saving } =
     useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
@@ -252,7 +253,7 @@ export default function Checklist({ data, engagementId }: Props) {
           <Button
             size="sm"
             className="gap-1 h-7 text-xs bg-violet-700 hover:bg-violet-800"
-            onClick={manualSave}
+            onClick={async () => { await manualSave(); onSaved?.(); }}
             disabled={saving}
           >
             {saving

@@ -43,6 +43,7 @@ import type { AuditWorksheetData }    from "./hooks/useAuditWorksheetData";
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
+  onSaved?:     () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -137,7 +138,7 @@ function EmpSelect({ label, value, onChange, employees }: {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export default function StatutoryAuditMaster({ data, engagementId }: Props) {
+export default function StatutoryAuditMaster({ data, engagementId, onSaved }: Props) {
   const { data: m, setField, patchFields, manualSave, saving, loaded } =
     useStatutoryMasterStorage(engagementId, data.engagement?.firm_id);
 
@@ -192,7 +193,7 @@ export default function StatutoryAuditMaster({ data, engagementId }: Props) {
           >
             <Wand2 size={13} /> Auto-fill dates
           </Button>
-          <Button size="sm" className="gap-1 h-7 text-xs bg-emerald-700 hover:bg-emerald-800" onClick={manualSave} disabled={saving}>
+          <Button size="sm" className="gap-1 h-7 text-xs bg-emerald-700 hover:bg-emerald-800" onClick={async () => { await manualSave(); onSaved?.(); }} disabled={saving}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
             Save
           </Button>

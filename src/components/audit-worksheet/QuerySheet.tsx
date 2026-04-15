@@ -111,6 +111,7 @@ function parseWorkbook(file: File): Promise<Array<Omit<QueryRow, "id">>> {
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
+  onSaved?:     () => void;
 }
 
 // ─── Correction Status Select ─────────────────────────────────────────────────
@@ -145,7 +146,7 @@ function CorrectionSelect({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function QuerySheet({ data, engagementId }: Props) {
+export default function QuerySheet({ data, engagementId, onSaved }: Props) {
   const {
     queries, addQuery, updateQuery, deleteQuery, bulkAddQueries,
     manualSave, saving, allCorrected, pendingCount,
@@ -271,7 +272,7 @@ export default function QuerySheet({ data, engagementId }: Props) {
           <Button
             size="sm"
             className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
-            onClick={manualSave}
+            onClick={async () => { await manualSave(); onSaved?.(); }}
             disabled={saving}
           >
             {saving

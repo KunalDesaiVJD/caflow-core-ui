@@ -29,9 +29,11 @@ import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 interface Props {
   engagementId: string;
+  /** CP-16: called after each tab save with the section name for history logging */
+  onSaved?: (sectionName: string) => void;
 }
 
-export default function AuditWorksheetPage({ engagementId }: Props) {
+export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
   const data = useAuditWorksheetData(engagementId);
 
   // Determine which tabs to show
@@ -151,6 +153,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <MergedAuditMaster
               data={data}
               engagementId={engagementId}
+              onSaved={() => onSaved?.("Tax & Statutory Audit Master")}
             />
           </TabsContent>
         )}
@@ -161,6 +164,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <TaxAuditMaster
               data={data}
               engagementId={engagementId}
+              onSaved={() => onSaved?.("Tax Audit Master")}
             />
           </TabsContent>
         )}
@@ -171,6 +175,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <StatutoryAuditMaster
               data={data}
               engagementId={engagementId}
+              onSaved={() => onSaved?.("Statutory Audit Master")}
             />
           </TabsContent>
         )}
@@ -181,6 +186,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
             <InternalAuditMaster
               data={data}
               engagementId={engagementId}
+              onSaved={() => onSaved?.("Internal Audit Master")}
             />
           </TabsContent>
         )}
@@ -192,6 +198,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
               data={data}
               engagementId={engagementId}
               taxAuditMode={taxAuditMode}
+              onSaved={() => onSaved?.("Special Attention")}
             />
           </TabsContent>
         )}
@@ -201,6 +208,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           <Worksheet
             data={data}
             engagementId={engagementId}
+            onSaved={() => onSaved?.("Audit Worksheet")}
           />
         </TabsContent>
 
@@ -209,6 +217,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           <QuerySheet
             data={data}
             engagementId={engagementId}
+            onSaved={() => onSaved?.("Query Sheet")}
           />
         </TabsContent>
 
@@ -217,6 +226,7 @@ export default function AuditWorksheetPage({ engagementId }: Props) {
           <Checklist
             data={data}
             engagementId={engagementId}
+            onSaved={() => onSaved?.("Checklist")}
           />
         </TabsContent>
       </Tabs>

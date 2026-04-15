@@ -142,9 +142,10 @@ function MultiEmpSelect({
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
+  onSaved?:     () => void;
 }
 
-export default function Worksheet({ data, engagementId }: Props) {
+export default function Worksheet({ data, engagementId, onSaved }: Props) {
   const { getRow, setRowField, patchRow, manualSave, saving } =
     useWorksheetSheetStorage(engagementId, data.engagement?.firm_id);
 
@@ -193,7 +194,7 @@ export default function Worksheet({ data, engagementId }: Props) {
         <Button
           size="sm"
           className="gap-1 h-7 text-xs bg-teal-700 hover:bg-teal-800"
-          onClick={manualSave}
+          onClick={async () => { await manualSave(); onSaved?.(); }}
           disabled={saving}
         >
           {saving
