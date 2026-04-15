@@ -73,11 +73,16 @@ function resolveSheetPaths(zip: Record<string, Uint8Array>): Map<string, string>
   const relsXml = _dec.decode(relsBuf);
 
   // rId → target file (relative to xl/)
+  // NOTE: Excel writes Target before Id in .rels XML, so we use two passes
+  // (one attr-at-a-time) rather than assuming a fixed attribute order.
   const ridToTarget = new Map<string, string>();
-  const relRe = /<Relationship\s[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g;
+  const relElRe = /<Relationship\b([^>]+?)(?:\/>|>)/g;
   let rm: RegExpExecArray | null;
-  while ((rm = relRe.exec(relsXml)) !== null) {
-    ridToTarget.set(rm[1], rm[2]);
+  while ((rm = relElRe.exec(relsXml)) !== null) {
+    const attrs  = rm[1];
+    const idM    = attrs.match(/\bId="([^"]+)"/);
+    const targM  = attrs.match(/\bTarget="([^"]+)"/);
+    if (idM && targM) ridToTarget.set(idM[1], targM[1]);
   }
 
   // <sheet name="..." sheetId="..." r:id="rId1"/>
@@ -431,6 +436,10 @@ serve(async (req) => {
     const client = (eng as any).clients ?? {};
     const fy     = (eng as any).financial_year ?? "";
 
+    console.log("[export_tax_audit] engagement_id:", engagement_id, "form_type:", form_type);
+    console.log("[export_tax_audit] financial_year:", fy, "client_id:", (eng as any).client_id);
+    console.log("[export_tax_audit] client keys:", Object.keys(client), "name:", client.name, "pan:", client.pan);
+
     // ── Load audit_firm ───────────────────────────────────────────────────────
     let firm: Record<string, any> = {};
     const auditFirmId = (eng as any).audit_firm_id;
@@ -484,6 +493,10 @@ serve(async (req) => {
       SIGN_DATE:      signDate,
     };
 
+    const nonEmptyValues = Object.entries(autoValues).filter(([,v]) => !!v);
+    console.log("[export_tax_audit] autoValues non-empty:", nonEmptyValues.length, "/", Object.keys(autoValues).length);
+    nonEmptyValues.forEach(([k, v]) => console.log("  ", k, "=", v));
+
     // ── Merge user-saved overrides ────────────────────────────────────────────
     const { data: savedValues } = await supabase
       .from("tax_audit_values")
@@ -515,10 +528,14 @@ serve(async (req) => {
     }
 
     const templateBytes = new Uint8Array(await fileData.arrayBuffer());
+    console.log("[export_tax_audit] template bytes:", templateBytes.length);
 
     // ── Unzip template (xlsx = ZIP) ───────────────────────────────────────────
     const zip        = fflate.unzipSync(templateBytes);
     const sheetPaths = resolveSheetPaths(zip);
+    const wbEntry = zip["xl/workbook.xml"];
+    console.log("[export_tax_audit] zip keys:", Object.keys(zip).length, "| wbXml entry:", wbEntry ? wbEntry.length + " bytes" : "NOT FOUND");
+    console.log("[export_tax_audit] sheetPaths:", JSON.stringify([...sheetPaths.entries()]));
 
     // ── Collect ALL cell updates  ─────────────────────────────────────────────
     // updates: sheetName → (cellAddr → value)
@@ -532,7 +549,7 @@ serve(async (req) => {
 
     // -1. Named-range fill — primary mechanism for 01_Control-based templates.
     //     Reads workbook.xml defined names, resolves sheet+cell, writes autoValues.
-    const wbXml = zip["xl/workbook.xml"] ? _dec.decode(zip["xl/workbook.xml"]) : "";
+    const wbXml = wbEntry ? _dec.decode(wbEntry) : "";
     if (wbXml) {
       const namedRanges = parseNamedRanges(wbXml);
       let nrFilled = 0;
@@ -547,6 +564,17 @@ serve(async (req) => {
         nrFilled++;
       }
       console.log(`[Named-range fill] ${namedRanges.size} ranges parsed, ${nrFilled} values written`);
+      if (nrFilled === 0 && namedRanges.size > 0) {
+        // Debug: show first 5 named ranges and what matched NR_TO_FIELD
+        let checked = 0;
+        for (const [rn, { sheetName, cellAddr }] of namedRanges) {
+          if (checked++ > 4) break;
+          const fk = NR_TO_FIELD[rn];
+          const val = fk ? autoValues[fk] : "NO_FIELD_KEY";
+          const sp = sheetPaths.get(sheetName);
+          console.log(`  NR ${rn} → sheet=${sheetName} cell=${cellAddr} fieldKey=${fk||"N/A"} value="${val}" sheetPath=${sp||"MISSING"}`);
+        }
+      }
     }
 
     // 0. AUTO-marker scan — scans every sheet for cells containing the literal
@@ -646,6 +674,7 @@ serve(async (req) => {
         ...corsHeaders,
         "Content-Type": "application/octet-stream",
         "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
       },
     });
 
