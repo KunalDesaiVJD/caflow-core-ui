@@ -25,7 +25,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Database,
+  Download, ArrowRight, RefreshCw, Copy, Clock, AlertTriangle, ExternalLink, Info, Settings, Database, Trash2,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -307,6 +307,22 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  };
+
+  // CP-01: Delete PDF — removes the tds_ack_files record (unlinks from filing).
+  // The file itself stays in Supabase Storage (non-destructive).
+  const deleteAckFile = async (filingId: string, ackFile: TdsAckFile) => {
+    const { error } = await (supabase.from('tds_ack_files' as any).delete().eq('id', ackFile.id));
+    if (error) {
+      toast({ title: 'Failed to remove PDF', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setAckFiles(prev => {
+      const next = new Map(prev);
+      next.delete(filingId);
+      return next;
+    });
+    toast({ title: 'PDF removed from filing' });
   };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
@@ -793,6 +809,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                       title={`Download: ${ackFile.file_name}`}
                                     >
                                       <Download size={9} /> Download
+                                    </button>
+                                    <button
+                                      className="flex items-center gap-0.5 text-[9px] text-destructive hover:underline"
+                                      onClick={() => deleteAckFile(f.id, ackFile)}
+                                      title="Remove PDF link (file kept in storage)"
+                                    >
+                                      <Trash2 size={9} /> Delete
                                     </button>
                                   </>
                                 ) : (
