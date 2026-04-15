@@ -1,30 +1,30 @@
--- Migration: audit_mrl
--- Management Representation Letter clauses per SA 580
+-- Migration: mrl_data
+-- Management Representation Letter storage — one row per engagement (JSONB)
 -- Corporate entities only (enforced at application layer)
 
-CREATE TABLE IF NOT EXISTS audit_mrl (
+-- Drop prior iteration if it was run
+DROP TABLE IF EXISTS audit_mrl;
+
+CREATE TABLE IF NOT EXISTS mrl_data (
   id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   engagement_id   uuid        NOT NULL REFERENCES audit_engagements(id) ON DELETE CASCADE,
-  clause_number   int         NOT NULL,
-  clause_title    text        NOT NULL,
-  clause_text     text        NOT NULL DEFAULT '',
-  is_selected     boolean     NOT NULL DEFAULT true,
-  custom_remarks  text,
-  last_updated_at timestamptz DEFAULT now(),
-  last_updated_by uuid,
-  UNIQUE (engagement_id, clause_number)
+  clauses_json    jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  header_data     jsonb,
+  updated_at      timestamptz DEFAULT now(),
+  updated_by      uuid        REFERENCES auth.users(id),
+  UNIQUE (engagement_id)
 );
 
-ALTER TABLE audit_mrl ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mrl_data ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can manage their engagement MRL"
-  ON audit_mrl
+  ON mrl_data
   FOR ALL
   USING (
     engagement_id IN (
-      SELECT id FROM audit_engagements
-      WHERE firm_id IN (
-        SELECT firm_id FROM users WHERE id = auth.uid()
+      SELECT ae.id FROM audit_engagements ae
+      WHERE ae.firm_id IN (
+        SELECT u.firm_id FROM users u WHERE u.id = auth.uid()
       )
     )
   );

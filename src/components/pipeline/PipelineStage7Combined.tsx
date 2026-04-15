@@ -5,7 +5,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
-import { EngagementMRL } from '@/components/engagement/EngagementMRL';
+import { MRLTab } from '@/components/stage7/MRLTab';
+import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 
 interface Props {
@@ -22,16 +23,11 @@ export default function PipelineStage7Combined({
   const [activeTab, setActiveTab] = useState('notes');
 
   // ─── Corporate entity check ───
-  // engagement.entity_type values (set at engagement creation): "company" | "llp" | "individual" | "firm" | "trust" | "huf" | "aop"
-  // engagement.clients.entity_type values (set at client creation): "Private Ltd" | "Public Ltd" | "LLP" | "Partnership" | etc.
-  // CARO 2020 applies ONLY to companies (Private/Public Limited). Enforce both entity-type signals
-  // so that even if the caro_applicable flag is misconfigured, non-corporates never see CARO.
-  const engEntityType = (engagement?.entity_type || "").toLowerCase();
-  const clientEntityType = (engagement?.clients?.entity_type || "");
+  // isCompanyEntity checks both engagement.entity_type and clients.entity_type.
+  // CARO 2020 and MRL apply ONLY to companies (Private/Public Limited / OPC).
   const isCorporate =
-    engEntityType === "company" ||
-    clientEntityType === "Private Ltd" ||
-    clientEntityType === "Public Ltd";
+    isCompanyEntity(engagement?.entity_type) ||
+    isCompanyEntity(engagement?.clients?.entity_type);
 
   const markComplete = async () => {
     setSaving(true);
@@ -114,7 +110,7 @@ export default function PipelineStage7Combined({
           </TabsContent>
 
           <TabsContent value="mrl" className="mt-4">
-            <EngagementMRL engagementId={engagementId} engagement={engagement} />
+            <MRLTab engagementId={engagementId} engagement={engagement} />
           </TabsContent>
         </Tabs>
       ) : (
