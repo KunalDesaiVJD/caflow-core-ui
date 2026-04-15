@@ -29,7 +29,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2,
 } from "lucide-react";
 
 // ─── Types ───
@@ -320,6 +320,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setSelectedChallan(null); setFilingLoaded(false);
     setCarryForwardChallans([]); setAllChallanDeductees({});
   };
+
+  // CP-03: Auto-load whenever all 4 selector fields are set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (selClient && selFy && selQuarter && selForm) {
+      loadFiling();
+    } else {
+      resetFiling();
+    }
+  }, [selClient, selFy, selQuarter, selForm]); // loadFiling/resetFiling intentionally omitted — stable callbacks
 
   // ─── Carry Forward (Issue 7H: include origin quarter/FY) ───
   const fetchCarryForwardChallans = async (clientId: string, fy: string, quarter: string, form: string) => {
@@ -843,83 +853,88 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   // ─── Render ───
   return (
     <div className="space-y-4">
-      {/* Filing Selector */}
-      <div className="rounded-lg bg-foreground/5 border p-4">
-        {!filingLoaded ? (
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
-            <div className="flex flex-wrap gap-3 items-end">
-              <div className="space-y-1">
-                <Label className="text-xs">Client</Label>
-                <Select value={selClient} onValueChange={setSelClient}>
-                  <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-                  <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">FY</Label>
-                <Select value={selFy} onValueChange={setSelFy}>
-                  <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Quarter</Label>
-                <Select value={selQuarter} onValueChange={setSelQuarter}>
-                  <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Form</Label>
-                <Select value={selForm} onValueChange={setSelForm}>
-                  <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <Button size="sm" onClick={loadFiling} disabled={loading}>
-                {loading ? "Loading..." : "Load Filing"}
-              </Button>
-            </div>
+      {/* ── CP-03: Filing Selector — always visible, auto-loads on change ── */}
+      <div className="rounded-lg bg-foreground/5 border p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
+          {loading && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 size={13} className="animate-spin" /> Loading…
+            </span>
+          )}
+        </div>
+
+        {/* 4 dropdowns — always editable, never disabled */}
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="space-y-1">
+            <Label className="text-xs">Client</Label>
+            <Select value={selClient} onValueChange={setSelClient}>
+              <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
+              <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
-        ) : filing ? (
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Client</p>
-              <p className="text-sm font-semibold">{client?.name || "—"}</p>
-            </div>
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">TAN</p>
-              <p className="text-sm font-mono">{client?.tan_number || filing.tan || "—"}</p>
-            </div>
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Form / Quarter</p>
-              <p className="text-sm font-semibold">{selForm} · {selQuarter} FY {selFy}</p>
-            </div>
-            <Badge className={cn("text-xs", {
-              "bg-muted text-muted-foreground": filing.work_status === "Not Started",
-              "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
-              "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
-              "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
-            })}>{filing.work_status}</Badge>
-            {isFilingLocked && (
-              <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
-                <Lock size={10} /> Data Entry Locked — Filed
-              </Badge>
-            )}
-            <div className="flex-1" />
-            <Button size="sm" variant="outline" className="gap-1" onClick={resetFiling}>
-              <RotateCcw size={14} /> Change Filing
-            </Button>
+          <div className="space-y-1">
+            <Label className="text-xs">FY</Label>
+            <Select value={selFy} onValueChange={setSelFy}>
+              <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
-        ) : (
-          <div className="text-center py-4">
-            <p className="text-sm text-muted-foreground mb-2">No filing found for this combination.</p>
-            <p className="text-xs text-muted-foreground">Activate TDS in Client Module first.</p>
-            <Button size="sm" variant="outline" className="mt-3 gap-1" onClick={resetFiling}>
-              <RotateCcw size={14} /> Change Filing
-            </Button>
+          <div className="space-y-1">
+            <Label className="text-xs">Quarter</Label>
+            <Select value={selQuarter} onValueChange={setSelQuarter}>
+              <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Form</Label>
+            <Select value={selForm} onValueChange={setSelForm}>
+              <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Filing info row — shown once auto-load completes */}
+        {filingLoaded && !loading && (
+          filing ? (
+            <div className="flex flex-wrap items-center gap-4 pt-2 border-t">
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Client</p>
+                <p className="text-sm font-semibold">{client?.name || "—"}</p>
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">TAN</p>
+                <p className="text-sm font-mono">{client?.tan_number || filing.tan || "—"}</p>
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Form / Quarter</p>
+                <p className="text-sm font-semibold">{selForm} · {selQuarter} FY {selFy}</p>
+              </div>
+              <Badge className={cn("text-xs", {
+                "bg-muted text-muted-foreground": filing.work_status === "Not Started",
+                "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
+                "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
+                "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
+              })}>{filing.work_status}</Badge>
+              {isFilingLocked && (
+                <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
+                  <Lock size={10} /> Data Entry Locked — Filed
+                </Badge>
+              )}
+            </div>
+          ) : (
+            <div className="pt-2 border-t">
+              <p className="text-sm text-muted-foreground">No filing found for this combination.</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Activate TDS in Client Module first.</p>
+            </div>
+          )
+        )}
+
+        {/* Prompt when client not yet selected */}
+        {!selClient && (
+          <p className="text-xs text-muted-foreground pt-1">Select a client to auto-load the filing.</p>
         )}
       </div>
 
