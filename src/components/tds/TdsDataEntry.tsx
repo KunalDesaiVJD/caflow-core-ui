@@ -331,29 +331,63 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     }
   }, [selClient, selFy, selQuarter, selForm]); // loadFiling/resetFiling intentionally omitted — stable callbacks
 
-  // ─── Carry Forward (Issue 7H: include origin quarter/FY) ───
+  // ─── Carry Forward — CP-04: cross-FY support ──────────────────────────────
+  //
+  // Convert a (FY, Quarter) pair to a single sortable integer so periods from
+  // different financial years can be compared with plain < / > operators.
+  //   e.g. FY 2026-27 Q3  →  startYear=2026, Q=3  →  20263
+  //        FY 2027-28 Q1  →  startYear=2027, Q=1  →  20271
+  //   20263 < 20271  ✔  so Q3/2026-27 is correctly identified as "prior".
+  //
+  // BUG BEFORE: qNum <= 1 short-circuited Q1 of any year (so Q4-prev-FY→Q1-new-FY
+  // never ran), and `.eq("financial_year", fy)` capped the lookup to the same FY.
+  //
+  // FIX: fetch ALL filings for this client (any FY), keep those whose computed
+  // period number is strictly less than the current period, then run the same
+  // unconsumed-balance check as before.
   const fetchCarryForwardChallans = async (clientId: string, fy: string, quarter: string, form: string) => {
-    const qNum = parseInt(quarter.replace("Q", ""));
-    if (qNum <= 1) { setCarryForwardChallans([]); return; }
-    const priorQuarters = Array.from({ length: qNum - 1 }, (_, i) => `Q${i + 1}`);
-    const { data: priorFilings } = await supabase.from("tds_filings").select("id, quarter, financial_year")
-      .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
-    if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+    const periodToNum = (periodFy: string, periodQ: string): number => {
+      const startYear = parseInt(periodFy.split("-")[0], 10);
+      const qNum = parseInt(periodQ.replace("Q", ""), 10);
+      return startYear * 10 + qNum;
+    };
+
+    const currentPeriod = periodToNum(fy, quarter);
+
+    // Fetch ALL filings for this client — no FY or quarter filter.
+    const { data: allFilings } = await supabase
+      .from("tds_filings")
+      .select("id, quarter, financial_year")
+      .eq("client_id", clientId);
+
+    if (!allFilings || allFilings.length === 0) { setCarryForwardChallans([]); return; }
+
+    // Keep only filings whose period is strictly before the current one.
+    const priorFilings = allFilings.filter(
+      f => periodToNum(f.financial_year, f.quarter) < currentPeriod
+    );
+
+    if (priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+
     const priorFilingIds = priorFilings.map(f => f.id);
-    // Issue 3 FIX: Do NOT filter by fully_utilized (column may not exist in DB, and the
-    // computed unconsumed check below is the authoritative filter anyway).
+
+    // Issue 3 FIX: Do NOT filter by fully_utilized — unconsumed check below is authoritative.
     const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
       .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
     const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
+
     const challanIds = priorChallans.map(c => c.id);
-    const { data: allDeds } = await supabase.from("tds_deductees").select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+    const { data: allDeds } = await supabase.from("tds_deductees")
+      .select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
       .in("challan_id", challanIds);
+
     const appliedMap = new Map<string, number>();
     (allDeds || []).forEach((d: any) => {
       const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0);
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
     });
+
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
       const applied = appliedMap.get(c.id) || 0;
