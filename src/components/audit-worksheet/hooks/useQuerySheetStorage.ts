@@ -132,6 +132,19 @@ export function useQuerySheetStorage(
     [debounce]
   );
 
+  // CP-17: bulk-add multiple rows (used by Excel import)
+  const bulkAddQueries = useCallback(
+    (rows: Array<Omit<QueryRow, "id">>) => {
+      setData(prev => {
+        const newRows = rows.map(r => ({ id: newId(), ...BLANK_QUERY, ...r }));
+        const next: QuerySheetData = { queries: [...prev.queries, ...newRows] };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     return persist(data, false);
@@ -149,6 +162,7 @@ export function useQuerySheetStorage(
     addQuery,
     updateQuery,
     deleteQuery,
+    bulkAddQueries,
     manualSave,
     saving,
     loaded,

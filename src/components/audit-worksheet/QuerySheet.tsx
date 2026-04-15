@@ -10,7 +10,8 @@
  * the engagement can progress to the next pipeline stage.
  * Zero queries = gate is open (no pending corrections).
  */
-import { useState } from "react";
+import { useState, useRef } from "react";
+import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
@@ -18,12 +19,92 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge }    from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2,
+  Plus, Trash2, Download, Upload, FileSpreadsheet,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
+import type { QueryRow } from "./hooks/useQuerySheetStorage";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
+
+// ─── Excel helpers ────────────────────────────────────────────────────────────
+
+const HEADERS = [
+  "SR.", "HEAD", "PARTICULARS", "QUERY DESCRIPTION",
+  "REQUIRED DOCUMENTS", "REMARK", "CORRECTION STATUS",
+];
+
+function exportToExcel(queries: QueryRow[], clientName: string, fy: string) {
+  const rows = queries.map((q, i) => [
+    i + 1,
+    q.head,
+    q.particulars,
+    q.query_description,
+    q.required_documents,
+    q.remark,
+    q.correction_status || "Pending",
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS, ...rows]);
+  // Column widths
+  ws["!cols"] = [
+    { wch: 5 }, { wch: 18 }, { wch: 22 }, { wch: 35 },
+    { wch: 28 }, { wch: 22 }, { wch: 18 },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Queries");
+  const safeName = (clientName || "Client").replace(/[^a-zA-Z0-9_-]/g, "_");
+  XLSX.writeFile(wb, `Queries_${safeName}_${fy || "FY"}.xlsx`);
+}
+
+function downloadTemplate() {
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS]);
+  ws["!cols"] = [
+    { wch: 5 }, { wch: 18 }, { wch: 22 }, { wch: 35 },
+    { wch: 28 }, { wch: 22 }, { wch: 18 },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Queries");
+  XLSX.writeFile(wb, "QuerySheet_Template_CAFlow.xlsx");
+}
+
+function parseWorkbook(file: File): Promise<Array<Omit<QueryRow, "id">>> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target?.result, { type: "binary" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1 });
+        // Skip header row(s): detect by checking if first cell is "SR." or numeric
+        const dataRows = raw.filter((row, i) => {
+          if (i === 0) return false; // always skip first row (header)
+          return row.some((c: any) => c !== undefined && c !== null && c !== "");
+        });
+        const parsed: Array<Omit<QueryRow, "id">> = dataRows.map((row: any[]) => ({
+          head:               String(row[1] ?? ""),
+          particulars:        String(row[2] ?? ""),
+          query_description:  String(row[3] ?? ""),
+          required_documents: String(row[4] ?? ""),
+          remark:             String(row[5] ?? ""),
+          correction_status:  (["Yes", "No"].includes(String(row[6] ?? ""))
+            ? String(row[6]) : "") as "" | "Yes" | "No",
+        }));
+        resolve(parsed.filter(r => r.head || r.particulars || r.query_description));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsBinaryString(file);
+  });
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -66,12 +147,43 @@ function CorrectionSelect({
 
 export default function QuerySheet({ data, engagementId }: Props) {
   const {
-    queries, addQuery, updateQuery, deleteQuery,
+    queries, addQuery, updateQuery, deleteQuery, bulkAddQueries,
     manualSave, saving, allCorrected, pendingCount,
   } = useQuerySheetStorage(engagementId, data.engagement?.firm_id);
 
   // Delete confirmation state: tracks which row is awaiting confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // ── Import state ────────────────────────────────────────────────────────────
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<Array<Omit<QueryRow, "id">> | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const rows = await parseWorkbook(file);
+      if (rows.length === 0) {
+        toast.error("No valid data rows found in the file.");
+      } else {
+        setImportPreview(rows);
+      }
+    } catch {
+      toast.error("Could not parse the file. Please use the CAFlow template.");
+    }
+    // Reset so same file can be re-selected
+    e.target.value = "";
+  };
+
+  const confirmImport = () => {
+    if (!importPreview) return;
+    setImporting(true);
+    bulkAddQueries(importPreview);
+    toast.success(`${importPreview.length} ${importPreview.length === 1 ? "query" : "queries"} imported successfully.`);
+    setImportPreview(null);
+    setImporting(false);
+  };
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
@@ -120,18 +232,67 @@ export default function QuerySheet({ data, engagementId }: Props) {
             </>
           )}
         </div>
-        <Button
-          size="sm"
-          className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
-          onClick={manualSave}
-          disabled={saving}
+        <div className="flex items-center gap-1.5">
+          {/* Export Excel */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1 h-7 text-xs border-green-600 text-green-700 hover:bg-green-50"
+            onClick={() => exportToExcel(queries, data.clientName, data.financialYear)}
+            disabled={queries.length === 0}
+            title="Export all queries to Excel"
+          >
+            <FileSpreadsheet size={12} />
+            Export Excel
+          </Button>
+
+          {/* Import Excel */}
+          <div className="flex flex-col items-center">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1 h-7 text-xs border-[#1A2744] text-[#1A2744] hover:bg-[#1A2744]/5"
+              onClick={() => fileInputRef.current?.click()}
+              title="Import queries from Excel"
+            >
+              <Upload size={12} />
+              Import Excel
+            </Button>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
+          {/* Save */}
+          <Button
+            size="sm"
+            className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
+            onClick={manualSave}
+            disabled={saving}
+          >
+            {saving
+              ? <Loader2 size={12} className="animate-spin" />
+              : <Save    size={12} />
+            }
+            Save
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Download Template link ── */}
+      <div className="border-b bg-muted/10 px-4 py-1.5 flex items-center gap-1">
+        <Download size={11} className="text-muted-foreground" />
+        <button
+          type="button"
+          className="text-[11px] text-primary underline underline-offset-2 hover:text-primary/80"
+          onClick={downloadTemplate}
         >
-          {saving
-            ? <Loader2 size={12} className="animate-spin" />
-            : <Save    size={12} />
-          }
-          Save
-        </Button>
+          Download blank import template (QuerySheet_Template_CAFlow.xlsx)
+        </button>
       </div>
 
       {/* ══════════ TABLE ══════════ */}
@@ -319,6 +480,85 @@ export default function QuerySheet({ data, engagementId }: Props) {
           </p>
         )}
       </div>
+
+      {/* ══════════ IMPORT PREVIEW MODAL ══════════ */}
+      <Dialog open={!!importPreview} onOpenChange={() => setImportPreview(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload size={16} className="text-[#1A2744]" />
+              Import Queries Preview
+            </DialogTitle>
+          </DialogHeader>
+
+          <p className="text-sm text-muted-foreground px-1">
+            You are about to import{" "}
+            <span className="font-semibold text-foreground">{importPreview?.length}</span>{" "}
+            {(importPreview?.length ?? 0) === 1 ? "query" : "queries"}.{" "}
+            Existing queries will <strong>not</strong> be deleted.
+          </p>
+
+          {/* Preview table — first 5 rows */}
+          <div className="overflow-auto rounded border flex-1 min-h-0">
+            <Table className="text-xs">
+              <TableHeader>
+                <TableRow className="bg-muted/60">
+                  {["#", "Head", "Particulars", "Query Description", "Correction Status"].map(h => (
+                    <TableHead key={h} className="text-xs py-2">{h}</TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(importPreview ?? []).slice(0, 5).map((r, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="w-8 text-center text-muted-foreground">{i + 1}</TableCell>
+                    <TableCell className="max-w-[100px] truncate">{r.head || "—"}</TableCell>
+                    <TableCell className="max-w-[120px] truncate">{r.particulars || "—"}</TableCell>
+                    <TableCell className="max-w-[200px] truncate">{r.query_description || "—"}</TableCell>
+                    <TableCell>
+                      <Badge
+                        className={cn(
+                          "text-[10px]",
+                          r.correction_status === "Yes" && "bg-green-100 text-green-700",
+                          r.correction_status === "No"  && "bg-red-100 text-red-700",
+                          !r.correction_status          && "bg-orange-100 text-orange-700",
+                        )}
+                      >
+                        {r.correction_status || "Pending"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(importPreview?.length ?? 0) > 5 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-2 text-xs">
+                      … and {(importPreview?.length ?? 0) - 5} more rows
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setImportPreview(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="bg-[#1A2744] hover:bg-[#1A2744]/90 text-white gap-1.5"
+              onClick={confirmImport}
+              disabled={importing}
+            >
+              {importing
+                ? <Loader2 size={13} className="animate-spin" />
+                : <Upload size={13} />
+              }
+              Import All ({importPreview?.length})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
