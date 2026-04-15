@@ -1,4 +1,18 @@
 import { useState, useEffect, useMemo } from "react";
+
+/** Parse a DB date string (YYYY-MM-DD) as a LOCAL date to avoid UTC-offset shift. */
+const parseLocalDate = (s: string): Date => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
+/** Serialise a Date back to YYYY-MM-DD using LOCAL calendar day (not UTC). */
+const toLocalDateStr = (dt: Date): string => {
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -277,12 +291,12 @@ const NewClientWizard = () => {
         classification: fyClass?.classification || "",
         audit_firm_id: fyClass?.audit_firm_id || "",
         responsible_person_id: client.responsible_person_id || "",
-        date_of_incorporation: client.date_of_incorporation ? new Date(client.date_of_incorporation) : undefined,
+        date_of_incorporation: client.date_of_incorporation ? parseLocalDate(client.date_of_incorporation) : undefined,
         registered_state: client.registered_state || "",
         business_nature: client.business_activity || "",
         cin: client.cin || "",
         dsc_number: client.dsc_number || "",
-        dsc_expiry_date: client.dsc_expiry_date ? new Date(client.dsc_expiry_date) : undefined,
+        dsc_expiry_date: client.dsc_expiry_date ? parseLocalDate(client.dsc_expiry_date) : undefined,
         work_group_type: client.work_group_type || "",
       });
 
@@ -437,10 +451,10 @@ const NewClientWizard = () => {
       address: basicInfo.address || null,
       tan_number: basicInfo.tan_number || null,
       dsc_number: advancedInfo.dsc_number || null,
-      dsc_expiry_date: advancedInfo.dsc_expiry_date?.toISOString().split("T")[0] || null,
+      dsc_expiry_date: advancedInfo.dsc_expiry_date ? toLocalDateStr(advancedInfo.dsc_expiry_date) : null,
       work_group_type: advancedInfo.work_group_type || null,
       responsible_person_id: advancedInfo.responsible_person_id || null,
-      date_of_incorporation: advancedInfo.date_of_incorporation?.toISOString().split("T")[0] || null,
+      date_of_incorporation: advancedInfo.date_of_incorporation ? toLocalDateStr(advancedInfo.date_of_incorporation) : null,
       registered_state: advancedInfo.registered_state || null,
       business_activity: advancedInfo.business_nature || null,
       cin: advancedInfo.cin || null,
@@ -744,10 +758,10 @@ const NewClientWizard = () => {
           .from("clients")
           .update({
             dsc_number: advancedInfo.dsc_number || null,
-            dsc_expiry_date: advancedInfo.dsc_expiry_date?.toISOString().split("T")[0] || null,
+            dsc_expiry_date: advancedInfo.dsc_expiry_date ? toLocalDateStr(advancedInfo.dsc_expiry_date) : null,
             work_group_type: advancedInfo.work_group_type || null,
             responsible_person_id: advancedInfo.responsible_person_id || null,
-            date_of_incorporation: advancedInfo.date_of_incorporation?.toISOString().split("T")[0] || null,
+            date_of_incorporation: advancedInfo.date_of_incorporation ? toLocalDateStr(advancedInfo.date_of_incorporation) : null,
             registered_state: advancedInfo.registered_state || null,
             business_activity: advancedInfo.business_nature || null,
             cin: advancedInfo.cin || null,
