@@ -245,9 +245,13 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // ── Reactive last-note count ──
-  const computedLastNote = notes.filter((n) => n.selected).length;
-  const displayLastNote = header.lastNoteOverride || String(computedLastNote);
+  // ── Reactive last-note count (CONFLICT-3: useEffect on [notes], not inline) ──
+  const [lastNote, setLastNote] = useState(8);
+  useEffect(() => {
+    const count = notes.filter((n) => n.selected).length;
+    setLastNote(count);
+  }, [notes]);
+  const displayLastNote = header.lastNoteOverride || String(lastNote);
 
   // ── Fetch client/firm/partner ──
   useEffect(() => {
@@ -693,7 +697,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           onToggle: () => toggleNote("note-8"),
           badge: (
             <span className="text-xs text-muted-foreground ml-2">
-              (auto-count: {computedLastNote})
+              (auto-count: {lastNote})
             </span>
           ),
           mainContent: (
@@ -707,7 +711,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
                       <span onClick={(e) => e.stopPropagation()}>
                         <input
                           type="text"
-                          value={header.lastNoteOverride || String(computedLastNote)}
+                          value={header.lastNoteOverride || String(lastNote)}
                           onChange={(e) => setH("lastNoteOverride", e.target.value)}
                           disabled={!notes[7].selected}
                           className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
