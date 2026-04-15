@@ -286,25 +286,33 @@ function resolveAutoMarkers(
   }
 
   // ── Pass 2: match each AUTO row to a field using label text ───────────────
+  // Strategy: try the CURRENT row's labels first (most specific).
+  // Only fall back to combined (current + row above) if nothing matched —
+  // this prevents e.g. "Place" from the previous row contaminating "Date:".
   const result = new Map<string, string>();
 
   for (const [rowNum, autoAddrs] of rowAutos) {
-    // Combine label texts from this row + the row above for context
-    const combined = [
+    const currentText = (rowTexts.get(rowNum) ?? []).join(" ");
+    const combinedText = [
       ...(rowTexts.get(rowNum - 1) ?? []),
       ...(rowTexts.get(rowNum)     ?? []),
     ].join(" ");
 
-    if (!combined) continue;
-
-    for (const [pattern, fieldKey] of LABEL_MAP) {
-      if (pattern.test(combined)) {
-        const value = autoValues[fieldKey];
-        if (value) {
-          for (const addr of autoAddrs) result.set(addr, value);
+    // Try current-row labels first, then fall back to combined context
+    for (const textToTry of [currentText, combinedText]) {
+      if (!textToTry) continue;
+      let matched = false;
+      for (const [pattern, fieldKey] of LABEL_MAP) {
+        if (pattern.test(textToTry)) {
+          const value = autoValues[fieldKey];
+          if (value) {
+            for (const addr of autoAddrs) result.set(addr, value);
+          }
+          matched = true;
+          break;
         }
-        break;
       }
+      if (matched) break;
     }
   }
 
