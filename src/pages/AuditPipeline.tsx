@@ -84,13 +84,17 @@ const PERIOD_TYPES = [
 function getAuditOptionsForClient(client: any) {
   if (!client) return AUDIT_TYPES;
   const opts: { value: string; label: string }[] = [];
-  const hasStat = !!client.statutory_audit_applicable;
-  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
-  if (hasStat)          opts.push({ value: "statutory",  label: "Statutory Audit" });
-  if (hasTax)           opts.push({ value: "tax_audit",  label: "Tax Audit" });
+  // hasStat / hasTax can come from either client_fy_audit_setup (boolean flags)
+  // OR from client_services active rows (linked_module = "audit")
+  const hasStat = !!client.statutory_audit_applicable || !!client.has_statutory_service;
+  const hasTax  = !!client.tax_audit_applicable       || !!client.has_tax_audit_service;
+  if (hasStat)           opts.push({ value: "statutory", label: "Statutory Audit" });
+  if (hasTax)            opts.push({ value: "tax_audit", label: "Tax Audit" });
   if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
-  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
-  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  if (client.internal_audit_applicable || client.has_internal_audit_service)
+                         opts.push({ value: "internal",  label: "Internal Audit" });
+  if (client.stock_audit_applicable)
+                         opts.push({ value: "stock",     label: "Stock Audit" });
   return opts;
 }
 
@@ -188,30 +192,90 @@ export default function AuditPipeline() {
   // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
-  // ─── All active firm clients for new engagement ───
-  // Show all active, non-draft clients for the firm so users can create
-  // engagements for any client regardless of audit flags.
+  // ─── Clients with audit services enabled (for new engagement dropdown) ───
+  // Only shows clients that have at least one audit service activated —
+  // either via client_fy_audit_setup boolean flags OR via an active
+  // client_services row whose service_category has linked_module = "audit".
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
+      // 1. All active non-draft clients
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .order("name", { ascending: true });
-
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
-
       const { data: allFirmClients } = await clientQuery;
+      if (!allFirmClients?.length) return [];
 
-      return (allFirmClients || []).map((c: any) => ({
-        id:          c.id as string,
-        name:        (c.name as string) ?? "",
-        entity_type: (c.entity_type as string) ?? "",
-      }));
+      const clientIds = allFirmClients.map((c: any) => c.id as string);
+
+      // 2. Fetch audit setup flags from client_fy_audit_setup
+      const { data: auditSetupRows } = await supabase
+        .from("client_fy_audit_setup")
+        .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
+        .in("client_id", clientIds);
+
+      // 3. Fetch active audit services from client_services + service_categories
+      const { data: auditServiceRows } = await supabase
+        .from("client_services")
+        .select("client_id, is_active, service_categories!inner(name, linked_module)")
+        .in("client_id", clientIds)
+        .eq("is_active", true);
+
+      // Build per-client audit flags from setup table
+      const setupMap: Record<string, any> = {};
+      for (const row of auditSetupRows ?? []) {
+        const r = row as any;
+        setupMap[r.client_id] = r;
+      }
+
+      // Build per-client audit flags from service rows
+      const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
+      for (const row of (auditServiceRows ?? []) as any[]) {
+        const cat = row.service_categories;
+        if (!cat || cat.linked_module !== "audit") continue;
+        if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
+        const nameLower = (cat.name as string).toLowerCase();
+        if (nameLower.includes("statutory"))            serviceMap[row.client_id].hasStat = true;
+        else if (nameLower.includes("tax"))             serviceMap[row.client_id].hasTax = true;
+        else if (nameLower.includes("internal"))        serviceMap[row.client_id].hasInternal = true;
+        else {
+          // Unknown audit service — count as tax audit by default
+          serviceMap[row.client_id].hasTax = true;
+        }
+      }
+
+      // Merge and filter to audit-eligible clients only
+      return (allFirmClients as any[])
+        .map(c => {
+          const setup = setupMap[c.id] ?? {};
+          const svc   = serviceMap[c.id] ?? {};
+          return {
+            id:          c.id as string,
+            name:        (c.name as string) ?? "",
+            entity_type: (c.entity_type as string) ?? "",
+            // audit setup flags (from client_fy_audit_setup)
+            statutory_audit_applicable:  !!setup.statutory_audit_applicable,
+            tax_audit_applicable:        !!setup.tax_audit_applicable,
+            internal_audit_applicable:   !!setup.internal_audit_applicable,
+            stock_audit_applicable:      !!setup.stock_audit_applicable,
+            // derived flags from active services
+            has_statutory_service:       !!svc.hasStat,
+            has_tax_audit_service:       !!svc.hasTax,
+            has_internal_audit_service:  !!svc.hasInternal,
+          };
+        })
+        .filter(c =>
+          c.statutory_audit_applicable || c.tax_audit_applicable ||
+          c.internal_audit_applicable  || c.stock_audit_applicable ||
+          c.has_statutory_service      || c.has_tax_audit_service  ||
+          c.has_internal_audit_service
+        );
     },
     enabled: !!user?.id,
   });
