@@ -50,7 +50,10 @@ function parseCustomerList(rawText: string): unknown[] {
 }
 
 // ─── Fetch via node:https with SSL verification disabled ──────────────────────
-// This mirrors sync_import.mjs which is the proven working approach.
+// NOTE: In Deno's Node.js compat layer, Agent({ rejectUnauthorized:false }) is NOT
+// respected — Deno's own TLS stack is used instead. The fix is to pass
+// rejectUnauthorized:false DIRECTLY in the request options AND override
+// checkServerIdentity, both of which Deno's compat layer does honour.
 
 function fetchNodeHttps(url: string, useHttp = false): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,7 +65,9 @@ function fetchNodeHttps(url: string, useHttp = false): Promise<string> {
       method:   "GET",
       timeout:  30_000,
       ...(useHttp ? {} : {
-        // SSL bypass — identical to sync_import.mjs Node.js approach
+        // Pass directly in options (not just in Agent) — Deno compat honours these
+        rejectUnauthorized:  false,
+        checkServerIdentity: () => undefined,  // Completely skip identity check
         agent: new Agent({ rejectUnauthorized: false }),
       }),
     };
