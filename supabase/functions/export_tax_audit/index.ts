@@ -108,6 +108,66 @@ function xmlEsc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// ── Named-range filling ───────────────────────────────────────────────────────
+//
+// Templates use Excel defined names (e.g. ENTITY_NAME → 01_Control!$F$7).
+// We parse workbook.xml for <definedName> elements, resolve each to a
+// (sheetPath, cellAddr) pair, and write values directly to those cells.
+// This is the primary fill mechanism for the 3CA/3CD template.
+//
+// Named range → autoValues key mapping (handles _0 suffix variants):
+const NR_TO_FIELD: Record<string, string> = {
+  ENTITY_NAME:    "ENTITY_NAME",
+  ENTITY_ADDRESS: "ENTITY_ADDRESS",
+  PAN:            "PAN",
+  TAN:            "TAN",
+  GSTIN:          "GSTIN",
+  ENTITY_TYPE:    "ENTITY_TYPE",
+  BUSINESS_NATURE:"BUSINESS_NATURE",
+  PREVIOUS_YEAR:  "PREVIOUS_YEAR",
+  ASSESSMENT_YEAR:"ASSESSMENT_YEAR",
+  FIRM_NAME:      "FIRM_NAME",
+  PARTNER_NAME:   "PARTNER_NAME",
+  FRN:            "FRN",
+  MEMBERSHIP_NO:  "MEMBERSHIP_NO",
+  UDIN:           "UDIN",
+  SIGN_DATE:      "SIGN_DATE",
+  PLACE_0:        "PLACE",
+  REPORT_DATE_0:  "REPORT_DATE",
+  BS_DATE_0:      "BS_DATE",
+  COMP_YEAR_END:  "COMP_YEAR_END",
+  BS_DATE:        "BS_DATE",
+  PLACE:          "PLACE",
+  REPORT_DATE:    "REPORT_DATE",
+};
+
+/**
+ * Parse workbook.xml definedName elements and return a map of
+ * namedRange → { sheetName, cellAddr } (strips $ signs from addr).
+ * Only handles simple single-cell references like "Sheet!$F$7".
+ */
+function parseNamedRanges(
+  wbXml: string,
+): Map<string, { sheetName: string; cellAddr: string }> {
+  const result = new Map<string, { sheetName: string; cellAddr: string }>();
+  const re = /<definedName\s+([^>]*)>(.*?)<\/definedName>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(wbXml)) !== null) {
+    const attrs = m[1];
+    const value = m[2].trim();
+    const nameM = attrs.match(/\bname="([^"]+)"/);
+    if (!nameM) continue;
+    // Match "SheetName!$COL$ROW" — sheet name may contain spaces, dots, underscores
+    const refM = value.match(/^'?([^'!]+)'?!\$([A-Z]+)\$(\d+)$/);
+    if (!refM) continue;
+    result.set(nameM[1], {
+      sheetName: refM[1],
+      cellAddr:  refM[2] + refM[3],  // e.g. "F7"
+    });
+  }
+  return result;
+}
+
 // ── AUTO-marker resolution ────────────────────────────────────────────────────
 //
 // Templates contain literal "AUTO" text as placeholders.  These three functions
@@ -403,10 +463,10 @@ serve(async (req) => {
       ENTITY_NAME:    client.name ?? "",
       ENTITY_ADDRESS: address,
       PAN:            client.pan ?? "",
-      TAN:            client.tan ?? "",
+      TAN:            client.tan_number ?? client.tan ?? "",  // DB column is tan_number
       GSTIN:          gstin,
       ENTITY_TYPE:    client.entity_type ?? "",
-      BUSINESS_NATURE: client.nature_of_business ?? client.business_nature ?? "",
+      BUSINESS_NATURE: client.business_activity ?? client.nature_of_business ?? client.business_nature ?? "",
       PREVIOUS_YEAR:  prev,
       ASSESSMENT_YEAR: ay,
       BS_DATE:        bsDate,
@@ -465,6 +525,25 @@ serve(async (req) => {
       if (!value && value !== "0") return;
       if (!updates.has(sheet)) updates.set(sheet, new Map());
       updates.get(sheet)!.set(addr, value);
+    }
+
+    // -1. Named-range fill — primary mechanism for 01_Control-based templates.
+    //     Reads workbook.xml defined names, resolves sheet+cell, writes autoValues.
+    const wbXml = zip["xl/workbook.xml"] ? _dec.decode(zip["xl/workbook.xml"]) : "";
+    if (wbXml) {
+      const namedRanges = parseNamedRanges(wbXml);
+      let nrFilled = 0;
+      for (const [rangeName, { sheetName, cellAddr }] of namedRanges) {
+        const fieldKey = NR_TO_FIELD[rangeName];
+        if (!fieldKey) continue;
+        const value = autoValues[fieldKey];
+        if (!value) continue;
+        const sheetPath = sheetPaths.get(sheetName);
+        if (!sheetPath) continue;
+        addUpdate(sheetName, cellAddr, value);
+        nrFilled++;
+      }
+      console.log(`[Named-range fill] ${namedRanges.size} ranges parsed, ${nrFilled} values written`);
     }
 
     // 0. AUTO-marker scan — scans every sheet for cells containing the literal
