@@ -51,15 +51,35 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .from("client_fy_audit_setup")
       .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable");
 
-    // Fetch active audit services (linked_module = "audit") from client_services
-    let auditSvcQuery: any = supabase
-      .from("client_services")
-      .select("client_id, service_categories!inner(name, linked_module)")
+    // Fetch audit-linked service category IDs (linked_module = "audit")
+    let auditCatQuery: any = supabase
+      .from("service_categories")
+      .select("id, name")
+      .eq("linked_module", "audit")
       .eq("is_active", true);
 
-    const [engRes, clientRes, classRes, auditSetupRes, auditSvcRes] = await Promise.all([
-      engQuery, clientQuery, classQuery, auditSetupQuery, auditSvcQuery
+    const [engRes, clientRes, classRes, auditSetupRes, auditCatRes] = await Promise.all([
+      engQuery, clientQuery, classQuery, auditSetupQuery, auditCatQuery
     ]);
+
+    // Build audit category lookup: id → name
+    const auditCatNameMap: Record<string, string> = {};
+    const auditCatIdSet = new Set<string>();
+    for (const cat of (auditCatRes.data || []) as any[]) {
+      auditCatNameMap[cat.id] = cat.name;
+      auditCatIdSet.add(cat.id);
+    }
+
+    // Fetch active client_services for audit categories only
+    let auditSvcRes: { data: any[] | null } = { data: [] };
+    if (auditCatIdSet.size > 0) {
+      const res = await supabase
+        .from("client_services")
+        .select("client_id, service_category_id")
+        .in("service_category_id", [...auditCatIdSet])
+        .eq("is_active", true);
+      auditSvcRes = { data: res.data };
+    }
 
     // Build set of client IDs with Audit classification
     const auditClientIdSet = new Set(
@@ -72,17 +92,17 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       setupMap[row.client_id] = row;
     }
 
-    // Build per-client flags from active services
+    // Build per-client flags from active audit services
     const svcMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
     for (const row of (auditSvcRes.data || []) as any[]) {
-      const cat = row.service_categories;
-      if (!cat || cat.linked_module !== "audit") continue;
+      const catName = auditCatNameMap[row.service_category_id];
+      if (!catName) continue;
       if (!svcMap[row.client_id]) svcMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-      const nameLower = (cat.name as string).toLowerCase();
-      if (nameLower.includes("statutory"))      svcMap[row.client_id].hasStat = true;
-      else if (nameLower.includes("tax"))       svcMap[row.client_id].hasTax = true;
-      else if (nameLower.includes("internal"))  svcMap[row.client_id].hasInternal = true;
-      else                                      svcMap[row.client_id].hasTax = true;
+      const nameLower = catName.toLowerCase();
+      if (nameLower.includes("statutory"))     svcMap[row.client_id].hasStat = true;
+      else if (nameLower.includes("tax"))      svcMap[row.client_id].hasTax = true;
+      else if (nameLower.includes("internal")) svcMap[row.client_id].hasInternal = true;
+      else                                     svcMap[row.client_id].hasTax = true;
     }
 
     // Show clients with Audit classification OR audit setup flags OR active audit services

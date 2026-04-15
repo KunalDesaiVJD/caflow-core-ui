@@ -311,58 +311,52 @@ const NewClientWizard = () => {
         });
       }
 
-      // ── FIX: Load existing client_services so the Services tab is pre-populated ──
-      // Without this, activeServices was always {}, making services appear lost on reload.
-      const { data: existingServices } = await supabase
-        .from("client_services")
-        .select("*")
-        .eq("client_id", clientId!)
-        .eq("is_active", true);
+      // ── Load Services & Billing: check both client_services and client_service_packages ──
+      const [{ data: existingServices }, { data: activePkgRow }] = await Promise.all([
+        supabase.from("client_services").select("*").eq("client_id", clientId!).eq("is_active", true),
+        supabase.from("client_service_packages").select("*")
+          .eq("client_id", clientId!).eq("is_active", true)
+          .order("created_at", { ascending: false }).limit(1).maybeSingle() as any,
+      ]);
 
-      if (existingServices && existingServices.length > 0) {
-        const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
-        for (const svc of existingServices as any[]) {
-          activeServicesMap[svc.service_category_id] = {
-            frequency: svc.frequency_override || "monthly",
-            reminder_date: svc.reminder_date ?? 1,
-            billing_amount: svc.billing_amount ?? 0,
-            invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
-          };
-        }
+      // Determine billing mode:
+      // 1. Active package in client_service_packages → package_wise
+      // 2. client_services row with billing_mode = "package_wise" → package_wise
+      // 3. Otherwise → service_specific
+      const hasPkgRow = !!activePkgRow;
+      const svcBillingMode = (existingServices?.[0] as any)?.billing_mode;
+      const billingMode: "service_specific" | "package_wise" =
+        hasPkgRow || svcBillingMode === "package_wise" ? "package_wise" : "service_specific";
 
-        const billingMode = ((existingServices[0] as any).billing_mode === "package_wise"
-          ? "package_wise"
-          : "service_specific") as "service_specific" | "package_wise";
-
-        // Load package config if billing mode is package_wise
-        let loadedPkg = { ...emptyPackageConfig };
-        if (billingMode === "package_wise") {
-          const { data: pkgRow } = await supabase
-            .from("client_service_packages")
-            .select("*")
-            .eq("client_id", clientId!)
-            .eq("is_active", true)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle() as any;
-          if (pkgRow) {
-            loadedPkg = {
-              package_name: pkgRow.package_name || "",
-              service_ids: Array.isArray(pkgRow.service_category_ids) ? pkgRow.service_category_ids : [],
-              frequency: pkgRow.frequency || "monthly",
-              reminder_date: pkgRow.reminder_date ?? 1,
-              billing_amount: pkgRow.billing_amount ?? 0,
-              invoice_gen_type: (pkgRow.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
-            };
-          }
-        }
-
-        setServiceBilling({
-          billingMode,
-          activeServices: activeServicesMap,
-          packageConfig: loadedPkg,
-        });
+      // Build individual services map (used in both modes for "not in package" rows)
+      const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
+      for (const svc of (existingServices || []) as any[]) {
+        activeServicesMap[svc.service_category_id] = {
+          frequency: svc.frequency_override || "monthly",
+          reminder_date: svc.reminder_date ?? 1,
+          billing_amount: svc.billing_amount ?? 0,
+          invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+        };
       }
+
+      // Load package config if billing mode is package_wise
+      let loadedPkg = { ...emptyPackageConfig };
+      if (billingMode === "package_wise" && activePkgRow) {
+        loadedPkg = {
+          package_name: activePkgRow.package_name || "",
+          service_ids: Array.isArray(activePkgRow.service_category_ids) ? activePkgRow.service_category_ids : [],
+          frequency: activePkgRow.frequency || "monthly",
+          reminder_date: activePkgRow.reminder_date ?? 1,
+          billing_amount: activePkgRow.billing_amount ?? 0,
+          invoice_gen_type: (activePkgRow.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+        };
+      }
+
+      setServiceBilling({
+        billingMode,
+        activeServices: activeServicesMap,
+        packageConfig: loadedPkg,
+      });
 
       setLoadingClient(false);
     };
