@@ -1093,12 +1093,15 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
         key: 'cl_34c',
         heading: '34(c) — Whether the assessee is liable to pay interest under section 201(1A) or section 206C(7). If yes, please furnish:',
         control: 'not_applicable_annexure',
+        // CP-15: removed 'section' column (not required per Form 3CD instructions).
+        // TAN auto-populates from client.tan_number via the hasTanColumn logic in ClauseRenderer (CP-14).
         annexureColumns: [
-          { key: 'tan', label: 'TAN', type: 'readonly', width: 120 },
-          { key: 'section', label: 'Section', type: 'dropdown', dropdownRef: 'TDS_SECTIONS', minWidth: 180 },
-          { key: 'interest_payable', label: 'Amount of interest u/s 201(1A)/206C(7) payable (₹)', type: 'numeric', width: 220 },
-          { key: 'amount_paid', label: 'Amount paid out of above (₹)', type: 'numeric', width: 160 },
-          { key: 'date_of_payment', label: 'Date of payment', type: 'date', width: 130 },
+          { key: 'tan', label: 'TAN', type: 'readonly' as const, width: 130 },
+          { key: 'nature_of_payment', label: 'Nature of Payment', type: 'text' as const, minWidth: 160 },
+          { key: 'interest_payable', label: 'Amount of Interest (₹)', type: 'numeric' as const, width: 180 },
+          { key: 'amount_paid', label: 'Amount Paid (₹)', type: 'numeric' as const, width: 150 },
+          { key: 'date_of_payment', label: 'Date of Payment', type: 'date' as const, width: 130 },
+          { key: 'remarks', label: 'Remarks', type: 'text' as const, minWidth: 140 },
         ],
       },
     ],
