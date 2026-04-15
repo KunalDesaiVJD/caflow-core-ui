@@ -2,7 +2,7 @@
  * MRLTab — Management Representation Letter (SA 580)
  * Companies ONLY | Stage 7 | 25 clauses
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { MRL_CLAUSES_TEMPLATE, MRL_OPENING_PARA_TEMPLATE, type MRLClause } from "@/constants/mrlClauses";
 import { getBSDate, getAuditYear } from "@/utils/entityUtils";
+import { exportToPdf } from "@/lib/exportUtils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,7 @@ interface Props {
 
 export function MRLTab({ engagementId, engagement }: Props) {
   const { user } = useAuth();
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // ── Derived constants from financial year ──
   const fy: string = engagement?.financial_year ?? "";
@@ -280,9 +282,16 @@ export function MRLTab({ engagementId, engagement }: Props) {
 
   const selectedCount = clauses.filter((c) => c.selected).length;
 
-  // ─── Print ───────────────────────────────────────────────────────────────
+  // ─── Print / Export PDF ──────────────────────────────────────────────────
 
   const handlePrint = () => window.print();
+
+  const handleExportPdf = async () => {
+    if (!contentRef.current) return;
+    const fySlug = (engagement?.financial_year ?? "FY").replace("/", "-");
+    const nameSlug = displayCompanyName.replace(/\s+/g, "_").slice(0, 30);
+    await exportToPdf(contentRef.current, `MRL_${nameSlug}_${fySlug}.pdf`);
+  };
 
   if (loading) {
     return (
@@ -312,6 +321,9 @@ export function MRLTab({ engagementId, engagement }: Props) {
             <Square className="w-4 h-4" /> Deselect All
           </Button>
           <Separator orientation="vertical" className="h-8" />
+          <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
+            <FileDown className="w-4 h-4" /> Export PDF
+          </Button>
           <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1">
             <Printer className="w-4 h-4" /> Print
           </Button>
@@ -321,6 +333,9 @@ export function MRLTab({ engagementId, engagement }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* ── Exportable content ── */}
+      <div ref={contentRef} className="space-y-6">
 
       {/* ── Letter Header ── */}
       <div className="border rounded-lg p-5 space-y-4 bg-card">
@@ -570,6 +585,8 @@ export function MRLTab({ engagementId, engagement }: Props) {
           </div>
         </div>
       </div>
+
+      </div>{/* end contentRef */}
 
       {/* ── Footer save ── */}
       <div className="flex justify-end pt-1">

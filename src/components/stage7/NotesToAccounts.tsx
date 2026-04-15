@@ -3,7 +3,7 @@
  * Stage 7 | Non-corporate only | 8 notes with sub-variants
  * Persists to `notes_to_accounts_data` table (separate from corporate `notes_to_accounts`).
  */
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, Fragment, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -18,8 +18,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Save, Loader2, CheckSquare, Square, Pencil, Printer, FileText } from "lucide-react";
+import { Save, Loader2, CheckSquare, Square, Pencil, Printer, FileText, FileDown } from "lucide-react";
 import { getBSDate, getAuditYear } from "@/utils/entityUtils";
+import { exportToPdf } from "@/lib/exportUtils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -219,6 +220,7 @@ interface Props {
 
 export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const { user } = useAuth();
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const fy: string = engagement?.financial_year ?? "";
   const auditYear = getAuditYear(fy);
@@ -389,6 +391,13 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
   const selectedCount = notes.filter((n) => n.selected).length;
 
+  const handleExportPdf = async () => {
+    if (!contentRef.current) return;
+    const fySlug = (engagement?.financial_year ?? "FY").replace("/", "-");
+    const nameSlug = displayEntityName.replace(/\s+/g, "_").slice(0, 30);
+    await exportToPdf(contentRef.current, `Notes_${nameSlug}_${fySlug}.pdf`);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -415,6 +424,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
             <Square className="w-4 h-4" /> Deselect All
           </Button>
           <Separator orientation="vertical" className="h-8" />
+          <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
+            <FileDown className="w-4 h-4" /> Export PDF
+          </Button>
           <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1">
             <Printer className="w-4 h-4" /> Print
           </Button>
@@ -424,6 +436,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* ── Exportable content ── */}
+      <div ref={contentRef} className="space-y-6">
 
       {/* ── Header ── */}
       <div className="border rounded-lg p-5 space-y-3 bg-card">
@@ -778,6 +793,8 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           </div>
         </div>
       </div>
+
+      </div>{/* end contentRef */}
 
       {/* ── Footer save ── */}
       <div className="flex justify-end pt-1">
