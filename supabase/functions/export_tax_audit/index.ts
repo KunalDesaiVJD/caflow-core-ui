@@ -270,7 +270,8 @@ function resolveAutoMarkers(
     const rowNum = parseInt(addrM[2], 10);
 
     const text = cellTextValue(attrs, inner, ss).trim();
-    if (text === "AUTO") {
+    // Match "AUTO" exactly OR cells like "_____ AUTO" / "________ AUTO" used in sign-off sections
+    if (text === "AUTO" || (text.endsWith("AUTO") && text.includes("_"))) {
       if (!rowAutos.has(rowNum)) rowAutos.set(rowNum, []);
       rowAutos.get(rowNum)!.push(addr);
     } else if (text) {
