@@ -309,20 +309,46 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     document.body.removeChild(a);
   };
 
-  // CP-01: Delete PDF — removes the tds_ack_files record (unlinks from filing).
-  // The file itself stays in Supabase Storage (non-destructive).
+  // CP-01: Delete PDF — confirmation → remove from Supabase Storage → delete
+  // tds_ack_files record → update UI. Does NOT touch any other filing data.
   const deleteAckFile = async (filingId: string, ackFile: TdsAckFile) => {
-    const { error } = await (supabase.from('tds_ack_files' as any).delete().eq('id', ackFile.id));
-    if (error) {
-      toast({ title: 'Failed to remove PDF', description: error.message, variant: 'destructive' });
-      return;
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this PDF? This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    try {
+      // 1. Extract storage path from the public URL and remove from bucket
+      const marker = '/storage/v1/object/public/documents/';
+      const idx = ackFile.file_url.indexOf(marker);
+      if (idx !== -1) {
+        const storagePath = ackFile.file_url.slice(idx + marker.length);
+        const { error: storageError } = await supabase.storage
+          .from('documents')
+          .remove([storagePath]);
+        if (storageError) {
+          console.warn('[deleteAckFile] storage remove:', storageError.message);
+          // Non-fatal — proceed to unlink even if storage delete fails
+        }
+      }
+
+      // 2. Delete the tds_ack_files record (unlinks PDF from the filing)
+      const { error: dbError } = await (supabase.from('tds_ack_files' as any)
+        .delete()
+        .eq('id', ackFile.id));
+      if (dbError) throw dbError;
+
+      // 3. Update local map so the row re-renders with [Attach ACK]
+      setAckFiles(prev => {
+        const next = new Map(prev);
+        next.delete(filingId);
+        return next;
+      });
+      toast({ title: 'PDF deleted successfully' });
+    } catch (err: any) {
+      console.error('[deleteAckFile]', err);
+      toast({ title: 'Failed to delete PDF', description: err.message, variant: 'destructive' });
     }
-    setAckFiles(prev => {
-      const next = new Map(prev);
-      next.delete(filingId);
-      return next;
-    });
-    toast({ title: 'PDF removed from filing' });
   };
 
   const logAuditEntry = async (filingId: string, actionType: string, oldVal: string | null, newVal: string | null, remark?: string) => {
@@ -811,11 +837,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                       <Download size={9} /> Download
                                     </button>
                                     <button
-                                      className="flex items-center gap-0.5 text-[9px] text-destructive hover:underline"
+                                      className="flex items-center gap-0.5 text-[9px] text-red-600 border border-red-600 rounded px-1 hover:bg-red-50"
                                       onClick={() => deleteAckFile(f.id, ackFile)}
-                                      title="Remove PDF link (file kept in storage)"
+                                      title="Delete PDF"
                                     >
-                                      <Trash2 size={9} /> Delete
+                                      <Trash2 size={9} /> Delete PDF
                                     </button>
                                   </>
                                 ) : (
