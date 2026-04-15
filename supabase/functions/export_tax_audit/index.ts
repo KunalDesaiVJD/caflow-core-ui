@@ -319,7 +319,9 @@ function setCellInXml(xml: string, addr: string, value: string): string {
   const addrRe  = addr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   // ── Self-closing variant ──────────────────────────────────────────────────
-  const selfRe = new RegExp(`<c(\\s[^>]*)\\br="${addrRe}"([^>]*?)/>`);
+  // NOTE: Use String.raw to avoid template-literal escape processing — \\s and
+  // \\b in template literals collapse to 's' and backspace (char 8) in Deno/V8.
+  const selfRe = new RegExp(String.raw`<c(\s[^>]*)\br="${addrRe}"([^>]*?)\/>`);
   const selfM  = selfRe.exec(xml);
   if (selfM) {
     const allA = selfM[1] + selfM[2];
@@ -333,7 +335,7 @@ function setCellInXml(xml: string, addr: string, value: string): string {
   }
 
   // ── Full element variant ──────────────────────────────────────────────────
-  const openRe = new RegExp(`<c(\\s[^>]*)\\br="${addrRe}"([^>]*?)>`);
+  const openRe = new RegExp(String.raw`<c(\s[^>]*)\br="${addrRe}"([^>]*?)>`);
   const openM  = openRe.exec(xml);
   if (!openM) return xml; // cell not in this sheet — silently skip
 
