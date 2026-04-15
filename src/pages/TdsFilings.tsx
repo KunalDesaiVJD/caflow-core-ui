@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   FileText, LayoutDashboard, PenLine,
-  ShieldCheck, BarChart3, Settings, ClipboardList,
+  ShieldCheck, BarChart3, Settings, ClipboardList, Combine,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
@@ -19,13 +19,12 @@ interface ClientOption { id: string; name: string | null; pan: string | null; ta
 interface UserOption { id: string; name: string | null; }
 
 const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { key: "filings", label: "Filings", icon: FileText },
-  { key: "data-entry", label: "Data Entry", icon: PenLine },
-  { key: "validate", label: "Validate & Finalise", icon: ShieldCheck },
-  { key: "reports", label: "Reports", icon: BarChart3 },
-  { key: "rate-master", label: "Rate Master", icon: Settings },
-  { key: "audit-log", label: "Audit Log", icon: ClipboardList },
+  { key: "dashboard",  label: "Dashboard",     icon: LayoutDashboard },
+  { key: "filings",    label: "Filings",        icon: FileText },
+  { key: "workspace",  label: "TDS Workspace",  icon: Combine },
+  { key: "reports",    label: "Reports",        icon: BarChart3 },
+  { key: "rate-master",label: "Rate Master",    icon: Settings },
+  { key: "audit-log",  label: "Audit Log",      icon: ClipboardList },
 ] as const;
 
 type NavKey = typeof NAV_ITEMS[number]["key"];
@@ -35,6 +34,8 @@ const TdsFilings = () => {
   
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // CP-02: sub-tab inside TDS Workspace
+  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
   /* DEPRECATED - migration moved to Filings section Options dropdown */
 
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -92,10 +93,76 @@ const TdsFilings = () => {
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-[1400px] mx-auto">
-          {activeSection === "dashboard" && <TdsDashboard clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} onNavigate={(section) => setActiveSection(section as NavKey)} />}
-          {activeSection === "filings" && <TdsFilingsManager clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} onNavigateDataEntry={() => setActiveSection("data-entry")} />}
-          {activeSection === "data-entry" && <TdsDataEntry clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
-          {activeSection === "validate" && <TdsValidateFinalise clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} onNavigateDataEntry={() => setActiveSection("data-entry")} />}
+          {activeSection === "dashboard" && (
+            <TdsDashboard
+              clients={clients} users={users} isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId}
+              onNavigate={(section) => {
+                // CP-02: "data-entry" and "validate" deep-links now open workspace
+                if (section === "data-entry") { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }
+                else if (section === "validate") { setWorkspaceTab("validate"); setActiveSection("workspace"); }
+                else setActiveSection(section as NavKey);
+              }}
+            />
+          )}
+          {activeSection === "filings" && (
+            <TdsFilingsManager
+              clients={clients} users={users} isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId}
+              onNavigateDataEntry={() => { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }}
+            />
+          )}
+
+          {/* ── CP-02: TDS Workspace — Data Entry + Validate & Finalise in tabs ── */}
+          {activeSection === "workspace" && (
+            <div>
+              {/* Tab bar */}
+              <div className="flex border-b mb-4">
+                <button
+                  onClick={() => setWorkspaceTab("data-entry")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    workspaceTab === "data-entry"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <PenLine size={14} /> Data Entry
+                  </span>
+                </button>
+                <button
+                  onClick={() => setWorkspaceTab("validate")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    workspaceTab === "validate"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck size={14} /> Validate &amp; Finalise
+                  </span>
+                </button>
+              </div>
+
+              {/* Tab content — rendered but hidden so state is preserved on switch */}
+              <div className={workspaceTab === "data-entry" ? "" : "hidden"}>
+                <TdsDataEntry
+                  clients={clients} users={users}
+                  isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+                />
+              </div>
+              <div className={workspaceTab === "validate" ? "" : "hidden"}>
+                <TdsValidateFinalise
+                  clients={clients} isSuperadmin={isSuperadmin}
+                  resolveFirmId={resolveFirmId}
+                  onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
+                />
+              </div>
+            </div>
+          )}
+
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
           {activeSection === "rate-master" && <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />}
           {activeSection === "audit-log" && <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
