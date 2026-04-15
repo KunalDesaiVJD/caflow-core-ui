@@ -121,21 +121,6 @@ export default function AuditIntelligence() {
   // #1 — clients from context are already filtered to audit-eligible (see useAuditContext)
   const auditClients = clients;
 
-  // For the Edit Engagement dialog: always include the existing engagement's client
-  // even if it no longer passes the audit eligibility filter (e.g. services were removed).
-  const editDialogClients = useMemo(() => {
-    if (!engForm.client_id) return auditClients;
-    const alreadyIncluded = auditClients.some(c => c.id === engForm.client_id);
-    if (alreadyIncluded) return auditClients;
-    // Append the current client (name from engagement) so it appears in the dropdown
-    const engClientName = selectedEngagement?.client_name || selectedEngagement?.clients?.name || "";
-    const engClientType = selectedEngagement?.client_entity_type || selectedEngagement?.entity_type || "";
-    return [
-      { id: engForm.client_id, name: engClientName, entity_type: engClientType },
-      ...auditClients,
-    ];
-  }, [auditClients, engForm.client_id, selectedEngagement]);
-
   // Dialogs
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -149,11 +134,26 @@ export default function AuditIntelligence() {
   // Searchable client dropdown
   const [clientOpen, setClientOpen] = useState(false);
 
-  // Edit form
+  // Edit form — must be declared BEFORE editDialogClients useMemo
   const [engForm, setEngForm] = useState({
     audit_firm_id: "", client_id: "", financial_year: "2024-25", audit_type: "statutory",
     entity_type: "company", audit_period_type: "annual",
   });
+
+  // For the Edit Engagement dialog: always include the existing engagement's client
+  // even if it no longer passes the audit eligibility filter.
+  // IMPORTANT: must come AFTER engForm useState declaration.
+  const editDialogClients = useMemo(() => {
+    if (!engForm.client_id) return auditClients;
+    const alreadyIncluded = auditClients.some(c => c.id === engForm.client_id);
+    if (alreadyIncluded) return auditClients;
+    const engClientName = selectedEngagement?.client_name || (selectedEngagement?.clients as any)?.name || "";
+    const engClientType = selectedEngagement?.client_entity_type || selectedEngagement?.entity_type || "";
+    return [
+      { id: engForm.client_id, name: engClientName, entity_type: engClientType },
+      ...auditClients,
+    ];
+  }, [auditClients, engForm.client_id, selectedEngagement]);
 
   useEffect(() => {
     if (!user?.firm_id) return;

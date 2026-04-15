@@ -311,16 +311,25 @@ const NewClientWizard = () => {
         });
       }
 
-      // ── Load Services & Billing: check both client_services and client_service_packages ──
-      const [{ data: existingServices }, { data: activePkgRow }] = await Promise.all([
-        supabase.from("client_services").select("*").eq("client_id", clientId!).eq("is_active", true),
-        supabase.from("client_service_packages").select("*")
-          .eq("client_id", clientId!).eq("is_active", true)
-          .order("created_at", { ascending: false }).limit(1).maybeSingle() as any,
-      ]);
+      // ── Load Services & Billing ──────────────────────────────────────────────
+      const { data: existingServices } = await supabase
+        .from("client_services")
+        .select("*")
+        .eq("client_id", clientId!)
+        .eq("is_active", true);
+
+      // Load the most-recent package regardless of is_active so we always find it
+      const pkgRes = await (supabase
+        .from("client_service_packages")
+        .select("*")
+        .eq("client_id", clientId!)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle() as any);
+      const activePkgRow = pkgRes?.data ?? null;
 
       // Determine billing mode:
-      // 1. Active package in client_service_packages → package_wise
+      // 1. Package row exists in client_service_packages → package_wise
       // 2. client_services row with billing_mode = "package_wise" → package_wise
       // 3. Otherwise → service_specific
       const hasPkgRow = !!activePkgRow;
@@ -328,7 +337,7 @@ const NewClientWizard = () => {
       const billingMode: "service_specific" | "package_wise" =
         hasPkgRow || svcBillingMode === "package_wise" ? "package_wise" : "service_specific";
 
-      // Build individual services map (used in both modes for "not in package" rows)
+      // Build individual services map (for "not in package" rows)
       const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
       for (const svc of (existingServices || []) as any[]) {
         activeServicesMap[svc.service_category_id] = {
@@ -339,12 +348,18 @@ const NewClientWizard = () => {
         };
       }
 
-      // Load package config if billing mode is package_wise
+      // Load package config
       let loadedPkg = { ...emptyPackageConfig };
       if (billingMode === "package_wise" && activePkgRow) {
+        const rawIds = activePkgRow.service_category_ids;
+        const serviceIds: string[] = Array.isArray(rawIds)
+          ? rawIds
+          : typeof rawIds === "string"
+          ? JSON.parse(rawIds)
+          : [];
         loadedPkg = {
           package_name: activePkgRow.package_name || "",
-          service_ids: Array.isArray(activePkgRow.service_category_ids) ? activePkgRow.service_category_ids : [],
+          service_ids: serviceIds,
           frequency: activePkgRow.frequency || "monthly",
           reminder_date: activePkgRow.reminder_date ?? 1,
           billing_amount: activePkgRow.billing_amount ?? 0,
@@ -530,15 +545,14 @@ const NewClientWizard = () => {
       }
     }
 
-    // Save package if package mode — deactivate old packages first, then upsert
+    // Save package if package mode — deactivate ALL old packages first, then insert
     if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
       const pkg = serviceBilling.packageConfig;
-      // Deactivate any existing packages for this client
+      // Deactivate ALL existing packages for this client (no is_active filter)
       await supabase
         .from("client_service_packages")
-        .update({ is_active: false, updated_at: new Date().toISOString() } as any)
-        .eq("client_id", targetClientId)
-        .eq("is_active", true);
+        .update({ is_active: false } as any)
+        .eq("client_id", targetClientId);
       // Insert the new/updated package
       const { error: pkgError } = await supabase.from("client_service_packages").insert({
         client_id: targetClientId,
