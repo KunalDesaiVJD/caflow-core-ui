@@ -429,11 +429,14 @@ const NewClientWizard = () => {
       errors.mobile = "Mobile number must be 10 digits";
     }
     if (basicInfo.pan && !errors.pan) {
-      // GAP-5: restrict uniqueness check to the current firm — PANs are unique per firm, not globally
+      // GAP-5: restrict uniqueness check to the current firm — PANs are unique per firm, not globally.
+      // Only check against published (non-draft) clients — drafts may have the same PAN
+      // during import and the conflict is resolved at finalization time.
       let panQuery = supabase
         .from("clients")
         .select("id")
         .eq("pan", basicInfo.pan)
+        .eq("is_draft", false)
         .is("deleted_at", null);
       if (effectiveFirmId) panQuery = panQuery.eq("firm_id", effectiveFirmId);
       const { data: existing } = await panQuery.limit(1);

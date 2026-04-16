@@ -78,7 +78,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Supabase uses setTimeout for token refresh — browser throttles timers in
+    // background tabs, so the refresh may never fire while the user is idle.
+    // When the tab becomes visible again, proactively refresh the token so the
+    // user never gets silently logged out after returning to the app.
+    const handleVisibilityChange = () => {
+      if (!isActive || document.hidden) return;
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          // Session still in storage — force a token refresh in case it expired
+          supabase.auth.refreshSession().then(({ data: { session: refreshed } }) => {
+            if (refreshed && isActive) void applySession(refreshed);
+          });
+        }
+        // If no session at all, auth state change will handle setting user to null
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // Ignore spurious SIGNED_OUT events that fire during background token refresh
+      // attempts — only act on them when the tab is visible (user is actually there).
+      if (event === "SIGNED_OUT" && document.hidden) return;
       void applySession(session);
     });
 
@@ -88,6 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       isActive = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       subscription.unsubscribe();
     };
   }, []);

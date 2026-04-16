@@ -487,25 +487,35 @@ export function useCustomerSync() {
 
             if (isNew) {
               // ── INSERT new client as draft ──────────────────────────────────
-              const { error } = await supabase
-                .from("clients")
-                .insert({
-                  customer_id,
-                  ...payload,
-                  firm_id:  firmId,
-                  user_id:  userId,
-                  is_draft: true,
-                  source:   "api_import",
-                } as any);
+              const baseInsert = {
+                customer_id,
+                ...payload,
+                firm_id:  firmId,
+                user_id:  userId,
+                is_draft: true,
+                source:   "api_import",
+              } as any;
+
+              let { error } = await supabase.from("clients").insert(baseInsert);
 
               if (error) {
-                let errMsg = error.message;
                 const isPanDupe =
                   error.code === "23505" &&
                   (error.message.toLowerCase().includes("pan") ||
                     ((error as any).details ?? "").toLowerCase().includes("pan"));
-                if (isPanDupe) errMsg = `Duplicate PAN: ${r.PanCard?.trim() || "unknown"}`;
-                return { ok: false, syncError: { customer_id, name: name ?? "", error: errMsg } };
+
+                if (isPanDupe) {
+                  // PAN duplicate constraint — retry without PAN so the draft is
+                  // still imported. The user must resolve the PAN during finalization.
+                  const withoutPan = { ...baseInsert, pan: null };
+                  const retry = await supabase.from("clients").insert(withoutPan);
+                  if (retry.error) {
+                    return { ok: false, syncError: { customer_id, name: name ?? "", error: retry.error.message } };
+                  }
+                  // Draft created without PAN — not an error, just flagged via null pan
+                } else {
+                  return { ok: false, syncError: { customer_id, name: name ?? "", error: error.message } };
+                }
               }
             } else {
               // ── UPDATE existing client (all API fields, never touches customer_id / is_draft / source) ─
