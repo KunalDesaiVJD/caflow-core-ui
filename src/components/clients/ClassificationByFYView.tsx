@@ -86,20 +86,30 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
     setLoading(true);
 
     try {
-      // ── Counts for all 4 tabs in one round-trip ─────────────────────────────
+      // ── Step 1: get active client IDs for the scoped firm ────────────────────
+      // Using a two-step approach avoids PostgREST's broken embedded-resource
+      // filters on HEAD (count) requests and the invalid `.order("table(col)")`
+      // syntax that silently returns empty results.
+      let clientQ = (supabase as any)
+        .from("clients")
+        .select("id")
+        .eq("is_active", true)
+        .is("deleted_at", null);
+      if (!showAllFirms && firmId) clientQ = clientQ.eq("firm_id", firmId);
+      const { data: clientRows, error: clientErr } = await clientQ;
+      if (clientErr) { console.error("[ClassificationByFYView] clients fetch:", clientErr); setLoading(false); return; }
+      const clientIds: string[] = (clientRows ?? []).map((r: any) => r.id);
+      if (clientIds.length === 0) { setCounts({ "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0 }); setRows([]); setLoading(false); return; }
+
+      // ── Step 2: counts for all 4 tabs ────────────────────────────────────────
       const countResults = await Promise.all(
         CLASSIFICATION_TABS.map(async (tab) => {
-          let q = (supabase as any)
+          const { count } = await (supabase as any)
             .from("client_fy_classifications")
-            .select("client_id, clients!inner(id, is_active, deleted_at, firm_id)", { count: "exact", head: true })
+            .select("client_id", { count: "exact", head: true })
             .eq("financial_year", selectedFY)
             .eq("classification", tab.key)
-            .eq("clients.is_active", true)
-            .is("clients.deleted_at", null);
-
-          if (!showAllFirms && firmId) q = q.eq("clients.firm_id", firmId);
-
-          const { count } = await q;
+            .in("client_id", clientIds);
           return { key: tab.key, count: count ?? 0 };
         })
       );
@@ -108,31 +118,41 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
       countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
       setCounts(newCounts);
 
-      // ── Data rows for the active tab ─────────────────────────────────────────
-      let dataQ = (supabase as any)
+      // ── Step 3: data rows for the active tab ─────────────────────────────────
+      const { data: fycRows, error: fycErr } = await (supabase as any)
         .from("client_fy_classifications")
-        .select("client_id, clients!inner(id, name, entity_type, pan, is_active, deleted_at, firm_id)")
+        .select("client_id")
         .eq("financial_year", selectedFY)
         .eq("classification", activeTab)
-        .eq("clients.is_active", true)
-        .is("clients.deleted_at", null)
-        .order("clients(name)", { ascending: true });
+        .in("client_id", clientIds);
 
-      if (!showAllFirms && firmId) dataQ = dataQ.eq("clients.firm_id", firmId);
-
-      const { data, error } = await dataQ;
-      if (error) {
-        console.error("[ClassificationByFYView]", error);
+      if (fycErr) {
+        console.error("[ClassificationByFYView] classifications fetch:", fycErr);
         setRows([]);
       } else {
-        setRows(
-          ((data as any[]) ?? []).map(r => ({
-            client_id:   r.client_id,
-            name:        r.clients?.name ?? null,
-            entity_type: r.clients?.entity_type ?? null,
-            pan:         r.clients?.pan ?? null,
-          }))
-        );
+        const activeClientIds: string[] = (fycRows ?? []).map((r: any) => r.client_id);
+        if (activeClientIds.length === 0) { setRows([]); return; }
+
+        // Fetch client details for those IDs
+        const { data: details, error: detailErr } = await (supabase as any)
+          .from("clients")
+          .select("id, name, entity_type, pan")
+          .in("id", activeClientIds)
+          .order("name", { ascending: true });
+
+        if (detailErr) {
+          console.error("[ClassificationByFYView] client details fetch:", detailErr);
+          setRows([]);
+        } else {
+          setRows(
+            ((details as any[]) ?? []).map(r => ({
+              client_id:   r.id,
+              name:        r.name ?? null,
+              entity_type: r.entity_type ?? null,
+              pan:         r.pan ?? null,
+            }))
+          );
+        }
       }
     } finally {
       setLoading(false);
