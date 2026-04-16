@@ -9,7 +9,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
 
 // ─── Per-row state ────────────────────────────────────────────────────────────
 
@@ -57,11 +57,16 @@ export function useChecklistSheetStorage(
   // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json");
-    if (saved && typeof saved === "object" && saved.rows && typeof saved.rows === "object") {
-      setData({ rows: saved.rows, dynamicRowIds: saved.dynamicRowIds || [] });
-    }
     setLoaded(true);
+    const cached = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json");
+    if (cached && typeof cached === "object" && cached.rows && typeof cached.rows === "object") {
+      setData({ rows: cached.rows, dynamicRowIds: cached.dynamicRowIds || [] });
+    }
+    awLoadFromDB<ChecklistSheetData>(engagementId, "checklist_sheet_json").then(remote => {
+      if (remote && typeof remote === "object" && remote.rows && typeof remote.rows === "object") {
+        setData({ rows: remote.rows, dynamicRowIds: remote.dynamicRowIds || [] });
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Persist ───────────────────────────────────────────────────────────────
@@ -69,7 +74,7 @@ export function useChecklistSheetStorage(
     async (snapshot: ChecklistSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "checklist_sheet_json", snapshot);
+        awSave(engagementId, "checklist_sheet_json", snapshot, firmId);
         if (!silent) toast.success("Checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

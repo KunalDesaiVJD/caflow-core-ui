@@ -15,7 +15,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -95,36 +95,42 @@ export function useSpecialAttentionStorage(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load ───────────────────────────────────────────────────────────────────
+  // Helper to apply migrations to raw data from localStorage or Supabase
+  function applyMigrations(saved: SpecialAttentionFormData) {
+    const carried: AuditorEntry[] =
+      Array.isArray((saved as any).audit_carried_by) && (saved as any).audit_carried_by.length > 0
+        ? (saved as any).audit_carried_by
+        : [
+            ...(saved.auditor1_id ? [{ id: saved.auditor1_id, name: saved.auditor1_name || "" }] : []),
+            ...(saved.auditor2_id ? [{ id: saved.auditor2_id, name: saved.auditor2_name || "" }] : []),
+          ];
+    const migratedRows: Record<string, SARowState> = {};
+    for (const [rowId, row] of Object.entries(saved.rows || {})) {
+      migratedRows[rowId] = migrateRow(row);
+    }
+    return { ...BLANK_SA, ...saved, audit_carried_by: carried, rows: migratedRows };
+  }
+
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
-    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-      // Migration 1: pre-audit_carried_by data → convert auditor1/2 legacy fields to array
-      const carried: AuditorEntry[] =
-        Array.isArray((saved as any).audit_carried_by) && (saved as any).audit_carried_by.length > 0
-          ? (saved as any).audit_carried_by
-          : [
-              ...(saved.auditor1_id ? [{ id: saved.auditor1_id, name: saved.auditor1_name || "" }] : []),
-              ...(saved.auditor2_id ? [{ id: saved.auditor2_id, name: saved.auditor2_name || "" }] : []),
-            ];
-
-      // Migration 2 (ISSUE-17): per-row checked_by_id (single) → checked_by_ids (array)
-      const migratedRows: Record<string, SARowState> = {};
-      for (const [rowId, row] of Object.entries(saved.rows || {})) {
-        migratedRows[rowId] = migrateRow(row);
-      }
-
-      setData({ ...BLANK_SA, ...saved, audit_carried_by: carried, rows: migratedRows });
-    }
     setLoaded(true);
-  }, [engagementId, loaded]);
+    const cached = awLoad<SpecialAttentionFormData>(engagementId, "special_attention_json");
+    if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
+      setData(applyMigrations(cached));
+    }
+    awLoadFromDB<SpecialAttentionFormData>(engagementId, "special_attention_json").then(remote => {
+      if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
+        setData(applyMigrations(remote));
+      }
+    });
+  }, [engagementId, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Persist ────────────────────────────────────────────────────────────────
   const persist = useCallback(
     async (snapshot: SpecialAttentionFormData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "special_attention_json", snapshot);
+        awSave(engagementId, "special_attention_json", snapshot, firmId);
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

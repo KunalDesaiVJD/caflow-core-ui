@@ -128,6 +128,7 @@ interface Client {
   pan: string | null;
   gstin: string[] | null;
   gstin_states: Record<string, string> | null;
+  gstin_addresses: Record<string, string> | null;
   entity_type: string | null;
   address: string | null;
   registered_office: string | null;
@@ -304,6 +305,7 @@ const NewInvoice = () => {
   // Multi-GSTIN picker — shown when selected client has > 1 GSTIN
   const [clientGstins, setClientGstins] = useState<string[]>([]);
   const [clientGstinStates, setClientGstinStates] = useState<Record<string, string>>({});
+  const [clientGstinAddresses, setClientGstinAddresses] = useState<Record<string, string>>({});
 
   // Credit note specific
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
@@ -343,7 +345,11 @@ const NewInvoice = () => {
     if (firmGstin && toGstin) {
       setIsIntraState(isIntraStateFromGstins(firmGstin, toGstin));
     }
-  }, [firmGstin, toGstin]);
+    // When user picks a GSTIN from the multi-picker, auto-fill per-GSTIN address
+    if (toGstin && clientGstins.length > 1 && clientGstinAddresses[toGstin]) {
+      setToAddress(clientGstinAddresses[toGstin]);
+    }
+  }, [firmGstin, toGstin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch firms list
   useEffect(() => {
@@ -408,7 +414,7 @@ const NewInvoice = () => {
   // Fetch clients
   useEffect(() => {
     (async () => {
-      let cq = supabase.from("clients").select("id, name, pan, gstin, gstin_states, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
+      let cq = supabase.from("clients").select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
@@ -513,20 +519,27 @@ const NewInvoice = () => {
       setToName(client.name || "");
       const gstins = client.gstin ?? [];
       const states = (client.gstin_states && typeof client.gstin_states === "object") ? client.gstin_states as Record<string, string> : {};
+      const addresses = (client.gstin_addresses && typeof client.gstin_addresses === "object") ? client.gstin_addresses as Record<string, string> : {};
       setClientGstins(gstins);
       setClientGstinStates(states);
+      setClientGstinAddresses(addresses);
       if (gstins.length === 1) {
         // Single GSTIN — auto-fill as before
         setToGstin(gstins[0]);
+        // Use per-GSTIN address if available, else fall back to client address
+        const perGstinAddr = addresses[gstins[0]];
+        if (perGstinAddr) {
+          setToAddress(perGstinAddr);
+        } else {
+          const addrParts = [client.address, client.registered_office].filter(Boolean);
+          if (addrParts.length > 0) setToAddress(addrParts.join(", "));
+        }
       } else if (gstins.length === 0) {
         setToGstin("");
+        const addrParts = [client.address, client.registered_office].filter(Boolean);
+        if (addrParts.length > 0) setToAddress(addrParts.join(", "));
       }
-      // If multiple GSTINs, leave toGstin as-is (user picks from dropdown)
-      // Auto-fetch address from client management
-      const addrParts = [client.address, client.registered_office].filter(Boolean);
-      if (addrParts.length > 0) {
-        setToAddress(addrParts.join(", "));
-      }
+      // Multiple GSTINs: don't auto-fill address; it will update when user picks a GSTIN
     }
     // Check audit classification & fetch turnover
     (async () => {

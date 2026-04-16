@@ -13,7 +13,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
 
 // ─── Data shape ──────────────────────────────────────────────────────────────
 
@@ -133,11 +133,16 @@ export function useInternalMasterStorage(
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<Partial<InternalMasterData>>(engagementId, "int_master_json");
-    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-      setData({ ...BLANK_INT_MASTER, ...saved });
-    }
     setLoaded(true);
+    const cached = awLoad<Partial<InternalMasterData>>(engagementId, "int_master_json");
+    if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
+      setData({ ...BLANK_INT_MASTER, ...cached });
+    }
+    awLoadFromDB<Partial<InternalMasterData>>(engagementId, "int_master_json").then(remote => {
+      if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
+        setData({ ...BLANK_INT_MASTER, ...remote });
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -145,7 +150,7 @@ export function useInternalMasterStorage(
     async (snapshot: InternalMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "int_master_json", snapshot);
+        awSave(engagementId, "int_master_json", snapshot, firmId);
         if (!silent) toast.success("Internal Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

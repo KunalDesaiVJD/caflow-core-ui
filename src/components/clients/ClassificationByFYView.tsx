@@ -2,7 +2,7 @@
  * ClassificationByFYView
  *
  * Renders a per-FY Audit / Non-Audit client registry.
- * Queries client_fy_classifications joined with clients.
+ * Queries client_fy_classifications.firm_id directly (no large IN() list).
  *
  * Props:
  *   firmId       — current effective firm (null when superadmin shows all)
@@ -86,45 +86,37 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
     setLoading(true);
 
     try {
-      // ── Step 1: get active client IDs for the scoped firm ────────────────────
-      // Using a two-step approach avoids PostgREST's broken embedded-resource
-      // filters on HEAD (count) requests and the invalid `.order("table(col)")`
-      // syntax that silently returns empty results.
-      let clientQ = (supabase as any)
-        .from("clients")
-        .select("id")
-        .eq("is_active", true)
-        .is("deleted_at", null);
-      if (!showAllFirms && firmId) clientQ = clientQ.eq("firm_id", firmId);
-      const { data: clientRows, error: clientErr } = await clientQ;
-      if (clientErr) { console.error("[ClassificationByFYView] clients fetch:", clientErr); setLoading(false); return; }
-      const clientIds: string[] = (clientRows ?? []).map((r: any) => r.id);
-      if (clientIds.length === 0) { setCounts({ "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0 }); setRows([]); setLoading(false); return; }
-
-      // ── Step 2: counts for all 4 tabs ────────────────────────────────────────
+      // ── Counts for all 4 tabs ─────────────────────────────────────────────
+      // Query client_fy_classifications.firm_id directly — no large IN() list.
+      // RLS (is_superadmin() OR firm_id = current_user_firm_id()) also scopes correctly.
       const countResults = await Promise.all(
         CLASSIFICATION_TABS.map(async (tab) => {
-          const { count } = await (supabase as any)
+          let q = (supabase as any)
             .from("client_fy_classifications")
-            .select("client_id", { count: "exact", head: true })
+            .select("id", { count: "exact", head: true })
             .eq("financial_year", selectedFY)
-            .eq("classification", tab.key)
-            .in("client_id", clientIds);
+            .eq("classification", tab.key);
+          if (!showAllFirms && firmId) q = q.eq("firm_id", firmId);
+          const { count } = await q;
           return { key: tab.key, count: count ?? 0 };
         })
       );
 
-      const newCounts = { ...counts };
+      const newCounts: Record<ClassificationKey, number> = {
+        "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0,
+      };
       countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
       setCounts(newCounts);
 
-      // ── Step 3: data rows for the active tab ─────────────────────────────────
-      const { data: fycRows, error: fycErr } = await (supabase as any)
+      // ── Data rows for the active tab ──────────────────────────────────────
+      let dataQ = (supabase as any)
         .from("client_fy_classifications")
         .select("client_id")
         .eq("financial_year", selectedFY)
-        .eq("classification", activeTab)
-        .in("client_id", clientIds);
+        .eq("classification", activeTab);
+      if (!showAllFirms && firmId) dataQ = dataQ.eq("firm_id", firmId);
+
+      const { data: fycRows, error: fycErr } = await dataQ;
 
       if (fycErr) {
         console.error("[ClassificationByFYView] classifications fetch:", fycErr);
@@ -138,6 +130,7 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
           .from("clients")
           .select("id, name, entity_type, pan")
           .in("id", activeClientIds)
+          .is("deleted_at", null)
           .order("name", { ascending: true });
 
         if (detailErr) {

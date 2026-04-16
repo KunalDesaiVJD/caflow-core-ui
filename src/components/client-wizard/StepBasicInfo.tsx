@@ -41,7 +41,8 @@ export interface BasicInfoData {
   mobile: string;
   address: string;
   gstins: string[];
-  gstin_states: Record<string, string>; // key = GSTIN, value = state name
+  gstin_states: Record<string, string>;    // key = GSTIN, value = state name
+  gstin_addresses: Record<string, string>; // key = GSTIN, value = registered address
   tan_number: string;
 }
 
@@ -108,17 +109,21 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
     gstins[index] = upper;
     // Auto-detect state from new GSTIN prefix; preserve manual overrides for existing GSTINs
     const states = { ...data.gstin_states };
-    if (old && old !== upper) delete states[old]; // remove old key
+    const addresses = { ...data.gstin_addresses };
+    if (old && old !== upper) { delete states[old]; delete addresses[old]; }
     if (upper.length >= 2) {
       const detected = detectStateFromGstin(upper);
-      // Only auto-set if not already manually set for this new value
       if (detected && !states[upper]) states[upper] = detected;
     }
-    onChange({ ...data, gstins, gstin_states: states });
+    onChange({ ...data, gstins, gstin_states: states, gstin_addresses: addresses });
   };
 
   const updateGstinState = (gstin: string, stateName: string) => {
     onChange({ ...data, gstin_states: { ...data.gstin_states, [gstin]: stateName } });
+  };
+
+  const updateGstinAddress = (gstin: string, address: string) => {
+    onChange({ ...data, gstin_addresses: { ...data.gstin_addresses, [gstin]: address } });
   };
 
   const addGstin = () => onChange({ ...data, gstins: [...data.gstins, ""] });
@@ -126,8 +131,9 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
     const removed = data.gstins[i];
     const gstins = data.gstins.filter((_, idx) => idx !== i);
     const states = { ...data.gstin_states };
-    if (removed) delete states[removed];
-    onChange({ ...data, gstins: gstins.length ? gstins : [""], gstin_states: states });
+    const addresses = { ...data.gstin_addresses };
+    if (removed) { delete states[removed]; delete addresses[removed]; }
+    onChange({ ...data, gstins: gstins.length ? gstins : [""], gstin_states: states, gstin_addresses: addresses });
   };
 
   return (
@@ -318,6 +324,19 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
                   {detectedState && savedState === detectedState && (
                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">auto</span>
                   )}
+                </div>
+              )}
+              {/* Per-GSTIN Registered Address */}
+              {g.length >= 2 && (
+                <div className="flex items-start gap-2 pl-1">
+                  <span className="text-xs text-muted-foreground w-28 shrink-0 pt-1.5">Registered Address:</span>
+                  <Textarea
+                    value={data.gstin_addresses[g] ?? ""}
+                    onChange={(e) => g && updateGstinAddress(g, e.target.value)}
+                    placeholder={`Address for ${g}`}
+                    rows={2}
+                    className="text-xs flex-1 min-h-[3rem]"
+                  />
                 </div>
               )}
               {errors[`gstin_${i}`] && (

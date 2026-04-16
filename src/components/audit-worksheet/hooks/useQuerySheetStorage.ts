@@ -10,7 +10,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,11 +61,16 @@ export function useQuerySheetStorage(
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
-    if (saved && typeof saved === "object" && Array.isArray(saved.queries)) {
-      setData(saved);
-    }
     setLoaded(true);
+    const cached = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
+    if (cached && typeof cached === "object" && Array.isArray(cached.queries)) {
+      setData(cached);
+    }
+    awLoadFromDB<QuerySheetData>(engagementId, "query_sheet_json").then(remote => {
+      if (remote && typeof remote === "object" && Array.isArray(remote.queries)) {
+        setData(remote);
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Persist ───────────────────────────────────────────────────────────────
@@ -73,7 +78,7 @@ export function useQuerySheetStorage(
     async (snapshot: QuerySheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "query_sheet_json", snapshot);
+        awSave(engagementId, "query_sheet_json", snapshot, firmId);
         if (!silent) toast.success("Query Sheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

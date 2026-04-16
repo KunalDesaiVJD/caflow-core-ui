@@ -54,6 +54,7 @@ const defaultBasicInfo: BasicInfoData = {
   address: "",
   gstins: [""],
   gstin_states: {},
+  gstin_addresses: {},
   tan_number: "",
 };
 
@@ -278,6 +279,9 @@ const NewClientWizard = () => {
         gstin_states: (client.gstin_states && typeof client.gstin_states === "object" && !Array.isArray(client.gstin_states))
           ? (client.gstin_states as Record<string, string>)
           : {},
+        gstin_addresses: (client.gstin_addresses && typeof client.gstin_addresses === "object" && !Array.isArray(client.gstin_addresses))
+          ? (client.gstin_addresses as Record<string, string>)
+          : {},
         email: client.email || "",
         mobile: client.mobile || "",
         address: client.address || "",
@@ -477,9 +481,13 @@ const NewClientWizard = () => {
   /* ───── Payload builders ───── */
   const buildClientPayload = () => {
     const gstins = basicInfo.gstins.filter((g) => g.trim());
-    // Keep only states for GSTINs that are still in the list
+    // Keep only states/addresses for GSTINs that are still in the list
     const gstin_states: Record<string, string> = {};
-    gstins.forEach((g) => { if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g]; });
+    const gstin_addresses: Record<string, string> = {};
+    gstins.forEach((g) => {
+      if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g];
+      if (basicInfo.gstin_addresses[g]) gstin_addresses[g] = basicInfo.gstin_addresses[g];
+    });
     return {
       name: basicInfo.name.trim(),
       customer_id: basicInfo.customer_id?.trim() || null,
@@ -487,6 +495,7 @@ const NewClientWizard = () => {
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
       gstin_states,
+      gstin_addresses,
       email: basicInfo.email || null,
       contact_person: advancedInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
@@ -623,12 +632,15 @@ const NewClientWizard = () => {
     const oldClassification: string | null = existingFYRow?.classification ?? null;
 
     // Upsert current classification (single source of truth per client+FY).
+    // firm_id is stored directly so ClassificationByFYView can query without a large IN() list.
     // onConflict targets only the exact (client_id, financial_year) row — other FY rows are untouched.
+    const classFirmId = effectiveFirmId ?? loadedClientFirmId ?? null;
     const { error } = await supabase.from("client_fy_classifications").upsert({
       client_id:      targetClientId,
       financial_year: advancedInfo.financial_year,
       classification: advancedInfo.classification,
       audit_firm_id:  advancedInfo.audit_firm_id || null,
+      firm_id:        classFirmId,
     } as any, { onConflict: "client_id,financial_year" });
     if (error) throw error;
 
@@ -779,7 +791,11 @@ const NewClientWizard = () => {
         if (!(await validateBasicInfo())) { setSaving(false); return; }
         const gstins = basicInfo.gstins.filter((g) => g.trim());
         const gstin_states: Record<string, string> = {};
-        gstins.forEach((g) => { if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g]; });
+        const gstin_addresses: Record<string, string> = {};
+        gstins.forEach((g) => {
+          if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g];
+          if (basicInfo.gstin_addresses[g]) gstin_addresses[g] = basicInfo.gstin_addresses[g];
+        });
         const { error } = await supabase
           .from("clients")
           .update({
@@ -789,6 +805,7 @@ const NewClientWizard = () => {
             entity_type: basicInfo.entity_type || null,
             gstin: gstins.length > 0 ? gstins : null,
             gstin_states,
+            gstin_addresses,
             email: basicInfo.email || null,
             mobile: basicInfo.mobile || null,
             address: basicInfo.address || null,
