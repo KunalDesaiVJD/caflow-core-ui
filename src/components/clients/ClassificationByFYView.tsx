@@ -87,15 +87,18 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
 
     try {
       // ── Counts for all 4 tabs ─────────────────────────────────────────────
-      // Query client_fy_classifications.firm_id directly — no large IN() list.
-      // RLS (is_superadmin() OR firm_id = current_user_firm_id()) also scopes correctly.
+      // Use clients!inner join so only active, non-deleted, non-draft clients
+      // are counted — prevents deleted/inactive clients from inflating counts.
       const countResults = await Promise.all(
         CLASSIFICATION_TABS.map(async (tab) => {
           let q = (supabase as any)
             .from("client_fy_classifications")
-            .select("id", { count: "exact", head: true })
+            .select("id, clients!inner(id)", { count: "exact", head: true })
             .eq("financial_year", selectedFY)
-            .eq("classification", tab.key);
+            .eq("classification", tab.key)
+            .eq("clients.is_active", true)
+            .eq("clients.is_draft", false)
+            .is("clients.deleted_at", null);
           if (!showAllFirms && firmId) q = q.eq("firm_id", firmId);
           const { count } = await q;
           return { key: tab.key, count: count ?? 0 };
@@ -108,12 +111,16 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
       countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
       setCounts(newCounts);
 
-      // ── Data rows for the active tab ──────────────────────────────────────
+      // ── Data rows for the active tab (join returns client details directly) ─
       let dataQ = (supabase as any)
         .from("client_fy_classifications")
-        .select("client_id")
+        .select("client_id, clients!inner(id, name, entity_type, pan)")
         .eq("financial_year", selectedFY)
-        .eq("classification", activeTab);
+        .eq("classification", activeTab)
+        .eq("clients.is_active", true)
+        .eq("clients.is_draft", false)
+        .is("clients.deleted_at", null)
+        .order("clients(name)", { ascending: true });
       if (!showAllFirms && firmId) dataQ = dataQ.eq("firm_id", firmId);
 
       const { data: fycRows, error: fycErr } = await dataQ;
@@ -122,30 +129,16 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
         console.error("[ClassificationByFYView] classifications fetch:", fycErr);
         setRows([]);
       } else {
-        const activeClientIds: string[] = (fycRows ?? []).map((r: any) => r.client_id);
-        if (activeClientIds.length === 0) { setRows([]); return; }
-
-        // Fetch client details for those IDs
-        const { data: details, error: detailErr } = await (supabase as any)
-          .from("clients")
-          .select("id, name, entity_type, pan")
-          .in("id", activeClientIds)
-          .is("deleted_at", null)
-          .order("name", { ascending: true });
-
-        if (detailErr) {
-          console.error("[ClassificationByFYView] client details fetch:", detailErr);
-          setRows([]);
-        } else {
-          setRows(
-            ((details as any[]) ?? []).map(r => ({
-              client_id:   r.id,
-              name:        r.name ?? null,
-              entity_type: r.entity_type ?? null,
-              pan:         r.pan ?? null,
-            }))
-          );
-        }
+        const mapped = ((fycRows ?? []) as any[])
+          .map(r => ({
+            client_id:   r.client_id,
+            name:        r.clients?.name ?? null,
+            entity_type: r.clients?.entity_type ?? null,
+            pan:         r.clients?.pan ?? null,
+          }))
+          // Sort client-side by name in case the DB order doesn't land correctly
+          .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+        setRows(mapped);
       }
     } finally {
       setLoading(false);
