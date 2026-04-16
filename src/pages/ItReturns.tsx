@@ -378,9 +378,12 @@ const ItReturns = () => {
 
       return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
-    // Enable once we know the user — the query itself fetches audit-classified
-    // clients internally so we can't gate on client counts from outside.
-    enabled: !!user?.id,
+    // Wait until at least one client pool is loaded before running.
+    // The query itself also fetches audit-classified clients internally, so
+    // it will still add them even when auditClientIds/itrClientIds are empty.
+    // Restoring the guard prevents an early empty-array run from being cached
+    // and blocking subsequent renders when itrClientIds loads.
+    enabled: !!user?.id && (itrClientIds.length > 0 || auditClientIds.length > 0),
   });
 
   // ─── Filtered profiles ───
