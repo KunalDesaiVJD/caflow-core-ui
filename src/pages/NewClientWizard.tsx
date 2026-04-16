@@ -534,7 +534,13 @@ const NewClientWizard = () => {
     const firmId = effectiveFirmId ?? loadedClientFirmId;
     if (!firmId) return;
 
-    const newActiveIds = Object.keys(serviceBilling.activeServices);
+    const isPackageMode = serviceBilling.billingMode === "package_wise";
+
+    // In package mode the active set comes from packageConfig.service_ids;
+    // in service-specific mode it comes from the activeServices map.
+    const newActiveIds = isPackageMode
+      ? serviceBilling.packageConfig.service_ids
+      : Object.keys(serviceBilling.activeServices);
 
     // FIX: deactivate any services removed from the wizard (previously active but no longer selected)
     if (newActiveIds.length > 0) {
@@ -554,25 +560,48 @@ const NewClientWizard = () => {
         .eq("is_active", true);
     }
 
-    // Save active individual services
-    const serviceEntries = Object.entries(serviceBilling.activeServices);
-    if (serviceEntries.length > 0) {
-      const rows = serviceEntries.map(([serviceId, cfg]) => ({
+    if (isPackageMode && newActiveIds.length > 0) {
+      // Package mode: write one client_services row per service in the package
+      // so Service Activation tab correctly shows all of them as Active.
+      const pkg = serviceBilling.packageConfig;
+      const rows = newActiveIds.map(serviceId => ({
         client_id: targetClientId,
         service_category_id: serviceId,
         is_active: true,
-        frequency_override: cfg.frequency,
-        billing_amount: cfg.billing_amount,
-        reminder_date: cfg.reminder_date,
-        invoice_gen_type: cfg.invoice_gen_type,
-        billing_mode: serviceBilling.billingMode,
+        frequency_override: pkg.frequency || null,
+        billing_amount: null,    // billing handled at package level
+        reminder_date: pkg.reminder_date || null,
+        invoice_gen_type: pkg.invoice_gen_type || null,
+        billing_mode: "package_wise",
       }));
       const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
         onConflict: "client_id,service_category_id",
       });
       if (svcError) {
-        console.error("[Services] upsert error:", svcError);
+        console.error("[Services] package upsert error:", svcError);
         throw svcError;
+      }
+    } else {
+      // Save active individual services (service-specific mode)
+      const serviceEntries = Object.entries(serviceBilling.activeServices);
+      if (serviceEntries.length > 0) {
+        const rows = serviceEntries.map(([serviceId, cfg]) => ({
+          client_id: targetClientId,
+          service_category_id: serviceId,
+          is_active: true,
+          frequency_override: cfg.frequency,
+          billing_amount: cfg.billing_amount,
+          reminder_date: cfg.reminder_date,
+          invoice_gen_type: cfg.invoice_gen_type,
+          billing_mode: serviceBilling.billingMode,
+        }));
+        const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
+          onConflict: "client_id,service_category_id",
+        });
+        if (svcError) {
+          console.error("[Services] upsert error:", svcError);
+          throw svcError;
+        }
       }
     }
 

@@ -299,13 +299,53 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       const { data } = await supabase.from("tds_filings").select("*")
         .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
       const match = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
-      setFiling(match as TdsFiling || null);
+
       if (match) {
+        setFiling(match as TdsFiling);
         await fetchChallans((match as TdsFiling).id);
         await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
       } else {
-        setChallans([]); setDeductees([]); setPrevEntries([]);
-        setSelectedChallan(null); setCarryForwardChallans([]);
+        // No filing found — auto-create it if TDS service is active for this client.
+        // This handles clients activated before the auto-create logic existed, and
+        // also allows the workspace to be used immediately after activation.
+        const firmId = await resolveFirmId();
+        const { data: cats } = await supabase
+          .from("service_categories").select("id").eq("linked_module", "tds");
+        const catIds = (cats || []).map((c: any) => c.id);
+        let tdsActive = false;
+        if (catIds.length > 0) {
+          const { data: cs } = await supabase
+            .from("client_services").select("id")
+            .eq("client_id", selClient).eq("is_active", true)
+            .in("service_category_id", catIds).limit(1);
+          tdsActive = (cs?.length ?? 0) > 0;
+        }
+        if (tdsActive) {
+          const { data: clientRow } = await supabase
+            .from("clients").select("tan_number").eq("id", selClient).maybeSingle();
+          const { data: newFiling } = await (supabase.from("tds_filings").insert({
+            client_id:      selClient,
+            firm_id:        firmId,
+            financial_year: selFy,
+            quarter:        selQuarter,
+            tds_forms:      [selForm],
+            work_status:    "Not Started",
+            tan:            (clientRow as any)?.tan_number || null,
+          }).select().single() as any);
+          if (newFiling) {
+            setFiling(newFiling as TdsFiling);
+            await fetchChallans((newFiling as TdsFiling).id);
+            await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+          } else {
+            setFiling(null);
+            setChallans([]); setDeductees([]); setPrevEntries([]);
+            setSelectedChallan(null); setCarryForwardChallans([]);
+          }
+        } else {
+          setFiling(null);
+          setChallans([]); setDeductees([]); setPrevEntries([]);
+          setSelectedChallan(null); setCarryForwardChallans([]);
+        }
       }
     } catch (err: any) {
       // Issue 6: Never show "Something went wrong" — return empty state
