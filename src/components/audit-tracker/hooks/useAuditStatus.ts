@@ -108,6 +108,12 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     const engagementIdsWithStatus = new Set(
       statusRows.filter(r => r.engagement_id).map(r => r.engagement_id!)
     );
+    // Also track client_ids that already have a real status row for this FY
+    // so we don't create a duplicate virtual row when addEntry auto-creates a
+    // status row without an engagement_id.
+    const clientIdsWithStatus = new Set(
+      statusRows.filter(r => r.client_id).map(r => r.client_id!)
+    );
 
     // ── 3. Auto-populate virtual rows from audit_engagements ──────────────
     if (selectedFY) {
@@ -127,9 +133,12 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
           .in("id", engClientIds);
         const clientNameMap = new Map((clientsData || []).map((c: any) => [c.id, c.name]));
 
-        // Create virtual rows for engagements that don't have a status row
+        // Create virtual rows for engagements that don't have a status row.
+        // Skip if the client already has a real row for this FY (e.g. auto-created
+        // by planning calendar without engagement_id).
         for (const eng of (engData as any[])) {
           if (engagementIdsWithStatus.has(eng.id)) continue;
+          if (clientIdsWithStatus.has(eng.client_id)) continue;
           const virtualRow: StatusEntry = {
             id:                           `virtual_${eng.id}`,
             firm_id:                      firmId,

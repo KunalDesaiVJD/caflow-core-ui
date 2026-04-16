@@ -87,19 +87,22 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
 
     try {
       // ── Counts for all 4 tabs ─────────────────────────────────────────────
-      // Use clients!inner join so only active, non-deleted, non-draft clients
-      // are counted — prevents deleted/inactive clients from inflating counts.
+      // Query clients as the primary table and use client_fy_classifications!inner
+      // as an embedded filter. This avoids PostgREST embedded-resource filter
+      // issues with { head: true } counts that can cause incorrect 0 results.
       const countResults = await Promise.all(
         CLASSIFICATION_TABS.map(async (tab) => {
           let q = (supabase as any)
-            .from("client_fy_classifications")
-            .select("id, clients!inner(id)", { count: "exact", head: true })
-            .eq("financial_year", selectedFY)
-            .eq("classification", tab.key)
-            .eq("clients.is_active", true)
-            .eq("clients.is_draft", false)
-            .is("clients.deleted_at", null);
-          if (!showAllFirms && firmId) q = q.eq("firm_id", firmId);
+            .from("clients")
+            .select("id, client_fy_classifications!inner(id)", { count: "exact", head: true })
+            .eq("client_fy_classifications.financial_year", selectedFY)
+            .eq("client_fy_classifications.classification", tab.key)
+            .eq("is_draft", false)
+            .is("deleted_at", null);
+          if (!showAllFirms && firmId) {
+            q = q.eq("firm_id", firmId);
+            q = q.eq("client_fy_classifications.firm_id", firmId);
+          }
           const { count } = await q;
           return { key: tab.key, count: count ?? 0 };
         })
@@ -111,17 +114,19 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
       countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
       setCounts(newCounts);
 
-      // ── Data rows for the active tab (join returns client details directly) ─
+      // ── Data rows for the active tab — clients primary, classification inner join ─
       let dataQ = (supabase as any)
-        .from("client_fy_classifications")
-        .select("client_id, clients!inner(id, name, entity_type, pan)")
-        .eq("financial_year", selectedFY)
-        .eq("classification", activeTab)
-        .eq("clients.is_active", true)
-        .eq("clients.is_draft", false)
-        .is("clients.deleted_at", null)
-        .order("clients(name)", { ascending: true });
-      if (!showAllFirms && firmId) dataQ = dataQ.eq("firm_id", firmId);
+        .from("clients")
+        .select("id, name, entity_type, pan, client_fy_classifications!inner(classification, financial_year)")
+        .eq("client_fy_classifications.financial_year", selectedFY)
+        .eq("client_fy_classifications.classification", activeTab)
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .order("name", { ascending: true });
+      if (!showAllFirms && firmId) {
+        dataQ = dataQ.eq("firm_id", firmId);
+        dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
+      }
 
       const { data: fycRows, error: fycErr } = await dataQ;
 
@@ -131,12 +136,11 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
       } else {
         const mapped = ((fycRows ?? []) as any[])
           .map(r => ({
-            client_id:   r.client_id,
-            name:        r.clients?.name ?? null,
-            entity_type: r.clients?.entity_type ?? null,
-            pan:         r.clients?.pan ?? null,
+            client_id:   r.id,
+            name:        r.name ?? null,
+            entity_type: r.entity_type ?? null,
+            pan:         r.pan ?? null,
           }))
-          // Sort client-side by name in case the DB order doesn't land correctly
           .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
         setRows(mapped);
       }

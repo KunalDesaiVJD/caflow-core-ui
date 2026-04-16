@@ -129,10 +129,10 @@ export function useSpecialAttentionStorage(
 
   // ── Persist ────────────────────────────────────────────────────────────────
   const persist = useCallback(
-    async (snapshot: SpecialAttentionFormData, silent: boolean) => {
+    async (snapshot: SpecialAttentionFormData, silent: boolean, fieldLabel?: string) => {
       setSaving(true);
       try {
-        awSave(engagementId, "special_attention_json", snapshot, firmId, user?.id, user?.name || "");
+        awSave(engagementId, "special_attention_json", snapshot, firmId, user?.id, user?.name || "", fieldLabel);
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -145,9 +145,9 @@ export function useSpecialAttentionStorage(
 
   // ── debounce helper ────────────────────────────────────────────────────────
   const debounce = useCallback(
-    (next: SpecialAttentionFormData) => {
+    (next: SpecialAttentionFormData, fieldLabel?: string) => {
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => persist(next, true), 1000);
+      timerRef.current = setTimeout(() => persist(next, true, fieldLabel), 1000);
     },
     [persist]
   );
@@ -176,7 +176,9 @@ export function useSpecialAttentionStorage(
             [rowId]: { ...prevRow, [field]: value },
           },
         };
-        debounce(next);
+        // Build a readable label for granular version history: "Special Attention · <rowId>"
+        const rowLabel = `Special Attention · ${rowId}`;
+        debounce(next, rowLabel);
         return next;
       });
     },
@@ -195,7 +197,8 @@ export function useSpecialAttentionStorage(
             [rowId]: { ...prevRow, ...patch },
           },
         };
-        debounce(next);
+        const rowLabel = `Special Attention · ${rowId}`;
+        debounce(next, rowLabel);
         return next;
       });
     },

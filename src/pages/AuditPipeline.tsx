@@ -416,6 +416,16 @@ export default function AuditPipeline() {
     }
   }, [form1A.client_id, eligibleClients]);
 
+  // Auto-sync nonCorpFormChoice from preliminary questionnaire answer
+  // When the user answers "Are you audited under any other act?" → auto-select 3CA or 3CB
+  useEffect(() => {
+    const et = (form1A.entity_type || "").toLowerCase().trim();
+    const isCompany = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+    if (!isCompany) {
+      setNonCorpFormChoice(questionnaire.audited_under_other_act === "yes" ? "3ca" : "3cb");
+    }
+  }, [questionnaire.audited_under_other_act, form1A.entity_type]);
+
   // Auto-determine flags — handle both legacy values ("company","llp") and raw client values ("Private Ltd","LLP",etc.)
   const autoFlags = useMemo(() => {
     const et = (form1A.entity_type || "").toLowerCase().trim();
@@ -768,6 +778,35 @@ export default function AuditPipeline() {
                       <YesNo label="AGM / Meeting dates available?" value={questionnaire.agm_dates || ""} onChange={v => setQ("agm_dates", v)} />
                       <YesNo label="Any board composition changes during the year?" value={questionnaire.board_changes || ""} onChange={v => setQ("board_changes", v)} />
                       <YesNo label="Any regulatory actions / show-cause notices?" value={questionnaire.regulatory_actions || ""} onChange={v => setQ("regulatory_actions", v)} />
+                      {/* Non-corporate only: determines 3CA vs 3CB selection in Stage 8 */}
+                      {!["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes((form1A.entity_type || "").toLowerCase().trim()) && (
+                        <div className="space-y-3 border-t pt-3 mt-2">
+                          <YesNo
+                            label="Are accounts audited under any other act? (e.g. Companies Act, Societies Act, Co-op Societies Act)"
+                            value={questionnaire.audited_under_other_act || ""}
+                            onChange={v => setQ("audited_under_other_act", v)}
+                          />
+                          {questionnaire.audited_under_other_act === "yes" && (
+                            <div className="space-y-1.5 pl-4">
+                              <Label className="text-xs">Mention the Act under which accounts are audited</Label>
+                              <Input
+                                placeholder="e.g. Societies Registration Act, Co-op Societies Act..."
+                                value={questionnaire.other_act_name || ""}
+                                onChange={e => setQ("other_act_name", e.target.value)}
+                                className="max-w-sm text-sm"
+                              />
+                              <p className="text-[11px] text-primary">
+                                ✓ Stage 8 will auto-select <strong>Form 3CA + 3CD</strong> (audited under another law)
+                              </p>
+                            </div>
+                          )}
+                          {questionnaire.audited_under_other_act === "no" && (
+                            <p className="text-[11px] text-muted-foreground pl-4">
+                              Stage 8 will use <strong>Form 3CB + 3CD</strong> (not audited under any other law)
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </AccordionContent>
                   </AccordionItem>
 

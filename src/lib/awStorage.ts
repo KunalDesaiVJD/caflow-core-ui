@@ -76,19 +76,28 @@ const SHEET_LABELS: Record<string, string> = {
  * firmId is required on first write to populate audit_worksheet_master.firm_id.
  * Subsequent writes without firmId still update the sheet column.
  */
+/**
+ * Persist data to localStorage + Supabase.
+ *
+ * @param fieldLabel  Optional human-readable label for the specific field/row
+ *                    that changed (e.g. "Special Attention · Row 3").
+ *                    When provided it is stored as `section_name` in the history
+ *                    log instead of the generic sheet label.
+ */
 export function awSave(
   engagementId: string,
   sheet: string,
   data: unknown,
   firmId?: string | null,
   userId?: string | null,
-  userName?: string | null
+  userName?: string | null,
+  fieldLabel?: string | null
 ): void {
   if (!engagementId) return;
   // 1. Instant localStorage cache
   try { localStorage.setItem(awKey(engagementId, sheet), JSON.stringify(data)); } catch {}
   // 2. Fire-and-forget Supabase upsert + history log
-  _pushToSupabase(engagementId, sheet, data, firmId, userId, userName).catch(() => {});
+  _pushToSupabase(engagementId, sheet, data, firmId, userId, userName, fieldLabel).catch(() => {});
 }
 
 async function _pushToSupabase(
@@ -97,7 +106,8 @@ async function _pushToSupabase(
   data: unknown,
   firmId?: string | null,
   userId?: string | null,
-  userName?: string | null
+  userName?: string | null,
+  fieldLabel?: string | null
 ): Promise<void> {
   try {
     const payload: Record<string, unknown> = {
@@ -111,12 +121,14 @@ async function _pushToSupabase(
       .upsert(payload, { onConflict: "engagement_id" });
 
     // Log to version history (non-fatal)
+    // Use fieldLabel if provided for granular tracking (e.g. "Special Attention · Row 3")
+    const sectionName = fieldLabel || SHEET_LABELS[sheet] || sheet;
     try {
       await (supabase as any)
         .from("audit_worksheet_history")
         .insert({
           engagement_id:   engagementId,
-          section_name:    SHEET_LABELS[sheet] || sheet,
+          section_name:    sectionName,
           changed_by:      userId   ?? null,
           changed_by_name: userName ?? "Unknown",
         });
