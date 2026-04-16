@@ -53,6 +53,7 @@ const defaultBasicInfo: BasicInfoData = {
   mobile: "",
   address: "",
   gstins: [""],
+  gstin_states: {},
   tan_number: "",
 };
 
@@ -274,6 +275,9 @@ const NewClientWizard = () => {
         pan: client.pan || "",
         entity_type: client.entity_type || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
+        gstin_states: (client.gstin_states && typeof client.gstin_states === "object" && !Array.isArray(client.gstin_states))
+          ? (client.gstin_states as Record<string, string>)
+          : {},
         email: client.email || "",
         mobile: client.mobile || "",
         address: client.address || "",
@@ -473,12 +477,16 @@ const NewClientWizard = () => {
   /* ───── Payload builders ───── */
   const buildClientPayload = () => {
     const gstins = basicInfo.gstins.filter((g) => g.trim());
+    // Keep only states for GSTINs that are still in the list
+    const gstin_states: Record<string, string> = {};
+    gstins.forEach((g) => { if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g]; });
     return {
       name: basicInfo.name.trim(),
       customer_id: basicInfo.customer_id?.trim() || null,
       pan: basicInfo.pan || null,
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
+      gstin_states,
       email: basicInfo.email || null,
       contact_person: advancedInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
@@ -770,6 +778,8 @@ const NewClientWizard = () => {
       if (stepId === "basic") {
         if (!(await validateBasicInfo())) { setSaving(false); return; }
         const gstins = basicInfo.gstins.filter((g) => g.trim());
+        const gstin_states: Record<string, string> = {};
+        gstins.forEach((g) => { if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g]; });
         const { error } = await supabase
           .from("clients")
           .update({
@@ -778,6 +788,7 @@ const NewClientWizard = () => {
             pan: basicInfo.pan || null,
             entity_type: basicInfo.entity_type || null,
             gstin: gstins.length > 0 ? gstins : null,
+            gstin_states,
             email: basicInfo.email || null,
             mobile: basicInfo.mobile || null,
             address: basicInfo.address || null,
