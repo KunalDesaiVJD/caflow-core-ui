@@ -279,9 +279,20 @@ const NewClientWizard = () => {
         gstin_states: (client.gstin_states && typeof client.gstin_states === "object" && !Array.isArray(client.gstin_states))
           ? (client.gstin_states as Record<string, string>)
           : {},
-        gstin_addresses: (client.gstin_addresses && typeof client.gstin_addresses === "object" && !Array.isArray(client.gstin_addresses))
-          ? (client.gstin_addresses as Record<string, string>)
-          : {},
+        gstin_addresses: (() => {
+          const saved = (client.gstin_addresses && typeof client.gstin_addresses === "object" && !Array.isArray(client.gstin_addresses))
+            ? { ...(client.gstin_addresses as Record<string, string>) }
+            : {};
+          // Auto-fill: if client has a main address and a GSTIN but no per-GSTIN address yet,
+          // pre-populate it so the field shows something meaningful immediately.
+          if (client.address) {
+            const gstinList: string[] = Array.isArray(client.gstin) ? client.gstin : [];
+            gstinList.filter((g: string) => g.trim()).forEach((g: string) => {
+              if (!saved[g]) saved[g] = client.address;
+            });
+          }
+          return saved;
+        })(),
         email: client.email || "",
         mobile: client.mobile || "",
         address: client.address || "",

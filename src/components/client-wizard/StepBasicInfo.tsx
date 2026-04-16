@@ -115,6 +115,10 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
       const detected = detectStateFromGstin(upper);
       if (detected && !states[upper]) states[upper] = detected;
     }
+    // Auto-fill registered address from client's main address when not already set
+    if (upper.length > 0 && data.address && !addresses[upper]) {
+      addresses[upper] = data.address;
+    }
     onChange({ ...data, gstins, gstin_states: states, gstin_addresses: addresses });
   };
 
