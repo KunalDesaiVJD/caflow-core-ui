@@ -126,6 +126,15 @@ function ayToFy(ay: string): string {
   return `${fyStart}-${fyEnd}`;
 }
 
+/** Returns the current financial year in "YYYY-YY" format (e.g. "2026-27" in April 2026) */
+function getCurrentFY(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth(); // 0-indexed; April = 3
+  const startYear = month >= 3 ? year : year - 1;
+  return `${startYear}-${String(startYear + 1).slice(-2)}`;
+}
+
 function isUnsavedItrProfile(profile: Pick<ItrProfile, "id">): boolean {
   return profile.id.startsWith("virtual_") || profile.id.startsWith("new_");
 }
@@ -226,9 +235,50 @@ const ItReturns = () => {
   const { data: profiles = [], isLoading } = useQuery({
     queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds, auditClientIds],
     queryFn: async () => {
-      // Combined pool: audit-engaged clients (always shown in Audited tab) + ITR-service clients
       const auditSet = new Set(auditClientIds);
-      const allClientIds = [...new Set([...auditClientIds, ...itrClientIds])];
+
+      // ── Step 1: Fetch audit-classified clients from client_fy_classifications ──
+      // The wizard stores financial_year = getCurrentFY() at the time of creation.
+      // Clients set up after the FY rollover (e.g. after 1 Apr 2026) get "2026-27"
+      // even though we're looking at AY "2025-26".  We must include BOTH the
+      // selected AY and the current FY so those recently-added clients are visible.
+      const currentFY = getCurrentFY();
+      const fysToCheck = [...new Set([selectedAY, currentFY])];
+
+      let clsQ = (supabase as any)
+        .from("client_fy_classifications")
+        .select("client_id, classification, financial_year")
+        .in("financial_year", fysToCheck);
+      if (!isSuperadmin && firmId) clsQ = clsQ.eq("firm_id", firmId);
+      const { data: fyClassData } = await clsQ;
+
+      // Build classMap: for each client keep the entry whose FY matches selectedAY
+      // if available, otherwise fall back to the currentFY entry.
+      const classMapRaw = new Map<string, { cls: string; fy: string }>();
+      for (const row of (fyClassData || [])) {
+        if (!row.client_id) continue;
+        const existing = classMapRaw.get(row.client_id);
+        // Prefer selectedAY row over currentFY row
+        if (!existing || (row.financial_year === selectedAY && existing.fy !== selectedAY)) {
+          classMapRaw.set(row.client_id, { cls: row.classification, fy: row.financial_year });
+        }
+      }
+      const classMap = new Map<string, string>(
+        Array.from(classMapRaw.entries()).map(([id, v]) => [id, v.cls])
+      );
+
+      // Clients explicitly classified as "Audit" in client_fy_classifications
+      const auditClassifiedClientIds = Array.from(classMapRaw.entries())
+        .filter(([, v]) => v.cls?.toLowerCase() === "audit")
+        .map(([id]) => id);
+
+      // ── Step 2: Build combined pool ──────────────────────────────────────────
+      // Audit-engaged + ITR-service + explicitly classified as Audit
+      const allClientIds = [...new Set([
+        ...auditClientIds,
+        ...itrClientIds,
+        ...auditClassifiedClientIds,
+      ])];
       if (allClientIds.length === 0) return [];
 
       let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
@@ -236,34 +286,24 @@ const ItReturns = () => {
       q = q.in("client_id", allClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details for the combined pool
+      // Fetch client details — include work_group_type which is set in Advanced Info
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type, responsible_person_id")
+        .select("id, name, pan, entity_type, responsible_person_id, work_group_type")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .in("id", allClientIds)
         .order("name");
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
-      // Fetch "Partner in Audited Firm" classifications from client_fy_classifications
-      // Note: client_fy_classifications stores financial_year in same format as AY (e.g. "2025-26")
-      const { data: fyClassData } = await supabase
-        .from("client_fy_classifications")
-        .select("client_id, classification")
-        .in("client_id", allClientIds)
-        .eq("financial_year", selectedAY);
-      const classMap = new Map((fyClassData || []).map(c => [c.client_id, c.classification]));
-
       // Classification logic:
-      // 1. Client has audit engagement for this AY → "Audit" (Audited tab)
-      // 2. client_fy_classifications says "Audit" → Audited tab
+      // 1. Client has audit engagement for this FY → "Audit"
+      // 2. client_fy_classifications says "Audit" (any recent FY) → "Audit"
       // 3. client_fy_classifications says "Partner in Audited Firm" → partner tab
       // 4. Everything else (ITR-service clients) → Non-Audited
       const resolveClassification = (clientId: string): string => {
         if (auditSet.has(clientId)) return "Audit";
         const cls = classMap.get(clientId) || "";
-        // Also treat "Audit" classification from client_fy_classifications as Audited
         if (cls.toLowerCase() === "audit") return "Audit";
         if (cls.toLowerCase().includes("partner")) return cls;
         return "";
@@ -273,16 +313,7 @@ const ItReturns = () => {
       const { data: uData } = await supabase.from("users").select("id, name");
       const userMap = new Map((uData || []).map(u => [u.id, u.name]));
 
-      // Fetch client work group memberships
-      const { data: wgMembers } = await supabase
-        .from("work_group_memberships")
-        .select("client_id, group_id, work_groups(name)")
-        .in("client_id", allClientIds);
-      const clientWgMap = new Map<string, string>();
-      for (const m of (wgMembers || [])) {
-        clientWgMap.set(m.client_id, (m as any).work_groups?.name || "");
-      }
-
+      // itr_work_groups map (for the ITR-specific work group assigned on a profile)
       const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
       const canonicalProfilesByClient = new Map<string, any>();
       for (const profile of (pData || [])) {
@@ -301,20 +332,24 @@ const ItReturns = () => {
       for (const p of canonicalProfiles) {
         const cl = clientMap.get(p.client_id || "");
         const wg = wgMap.get(p.itr_work_group_id || "");
+        // work_group_type is set in the client wizard's Advanced Info step and stored on clients table.
+        // Fall back to itr_work_groups name if available.
+        const workGroupDisplay = (cl as any)?.work_group_type || (wg as any)?.name || "";
         enriched.push({
           ...p,
           client_name: cl?.name || "Unknown",
           client_pan: cl?.pan || "",
           entity_type: cl?.entity_type || "",
-          group_name: (wg as any)?.name || "",
+          group_name: workGroupDisplay,
           assigned_name: userMap.get(p.assigned_to || "") || "",
           client_classification: resolveClassification(p.client_id || ""),
-          work_group_name: clientWgMap.get(p.client_id || "") || "",
+          work_group_name: workGroupDisplay,
         });
       }
 
       for (const client of (cData || [])) {
         if (existingClientIds.has(client.id)) continue;
+        const workGroupDisplay = (client as any).work_group_type || "";
         enriched.push({
           id: `virtual_${client.id}_${selectedAY}`,
           client_id: client.id,
@@ -336,13 +371,16 @@ const ItReturns = () => {
           client_pan: client.pan || "",
           entity_type: client.entity_type || "",
           client_classification: resolveClassification(client.id),
-          work_group_name: clientWgMap.get(client.id) || "",
+          work_group_name: workGroupDisplay,
+          group_name: workGroupDisplay,
         });
       }
 
       return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
-    enabled: !!user?.id && (itrClientIds.length > 0 || auditClientIds.length > 0),
+    // Enable once we know the user — the query itself fetches audit-classified
+    // clients internally so we can't gate on client counts from outside.
+    enabled: !!user?.id,
   });
 
   // ─── Filtered profiles ───
