@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ export function useWorksheetSheetStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<WorksheetSheetData>(BLANK_WS);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -78,7 +80,7 @@ export function useWorksheetSheetStorage(
     async (snapshot: WorksheetSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "worksheet_json", snapshot, firmId);
+        awSave(engagementId, "worksheet_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Audit Worksheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

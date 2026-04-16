@@ -15,7 +15,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
-  Save, Loader2, CheckSquare, Square, Pencil, ClipboardList,
+  Save, Loader2, CheckSquare, Square, ClipboardList,
   Printer, FileDown,
 } from "lucide-react";
 import { MRL_CLAUSES_TEMPLATE, MRL_OPENING_PARA_TEMPLATE, type MRLClause } from "@/constants/mrlClauses";
@@ -446,9 +446,9 @@ export function MRLTab({ engagementId, engagement }: Props) {
                 style={isDisabled ? { pointerEvents: "auto", opacity: 1 } : undefined}
               >
                 <div className="flex items-center gap-3 w-full text-left">
-                  {/* Checkbox (stop propagation so it doesn't toggle accordion) */}
+                  {/* Checkbox — stopPropagation prevents accordion toggle; onCheckedChange handles toggle */}
                   <span
-                    onClick={(e) => { e.stopPropagation(); toggleClause(clause.id); }}
+                    onClick={(e) => e.stopPropagation()}
                     className="flex-shrink-0"
                   >
                     <Checkbox
@@ -489,25 +489,19 @@ export function MRLTab({ engagementId, engagement }: Props) {
                   />
                 </div>
 
-                {/* Editable textarea (edit icon click expands) */}
-                <details className="group">
-                  <summary className="flex items-center gap-1 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none w-fit">
-                    <Pencil className="w-3 h-3" />
-                    Edit clause text
-                  </summary>
-                  <div className="mt-2">
-                    <Textarea
-                      value={clause.text}
-                      onChange={(e) => updateText(clause.id, e.target.value)}
-                      rows={6}
-                      className="text-sm resize-y font-mono"
-                      disabled={isDisabled}
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Use <code className="text-orange-500">[CASH_AMOUNT]</code> to insert the cash inline input.
-                    </p>
-                  </div>
-                </details>
+                {/* Editable clause text — always visible */}
+                <div>
+                  <Textarea
+                    value={clause.text}
+                    onChange={(e) => updateText(clause.id, e.target.value)}
+                    rows={6}
+                    className="text-sm resize-y font-mono"
+                    disabled={isDisabled}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Use <code className="text-orange-500">[CASH_AMOUNT]</code> to insert the cash inline input.
+                  </p>
+                </div>
               </AccordionContent>
             </AccordionItem>
           );

@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ export function useQuerySheetStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<QuerySheetData>(BLANK_DATA);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -78,7 +80,7 @@ export function useQuerySheetStorage(
     async (snapshot: QuerySheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "query_sheet_json", snapshot, firmId);
+        awSave(engagementId, "query_sheet_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Query Sheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

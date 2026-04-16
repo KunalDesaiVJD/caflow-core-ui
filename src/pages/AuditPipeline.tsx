@@ -181,7 +181,7 @@ export default function AuditPipeline() {
   // ─── Stage 1 form state — must be declared before any useQuery that references form1A ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
   const [planning, setPlanning] = useState({
@@ -305,24 +305,25 @@ export default function AuditPipeline() {
     enabled: !!user?.id,
   });
 
-  // ─── Partners from the PRACTICE FIRM's user list ───────────────────────────
-  // Shows ALL users with partner/admin role — is_active intentionally NOT
-  // filtered here so that partners marked inactive still appear in the dropdown.
+  // ─── Partners from FIRM SETTINGS (firms.membership_numbers) ────────────────
+  // Reads the partner membership list configured in Settings → Audit Registration.
+  // These are the actual signing partners of the practice firm.
   const { data: partnersForFirm = [] } = useQuery({
     queryKey: ["practice-firm-partners", user?.firm_id],
     queryFn: async () => {
       if (!user?.firm_id) return [];
       const { data } = await supabase
-        .from("users")
-        .select("id, name, role")
-        .eq("firm_id", user.firm_id)
-        .in("role", ["partner_ca", "firm_admin", "ca", "partner"])
-        .order("name", { ascending: true });
-      return (data || []).map((u: any) => ({
-        id:           u.id as string,
-        partner_name: (u.name as string) ?? u.id,
-        membership_no: null as string | null,
-      }));
+        .from("firms")
+        .select("membership_numbers")
+        .eq("id", user.firm_id)
+        .single();
+      if (!data?.membership_numbers) return [];
+      return ((data.membership_numbers as any[]) || [])
+        .filter((m: any) => m?.partner_name)
+        .map((m: any) => ({
+          partner_name:  m.partner_name  as string,
+          membership_no: (m.membership_no as string) || null,
+        }));
     },
     enabled: !!user?.firm_id,
   });
@@ -383,7 +384,8 @@ export default function AuditPipeline() {
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
       audit_firm_id: engagement.audit_firm_id || "",
-      partner_id: engagement.partner_id || "",
+      partner_id:   engagement.partner_id   || "",
+      partner_name: engagement.partner_name || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -482,8 +484,9 @@ export default function AuditPipeline() {
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
         audit_firm_id: form1A.audit_firm_id || null,
-        // partner_id FK → users; only set when partner is a system user (audit_registration IDs may differ)
-        partner_id: form1A.partner_id || null,
+        // partner_id kept for backward compat; partner_name is the primary display field
+        partner_id:   form1A.partner_id   || null,
+        partner_name: form1A.partner_name || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -519,6 +522,7 @@ export default function AuditPipeline() {
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
       audit_firm_id: form1A.audit_firm_id || null,
+      partner_name:  form1A.partner_name  || null,
       questionnaire_answers: questionnaire,
       stage_statuses: newStatuses,
       pipeline_stage: complete ? 2 : 1,
@@ -679,6 +683,34 @@ export default function AuditPipeline() {
                         {(auditFirmsForEng || []).map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                  )}
+                </div>
+                {/* Engagement Partner — always editable (can be changed after creation) */}
+                <div>
+                  <Label>Engagement Partner</Label>
+                  <Select
+                    value={form1A.partner_name}
+                    onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
+                    disabled={partnersForFirm.length === 0}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={partnersForFirm.length === 0 ? "Add partners in Settings → Audit Registration" : "Select partner"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {partnersForFirm.map(p => (
+                        <SelectItem key={p.partner_name} value={p.partner_name}>
+                          {p.partner_name}
+                          {p.membership_no && (
+                            <span className="ml-2 text-xs text-muted-foreground">({p.membership_no})</span>
+                          )}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {partnersForFirm.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Add partner membership numbers in Settings → Audit Registration.
+                    </p>
                   )}
                 </div>
                 <div>
@@ -1098,28 +1130,31 @@ export default function AuditPipeline() {
               </Select>
             </div>
 
-            {/* Engagement Partner — from practice firm's users (role: partner_ca / firm_admin) */}
+            {/* Engagement Partner — from firm settings (Settings → Audit Registration → Partner Membership Numbers) */}
             <div>
               <Label>Engagement Partner</Label>
               <Select
-                value={form1A.partner_id}
-                onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
+                value={form1A.partner_name}
+                onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
                 disabled={partnersForFirm.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners found" : "Select partner"} />
+                  <SelectValue placeholder={partnersForFirm.length === 0 ? "Add partners in Settings → Audit Registration" : "Select partner"} />
                 </SelectTrigger>
                 <SelectContent>
                   {partnersForFirm.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
+                    <SelectItem key={p.partner_name} value={p.partner_name}>
                       {p.partner_name}
+                      {p.membership_no && (
+                        <span className="ml-2 text-xs text-muted-foreground">({p.membership_no})</span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {partnersForFirm.length === 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  No partners found. Ensure users have role Partner/CA or Firm Admin in Settings → Users.
+                  Add partner membership numbers in Settings → Audit Registration.
                 </p>
               )}
             </div>

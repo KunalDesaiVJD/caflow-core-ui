@@ -145,7 +145,14 @@ export default function EngagementDetail() {
           </Button>
         </div>
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-          {partner && <span>Partner: <strong className="text-foreground">{partner.name}</strong></span>}
+          {(engagement.partner_name || partner) && (
+            <span>
+              Engagement Partner:{" "}
+              <strong className="text-foreground">
+                {engagement.partner_name || partner?.name}
+              </strong>
+            </span>
+          )}
           {manager && <span>Manager: <strong className="text-foreground">{manager.name}</strong></span>}
           {auditorAssignment ? (
             <span className="flex items-center gap-1">

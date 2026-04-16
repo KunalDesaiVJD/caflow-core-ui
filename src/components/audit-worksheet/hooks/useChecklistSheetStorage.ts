@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Per-row state ────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export function useChecklistSheetStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<ChecklistSheetData>(BLANK_CHECKLIST);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -74,7 +76,7 @@ export function useChecklistSheetStorage(
     async (snapshot: ChecklistSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "checklist_sheet_json", snapshot, firmId);
+        awSave(engagementId, "checklist_sheet_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

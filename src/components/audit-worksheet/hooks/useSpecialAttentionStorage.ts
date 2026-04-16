@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -89,6 +90,7 @@ export function useSpecialAttentionStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<SpecialAttentionFormData>(BLANK_SA);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -130,7 +132,7 @@ export function useSpecialAttentionStorage(
     async (snapshot: SpecialAttentionFormData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "special_attention_json", snapshot, firmId);
+        awSave(engagementId, "special_attention_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Special Attention checklist saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

@@ -14,6 +14,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ──────────────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@ export function useInternalMasterStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<InternalMasterData>(BLANK_INT_MASTER);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -150,7 +152,7 @@ export function useInternalMasterStorage(
     async (snapshot: InternalMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "int_master_json", snapshot, firmId);
+        awSave(engagementId, "int_master_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Internal Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

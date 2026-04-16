@@ -13,6 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ export const BLANK_STATUTORY_MASTER: StatutoryMasterData = {
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useStatutoryMasterStorage(engagementId: string, firmId?: string | null) {
+  const { user } = useAuth();
   const [data, setData]     = useState<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -149,7 +151,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     async (snapshot: StatutoryMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "statutory_master_json", snapshot, firmId);
+        awSave(engagementId, "statutory_master_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Statutory Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
