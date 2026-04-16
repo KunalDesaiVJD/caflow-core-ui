@@ -167,9 +167,132 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return ends[quarter] || new Date();
   };
 
+  /**
+   * syncMissingFilings — backfill tds_filings rows for clients that have
+   * TDS service active but never got rows created (e.g. activated before
+   * auto-create logic existed).
+   *
+   * For the selected FY:
+   *  - If effective_from_fy < selectedFY  → all 4 quarters
+   *  - If effective_from_fy === selectedFY → quarters from effective_from_q
+   *  - If effective_from_fy > selectedFY  → skip
+   * For each (client, form, quarter) combo missing in tds_filings → INSERT.
+   */
+  const syncMissingFilings = useCallback(async (selectedFY: string) => {
+    const firmId = await resolveFirmId();
+
+    // 1. Get TDS service category IDs
+    const { data: cats } = await supabase
+      .from("service_categories")
+      .select("id")
+      .eq("linked_module", "tds");
+    if (!cats?.length) return;
+    const catIds = cats.map((c: any) => c.id);
+
+    // 2. Get active TDS client-services for this firm
+    let csQ = (supabase as any)
+      .from("client_services")
+      .select("client_id, tds_forms_applicable, tds_effective_from_fy, tds_effective_from_q")
+      .in("service_category_id", catIds)
+      .eq("is_active", true);
+    if (!isSuperadmin && firmId) csQ = csQ.eq("firm_id", firmId);
+    const { data: csData } = await csQ;
+    if (!csData?.length) return;
+
+    // 3. Determine which (client, form, quarter) rows SHOULD exist for selectedFY
+    const fyStart = parseInt(selectedFY.split("-")[0]);
+    const allQuarters = ["Q1", "Q2", "Q3", "Q4"];
+
+    const required: Array<{ client_id: string; form: string; quarter: string; tan: string | null; firm_id: string | null }> = [];
+
+    // Fetch TAN for each client (needed for the filing row)
+    const clientIds = [...new Set((csData as any[]).map((cs: any) => cs.client_id).filter(Boolean))];
+    const { data: clientsData } = await supabase
+      .from("clients")
+      .select("id, tan_number, deleted_at")
+      .in("id", clientIds)
+      .is("deleted_at", null);
+    const tanMap = new Map<string, string | null>((clientsData || []).map((c: any) => [c.id, c.tan_number || null]));
+    const activeClientSet = new Set((clientsData || []).map((c: any) => c.id));
+
+    for (const cs of (csData as any[])) {
+      if (!cs.client_id || !activeClientSet.has(cs.client_id)) continue;
+      const forms: string[] = cs.tds_forms_applicable || [];
+      if (forms.length === 0) continue;
+
+      const effectiveFY = cs.tds_effective_from_fy || "";
+      const effectiveQ = cs.tds_effective_from_q || "Q1";
+
+      let quarters: string[];
+      if (!effectiveFY || effectiveFY < selectedFY) {
+        // Service started before this FY → all quarters apply
+        quarters = allQuarters;
+      } else if (effectiveFY === selectedFY) {
+        // Service started mid-FY → only from the effective quarter onwards
+        const idx = allQuarters.indexOf(effectiveQ);
+        quarters = idx >= 0 ? allQuarters.slice(idx) : allQuarters;
+      } else {
+        // Service starts after this FY → nothing to create
+        continue;
+      }
+
+      for (const form of forms) {
+        for (const quarter of quarters) {
+          required.push({
+            client_id: cs.client_id,
+            form,
+            quarter,
+            tan: tanMap.get(cs.client_id) ?? null,
+            firm_id: firmId,
+          });
+        }
+      }
+    }
+
+    if (required.length === 0) return;
+
+    // 4. Find which combinations already exist in tds_filings
+    const { data: existing } = await supabase
+      .from("tds_filings")
+      .select("client_id, tds_forms, quarter")
+      .eq("financial_year", selectedFY)
+      .in("client_id", clientIds);
+
+    const existingSet = new Set<string>();
+    for (const row of (existing || [])) {
+      for (const form of (row.tds_forms || [])) {
+        existingSet.add(`${row.client_id}|${form}|${row.quarter}`);
+      }
+    }
+
+    // 5. Insert only missing rows
+    const toInsert = required.filter(
+      r => !existingSet.has(`${r.client_id}|${r.form}|${r.quarter}`)
+    );
+    if (toInsert.length === 0) return;
+
+    const insertPayload = toInsert.map(r => ({
+      client_id:       r.client_id,
+      firm_id:         r.firm_id,
+      financial_year:  selectedFY,
+      quarter:         r.quarter,
+      tds_forms:       [r.form],
+      work_status:     "Not Started",
+      tan:             r.tan,
+    }));
+
+    await supabase.from("tds_filings").insert(insertPayload as any);
+  }, [isSuperadmin, resolveFirmId]);
+
   const fetchFilings = useCallback(async () => {
     setLoading(true);
     const firmId = await resolveFirmId();
+
+    // Auto-backfill missing filing rows before fetching
+    if (fyFilter !== "all") {
+      await syncMissingFilings(fyFilter);
+    }
+
     let q = supabase.from("tds_filings").select("*").order("created_at", { ascending: false }).limit(500);
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     if (fyFilter !== "all") q = q.eq("financial_year", fyFilter);
@@ -195,7 +318,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setLoading(false);
     // Fetch ACK files for all loaded filings
     await fetchAckFiles(allFilings.map(f => f.id));
-  }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
+  }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter, syncMissingFilings]);
 
   useEffect(() => { fetchFilings(); }, [fetchFilings]);
 
