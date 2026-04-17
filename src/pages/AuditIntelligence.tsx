@@ -24,12 +24,11 @@ import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
-import { format, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import {
   Building2, FileText, Calculator, Eye, ClipboardCheck, Shield,
-  BookMarked, Layers, Award, ChevronRight, Plus, Upload, Search,
-  MessageSquare, FileUp, FileOutput, BarChart3, Clock, Activity,
-  Users, CalendarDays, AlertTriangle, CheckCircle2, Circle, Loader2,
+  BookMarked, Layers, Award, ChevronRight, Plus,
+  CalendarDays, CheckCircle2, Circle, Loader2,
   MoreVertical, Pencil, Trash2, ChevronsUpDown, Check
 } from "lucide-react";
 import { toast } from "sonner";
@@ -47,14 +46,6 @@ const STAGES = [
   { num: 9,  label: "Sign-off & UDIN",             icon: Award          },
 ];
 
-const QUICK_ACTIONS = [
-  { label: "Import Trial Balance", icon: Upload, stage: 2 },
-  { label: "Scrutiny Engine", icon: Search, stage: 4 },
-  { label: "Client Queries", icon: MessageSquare, stage: 5 },
-  { label: "Workpapers & Risk", icon: FileUp, stage: 6 },
-  { label: "Notes to Accounts", icon: BookMarked, stage: 7 },
-  { label: "Generate Report", icon: FileOutput, stage: 9 },
-];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
 const AUDIT_TYPES = [
@@ -572,51 +563,8 @@ export default function AuditIntelligence() {
             </CardContent>
           </Card>
 
-          {/* Quick Actions Row */}
-          <div className="grid gap-6">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider">Quick Actions</h3>
-              <div className="grid grid-cols-2 gap-2">
-                {QUICK_ACTIONS.map(action => (
-                  <Button
-                    key={action.label}
-                    variant="outline"
-                    size="sm"
-                    className="h-auto py-2.5 px-3 justify-start gap-2 text-xs"
-                    onClick={async () => {
-                      if (!selectedEngagementId) {
-                        toast.error("Select an engagement first");
-                        return;
-                      }
-                      await supabase
-                        .from("audit_engagements")
-                        .update({ pipeline_stage: action.stage } as any)
-                        .eq("id", selectedEngagementId);
-                      navigate(`/audit/pipeline/${selectedEngagementId}?stage=${action.stage}`);
-                    }}
-                  >
-                    <action.icon size={14} className="shrink-0 text-primary" />
-                    <span className="truncate">{action.label}</span>
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Recent Activity + All Engagements */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Activity size={16} className="text-primary" />
-                  Recent Activity
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <RecentActivityTimeline engagementId={selectedEngagementId} />
-              </CardContent>
-            </Card>
-            <Card>
+          {/* All Engagements */}
+          <Card>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
@@ -670,7 +618,6 @@ export default function AuditIntelligence() {
                 )}
               </CardContent>
             </Card>
-          </div>
         </>
       )}
 
@@ -786,101 +733,3 @@ export default function AuditIntelligence() {
   );
 }
 
-// ─── Sub-components ───
-
-function MetricCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: number; color?: string }) {
-  return (
-    <Card className="p-3">
-      <div className="flex items-center gap-2 mb-1">
-        <Icon size={14} className={color || "text-primary"} />
-        <span className="text-xs text-muted-foreground">{label}</span>
-      </div>
-      <p className={cn("text-2xl font-bold", color || "text-foreground")}>{value.toLocaleString("en-IN")}</p>
-    </Card>
-  );
-}
-
-function RecentActivityTimeline({ engagementId }: { engagementId: string }) {
-  const [activities, setActivities] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (!engagementId) return;
-    loadActivities();
-  }, [engagementId]);
-
-  const loadActivities = async () => {
-    const [queriesRes, wpRes] = await Promise.all([
-      supabase.from("audit_client_queries")
-        .select("id, query_text, status, created_at")
-        .eq("engagement_id", engagementId)
-        .order("created_at", { ascending: false })
-        .limit(5),
-      supabase.from("audit_workpapers")
-        .select("id, section, wp_ref, signed_by")
-        .eq("engagement_id", engagementId)
-        .limit(3),
-    ]);
-
-    const items: any[] = [];
-    (queriesRes.data || []).forEach(q => {
-      items.push({
-        id: q.id,
-        text: `Query: ${(q.query_text || "").slice(0, 60)}…`,
-        status: q.status,
-        time: q.created_at,
-        type: "query",
-      });
-    });
-    (wpRes.data || []).forEach(w => {
-      items.push({
-        id: w.id,
-        text: `Workpaper ${w.wp_ref || ""}: ${w.section || "General"}`,
-        status: w.signed_by ? "Signed" : "Draft",
-        time: null,
-        type: "workpaper",
-      });
-    });
-
-    items.sort((a, b) => {
-      if (!a.time && !b.time) return 0;
-      if (!a.time) return 1;
-      if (!b.time) return -1;
-      return new Date(b.time).getTime() - new Date(a.time).getTime();
-    });
-
-    setActivities(items.slice(0, 8));
-  };
-
-  if (activities.length === 0) {
-    return (
-      <div className="text-center py-6">
-        <Clock className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
-        <p className="text-sm text-muted-foreground">No activity yet for this engagement</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      {activities.map(a => (
-        <div key={a.id} className="flex gap-3 items-start">
-          <div className={cn(
-            "w-2 h-2 rounded-full mt-1.5 shrink-0",
-            a.type === "query" ? "bg-blue-500" : "bg-emerald-500"
-          )} />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-foreground truncate">{a.text}</p>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-[9px]">{a.status}</Badge>
-              {a.time && (
-                <span className="text-[10px] text-muted-foreground">
-                  {formatDistanceToNow(new Date(a.time), { addSuffix: true })}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
