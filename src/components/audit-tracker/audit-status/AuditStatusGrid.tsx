@@ -466,7 +466,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                   <td colSpan={COLS.length} className="py-16 text-center text-muted-foreground">
                     {rows.length === 0
                       ? selectedFY
-                        ? `No audit engagements found for FY ${selectedFY}. Create engagements in Engagement Setup first.`
+                        ? `No audit entries found for FY ${selectedFY}. Add planning entries or create engagements first.`
                         : "Select an Assessment Year above to see audit clients"
                       : "No rows match the current filters"}
                   </td>

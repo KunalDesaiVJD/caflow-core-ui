@@ -22,14 +22,33 @@ import AuditStatusGrid         from "./audit-status/AuditStatusGrid";
 import type { PlanEntry }      from "./hooks/useAuditPlanning";
 import type { PlanSaveData }   from "./planning/PlanningEntryDialog";
 
-// Assessment Year → Financial Year
+// Assessment Year → Financial Year  (e.g. "2027-28" → "2026-27")
 function ayToFy(ay: string): string {
   const [start] = ay.split("-");
   return `${Number(start) - 1}-${String(Number(start)).slice(-2)}`;
 }
 
-const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
-const DEFAULT_AY = "2025-26";
+// Compute current AY based on Indian FY (April–March)
+function computeCurrentAY(): string {
+  const now = new Date();
+  const month = now.getMonth() + 1; // 1-12
+  const year  = now.getFullYear();
+  const fyStart = month >= 4 ? year : year - 1;  // FY starts in April
+  const ayStart = fyStart + 1;
+  return `${ayStart}-${String(ayStart + 1).slice(-2)}`;
+}
+
+const DEFAULT_AY = computeCurrentAY();  // e.g. "2027-28" when running in Apr 2026
+
+// Dynamically build a 5-year list descending from current AY
+const ASSESSMENT_YEARS = (() => {
+  const [startStr] = DEFAULT_AY.split("-");
+  const s = Number(startStr);
+  return Array.from({ length: 5 }, (_, i) => {
+    const n = s - i;
+    return `${n}-${String(n + 1).slice(-2)}`;
+  });
+})();
 
 interface Props {
   firmId:       string;

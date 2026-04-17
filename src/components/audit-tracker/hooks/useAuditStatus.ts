@@ -44,6 +44,11 @@ export interface StatusEntry {
   engagement_type?:             string | null;
   /** true = row sourced from audit_engagement with no saved status yet */
   isVirtual?:                   boolean;
+  /** true = row sourced from audit_planning (no engagement exists yet) */
+  isPlanning?:                  boolean;
+  /** Planned dates from audit_planning entry — displayed in the row */
+  planned_from?:                string | null;
+  planned_to?:                  string | null;
 }
 
 export type StatusPatch = Partial<Omit<StatusEntry, "id"|"firm_id"|"created_at"|"isVirtual">>;
@@ -173,6 +178,74 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       }
     }
 
+    // ── 4. Auto-populate virtual rows from audit_planning ─────────────────
+    // Safety net: if addEntry auto-create failed, or if a planning entry was
+    // created before the auto-create feature, show a placeholder row so the
+    // client always appears in the grid.
+    if (selectedFY) {
+      // Convert "YYYY-YY" → date range  (e.g. "2026-27" → 2026-04-01 … 2027-03-31)
+      const [fyStartYearStr] = selectedFY.split("-");
+      const fyStartYear = Number(fyStartYearStr);
+      const fyDateStart = `${fyStartYear}-04-01`;
+      const fyDateEnd   = `${fyStartYear + 1}-03-31`;
+
+      let planQ = (supabase as any)
+        .from("audit_planning")
+        .select("id, client_id, client_name, planned_from, planned_to, employee_names")
+        .gte("planned_from", fyDateStart)
+        .lte("planned_from", fyDateEnd);
+      if (!isSuperadmin) planQ = planQ.eq("firm_id", firmId);
+      const { data: planData } = await planQ;
+
+      // Refresh the set — may have grown after step 3
+      const allKnownClientIds = new Set([
+        ...clientIdsWithStatus,
+        ...statusRows.filter(r => r.client_id).map(r => r.client_id!),
+      ]);
+
+      for (const plan of ((planData as any[]) || [])) {
+        if (!plan.client_id) continue;
+        if (allKnownClientIds.has(plan.client_id)) continue;   // already in grid
+
+        const planningRow: StatusEntry = {
+          id:                           `planning_${plan.id}`,
+          firm_id:                      firmId,
+          client_id:                    plan.client_id ?? null,
+          party_name:                   plan.client_name ?? null,
+          physical_audit_conducted:     "No",
+          accounting_data:              "No",
+          audit_employees:              Array.isArray(plan.employee_names)
+                                          ? (plan.employee_names as string[]).join(", ")
+                                          : (plan.employee_names ?? null),
+          audit_report_prepared_by:     null,
+          audit_status:                 "Scheduled",
+          audit_status_other:           null,
+          report_print_date:            null,
+          firm:                         null,
+          partner:                      null,
+          udin_tax_audit:               null,
+          udin_statutory_audit:         null,
+          udin_date:                    null,
+          physical_report_received_date:null,
+          scanned:                      "No",
+          prepared_by:                  null,
+          checked_by:                   null,
+          uploaded_by:                  null,
+          remarks:                      null,
+          engagement_id:                null,
+          financial_year:               selectedFY,
+          created_at:                   "",
+          engagement_type:              null,
+          isVirtual:                    true,
+          isPlanning:                   true,
+          planned_from:                 plan.planned_from ?? null,
+          planned_to:                   plan.planned_to   ?? null,
+        };
+        statusRows.push(planningRow);
+        allKnownClientIds.add(plan.client_id);  // prevent duplicates within same loop
+      }
+    }
+
     // Sort: virtual rows last (pending), then alphabetically by party_name
     statusRows.sort((a, b) => {
       if (a.isVirtual && !b.isVirtual) return 1;
@@ -213,8 +286,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
   }
 
   async function updateRow(id: string, patch: StatusPatch) {
-    // If this is a virtual row being saved for the first time
-    if (id.startsWith("virtual_")) {
+    // If this is a virtual row (from engagement or planning) being saved for the first time
+    if (id.startsWith("virtual_") || id.startsWith("planning_")) {
       const virtualRow = rows.find(r => r.id === id);
       if (!virtualRow) return;
       const result = await addRow({
@@ -257,7 +330,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
   }
 
   async function removeRow(id: string) {
-    if (id.startsWith("virtual_")) {
+    if (id.startsWith("virtual_") || id.startsWith("planning_")) {
       setRows(prev => prev.filter(r => r.id !== id));
       return;
     }
