@@ -38,6 +38,7 @@ import {
   CalendarDays, Sparkles, Copy, Send, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getClassificationsForFY } from "@/utils/classificationUtils";
 import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 
 // ─── Constants ───
@@ -321,13 +322,25 @@ const ItReturns = () => {
       q = q.in("client_id", allClientIds);
       const { data: pData } = await q;
 
-      // Classification logic:
-      // 1. Client has audit engagement for this FY → "Audit"
-      // 2. client_fy_classifications says "Audit" (any recent FY) → "Audit"
-      // 3. client_fy_classifications says "Partner in Audited Firm" → partner tab
-      // 4. Everything else (ITR-service clients) → Non-Audited
+      // ── FY-aware classification resolution ────────────────────────────────
+      // Use the shared util which consults client_classification_history first
+      // (so past FYs aren't retroactively reclassified), then falls back to
+      // client_fy_classifications, then to the live client.classification.
+      // The FY of interest is the one that corresponds to the selected AY.
+      const targetFY = ayToFy(selectedAY);
+      const fyAwareClsMap = await getClassificationsForFY(allClientIds, targetFY);
+
+      // Classification logic (in priority order):
+      // 1. Client has an audit engagement for this FY              → "Audit"
+      // 2. FY-aware util resolves to "Audit"                       → "Audit"
+      // 3. FY-aware util resolves to "Partner in Audited Firm"     → that
+      // 4. Legacy classMap fallback (handles wizard-stored currentFY rows)
+      // 5. Everything else (ITR-service clients)                   → Non-Audited
       const resolveClassification = (clientId: string): string => {
         if (auditSet.has(clientId)) return "Audit";
+        const fyAware = (fyAwareClsMap.get(clientId) || "").toLowerCase();
+        if (fyAware === "audit") return "Audit";
+        if (fyAware.includes("partner")) return fyAwareClsMap.get(clientId)!;
         const cls = classMap.get(clientId) || "";
         if (cls.toLowerCase() === "audit") return "Audit";
         if (cls.toLowerCase().includes("partner")) return cls;

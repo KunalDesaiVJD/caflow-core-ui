@@ -40,11 +40,24 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       clientQuery = clientQuery.eq("firm_id", user.firm_id);
     }
 
-    // Fetch client IDs that have classification = 'Audit' in client_fy_classifications
+    // Fetch client IDs that have EVER been classified as 'Audit'.
+    // We intentionally union two sources here so the audit context surfaces
+    // any client who was Audit at any point in time — even if they've since
+    // been switched to Non-Audit. Per-FY eligibility for actually CREATING
+    // a new engagement is enforced separately by `getClassificationForFY`
+    // (see AuditPipeline.createEngagement.mutationFn) so past engagements
+    // stay accessible while new ones are blocked when the FY-effective
+    // classification isn't Audit.
+    //   1. client_fy_classifications row with classification ilike 'audit'
+    //   2. client_classification_history row whose new_classification = 'Audit'
     let classQuery: any = supabase
       .from("client_fy_classifications")
       .select("client_id")
       .ilike("classification", "audit");
+    const classHistoryQuery: any = (supabase as any)
+      .from("client_classification_history")
+      .select("client_id")
+      .ilike("new_classification", "audit");
 
     // Fetch audit setup flags from client_fy_audit_setup
     let auditSetupQuery: any = supabase
@@ -58,8 +71,8 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       .eq("linked_module", "audit")
       .eq("is_active", true);
 
-    const [engRes, clientRes, classRes, auditSetupRes, auditCatRes] = await Promise.all([
-      engQuery, clientQuery, classQuery, auditSetupQuery, auditCatQuery
+    const [engRes, clientRes, classRes, classHistoryRes, auditSetupRes, auditCatRes] = await Promise.all([
+      engQuery, clientQuery, classQuery, classHistoryQuery, auditSetupQuery, auditCatQuery
     ]);
 
     // Build audit category lookup: id → name
@@ -81,10 +94,14 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       auditSvcRes = { data: res.data };
     }
 
-    // Build set of client IDs with Audit classification
-    const auditClientIdSet = new Set(
-      (classRes.data || []).map((r: any) => r.client_id)
-    );
+    // Build set of client IDs with Audit classification (union of FY snapshot
+    // table + history table). The history query may fail silently if the
+    // table doesn't exist yet; .data falls back to []. See note above for why
+    // we union both sources.
+    const auditClientIdSet = new Set<string>([
+      ...(classRes.data || []).map((r: any) => r.client_id).filter(Boolean),
+      ...(classHistoryRes?.data || []).map((r: any) => r.client_id).filter(Boolean),
+    ]);
 
     // Build per-client audit setup flags
     const setupMap: Record<string, any> = {};

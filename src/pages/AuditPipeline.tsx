@@ -25,6 +25,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { getClassificationForFY } from "@/utils/classificationUtils";
+import { isCompanyEntity } from "@/utils/entityUtils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck,
@@ -416,6 +418,36 @@ export default function AuditPipeline() {
     }
   }, [form1A.client_id, eligibleClients]);
 
+  // ── Block C (corporate-only) pre-fill ──────────────────────────────────────
+  // Defaults per spec:
+  //   • caro_applicable   → Yes for Public Ltd, No for Private Ltd (auto-prefill
+  //                         from client_fy_audit_setup / clients.caro_applicable
+  //                         when present; user can override).
+  //   • ifc_applicable    → Yes
+  //   • cash_flow_applicable → Yes
+  // Only fires when the entity is corporate AND the answer hasn't been set yet,
+  // so existing engagements (loaded via questionnaire_answers) aren't clobbered.
+  useEffect(() => {
+    if (!isCompanyEntity(form1A.entity_type)) return;
+    const client = (eligibleClients || []).find((c: any) => c.id === form1A.client_id) as any;
+    setQuestionnaire((q) => {
+      const next = { ...q };
+      if (!next.caro_applicable) {
+        const clientCaro: boolean | null | undefined = client?.caro_applicable;
+        if (typeof clientCaro === "boolean") {
+          next.caro_applicable = clientCaro ? "yes" : "no";
+        } else {
+          // Spec default: Public Ltd → Yes, Private Ltd → No
+          const et = (form1A.entity_type || "").toLowerCase().trim();
+          next.caro_applicable = (et === "public ltd" || et === "public limited" || et === "public_ltd") ? "yes" : "no";
+        }
+      }
+      if (!next.ifc_applicable) next.ifc_applicable = "yes";
+      if (!next.cash_flow_applicable) next.cash_flow_applicable = "yes";
+      return next;
+    });
+  }, [form1A.entity_type, form1A.client_id, eligibleClients]);
+
   // Auto-sync nonCorpFormChoice from preliminary questionnaire answer
   // When the user answers "Are you audited under any other act?" → auto-select 3CA or 3CB
   useEffect(() => {
@@ -463,13 +495,33 @@ export default function AuditPipeline() {
   const blockDFields = ["turnover_exceeds_limit", "accounting_method", "stock_valuation", "section_40a3", "donations_80g"];
   const blockDValid = !isTaxAuditReq || blockDFields.every(f => questionnaire[f]);
 
-  const questValid = blockAValid && blockBValid && blockDValid;
+  // Block C — Audit Applicability (corporate-only). Pre-filled by the effect
+  // above, so the user only needs to confirm or override. When entity isn't
+  // corporate the block is hidden entirely and validation auto-passes.
+  const isCorporateForBlockC = isCompanyEntity(form1A.entity_type);
+  const blockCFields = ["caro_applicable", "ifc_applicable", "cash_flow_applicable"];
+  const blockCValid = !isCorporateForBlockC || blockCFields.every(f => questionnaire[f]);
+
+  const questValid = blockAValid && blockBValid && blockCValid && blockDValid;
   const canCompleteStage1 = block1AValid && questValid;
 
   // ─── Create new engagement ───
   const createEngagement = useMutation({
     mutationFn: async () => {
       const effectiveFirmId = user?.firm_id || "be411601-f0f5-4f74-b93d-b87a8ef1b82b";
+
+      // ── FY-aware classification gate ────────────────────────────────────
+      // The client's classification IN THE ENGAGEMENT'S FY must be "Audit".
+      // Past engagements remain valid because history is consulted by FY —
+      // a client switched to Non-Audit from FY 2026-27 can still have an
+      // Audit engagement created for FY 2024-25 if they were Audit then.
+      const clsForFY = await getClassificationForFY(form1A.client_id, form1A.financial_year);
+      if (clsForFY !== "Audit") {
+        throw new Error(
+          `Cannot create audit engagement: client was classified as "${clsForFY}" in FY ${form1A.financial_year}, not "Audit".`,
+        );
+      }
+
       // Check for duplicate engagement
       const { data: existing } = await supabase
         .from("audit_engagements")
@@ -542,7 +594,25 @@ export default function AuditPipeline() {
       requires_3cd: autoFlags.requires_3cd,
       requires_cash_flow: autoFlags.requires_cash_flow,
       schedule_iii_division: autoFlags.schedule_iii_division,
-      caro_applicable: autoFlags.requires_caro,
+      // Block C — user-confirmed Audit Applicability flags (corporate only).
+      // For non-corporate engagements we fall back to the auto-derived flag so
+      // existing logic (Stage 7 CARO tab visibility, etc.) keeps working.
+      // TODO migration: ALTER TABLE audit_engagements
+      //   ADD COLUMN IF NOT EXISTS caro_applicable      BOOLEAN DEFAULT true;
+      //   ADD COLUMN IF NOT EXISTS ifc_applicable       BOOLEAN DEFAULT true;
+      //   ADD COLUMN IF NOT EXISTS cash_flow_applicable BOOLEAN DEFAULT true;
+      // (caro_applicable already exists per types.ts; ifc_applicable and
+      //  cash_flow_applicable need to be added before this column write
+      //  succeeds. Until then PostgREST will return PGRST204 for the new keys.)
+      caro_applicable: isCorporateForBlockC
+        ? questionnaire.caro_applicable === "yes"
+        : autoFlags.requires_caro,
+      ifc_applicable: isCorporateForBlockC
+        ? questionnaire.ifc_applicable === "yes"
+        : null,
+      cash_flow_applicable: isCorporateForBlockC
+        ? questionnaire.cash_flow_applicable === "yes"
+        : null,
       risk_rating: planning.risk_profile,
       team_members: planning.team_members,
       planned_end: planning.expected_completion || null,
@@ -562,7 +632,7 @@ export default function AuditPipeline() {
     refetchEng();
     queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] });
     setSaving(false);
-  }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses]);
+  }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses, isCorporateForBlockC]);
 
   const partners = (firmUsers || []).filter(u => ["partner_ca", "firm_admin"].includes(u.role));
   const grouped = useMemo(() => {
@@ -828,6 +898,40 @@ export default function AuditPipeline() {
                       <YesNo label="Loans to/from directors or related parties?" value={questionnaire.director_loans || ""} onChange={v => setQ("director_loans", v)} />
                     </AccordionContent>
                   </AccordionItem>
+
+                  {/* Block C — Audit Applicability (corporate-only) ───────
+                   *  Hidden entirely for non-corporate entities. The 3 answers
+                   *  are pre-filled from the client's audit setup but stay
+                   *  user-editable. They drive Stage 7 tab visibility (CARO,
+                   *  IFC) and the cash-flow-statement requirement. */}
+                  {isCorporateForBlockC && (
+                    <AccordionItem value="block-c" className="border rounded-lg px-4">
+                      <AccordionTrigger className="text-sm font-semibold">
+                        Block — Audit Applicability (For Companies)
+                        {blockCValid && <CheckCircle2 size={14} className="ml-2 text-primary" />}
+                      </AccordionTrigger>
+                      <AccordionContent className="space-y-4 pt-2">
+                        <YesNo
+                          label="Is CARO 2020 (Companies Auditor's Report Order) applicable?"
+                          hint="Applicable for companies not falling under CARO exemptions"
+                          value={questionnaire.caro_applicable || ""}
+                          onChange={v => setQ("caro_applicable", v)}
+                        />
+                        <YesNo
+                          label="Is Internal Financial Controls (IFC) Report applicable?"
+                          hint="Under Section 143(3)(i) of Companies Act 2013"
+                          value={questionnaire.ifc_applicable || ""}
+                          onChange={v => setQ("ifc_applicable", v)}
+                        />
+                        <YesNo
+                          label="Does the company prepare Cash Flow Statement?"
+                          hint="Mandatory for listed companies and certain others under Sch. III"
+                          value={questionnaire.cash_flow_applicable || ""}
+                          onChange={v => setQ("cash_flow_applicable", v)}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
 
                   {/* Block D — Tax Audit (conditional) */}
                   {isTaxAuditReq && (

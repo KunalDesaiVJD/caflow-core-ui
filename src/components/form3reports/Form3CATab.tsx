@@ -14,8 +14,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Save, FileDown, CheckCircle2 } from "lucide-react";
+import { Loader2, Save, FileDown, CheckCircle2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { generateAuditReport, flagsFromEngagement } from "@/lib/auditReportGenerator";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,15 @@ interface CAFormData {
   p1:  string;
   p2:  string;
   p3:  string;
+  // ── Statutory Auditor's Report (Companies Act 2013) — derived from
+  // Block C flags (caro_applicable / ifc_applicable / cash_flow_applicable)
+  // via auditReportGenerator. Editable; saved alongside the rest of the
+  // paragraphs in form_3ca_paragraphs JSONB so manual overrides survive.
+  sar_opinion_para:        string;
+  sar_opinion_conclusion:  string;
+  sar_point_d:             string;
+  sar_point_g:             string;
+  sar_caro_annexure:       string;
   // Annexure paragraphs
   anx_assessee_1: string;
   anx_assessee_2: string;
@@ -58,6 +68,8 @@ function buildDefaults(
   applicableAct: string,
   reportDate:    string,
   endYear:       string,
+  sarFlags?:     { caroApplicable: boolean; ifcApplicable: boolean; cashFlowApplicable: boolean },
+  fy?:           string,
 ): Omit<CAFormData, "applicable_act" | "act_other_text" | "audit_report_date" | "signature_date" | "udin"> {
   const panPart = clientPAN ? ` (PAN: ${clientPAN})` : "";
   const nm      = clientName || "[Client Name]";
@@ -69,7 +81,22 @@ function buildDefaults(
     : "___________";
   const yr      = endYear || "____";
 
+  // Statutory Auditor's Report fragments — derive from Block C flags via
+  // generator. Defaults to "fully applicable" when flags missing.
+  const sar = generateAuditReport({
+    caroApplicable:     sarFlags?.caroApplicable     ?? true,
+    ifcApplicable:      sarFlags?.ifcApplicable      ?? true,
+    cashFlowApplicable: sarFlags?.cashFlowApplicable ?? true,
+    clientName:         clientName,
+    financialYear:      fy,
+  });
+
   return {
+    sar_opinion_para:       sar.opinionPara,
+    sar_opinion_conclusion: sar.opinionConclusion,
+    sar_point_d:            sar.pointD,
+    sar_point_g:            sar.pointG,
+    sar_caro_annexure:      sar.caroAnnexure,
     p1: `We report that the statutory audit of M/s. ${nm}${addr}${panPart} was conducted by ${firm} in pursuance of the provisions of the ${act}, and we annex hereto a copy of the audit report dated ${rDate} along with a copy of each of the audited Statement of Profit and Loss Account, the audited Balance Sheet and documents declared by the said Act to be part of, or annexed to, such accounts.`,
     p2: `The statement of particulars required to be furnished under section 44AB is annexed herewith in Form No. 3CD.`,
     p3: `In our opinion and to the best of our information and according to examination of books of account including other relevant documents and explanations given to us, the particulars given in the said Form No. 3CD are true and correct as per Annexure attached.`,
@@ -163,7 +190,8 @@ export default function Form3CATab({ engagementId }: Props) {
   const [formData,    setFormData]    = useState<CAFormData>({
     applicable_act: "Companies Act, 2013", act_other_text: "",
     audit_report_date: TODAY, signature_date: TODAY, udin: "",
-    ...buildDefaults("", "", "", "", "Companies Act, 2013", TODAY, ""),
+    ...buildDefaults("", "", "", "", "Companies Act, 2013", TODAY, "",
+      { caroApplicable: true, ifcApplicable: true, cashFlowApplicable: true }, ""),
   });
 
   const autoSaveRef = useRef<ReturnType<typeof setTimeout>>();
@@ -214,7 +242,10 @@ export default function Form3CATab({ engagementId }: Props) {
     const cAddr  = cl?.address || cl?.registered_office || "";
     const cPAN   = cl?.pan   || "";
 
-    const defaults = buildDefaults(cName, cAddr, cPAN, fName, act, rDate, endYr);
+    const defaults = buildDefaults(
+      cName, cAddr, cPAN, fName, act, rDate, endYr,
+      flagsFromEngagement(eng), fy,
+    );
 
     // Merge saved overrides
     const savedParas = ((eng as any).form_3ca_paragraphs as Record<string, string>) || {};
@@ -375,6 +406,81 @@ export default function Form3CATab({ engagementId }: Props) {
             <EditablePara value={formData[key] as string} onChange={v => patch(key, v)} className="flex-1" />
           </div>
         ))}
+
+        {/* ─── STATUTORY AUDITOR'S REPORT (Companies Act 2013) ───
+             Conditional fragments — auto-derived from Stage 1 Block C
+             flags (caro_applicable / ifc_applicable / cash_flow_applicable)
+             via auditReportGenerator. Editable; Reset to re-derive from
+             current flags. */}
+        <hr className="border-gray-300 my-6 print:hidden" />
+        <div className="mb-4 print:mt-6">
+          <div className="flex items-center justify-between mb-2 print:hidden">
+            <p className="text-sm font-bold underline underline-offset-2">
+              Statutory Auditor's Report — Companies Act, 2013
+            </p>
+            <Button
+              size="sm" variant="ghost" className="h-7 gap-1 text-xs"
+              onClick={() => {
+                if (!engagement) return;
+                const fresh = generateAuditReport({
+                  ...flagsFromEngagement(engagement),
+                  clientName, financialYear: fy,
+                });
+                setFormData(prev => ({
+                  ...prev,
+                  sar_opinion_para:       fresh.opinionPara,
+                  sar_opinion_conclusion: fresh.opinionConclusion,
+                  sar_point_d:            fresh.pointD,
+                  sar_point_g:            fresh.pointG,
+                  sar_caro_annexure:      fresh.caroAnnexure,
+                }));
+                clearTimeout(autoSaveRef.current);
+                autoSaveRef.current = setTimeout(() => doSave({
+                  ...formData,
+                  sar_opinion_para:       fresh.opinionPara,
+                  sar_opinion_conclusion: fresh.opinionConclusion,
+                  sar_point_d:            fresh.pointD,
+                  sar_point_g:            fresh.pointG,
+                  sar_caro_annexure:      fresh.caroAnnexure,
+                }, true), 500);
+                toast.info("Auditor's Report fragments reset from current Block C flags");
+              }}
+              title="Re-derive from Block C flags (caro_applicable / ifc_applicable / cash_flow_applicable)"
+            >
+              <RotateCcw size={12} /> Reset from flags
+            </Button>
+          </div>
+
+          {/* Opinion (opening) */}
+          <p className="text-sm font-semibold mb-1 mt-3">Opinion</p>
+          <EditablePara value={formData.sar_opinion_para}
+            onChange={v => patch("sar_opinion_para", v)} />
+
+          {/* Opinion (closing) */}
+          <div className="mt-2">
+            <EditablePara value={formData.sar_opinion_conclusion}
+              onChange={v => patch("sar_opinion_conclusion", v)} />
+          </div>
+
+          {/* Other Legal & Regulatory — Point (d) */}
+          <p className="text-sm font-semibold mb-1 mt-4">
+            Report on Other Legal &amp; Regulatory Requirements — Point (d)
+          </p>
+          <EditablePara value={formData.sar_point_d}
+            onChange={v => patch("sar_point_d", v)} />
+
+          {/* Point (g) */}
+          <p className="text-sm font-semibold mb-1 mt-4">
+            Report on Other Legal &amp; Regulatory Requirements — Point (g)
+          </p>
+          <EditablePara value={formData.sar_point_g}
+            onChange={v => patch("sar_point_g", v)} />
+
+          {/* CARO Annexure-A reference */}
+          <p className="text-sm font-semibold mb-1 mt-4">CARO 2020 — Annexure-A reference</p>
+          <EditablePara value={formData.sar_caro_annexure}
+            onChange={v => patch("sar_caro_annexure", v)} />
+        </div>
 
         {/* ─── SIGNATURE BLOCK ─── */}
         <div className="flex justify-end mt-6">

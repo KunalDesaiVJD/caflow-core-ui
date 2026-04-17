@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { VersionHistoryPanel } from "@/components/VersionHistoryPanel";
 import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSection";
+import ClassificationHistoryTimeline from "@/components/clients/ClassificationHistoryTimeline";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ArrowLeft, Pencil, Shield, Loader2, Save, AlertTriangle } from "lucide-react";
@@ -863,8 +864,8 @@ const ClientDetail = () => {
               </Card>
             </div>
 
-            {/* Scrutiny Widget */}
-            <div className="lg:col-span-2">
+            {/* Scrutiny Widget + Classification History */}
+            <div className="lg:col-span-2 space-y-4">
               <Card>
                 <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Shield className="h-4 w-4" /> Scrutiny Health</CardTitle></CardHeader>
                 <CardContent className="flex flex-col items-center space-y-3">
@@ -884,6 +885,15 @@ const ClientDetail = () => {
                   <Button size="sm" className="gap-1" onClick={runScrutiny} disabled={scrutinyRunning}>
                     {scrutinyRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Shield className="h-3 w-3" />} Run Scrutiny
                   </Button>
+                </CardContent>
+              </Card>
+
+              {/* Classification History timeline — append-only audit of every
+                  Audit / Non-Audit / Partner-in-Audited-Firm / Not-Applicable
+                  transition for this client. */}
+              <Card>
+                <CardContent className="p-4">
+                  <ClassificationHistoryTimeline clientId={client.id} />
                 </CardContent>
               </Card>
             </div>

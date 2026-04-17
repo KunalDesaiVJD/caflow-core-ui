@@ -90,6 +90,10 @@ const NewClientWizard = () => {
   const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({});
   // For superadmin editing an existing client: track the client's own firm_id
   const [loadedClientFirmId, setLoadedClientFirmId] = useState<string | null>(null);
+  /** FY in which this client was created — derived from clients.created_at.
+   *  Used by the classification-change modal to block back-dating before the
+   *  client existed. */
+  const [clientCreationFY, setClientCreationFY] = useState<string | undefined>(undefined);
 
   // Track linked modules of active services for cross-step logic
   const [activeLinkedModules, setActiveLinkedModules] = useState<string[]>([]);
@@ -261,6 +265,14 @@ const NewClientWizard = () => {
 
       // #13: track the client's firm_id so superadmin uses the right firm for service categories
       if (client.firm_id) setLoadedClientFirmId(client.firm_id);
+
+      // Derive client creation FY from created_at (Indian FY: April–March).
+      if (client.created_at) {
+        const d = new Date(client.created_at);
+        const y = d.getFullYear();
+        const startYear = d.getMonth() >= 3 ? y : y - 1;
+        setClientCreationFY(`${startYear}-${String(startYear + 1).slice(2)}`);
+      }
 
       // GAP-2: load existing group memberships so edit mode doesn't wipe them on save
       const { data: existingMemberships } = await supabase
@@ -1110,6 +1122,13 @@ const NewClientWizard = () => {
               itrServiceActive={itrServiceActive}
               errors={advancedErrors}
               savedClassification={isEditMode ? savedClassification : undefined}
+              clientId={isEditMode ? clientId : undefined}
+              clientCreationFY={clientCreationFY}
+              onClassificationSaved={() => {
+                // Reflect the change in the local "saved" snapshot so the
+                // warning modal won't fire again for the same value.
+                setSavedClassification(advancedInfo.classification);
+              }}
             />
           )}
           {currentStepDef?.id === "services" && (

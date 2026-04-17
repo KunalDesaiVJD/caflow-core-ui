@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
 import { NCENotesToAccounts } from '@/components/stage7/NotesToAccounts';
+import { IFCReportTab } from '@/components/stage7/IFCReportTab';
+import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 
@@ -85,39 +87,95 @@ export default function PipelineStage7Combined({
       </div>
 
       {isCorporate ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="notes" className="gap-1">
-              <BookMarked size={14} /> Notes to Accounts
-            </TabsTrigger>
-            <TabsTrigger value="caro" className="gap-1">
-              <Shield size={14} /> CARO 2020
-            </TabsTrigger>
-            <TabsTrigger value="mrl" className="gap-1">
-              <ClipboardList size={14} /> MRL
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="notes" className="mt-4">
-            <NotesToAccounts engagementIdProp={engagementId} isCorporate={true} />
-          </TabsContent>
-
-          <TabsContent value="caro" className="mt-4">
-            <EngagementCARO
-              engagement={engagement}
-              client={engagement?.clients}
-              onUpdate={() => {}}
-            />
-          </TabsContent>
-
-          <TabsContent value="mrl" className="mt-4">
-            <MRLTab engagementId={engagementId} engagement={engagement} />
-          </TabsContent>
-        </Tabs>
+        <CorporateStage7Tabs
+          engagementId={engagementId}
+          engagement={engagement}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+        />
       ) : (
         /* Non-corporate: NCE Notes to Accounts — no CARO or MRL */
         <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
       )}
     </div>
+  );
+}
+
+// ─── Corporate Stage 7 tabs (array-driven) ──────────────────────────────────
+// Tab visibility is governed by Stage 1 Block C ("Audit Applicability"):
+//   - CARO 2020       → engagement.caro_applicable
+//   - IFC Report      → engagement.ifc_applicable
+//   - Cash Flow Notes → engagement.cash_flow_applicable
+//
+// Treat `null`/`undefined` as visible so legacy engagements created before
+// Block C existed don't lose access to CARO/MRL. Only an explicit `false`
+// (set by the auditor in Block C) hides a tab.
+//
+// If the active tab gets filtered out (e.g. user toggled CARO to No while
+// sitting on the CARO tab), fall back to 'notes'.
+interface TabsProps {
+  engagementId: string;
+  engagement: any;
+  activeTab: string;
+  setActiveTab: (v: string) => void;
+}
+
+function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab }: TabsProps) {
+  const tabs = useMemo(() => {
+    const visible = (flag: any) => flag !== false; // null/undefined → visible
+    const all = [
+      { id: 'notes',    label: 'Notes to Accounts', icon: BookMarked,    show: true },
+      { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
+      { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
+      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) },
+      { id: 'mrl',      label: 'MRL',               icon: ClipboardList, show: true },
+    ];
+    return all.filter(t => t.show);
+  }, [engagement?.caro_applicable, engagement?.ifc_applicable, engagement?.cash_flow_applicable]);
+
+  // If activeTab vanished (Block C toggled), reset to first available.
+  useEffect(() => {
+    if (!tabs.find(t => t.id === activeTab)) setActiveTab(tabs[0]?.id || 'notes');
+  }, [tabs, activeTab, setActiveTab]);
+
+  return (
+    <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <TabsList>
+        {tabs.map(t => {
+          const Icon = t.icon;
+          return (
+            <TabsTrigger key={t.id} value={t.id} className="gap-1">
+              <Icon size={14} /> {t.label}
+            </TabsTrigger>
+          );
+        })}
+      </TabsList>
+
+      {tabs.some(t => t.id === 'notes') && (
+        <TabsContent value="notes" className="mt-4">
+          <NotesToAccounts engagementIdProp={engagementId} isCorporate={true} />
+        </TabsContent>
+      )}
+      {tabs.some(t => t.id === 'caro') && (
+        <TabsContent value="caro" className="mt-4">
+          <EngagementCARO engagement={engagement} client={engagement?.clients} onUpdate={() => {}} />
+        </TabsContent>
+      )}
+      {tabs.some(t => t.id === 'ifc') && (
+        <TabsContent value="ifc" className="mt-4">
+          <IFCReportTab engagementId={engagementId} engagement={engagement} />
+        </TabsContent>
+      )}
+      {tabs.some(t => t.id === 'cashflow') && (
+        <TabsContent value="cashflow" className="mt-4">
+          <CashFlowNotesTab engagementId={engagementId} engagement={engagement} />
+        </TabsContent>
+      )}
+      {tabs.some(t => t.id === 'mrl') && (
+        <TabsContent value="mrl" className="mt-4">
+          <MRLTab engagementId={engagementId} engagement={engagement} />
+        </TabsContent>
+      )}
+    </Tabs>
   );
 }

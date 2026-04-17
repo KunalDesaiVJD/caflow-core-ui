@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -21,6 +22,7 @@ import {
   DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 
 /* ───── Interface ───── */
 export interface AdvancedInfoData {
@@ -36,6 +38,15 @@ export interface AdvancedInfoData {
   dsc_number: string;
   dsc_expiry_date: Date | undefined;
   work_group_type: string;
+  /** Pending classification-change metadata, captured by the change-confirmation
+   *  modal and consumed by NewClientWizard.saveFYClassification when writing the
+   *  client_classification_history row. Optional — only present when the user
+   *  just confirmed a classification change in this session. */
+  pending_classification_change?: {
+    effective_from_fy: string;
+    responsible_person_id?: string;
+    notes?: string;
+  };
 }
 
 /* ───── Helpers ───── */
@@ -47,14 +58,6 @@ function getCurrentFY(): string {
   return `${startYear}-${String(startYear + 1).slice(2)}`;
 }
 
-/** "2024-25" → "2025-26" */
-function nextFY(fy: string): string {
-  const m = fy.match(/^(\d{4})-(\d{2})$/);
-  if (!m) return "";
-  const y = parseInt(m[1]) + 1;
-  return `${y}-${String(y + 1).slice(2)}`;
-}
-
 function generateFYOptions(): string[] {
   const today = new Date();
   const currentStartYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
@@ -64,6 +67,22 @@ function generateFYOptions(): string[] {
     options.push(`${y}-${String(y + 1).slice(2)}`);
   }
   return options;
+}
+
+/** Compare two FY strings (e.g. "2024-25" vs "2025-26") by start year.
+ *  Returns -1 if fy1 < fy2, 1 if fy1 > fy2, 0 if equal. */
+function fyCompare(fy1: string, fy2: string): -1 | 0 | 1 {
+  const y1 = parseInt(fy1.split("-")[0]);
+  const y2 = parseInt(fy2.split("-")[0]);
+  return y1 < y2 ? -1 : y1 > y2 ? 1 : 0;
+}
+
+/** "2025-26" → "2024-25" */
+function getPreviousFY(fy: string): string {
+  const [start] = fy.split("-");
+  const s = parseInt(start);
+  if (isNaN(s)) return "";
+  return `${s - 1}-${String(s).slice(2)}`;
 }
 
 export const defaultAdvancedInfo: AdvancedInfoData = {
@@ -101,6 +120,13 @@ const INDIAN_STATES = [
 
 const FY_OPTIONS = generateFYOptions();
 
+/** Effective-from FY options surfaced inside the classification-change modal.
+ *  Wider than the dropdown so users can backdate or future-date a change. */
+const CHANGE_EFFECTIVE_FY_OPTIONS = [
+  "2020-21", "2021-22", "2022-23", "2023-24", "2024-25",
+  "2025-26", "2026-27", "2027-28", "2028-29", "2029-30",
+];
+
 /* ───── Props ───── */
 interface Props {
   data: AdvancedInfoData;
@@ -112,16 +138,33 @@ interface Props {
    *  When provided and the user picks a different value, a warning modal fires
    *  before the change is applied. */
   savedClassification?: string;
+  /** Existing client id (edit mode). When present, the classification-change
+   *  modal commits directly to the DB. When absent (new-client wizard), the
+   *  modal only stashes metadata for later persistence. */
+  clientId?: string;
+  /** First FY in which this client could possibly be classified — typically
+   *  the FY of client creation / registration. Used to block effective-from
+   *  picks before the client existed. */
+  clientCreationFY?: string;
+  /** Optional refetch hook called after a successful classification commit. */
+  onClassificationSaved?: () => void;
 }
 
 export const StepAdvancedInfo = ({
   data, onChange, entityType, itrServiceActive, errors, savedClassification,
+  clientId, clientCreationFY, onClassificationSaved,
 }: Props) => {
   const { user } = useAuth();
+  const { toast } = useToast();
+  const [savingClassification, setSavingClassification] = useState(false);
 
   const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
   /** Classification value waiting for user confirmation before being applied */
   const [pendingClassification, setPendingClassification] = useState<string | null>(null);
+  /** Modal-local state for the classification-change confirmation dialog */
+  const [effectiveFromFY, setEffectiveFromFY] = useState<string>("");
+  const [pendingResponsiblePersonId, setPendingResponsiblePersonId] = useState<string>("");
+  const [changeNotes, setChangeNotes] = useState<string>("");
 
   const set = <K extends keyof AdvancedInfoData>(key: K, val: AdvancedInfoData[K]) =>
     onChange({ ...data, [key]: val });
@@ -142,16 +185,146 @@ export const StepAdvancedInfo = ({
       v !== savedClassification;
 
     if (isDifferentFromSaved) {
-      // Intercept: ask user to confirm before applying
+      // Intercept: ask user to confirm before applying.
+      // Reset the modal-local fields so each change starts clean.
+      setEffectiveFromFY("");
+      setPendingResponsiblePersonId(data.responsible_person_id || "");
+      setChangeNotes("");
       setPendingClassification(v);
     } else {
       applyClassificationChange(v);
     }
   };
 
-  /* Load users for responsible person */
+  /** Apply the new classification + change metadata to the local wizard state.
+   *  Used both in new-client mode (no DB write yet — wizard persists on Save)
+   *  and after a successful DB commit in edit mode. */
+  const stashClassificationLocally = (newValue: string) => {
+    const updates: Partial<AdvancedInfoData> = { classification: newValue };
+    if (newValue !== "Audit") updates.audit_firm_id = "";
+    if (newValue !== "Non-Audit" && newValue !== "Partner in Audited Firm") {
+      updates.responsible_person_id = "";
+    } else if (pendingResponsiblePersonId) {
+      updates.responsible_person_id = pendingResponsiblePersonId;
+    }
+    updates.pending_classification_change = {
+      effective_from_fy: effectiveFromFY,
+      responsible_person_id: pendingResponsiblePersonId || undefined,
+      notes: changeNotes.trim() || undefined,
+    };
+    onChange({ ...data, ...updates });
+  };
+
+  /** Confirm handler for the classification-change modal.
+   *  Edit mode (clientId set): writes history + upserts FY row + (conditionally)
+   *  flips clients.classification + stashes locally + closes modal.
+   *  New-client mode: only stashes locally — wizard persists on final Save. */
+  const handleConfirmClassificationChange = async () => {
+    if (!pendingClassification) return;
+
+    // ── Validation 1: effectiveFromFY required ───────────────────────────
+    if (!effectiveFromFY) {
+      toast({ title: "Effective From FY is required", variant: "destructive" });
+      return;
+    }
+
+    // ── Validation 2: cannot pre-date client creation FY ─────────────────
+    if (clientCreationFY && fyCompare(effectiveFromFY, clientCreationFY) < 0) {
+      toast({
+        title: "Effective FY cannot be before client creation FY",
+        description: `Client was created in FY ${clientCreationFY}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // ── New-client mode: no DB writes — stash & close ────────────────────
+    if (!clientId) {
+      stashClassificationLocally(pendingClassification);
+      setPendingClassification(null);
+      return;
+    }
+
+    setSavingClassification(true);
+    try {
+      // ── Validation 3: conflict check (history row already exists for this FY)
+      const { data: conflict, error: conflictErr } = await (supabase as any)
+        .from("client_classification_history")
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("effective_from_fy", effectiveFromFY);
+      if (conflictErr) throw conflictErr;
+      if (conflict && conflict.length > 0) {
+        toast({
+          title: `A classification change already exists for FY ${effectiveFromFY}`,
+          variant: "destructive",
+        });
+        setSavingClassification(false);
+        return;
+      }
+
+      // Resolve current auth user for changed_by audit field
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUserId = authData?.user?.id ?? null;
+
+      // ── STEP 1: Insert history row ─────────────────────────────────────
+      const { error: historyError } = await (supabase as any)
+        .from("client_classification_history")
+        .insert({
+          client_id: clientId,
+          old_classification: savedClassification || null,
+          new_classification: pendingClassification,
+          effective_from_fy: effectiveFromFY,
+          responsible_person_id: pendingResponsiblePersonId || null,
+          changed_by: currentUserId,
+          changed_at: new Date().toISOString(),
+          notes: changeNotes.trim() || null,
+        });
+      if (historyError) throw historyError;
+
+      // ── STEP 2: Upsert client_fy_classifications for the new FY ────────
+      const { error: fyError } = await (supabase as any)
+        .from("client_fy_classifications")
+        .upsert({
+          client_id: clientId,
+          financial_year: effectiveFromFY,
+          classification: pendingClassification,
+          responsible_person_id: pendingResponsiblePersonId || null,
+        }, { onConflict: "client_id,financial_year" });
+      if (fyError) throw fyError;
+
+      // ── STEP 3: Flip clients.classification when the change is active ──
+      const currentFY = getCurrentFY();
+      if (fyCompare(effectiveFromFY, currentFY) <= 0) {
+        const { error: clientErr } = await (supabase as any)
+          .from("clients")
+          .update({ classification: pendingClassification })
+          .eq("id", clientId);
+        if (clientErr) throw clientErr;
+      }
+
+      // ── STEP 4: Sync local wizard state, notify, refetch ───────────────
+      stashClassificationLocally(pendingClassification);
+      toast({
+        title: "Classification updated",
+        description: `Changed to ${pendingClassification} from FY ${effectiveFromFY}.`,
+      });
+      onClassificationSaved?.();
+      setPendingClassification(null);
+    } catch (err: any) {
+      toast({
+        title: "Failed to save classification change",
+        description: err?.message || String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingClassification(false);
+    }
+  };
+
+  /* Load users for responsible person — needed for the inline field AND for
+   * the classification-change modal's Responsible Person select. */
   useEffect(() => {
-    if (data.classification !== "Non-Audit" && data.classification !== "Partner in Audited Firm") return;
     const load = async () => {
       let query = supabase.from("users").select("id, name").eq("is_active", true).order("name");
       if (user?.firm_id) query = query.eq("firm_id", user.firm_id);
@@ -159,7 +332,7 @@ export const StepAdvancedInfo = ({
       if (usrs) setUsers(usrs);
     };
     load();
-  }, [data.classification, user?.firm_id]);
+  }, [user?.firm_id]);
 
   /* Derived state for work group sub-option */
   const isItrWithAccounts = data.work_group_type === "itr_with_accounts_inside" || data.work_group_type === "itr_with_accounts_outside";
@@ -348,34 +521,103 @@ export const StepAdvancedInfo = ({
         </div>
       </div>
 
-      {/* ── Classification Change Warning Modal ── */}
+      {/* ── Classification Change Confirmation Modal ──────────────────────
+       *  Captures: new classification (already selected), effective-from FY
+       *  (mandatory), responsible person (optional), notes (optional).
+       *  Metadata is stashed on data.pending_classification_change so the
+       *  wizard can persist it to client_classification_history on save. */}
       <Dialog
         open={!!pendingClassification}
         onOpenChange={(open) => { if (!open) setPendingClassification(null); }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Change Classification?
+              Change Client Classification
             </DialogTitle>
-            <DialogDescription className="pt-2 space-y-2 text-sm">
-              <p>
-                Changing classification for FY{" "}
-                <strong>{data.financial_year}</strong> from{" "}
-                <strong className="text-indigo-600">{savedClassification}</strong> to{" "}
-                <strong className="text-indigo-600">{pendingClassification}</strong>.
-              </p>
-              {nextFY(data.financial_year) && (
-                <p className="font-medium text-amber-700">
-                  Classification change applies from FY <strong>{nextFY(data.financial_year)}</strong> only.
-                </p>
-              )}
-              <p className="text-muted-foreground">
-                All historical data for FY <strong>{data.financial_year}</strong> and earlier is preserved.
-              </p>
+            <DialogDescription className="sr-only">
+              Confirm the classification change and pick the effective financial year.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Change summary */}
+          <div className="bg-amber-50 border border-amber-200 rounded p-3">
+            <p className="text-sm font-medium">You are changing:</p>
+            <div className="flex items-center gap-3 mt-1 text-sm">
+              <span className="font-bold text-blue-700">{savedClassification}</span>
+              <span className="text-muted-foreground">→</span>
+              <span className="font-bold text-orange-600">{pendingClassification}</span>
+            </div>
+          </div>
+
+          {/* Effective From FY — mandatory */}
+          <div className="space-y-1.5">
+            <Label className="text-sm font-semibold">
+              Effective From Financial Year <span className="text-destructive">*</span>
+            </Label>
+            <Select value={effectiveFromFY} onValueChange={setEffectiveFromFY}>
+              <SelectTrigger className={!effectiveFromFY ? "border-red-400" : ""}>
+                <SelectValue placeholder="Select effective FY" />
+              </SelectTrigger>
+              <SelectContent>
+                {CHANGE_EFFECTIVE_FY_OPTIONS.map((fy) => (
+                  <SelectItem key={fy} value={fy}>{fy}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Old classification applies to FYs BEFORE this year. New classification applies FROM this FY onward.
+            </p>
+          </div>
+
+          {/* Responsible Person — optional */}
+          <div className="space-y-1.5">
+            <Label className="text-sm font-semibold">Responsible Person</Label>
+            <Select
+              value={pendingResponsiblePersonId}
+              onValueChange={setPendingResponsiblePersonId}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select responsible person" />
+              </SelectTrigger>
+              <SelectContent>
+                {users.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Notes — optional */}
+          <div className="space-y-1.5">
+            <Label className="text-sm font-semibold">Notes (optional)</Label>
+            <Textarea
+              placeholder="Reason for classification change..."
+              value={changeNotes}
+              onChange={(e) => setChangeNotes(e.target.value)}
+              rows={3}
+            />
+          </div>
+
+          {/* Impact preview */}
+          {effectiveFromFY && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm space-y-0.5">
+              <p className="font-semibold mb-1">Impact Summary:</p>
+              <p>
+                • FYs up to <strong>{getPreviousFY(effectiveFromFY)}</strong>:{" "}
+                <strong>{savedClassification}</strong>
+              </p>
+              <p>
+                • From FY <strong>{effectiveFromFY}</strong> onward:{" "}
+                <strong>{pendingClassification}</strong>
+              </p>
+              <p className="text-muted-foreground mt-1">
+                Previous classification preserved in history.
+              </p>
+            </div>
+          )}
+
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="outline"
@@ -384,13 +626,11 @@ export const StepAdvancedInfo = ({
               Cancel
             </Button>
             <Button
-              className="bg-indigo-600 hover:bg-indigo-700"
-              onClick={() => {
-                if (pendingClassification) applyClassificationChange(pendingClassification);
-                setPendingClassification(null);
-              }}
+              disabled={!effectiveFromFY || savingClassification}
+              onClick={handleConfirmClassificationChange}
+              className="bg-amber-500 hover:bg-amber-600 text-white"
             >
-              Confirm Change
+              {savingClassification ? "Saving…" : "Confirm Change"}
             </Button>
           </DialogFooter>
         </DialogContent>
