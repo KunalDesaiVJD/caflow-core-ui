@@ -72,9 +72,10 @@ export interface ApiRecord {
   GST_No:          string;
   Adhar_No:        string;
   AuditorName:     string;
-  // Active / status fields (vary by API version — both checked)
-  IsActive?:       boolean | number | string;
-  Status?:         string;
+  // Active / status fields (vary by API version — all variants checked)
+  Active?:         string;                   // "Yes" / "No"
+  IsActive?:       boolean | number | string; // true/false, 1/0, "Active"
+  Status?:         string;                   // "Active" / other
 }
 
 export interface SyncError {
@@ -100,20 +101,31 @@ export interface SyncProgress {
 export type SyncStatus = "idle" | "fetching" | "previewing" | "importing" | "done" | "error";
 
 // ─── Active-record filter ─────────────────────────────────────────────────────
-// Returns true when the record should be included (client is active).
-// If the API doesn't return an active/status field at all, every record passes.
+// Returns true when the record is active.
+// Checks all known field variants the API may return (Active / IsActive / Status).
+// If NONE of these fields are present, the record is assumed active.
 
 function isActiveRecord(r: ApiRecord): boolean {
-  // Check IsActive (boolean / 0-1 / string)
+  // 1. "Active": "Yes" / "No"  (confirmed field in current API)
+  if (r.Active !== undefined && r.Active !== null && r.Active !== "") {
+    const v = String(r.Active).toLowerCase().trim();
+    // "no" = inactive; anything else that's a truthy string = active
+    if (v === "no"  || v === "false" || v === "0" || v === "n") return false;
+    if (v === "yes" || v === "true"  || v === "1" || v === "y") return true;
+  }
+
+  // 2. "IsActive": true / false / 1 / 0 / "Active"
   if (r.IsActive !== undefined && r.IsActive !== null && r.IsActive !== "") {
     const v = String(r.IsActive).toLowerCase().trim();
     return v === "true" || v === "1" || v === "active" || v === "y" || v === "yes";
   }
-  // Check Status (string)
+
+  // 3. "Status": "Active" / other
   if (r.Status !== undefined && r.Status !== null && r.Status !== "") {
     return String(r.Status).toLowerCase().trim() === "active";
   }
-  // No active/status field present — include all records
+
+  // No active/status field present — include (assume active)
   return true;
 }
 
