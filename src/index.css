@@ -64,6 +64,35 @@
   }
 }
 
+/* ─── Form 3CA / 3CB Print / PDF export ──────────────────────────────────────
+   When window.print() is called from the form components, hide everything
+   except the form document card so the PDF contains only the audit report.
+   The document card is the direct child div with class `form3-document`.
+   All other page chrome (sidebar, toolbar, tabs) is suppressed via print:hidden
+   Tailwind utilities, but the scroll containers need explicit reset here.
+─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Hide all Radix / shadcn scroll area decorations */
+  [data-radix-scroll-area-viewport] {
+    overflow: visible !important;
+    height: auto !important;
+  }
+  /* Page margins */
+  @page {
+    margin: 15mm 12mm;
+    size: A4 portrait;
+  }
+  /* Ensure white background */
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  /* Keep amber highlight legible in B&W print */
+  .bg-amber-50 {
+    background: transparent !important;
+  }
+}
+
 @layer utilities {
   /* Safe area for bottom nav on notched devices */
   .safe-bottom {

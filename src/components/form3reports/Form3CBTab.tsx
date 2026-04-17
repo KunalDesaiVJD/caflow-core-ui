@@ -7,16 +7,15 @@
  * Auto-filled: client name / address / PAN, firm name / FRN / city,
  *              partner name / membership no, financial year.
  *
- * Editable fields stored in form_3ca_3cb (tab='3cb', data jsonb):
- *   observation_text, qualification_text, signature_date, udin
+ * Editable fields saved to audit_engagements columns:
+ *   form_3cb_observations, form_3cb_qualifications, form_3cb_signature_date, udin
  */
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth }  from "@/hooks/useAuth";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Save, Printer, CheckCircle2 } from "lucide-react";
+import { Loader2, Save, FileDown, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -59,10 +58,10 @@ function fmtDate(d: string): string {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-/** Highlighted auto-filled value */
+/** Highlighted auto-filled value — amber/gold to match software convention */
 function AutoVal({ v, placeholder = "—" }: { v?: string | null; placeholder?: string }) {
   return v ? (
-    <span className="bg-blue-50 text-blue-900 font-medium border-b border-blue-200 px-0.5 print:bg-transparent print:border-0 print:font-bold">
+    <span className="bg-amber-50 text-amber-800 font-medium border-b border-amber-300 px-0.5 print:bg-transparent print:border-0 print:font-bold">
       {v}
     </span>
   ) : (
@@ -88,16 +87,15 @@ interface Props {
 }
 
 export default function Form3CBTab({ engagementId }: Props) {
-  const { user } = useAuth();
-
-  const [loading,    setLoading]    = useState(true);
-  const [saving,     setSaving]     = useState(false);
-  const [saved,      setSaved]      = useState(false);
-  const [engagement, setEngagement] = useState<any>(null);
-  const [client,     setClient]     = useState<any>(null);
-  const [auditFirm,  setAuditFirm]  = useState<any>(null);
-  const [formRow,    setFormRow]    = useState<any>(null);
-  const [formData,   setFormData]   = useState<CBFormData>(DEFAULT_DATA);
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [saved,       setSaved]       = useState(false);
+  const [engagement,  setEngagement]  = useState<any>(null);
+  const [client,      setClient]      = useState<any>(null);
+  const [auditFirm,   setAuditFirm]   = useState<any>(null);  // audit_firms row (explicit override)
+  const [caFirm,      setCaFirm]      = useState<any>(null);  // firms row (own CA practice)
+  const [partnerUser, setPartnerUser] = useState<any>(null);  // users row (signing partner)
+  const [formData,    setFormData]    = useState<CBFormData>(DEFAULT_DATA);
 
   const autoSaveRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -111,16 +109,19 @@ export default function Form3CBTab({ engagementId }: Props) {
   async function load() {
     setLoading(true);
 
+    // ── 1. Engagement + client + own CA firm in one query ──────────────────
     const { data: eng } = await supabase
       .from("audit_engagements")
-      .select("*, clients(*)")
+      .select("*, clients(*), firms(*)")
       .eq("id", engagementId)
       .single();
 
     if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }
     setEngagement(eng);
     setClient((eng as any).clients || null);
+    setCaFirm((eng as any).firms   || null);
 
+    // ── 2. Audit firm (explicit external auditor override, if set) ─────────
     if ((eng as any).audit_firm_id) {
       const { data: af } = await supabase
         .from("audit_firms")
@@ -130,31 +131,23 @@ export default function Form3CBTab({ engagementId }: Props) {
       setAuditFirm(af || null);
     }
 
-    const { data: existing } = await supabase
-      .from("form_3ca_3cb" as any)
-      .select("*")
-      .eq("engagement_id", engagementId)
-      .eq("tab", "3cb")
-      .maybeSingle();
-
-    if (existing) {
-      setFormRow(existing);
-      setFormData({ ...DEFAULT_DATA, ...(existing as any).data });
-    } else {
-      const { data: created } = await supabase
-        .from("form_3ca_3cb" as any)
-        .insert({
-          engagement_id: engagementId,
-          firm_id:       (eng as any).firm_id,
-          client_id:     (eng as any).client_id,
-          tab:           "3cb",
-          data:          DEFAULT_DATA,
-          status:        "draft",
-        } as any)
-        .select()
+    // ── 3. Signing partner ─────────────────────────────────────────────────
+    if ((eng as any).partner_id) {
+      const { data: partner } = await supabase
+        .from("users")
+        .select("name, membership_number")
+        .eq("id", (eng as any).partner_id)
         .single();
-      if (created) setFormRow(created as any);
+      setPartnerUser(partner || null);
     }
+
+    // ── 4. Populate editable fields from engagement columns ───────────────
+    setFormData({
+      observation_text:   (eng as any).form_3cb_observations  || DEFAULT_DATA.observation_text,
+      qualification_text: (eng as any).form_3cb_qualifications || DEFAULT_DATA.qualification_text,
+      signature_date:     (eng as any).form_3cb_signature_date || TODAY,
+      udin:               (eng as any).udin                   || "",
+    });
 
     setLoading(false);
   }
@@ -169,25 +162,36 @@ export default function Form3CBTab({ engagementId }: Props) {
       return next;
     });
     setSaved(false);
-  }, [formRow]);
+  }, [engagementId]);
 
-  // ── Save ─────────────────────────────────────────────────────────────────
+  // ── Save — writes editable fields directly to audit_engagements ──────────
 
   async function doSave(data: CBFormData, silent = false) {
-    if (!formRow) return;
+    if (!engagementId) return;
     setSaving(true);
     const { error } = await supabase
-      .from("form_3ca_3cb" as any)
+      .from("audit_engagements")
       .update({
-        data:          data,
-        status:        "draft",
-        last_saved_at: new Date().toISOString(),
-        last_saved_by: user?.id,
+        form_3cb_observations:   data.observation_text,
+        form_3cb_qualifications: data.qualification_text,
+        form_3cb_signature_date: data.signature_date,
+        udin:                    data.udin,
       } as any)
-      .eq("id", (formRow as any).id);
+      .eq("id", engagementId);
     setSaving(false);
     if (error) { if (!silent) toast.error("Save failed: " + error.message); }
     else       { setSaved(true); if (!silent) toast.success("Form 3CB saved"); }
+  }
+
+  // ── Download PDF ─────────────────────────────────────────────────────────
+
+  function handleDownloadPDF() {
+    const safeClient = (clientName || "Client").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_");
+    const safeFY     = (fy || "").replace(/[^a-zA-Z0-9-]/g, "_");
+    const prevTitle  = document.title;
+    document.title   = `Form_3CB_${safeClient}_FY${safeFY}`;
+    window.print();
+    setTimeout(() => { document.title = prevTitle; }, 1000);
   }
 
   // ── Derived values ────────────────────────────────────────────────────────
@@ -200,11 +204,12 @@ export default function Form3CBTab({ engagementId }: Props) {
   const clientAddress = client?.address          || client?.registered_office || "";
   const clientPAN     = client?.pan              || "";
 
-  const firmName      = auditFirm?.name          || "";
-  const firmFRN       = auditFirm?.icai_reg_no   || "";
-  const firmCity      = auditFirm?.city          || "";
-  const partnerName   = auditFirm?.partner_name  || "";
-  const membershipNo  = auditFirm?.partner_icai_no || "";
+  // Priority: auditFirm (explicit override) → caFirm (own CA firm) → partnerUser (signing partner)
+  const firmName    = auditFirm?.name         || caFirm?.name             || "";
+  const firmFRN     = auditFirm?.icai_reg_no  || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
+  const firmCity    = auditFirm?.city         || (caFirm?.address as any)?.city || "";
+  const partnerName = auditFirm?.partner_name || partnerUser?.name         || "";
+  const membershipNo= auditFirm?.partner_icai_no || partnerUser?.membership_number || "";
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -247,9 +252,9 @@ export default function Form3CBTab({ engagementId }: Props) {
           <Button
             size="sm" variant="outline"
             className="h-8 gap-1.5 text-xs print:hidden"
-            onClick={() => window.print()}
+            onClick={handleDownloadPDF}
           >
-            <Printer size={13} /> Print / Export PDF
+            <FileDown size={13} /> Download PDF
           </Button>
           <Button
             size="sm"
@@ -257,7 +262,7 @@ export default function Form3CBTab({ engagementId }: Props) {
             onClick={() => doSave(formData)}
             disabled={saving}
           >
-            <Save size={13} /> Save Draft
+            <Save size={13} /> Save Form
           </Button>
         </div>
       </div>
@@ -267,9 +272,9 @@ export default function Form3CBTab({ engagementId }: Props) {
 
         {/* ─── HEADER ─── */}
         <div className="text-center mb-6 space-y-1">
-          <p className="text-base font-bold uppercase tracking-wide">FORM NO. 3CB</p>
-          <p className="text-xs text-gray-600">[See rule 6G (1) (b)]</p>
-          <p className="text-sm font-medium mt-2 max-w-2xl mx-auto">
+          <p className="text-xl font-bold uppercase tracking-widest">FORM NO. 3CB</p>
+          <p className="text-xs text-gray-500 tracking-wide">[See rule 6G (1) (b)]</p>
+          <p className="text-sm font-semibold italic mt-3 max-w-2xl mx-auto leading-relaxed">
             Audit Report under section 44AB of the Income-tax Act, 1961 in a case of a person
             referred to in clause(b) of Sub-rule(1) of rule 6G
           </p>
@@ -474,8 +479,9 @@ export default function Form3CBTab({ engagementId }: Props) {
 
         {/* ─── Annexure Header ─── */}
         <div className="text-center mb-6 space-y-1">
-          <p className="text-sm font-bold uppercase tracking-wide">
-            ANNEXURE TO FORM NO. 3CB [See rule 6G (1) (b)] OF
+          <p className="text-lg font-bold uppercase tracking-widest">ANNEXURE</p>
+          <p className="text-sm font-semibold uppercase tracking-wide">
+            TO FORM NO. 3CB [See rule 6G (1) (b)] OF
           </p>
           <p className="text-sm font-bold uppercase">
             <AutoVal v={clientName} placeholder="[CLIENT NAME]" />
