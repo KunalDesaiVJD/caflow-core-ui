@@ -60,11 +60,22 @@ interface ClientService {
   assigned_staff: any;
   fee_override: number | null;
   notes: string | null;
+  billing_mode?: string | null;
   tds_forms_applicable?: string[] | null;
   tds_effective_from_fy?: string | null;
   tds_effective_from_q?: string | null;
   tds_deactivated_from_fy?: string | null;
   tds_deactivated_from_q?: string | null;
+}
+
+interface ClientPackage {
+  id: string;
+  client_id: string;
+  package_name: string | null;
+  service_category_ids: string[] | null;
+  frequency: string | null;
+  billing_amount: number | null;
+  is_active: boolean;
 }
 
 const SEVERITY_COLORS: Record<string, string> = { HIGH: "#ef4444", MEDIUM: "#f59e0b", LOW: "#9ca3af" };
@@ -127,6 +138,7 @@ const ClientDetail = () => {
   // Services
   const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([]);
   const [clientServices, setClientServices] = useState<ClientService[]>([]);
+  const [clientPackages, setClientPackages] = useState<ClientPackage[]>([]);
   const [svcSaving, setSvcSaving] = useState<string | null>(null);
 
   // TAN editing
@@ -214,12 +226,13 @@ const ClientDetail = () => {
   async function loadAllData() {
     setLoading(true);
     try {
-      const [clientRes, profileRes, catRes, csRes, staffRes] = await Promise.all([
+      const [clientRes, profileRes, catRes, csRes, staffRes, pkgRes] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId!).single(),
         supabase.from("client_profiles").select("audit_questions").eq("client_id", clientId!).limit(1),
         supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active, firm_id").eq("is_active", true).order("name"),
         supabase.from("client_services").select("*").eq("client_id", clientId!),
         supabase.from("users").select("id, name").order("name"),
+        supabase.from("client_service_packages").select("*").eq("client_id", clientId!).eq("is_active", true),
       ]);
 
       let findingsData: any[] = [];
@@ -260,6 +273,7 @@ const ClientDetail = () => {
       });
       setServiceCategories(dedupedCats as any as ServiceCategory[]);
       setClientServices((csRes.data || []) as any as ClientService[]);
+      setClientPackages((pkgRes.data || []) as any as ClientPackage[]);
       setStaffList((staffRes.data || []) as any[]);
       setItrWorkGroups(wgData);
       setClientItrProfile(itrData);
@@ -878,72 +892,194 @@ const ClientDetail = () => {
 
         {/* Tab 2: Service Activation (read-only) */}
         <TabsContent value="services">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">Active Services</CardTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Services configured during client setup. To change services, use <Button variant="link" className="h-auto p-0 text-xs" onClick={() => navigate(`/clients/edit/${client.id}`)}>Edit Client</Button>.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {serviceCategories.map(cat => {
-                const cs = clientServices.find(s => s.service_category_id === cat.id);
-                const isActive = cs?.is_active || false;
-                const isTds = cat.linked_module === 'tds';
-                return (
-                  <div
-                    key={cat.id}
-                    className={`border rounded-lg p-4 ${isActive
-                      ? 'border-green-200 bg-green-50/40 dark:border-green-800 dark:bg-green-900/10'
-                      : 'border-border bg-muted/20 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Badge
-                        variant={isActive ? "default" : "secondary"}
-                        className={`text-xs shrink-0 ${isActive ? "bg-green-600 hover:bg-green-600" : ""}`}
-                      >
-                        {isActive ? "Active" : "Inactive"}
-                      </Badge>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">{cat.name}</p>
-                        <div className="flex gap-1.5 mt-0.5">
-                          <Badge variant="outline" className="text-[10px]">
-                            {cs?.frequency_override || cat.frequency}
-                          </Badge>
-                          {cat.linked_module && (
-                            <Badge variant="secondary" className="text-[10px]">{cat.linked_module}</Badge>
+          {(() => {
+            // ── Determine billing mode ────────────────────────────────────────
+            // Package mode: any client_services row has billing_mode='package_wise'
+            // OR there is at least one active client_service_packages row.
+            const isPackageMode =
+              clientServices.some(cs => (cs as any).billing_mode === "package_wise") ||
+              clientPackages.length > 0;
+
+            // Active package (first active one wins)
+            const activePkg = clientPackages[0] ?? null;
+
+            // Services included in the package (resolve category IDs → names)
+            const packageServiceIds: string[] = Array.isArray(activePkg?.service_category_ids)
+              ? activePkg.service_category_ids
+              : [];
+            const packageServices = packageServiceIds
+              .map(id => serviceCategories.find(c => c.id === id))
+              .filter(Boolean) as ServiceCategory[];
+
+            // For service-specific: only show active rows
+            const activeSpecificServices = serviceCategories.filter(cat => {
+              const cs = clientServices.find(s => s.service_category_id === cat.id);
+              return cs?.is_active;
+            });
+
+            return (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Service Activation</CardTitle>
+                  {/* Billing mode pill */}
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Billing Mode:</span>
+                    <Badge
+                      variant="outline"
+                      className={`text-[11px] font-semibold ${isPackageMode
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300"
+                        : "border-teal-300 bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-300"
+                      }`}
+                    >
+                      {isPackageMode ? "Package Wise" : "Service Specific"}
+                    </Badge>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-4">
+
+                  {/* ── PACKAGE WISE ── */}
+                  {isPackageMode && (
+                    <div className="space-y-3">
+                      {/* Package name banner */}
+                      <div className="flex items-center gap-2 p-3 rounded-lg bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800">
+                        <div className="flex-1">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">Package</p>
+                          <p className="text-sm font-bold text-foreground mt-0.5">
+                            {activePkg?.package_name || "—"}
+                          </p>
+                          {activePkg?.billing_amount != null && (
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              ₹{Number(activePkg.billing_amount).toLocaleString("en-IN")}
+                              {activePkg.frequency ? ` · ${activePkg.frequency}` : ""}
+                            </p>
                           )}
                         </div>
+                        <Badge className="bg-indigo-600 hover:bg-indigo-600 text-xs shrink-0">Active</Badge>
                       </div>
+
+                      {/* Services in package */}
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                          Included Services ({packageServices.length})
+                        </p>
+                        {packageServices.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {packageServices.map(cat => (
+                              <div key={cat.id} className="flex items-center gap-2 py-1.5 px-3 rounded-md bg-green-50/60 border border-green-200 dark:bg-green-900/10 dark:border-green-800">
+                                <span className="text-green-600 dark:text-green-400 text-sm font-bold">✓</span>
+                                <span className="text-sm font-medium text-foreground">{cat.name}</span>
+                                {cat.linked_module && (
+                                  <Badge variant="secondary" className="text-[9px] ml-auto">{cat.linked_module}</Badge>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">No services linked to this package.</p>
+                        )}
+                      </div>
+
+                      {/* Non-package individual services (active ones outside package) */}
+                      {(() => {
+                        const extraActive = activeSpecificServices.filter(
+                          cat => !packageServiceIds.includes(cat.id)
+                        );
+                        if (extraActive.length === 0) return null;
+                        return (
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                              Additional Services
+                            </p>
+                            <div className="space-y-1.5">
+                              {extraActive.map(cat => {
+                                const cs = clientServices.find(s => s.service_category_id === cat.id);
+                                return (
+                                  <div key={cat.id} className="flex items-center gap-2 py-1.5 px-3 rounded-md bg-green-50/60 border border-green-200 dark:bg-green-900/10 dark:border-green-800">
+                                    <span className="text-green-600 dark:text-green-400 text-sm font-bold">✓</span>
+                                    <span className="text-sm font-medium text-foreground">{cat.name}</span>
+                                    {cs?.fee_override != null && (
+                                      <span className="text-xs text-muted-foreground ml-1">₹{Number(cs.fee_override).toLocaleString("en-IN")}</span>
+                                    )}
+                                    <Badge variant="outline" className="text-[9px] ml-auto">
+                                      {cs?.frequency_override || cat.frequency}
+                                    </Badge>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
-                    {isActive && cs && (
-                      <div className="mt-2 pl-16 text-xs text-muted-foreground space-y-0.5">
-                        {isTds && (cs as any).tds_forms_applicable?.length > 0 && (
-                          <p>
-                            Forms: <span className="font-mono text-foreground">{((cs as any).tds_forms_applicable || []).join(', ')}</span>
-                            {(cs as any).tds_effective_from_fy && (
-                              <span> · Effective: {(cs as any).tds_effective_from_fy} {(cs as any).tds_effective_from_q}</span>
-                            )}
-                          </p>
-                        )}
-                        {cs.fee_override != null && (
-                          <p>Fee: <span className="font-medium text-foreground">₹{Number(cs.fee_override).toLocaleString("en-IN")}</span></p>
-                        )}
-                        {cs.due_date_override != null && (
-                          <p>Due Day: <span className="font-medium text-foreground">{cs.due_date_override}</span></p>
-                        )}
-                        {cs.notes && <p>Notes: <span className="text-foreground">{cs.notes}</span></p>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {serviceCategories.length === 0 && (
-                <p className="text-sm text-muted-foreground py-4 text-center">No services configured.</p>
-              )}
-            </CardContent>
-          </Card>
+                  )}
+
+                  {/* ── SERVICE SPECIFIC ── */}
+                  {!isPackageMode && (
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Active Services ({activeSpecificServices.length})
+                      </p>
+                      {activeSpecificServices.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {activeSpecificServices.map(cat => {
+                            const cs = clientServices.find(s => s.service_category_id === cat.id);
+                            const isTds = cat.linked_module === "tds";
+                            return (
+                              <div key={cat.id} className="border border-green-200 bg-green-50/40 dark:border-green-800 dark:bg-green-900/10 rounded-lg p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-green-600 dark:text-green-400 text-sm font-bold">✓</span>
+                                  <span className="text-sm font-medium text-foreground">{cat.name}</span>
+                                  <div className="flex gap-1 ml-auto">
+                                    <Badge variant="outline" className="text-[9px]">
+                                      {cs?.frequency_override || cat.frequency}
+                                    </Badge>
+                                    {cat.linked_module && (
+                                      <Badge variant="secondary" className="text-[9px]">{cat.linked_module}</Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                {cs && (
+                                  <div className="mt-1.5 pl-5 text-xs text-muted-foreground space-y-0.5">
+                                    {isTds && (cs as any).tds_forms_applicable?.length > 0 && (
+                                      <p>
+                                        Forms: <span className="font-mono text-foreground">{((cs as any).tds_forms_applicable || []).join(", ")}</span>
+                                        {(cs as any).tds_effective_from_fy && (
+                                          <span> · From: {(cs as any).tds_effective_from_fy} {(cs as any).tds_effective_from_q}</span>
+                                        )}
+                                      </p>
+                                    )}
+                                    {cs.fee_override != null && (
+                                      <p>Fee: <span className="font-medium text-foreground">₹{Number(cs.fee_override).toLocaleString("en-IN")}</span></p>
+                                    )}
+                                    {cs.due_date_override != null && (
+                                      <p>Due Day: <span className="font-medium text-foreground">{cs.due_date_override}</span></p>
+                                    )}
+                                    {cs.notes && <p>Notes: <span className="text-foreground">{cs.notes}</span></p>}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground py-2 text-center">No active services.</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Edit link */}
+                  <p className="text-xs text-muted-foreground pt-1 border-t border-border">
+                    To change services →{" "}
+                    <Button variant="link" className="h-auto p-0 text-xs" onClick={() => navigate(`/clients/edit/${client.id}`)}>
+                      Edit Client
+                    </Button>
+                  </p>
+
+                </CardContent>
+              </Card>
+            );
+          })()}
         </TabsContent>
 
         {/* Tab 3: Audit Setup */}
