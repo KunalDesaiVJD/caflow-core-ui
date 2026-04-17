@@ -9,7 +9,8 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ export function useWorksheetSheetStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<WorksheetSheetData>(BLANK_WS);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -59,11 +61,18 @@ export function useWorksheetSheetStorage(
   // ── Load ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<WorksheetSheetData>(engagementId, "worksheet_json");
-    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-      setData({ rows: { ...saved.rows } });
-    }
     setLoaded(true);
+    // 1. Instant from localStorage cache
+    const cached = awLoad<WorksheetSheetData>(engagementId, "worksheet_json");
+    if (cached && typeof cached === "object" && Object.keys(cached.rows ?? {}).length > 0) {
+      setData({ rows: { ...cached.rows } });
+    }
+    // 2. Sync from Supabase for cross-device / cross-user data
+    awLoadFromDB<WorksheetSheetData>(engagementId, "worksheet_json").then(remote => {
+      if (remote && typeof remote === "object" && Object.keys(remote.rows ?? {}).length > 0) {
+        setData({ rows: { ...remote.rows } });
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Persist ────────────────────────────────────────────────────────────────
@@ -71,7 +80,7 @@ export function useWorksheetSheetStorage(
     async (snapshot: WorksheetSheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "worksheet_json", snapshot);
+        awSave(engagementId, "worksheet_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Audit Worksheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

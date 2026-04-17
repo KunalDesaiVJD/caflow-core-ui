@@ -126,6 +126,15 @@ function ayToFy(ay: string): string {
   return `${fyStart}-${fyEnd}`;
 }
 
+/** Returns the current financial year in "YYYY-YY" format (e.g. "2026-27" in April 2026) */
+function getCurrentFY(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth(); // 0-indexed; April = 3
+  const startYear = month >= 3 ? year : year - 1;
+  return `${startYear}-${String(startYear + 1).slice(-2)}`;
+}
+
 function isUnsavedItrProfile(profile: Pick<ItrProfile, "id">): boolean {
   return profile.id.startsWith("virtual_") || profile.id.startsWith("new_");
 }
@@ -226,9 +235,50 @@ const ItReturns = () => {
   const { data: profiles = [], isLoading } = useQuery({
     queryKey: ["itr_profiles", firmId, selectedAY, itrClientIds, auditClientIds],
     queryFn: async () => {
-      // Combined pool: audit-engaged clients (always shown in Audited tab) + ITR-service clients
       const auditSet = new Set(auditClientIds);
-      const allClientIds = [...new Set([...auditClientIds, ...itrClientIds])];
+
+      // ── Step 1: Fetch audit-classified clients from client_fy_classifications ──
+      // The wizard stores financial_year = getCurrentFY() at the time of creation.
+      // Clients set up after the FY rollover (e.g. after 1 Apr 2026) get "2026-27"
+      // even though we're looking at AY "2025-26".  We must include BOTH the
+      // selected AY and the current FY so those recently-added clients are visible.
+      const currentFY = getCurrentFY();
+      const fysToCheck = [...new Set([selectedAY, currentFY])];
+
+      let clsQ = (supabase as any)
+        .from("client_fy_classifications")
+        .select("client_id, classification, financial_year")
+        .in("financial_year", fysToCheck);
+      if (!isSuperadmin && firmId) clsQ = clsQ.eq("firm_id", firmId);
+      const { data: fyClassData } = await clsQ;
+
+      // Build classMap: for each client keep the entry whose FY matches selectedAY
+      // if available, otherwise fall back to the currentFY entry.
+      const classMapRaw = new Map<string, { cls: string; fy: string }>();
+      for (const row of (fyClassData || [])) {
+        if (!row.client_id) continue;
+        const existing = classMapRaw.get(row.client_id);
+        // Prefer selectedAY row over currentFY row
+        if (!existing || (row.financial_year === selectedAY && existing.fy !== selectedAY)) {
+          classMapRaw.set(row.client_id, { cls: row.classification, fy: row.financial_year });
+        }
+      }
+      const classMap = new Map<string, string>(
+        Array.from(classMapRaw.entries()).map(([id, v]) => [id, v.cls])
+      );
+
+      // Clients explicitly classified as "Audit" in client_fy_classifications
+      const auditClassifiedClientIds = Array.from(classMapRaw.entries())
+        .filter(([, v]) => v.cls?.toLowerCase() === "audit")
+        .map(([id]) => id);
+
+      // ── Step 2: Build combined pool ──────────────────────────────────────────
+      // Audit-engaged + ITR-service + explicitly classified as Audit
+      const allClientIds = [...new Set([
+        ...auditClientIds,
+        ...itrClientIds,
+        ...auditClassifiedClientIds,
+      ])];
       if (allClientIds.length === 0) return [];
 
       let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
@@ -236,32 +286,25 @@ const ItReturns = () => {
       q = q.in("client_id", allClientIds);
       const { data: pData } = await q;
 
-      // Fetch client details for the combined pool
+      // Fetch client details — include work_group_type which is set in Advanced Info
       const { data: cData } = await supabase
         .from("clients")
-        .select("id, name, pan, entity_type, responsible_person_id")
+        .select("id, name, pan, entity_type, responsible_person_id, work_group_type")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .in("id", allClientIds)
         .order("name");
       const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
-      // Fetch "Partner in Audited Firm" classifications from client_fy_classifications
-      // Note: client_fy_classifications stores financial_year in same format as AY (e.g. "2025-26")
-      const { data: fyClassData } = await supabase
-        .from("client_fy_classifications")
-        .select("client_id, classification")
-        .in("client_id", allClientIds)
-        .eq("financial_year", selectedAY);
-      const classMap = new Map((fyClassData || []).map(c => [c.client_id, c.classification]));
-
       // Classification logic:
-      // 1. Client has audit engagement for this AY → "Audit" (Audited tab)
-      // 2. client_fy_classifications says "Partner in Audited Firm" → partner tab
-      // 3. Everything else (ITR-service clients) → Non-Audited
+      // 1. Client has audit engagement for this FY → "Audit"
+      // 2. client_fy_classifications says "Audit" (any recent FY) → "Audit"
+      // 3. client_fy_classifications says "Partner in Audited Firm" → partner tab
+      // 4. Everything else (ITR-service clients) → Non-Audited
       const resolveClassification = (clientId: string): string => {
         if (auditSet.has(clientId)) return "Audit";
         const cls = classMap.get(clientId) || "";
+        if (cls.toLowerCase() === "audit") return "Audit";
         if (cls.toLowerCase().includes("partner")) return cls;
         return "";
       };
@@ -270,16 +313,7 @@ const ItReturns = () => {
       const { data: uData } = await supabase.from("users").select("id, name");
       const userMap = new Map((uData || []).map(u => [u.id, u.name]));
 
-      // Fetch client work group memberships
-      const { data: wgMembers } = await supabase
-        .from("work_group_memberships")
-        .select("client_id, group_id, work_groups(name)")
-        .in("client_id", allClientIds);
-      const clientWgMap = new Map<string, string>();
-      for (const m of (wgMembers || [])) {
-        clientWgMap.set(m.client_id, (m as any).work_groups?.name || "");
-      }
-
+      // itr_work_groups map (for the ITR-specific work group assigned on a profile)
       const wgMap = new Map(workGroups.map((g: any) => [g.id, g]));
       const canonicalProfilesByClient = new Map<string, any>();
       for (const profile of (pData || [])) {
@@ -298,20 +332,24 @@ const ItReturns = () => {
       for (const p of canonicalProfiles) {
         const cl = clientMap.get(p.client_id || "");
         const wg = wgMap.get(p.itr_work_group_id || "");
+        // work_group_type is set in the client wizard's Advanced Info step and stored on clients table.
+        // Fall back to itr_work_groups name if available.
+        const workGroupDisplay = (cl as any)?.work_group_type || (wg as any)?.name || "";
         enriched.push({
           ...p,
           client_name: cl?.name || "Unknown",
           client_pan: cl?.pan || "",
           entity_type: cl?.entity_type || "",
-          group_name: (wg as any)?.name || "",
+          group_name: workGroupDisplay,
           assigned_name: userMap.get(p.assigned_to || "") || "",
           client_classification: resolveClassification(p.client_id || ""),
-          work_group_name: clientWgMap.get(p.client_id || "") || "",
+          work_group_name: workGroupDisplay,
         });
       }
 
       for (const client of (cData || [])) {
         if (existingClientIds.has(client.id)) continue;
+        const workGroupDisplay = (client as any).work_group_type || "";
         enriched.push({
           id: `virtual_${client.id}_${selectedAY}`,
           client_id: client.id,
@@ -333,12 +371,18 @@ const ItReturns = () => {
           client_pan: client.pan || "",
           entity_type: client.entity_type || "",
           client_classification: resolveClassification(client.id),
-          work_group_name: clientWgMap.get(client.id) || "",
+          work_group_name: workGroupDisplay,
+          group_name: workGroupDisplay,
         });
       }
 
       return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
+    // Wait until at least one client pool is loaded before running.
+    // The query itself also fetches audit-classified clients internally, so
+    // it will still add them even when auditClientIds/itrClientIds are empty.
+    // Restoring the guard prevents an early empty-array run from being cached
+    // and blocking subsequent renders when itrClientIds loads.
     enabled: !!user?.id && (itrClientIds.length > 0 || auditClientIds.length > 0),
   });
 
@@ -350,7 +394,7 @@ const ItReturns = () => {
       if (filterForm && p.itr_form !== filterForm) return false;
       if (filterStaff && p.assigned_to !== filterStaff) return false;
       if (filterConstitution && (p.entity_type || "") !== filterConstitution) return false;
-      if (filterWorkGroup && (p.work_group_name || "") !== filterWorkGroup) return false;
+      if (filterWorkGroup && (p.group_name || p.work_group_name || "") !== filterWorkGroup) return false;
       if (filterUploadBy && (p as any).upload_by !== filterUploadBy) return false;
       if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
       if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
@@ -628,7 +672,7 @@ function FilingTab({
         </Badge>
       </div>
 
-      {/* Toolbar */}
+      {/* Toolbar — search + actions only; column filters are in the table header row */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -639,55 +683,9 @@ function FilingTab({
             className="pl-9 h-9"
           />
         </div>
-        <Select value={filterForm} onValueChange={v => setFilterForm(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="ITR Form" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Forms</SelectItem>
-            {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={filterConstitution} onValueChange={v => setFilterConstitution(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[130px] h-9 text-xs"><SelectValue placeholder="Constitution" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            {[...new Set(allProfiles.map((p: ItrProfile) => p.entity_type).filter(Boolean))].map((et: string) => (
-              <SelectItem key={et} value={et}>{et}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={filterWorkGroup} onValueChange={v => setFilterWorkGroup(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[130px] h-9 text-xs"><SelectValue placeholder="Work Group" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            {[...new Set(allProfiles.map((p: ItrProfile) => p.work_group_name).filter(Boolean))].map((wg: string) => (
-              <SelectItem key={wg} value={wg}>{wg}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={filterUploadBy} onValueChange={v => setFilterUploadBy(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Upload By" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={filterPreparedBy} onValueChange={v => setFilterPreparedBy(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Prepared By" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={filterCheckedBy} onValueChange={v => setFilterCheckedBy(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Checked By" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
-          </SelectContent>
-        </Select>
         {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterUploadBy || filterPreparedBy || filterCheckedBy) && (
           <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); }}>
-            <X size={14} className="mr-1" /> Clear
+            <X size={14} className="mr-1" /> Clear Filters
           </Button>
         )}
         <div className="flex-1" />
@@ -755,23 +753,96 @@ function FilingTab({
               <div className="border rounded-lg overflow-auto">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-background">
+                    {/* ── Column labels ── */}
                     <TableRow>
                       <TableHead className="sticky left-0 z-20 bg-background min-w-[180px]">Client Name</TableHead>
                       <TableHead className="min-w-[100px]">Constitution</TableHead>
                       <TableHead className="min-w-[120px]">Work Group</TableHead>
-                      <TableHead className="min-w-[170px]">Status</TableHead>
-                      <TableHead className="min-w-[130px]">Filed Date</TableHead>
-                      <TableHead className="min-w-[130px]">Upload By</TableHead>
+                      <TableHead className="min-w-[160px]">Status</TableHead>
                       <TableHead className="min-w-[130px]">Prepared By</TableHead>
                       <TableHead className="min-w-[130px]">Checked By</TableHead>
-                      <TableHead className="w-[110px]">Actions</TableHead>
+                      <TableHead className="min-w-[130px]">Filed Date</TableHead>
+                      <TableHead className="min-w-[130px]">Upload By</TableHead>
+                      <TableHead className="w-[80px]">Actions</TableHead>
+                    </TableRow>
+                    {/* ── Column filters ── */}
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="sticky left-0 z-20 bg-muted/40 py-1 px-2">
+                        <span className="text-[10px] text-muted-foreground italic">search ↑</span>
+                      </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterConstitution}
+                          onChange={e => setFilterConstitution(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {[...new Set((allProfiles as ItrProfile[]).map(p => p.entity_type).filter(Boolean))].map((et: any) => (
+                            <option key={et} value={et}>{et}</option>
+                          ))}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterWorkGroup}
+                          onChange={e => setFilterWorkGroup(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {[...new Set((allProfiles as ItrProfile[]).map(p => p.group_name || p.work_group_name).filter(Boolean))].map((wg: any) => (
+                            <option key={wg} value={wg}>{wg}</option>
+                          ))}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterStatus}
+                          onChange={e => setFilterStatus(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {FILING_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterPreparedBy}
+                          onChange={e => setFilterPreparedBy(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {(staffUsers as StaffUser[]).map(u => <option key={u.id} value={u.id}>{u.name || u.id}</option>)}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterCheckedBy}
+                          onChange={e => setFilterCheckedBy(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {(staffUsers as StaffUser[]).map(u => <option key={u.id} value={u.id}>{u.name || u.id}</option>)}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2" />
+                      <TableHead className="py-1 px-2">
+                        <select
+                          value={filterUploadBy}
+                          onChange={e => setFilterUploadBy(e.target.value)}
+                          className="h-6 text-[11px] w-full rounded border border-border bg-background px-1 cursor-pointer"
+                        >
+                          <option value="">All</option>
+                          {(staffUsers as StaffUser[]).map(u => <option key={u.id} value={u.id}>{u.name || u.id}</option>)}
+                        </select>
+                      </TableHead>
+                      <TableHead className="py-1 px-2" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {subTabProfiles.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                          No clients in this category.
+                          No clients in this category.{filterConstitution || filterWorkGroup || filterStatus || filterPreparedBy || filterCheckedBy || filterUploadBy ? " (filters active)" : ""}
                         </TableCell>
                       </TableRow>
                     ) : subTabProfiles.map((p: ItrProfile) => (
@@ -832,8 +903,8 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
         {/* Constitution */}
         <TableCell className="text-xs">{p.entity_type || "—"}</TableCell>
 
-        {/* Work Group - read-only from client */}
-        <TableCell className="text-xs text-muted-foreground">{p.work_group_name || "—"}</TableCell>
+        {/* Work Group - show itr_work_group (group_name) first, fall back to client work group */}
+        <TableCell className="text-xs text-muted-foreground">{p.group_name || p.work_group_name || "—"}</TableCell>
 
         {/* Status */}
         <TableCell>
@@ -851,30 +922,6 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
                   {s}
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
-        </TableCell>
-
-        {/* Filed Date */}
-        <TableCell>
-          <InlineDatePicker
-            value={p.date_filed}
-            onChange={v => onUpdate(p, "date_filed", v)}
-          />
-        </TableCell>
-
-        {/* Upload By */}
-        <TableCell>
-          <Select
-            value={(p as any).upload_by || "none"}
-            onValueChange={v => onUpdate(p, "upload_by", v === "none" ? null : v)}
-          >
-            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
-              <SelectValue placeholder="—" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">—</SelectItem>
-              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
             </SelectContent>
           </Select>
         </TableCell>
@@ -900,6 +947,30 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
           <Select
             value={(p as any).checked_by || "none"}
             onValueChange={v => onUpdate(p, "checked_by", v === "none" ? null : v)}
+          >
+            <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">—</SelectItem>
+              {staffUsers.map((u: StaffUser) => <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TableCell>
+
+        {/* Filed Date — moved to end (after Checked By) */}
+        <TableCell>
+          <InlineDatePicker
+            value={p.date_filed}
+            onChange={v => onUpdate(p, "date_filed", v)}
+          />
+        </TableCell>
+
+        {/* Upload By — moved to end (after Filed Date) */}
+        <TableCell>
+          <Select
+            value={(p as any).upload_by || "none"}
+            onValueChange={v => onUpdate(p, "upload_by", v === "none" ? null : v)}
           >
             <SelectTrigger className="h-7 text-xs border-none shadow-none bg-transparent px-1">
               <SelectValue placeholder="—" />
@@ -963,6 +1034,7 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
     }
     if (ackNo !== (p.acknowledgment_no || "")) onUpdate(p, "acknowledgment_no", ackNo);
     if (itrForm !== (p.itr_form || "")) onUpdate(p, "itr_form", itrForm || null);
+    if (remarks !== ((p as any).remarks || "")) onUpdate(p, "remarks", remarks || null);
     onOpenChange(false);
   };
 
@@ -973,10 +1045,6 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
           <SheetTitle>{p.client_name} — Info</SheetTitle>
         </SheetHeader>
         <div className="space-y-4 mt-4">
-          <div>
-            <Label>PAN</Label>
-            <p className="font-mono text-sm text-muted-foreground">{p.client_pan || "—"}</p>
-          </div>
           <div className="space-y-1.5">
             <Label>ITR Form</Label>
             <Select value={itrForm || "none"} onValueChange={v => setItrForm(v === "none" ? "" : v)}>
@@ -994,16 +1062,6 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
           <div className="space-y-1.5">
             <Label>Remarks</Label>
             <Textarea value={remarks} onChange={e => setRemarks(e.target.value)} rows={3} placeholder="Any notes..." />
-          </div>
-          <div>
-            <Label>Status</Label>
-            <Badge className={cn("text-xs", STATUS_COLORS[p.filing_status || "Data Pending"] || "")}>
-              {p.filing_status || "Data Pending"}
-            </Badge>
-          </div>
-          <div>
-            <Label>Work Group</Label>
-            <p className="text-sm text-muted-foreground">{p.work_group_name || "—"}</p>
           </div>
           <Separator />
           <Button onClick={handleSave} className="w-full">Save & Close</Button>

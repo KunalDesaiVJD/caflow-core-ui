@@ -90,13 +90,15 @@ const statusLabel: Record<string, string> = {
 function getAuditOptionsForClient(client: any) {
   if (!client) return AUDIT_TYPES;
   const opts: { value: string; label: string }[] = [];
-  const hasStat = !!client.statutory_audit_applicable;
-  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
-  if (hasStat)           opts.push({ value: "statutory",  label: "Statutory Audit" });
-  if (hasTax)            opts.push({ value: "tax_audit",  label: "Tax Audit" });
-  if (hasStat && hasTax) opts.push({ value: "both",       label: "Both (Statutory + Tax)" });
-  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
-  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  const hasStat = !!client.statutory_audit_applicable || !!client.has_statutory_service;
+  const hasTax  = !!client.tax_audit_applicable       || !!client.has_tax_audit_service;
+  if (hasStat)           opts.push({ value: "statutory", label: "Statutory Audit" });
+  if (hasTax)            opts.push({ value: "tax_audit", label: "Tax Audit" });
+  if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
+  if (client.internal_audit_applicable || client.has_internal_audit_service)
+                         opts.push({ value: "internal",  label: "Internal Audit" });
+  if (client.stock_audit_applicable)
+                         opts.push({ value: "stock",     label: "Stock Audit" });
   return opts;
 }
 
@@ -116,7 +118,7 @@ export default function AuditIntelligence() {
   const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
-  // #1 — clients from context are already filtered to classification='Audit' (see useAuditContext)
+  // #1 — clients from context are already filtered to audit-eligible (see useAuditContext)
   const auditClients = clients;
 
   // Dialogs
@@ -132,11 +134,26 @@ export default function AuditIntelligence() {
   // Searchable client dropdown
   const [clientOpen, setClientOpen] = useState(false);
 
-  // Edit form
+  // Edit form — must be declared BEFORE editDialogClients useMemo
   const [engForm, setEngForm] = useState({
     audit_firm_id: "", client_id: "", financial_year: "2024-25", audit_type: "statutory",
     entity_type: "company", audit_period_type: "annual",
   });
+
+  // For the Edit Engagement dialog: always include the existing engagement's client
+  // even if it no longer passes the audit eligibility filter.
+  // IMPORTANT: must come AFTER engForm useState declaration.
+  const editDialogClients = useMemo(() => {
+    if (!engForm.client_id) return auditClients;
+    const alreadyIncluded = auditClients.some(c => c.id === engForm.client_id);
+    if (alreadyIncluded) return auditClients;
+    const engClientName = selectedEngagement?.client_name || (selectedEngagement?.clients as any)?.name || "";
+    const engClientType = selectedEngagement?.client_entity_type || selectedEngagement?.entity_type || "";
+    return [
+      { id: engForm.client_id, name: engClientName, entity_type: engClientType },
+      ...auditClients,
+    ];
+  }, [auditClients, engForm.client_id, selectedEngagement]);
 
   useEffect(() => {
     if (!user?.firm_id) return;
@@ -690,12 +707,12 @@ export default function AuditIntelligence() {
             <div>
               <Label>Client *</Label>
               <Select value={engForm.client_id} onValueChange={v => {
-                const client = clients.find(c => c.id === v);
+                const client = editDialogClients.find(c => c.id === v);
                 setEngForm(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
               }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
-                  {auditClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {editDialogClients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

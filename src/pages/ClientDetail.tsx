@@ -769,7 +769,6 @@ const ClientDetail = () => {
           <TabsTrigger value="basic">Basic Info</TabsTrigger>
           <TabsTrigger value="services">Service Activation</TabsTrigger>
           {isAuditClient && <TabsTrigger value="audit">Audit Setup</TabsTrigger>}
-          <TabsTrigger value="groups">Work Groups</TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Basic Info */}
@@ -845,23 +844,6 @@ const ClientDetail = () => {
                 </CardContent>
               </Card>
 
-              {/* Banking Summary */}
-              <Card>
-                <CardHeader><CardTitle className="text-sm">Banking Details</CardTitle></CardHeader>
-                <CardContent>
-                  {bankAccounts.length > 0 ? (
-                    <div className="space-y-1">
-                      {bankAccounts.map((b: any, i: number) => (
-                        <div key={i} className="flex justify-between text-sm">
-                          <span>{b.bank_name} — {b.branch}</span>
-                          <span className="font-mono text-muted-foreground">{b.account_type}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <p className="text-sm text-muted-foreground">No bank accounts recorded</p>}
-                </CardContent>
-              </Card>
-
               <Card>
                 <CardContent className="p-4"><ClientGroupsSection clientId={client.id} /></CardContent>
               </Card>
@@ -894,74 +876,72 @@ const ClientDetail = () => {
           </div>
         </TabsContent>
 
-        {/* Tab 2: Service Activation */}
+        {/* Tab 2: Service Activation (read-only) */}
         <TabsContent value="services">
           <Card>
-            <CardHeader><CardTitle className="text-sm">Service Activation</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
+            <CardHeader>
+              <CardTitle className="text-sm">Active Services</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Services configured during client setup. To change services, use <Button variant="link" className="h-auto p-0 text-xs" onClick={() => navigate(`/clients/edit/${client.id}`)}>Edit Client</Button>.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2">
               {serviceCategories.map(cat => {
                 const cs = clientServices.find(s => s.service_category_id === cat.id);
                 const isActive = cs?.is_active || false;
                 const isTds = cat.linked_module === 'tds';
                 return (
-                  <div key={cat.id} className="border border-border rounded-lg p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Switch
-                          checked={isActive}
-                          onCheckedChange={() => toggleService(cat.id, isActive)}
-                          disabled={svcSaving === cat.id}
-                        />
-                        <div>
-                          <p className="text-sm font-medium text-foreground">{cat.name}</p>
-                          <div className="flex gap-1.5 mt-0.5">
-                            <Badge variant="outline" className="text-[10px]">{cat.frequency}</Badge>
-                            {cat.linked_module && <Badge variant="secondary" className="text-[10px]">{cat.linked_module}</Badge>}
-                          </div>
+                  <div
+                    key={cat.id}
+                    className={`border rounded-lg p-4 ${isActive
+                      ? 'border-green-200 bg-green-50/40 dark:border-green-800 dark:bg-green-900/10'
+                      : 'border-border bg-muted/20 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        variant={isActive ? "default" : "secondary"}
+                        className={`text-xs shrink-0 ${isActive ? "bg-green-600 hover:bg-green-600" : ""}`}
+                      >
+                        {isActive ? "Active" : "Inactive"}
+                      </Badge>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{cat.name}</p>
+                        <div className="flex gap-1.5 mt-0.5">
+                          <Badge variant="outline" className="text-[10px]">
+                            {cs?.frequency_override || cat.frequency}
+                          </Badge>
+                          {cat.linked_module && (
+                            <Badge variant="secondary" className="text-[10px]">{cat.linked_module}</Badge>
+                          )}
                         </div>
                       </div>
-                      {svcSaving === cat.id && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                     </div>
                     {isActive && cs && (
-                      <div className="space-y-3 pl-12">
-                        {/* TDS-specific info */}
-                        {isTds && (cs as any).tds_forms_applicable && (
-                          <div className="bg-muted/50 rounded-lg p-3 space-y-1">
-                            <p className="text-xs font-medium">Applicable Forms: <span className="font-mono">{((cs as any).tds_forms_applicable || []).join(', ')}</span></p>
-                            <p className="text-xs text-muted-foreground">
-                              Effective from: {(cs as any).tds_effective_from_fy} {(cs as any).tds_effective_from_q}
-                            </p>
-                          </div>
+                      <div className="mt-2 pl-16 text-xs text-muted-foreground space-y-0.5">
+                        {isTds && (cs as any).tds_forms_applicable?.length > 0 && (
+                          <p>
+                            Forms: <span className="font-mono text-foreground">{((cs as any).tds_forms_applicable || []).join(', ')}</span>
+                            {(cs as any).tds_effective_from_fy && (
+                              <span> · Effective: {(cs as any).tds_effective_from_fy} {(cs as any).tds_effective_from_q}</span>
+                            )}
+                          </p>
                         )}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Frequency Override</Label>
-                            <Select value={cs.frequency_override || "__default__"} onValueChange={v => updateServiceField(cs.id, "frequency_override", v === "__default__" ? null : v)}>
-                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Default" /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__default__">Default</SelectItem>
-                                {FREQUENCIES.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Due Day Override</Label>
-                            <Input type="number" min={1} max={31} className="h-8 text-xs" value={cs.due_date_override || ""} onChange={e => updateServiceField(cs.id, "due_date_override", e.target.value ? parseInt(e.target.value) : null)} />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Fee Override (₹)</Label>
-                            <Input type="number" className="h-8 text-xs" value={cs.fee_override || ""} onChange={e => updateServiceField(cs.id, "fee_override", e.target.value ? parseFloat(e.target.value) : null)} />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-[11px]">Notes</Label>
-                            <Input className="h-8 text-xs" value={cs.notes || ""} onChange={e => updateServiceField(cs.id, "notes", e.target.value || null)} />
-                          </div>
-                        </div>
+                        {cs.fee_override != null && (
+                          <p>Fee: <span className="font-medium text-foreground">₹{Number(cs.fee_override).toLocaleString("en-IN")}</span></p>
+                        )}
+                        {cs.due_date_override != null && (
+                          <p>Due Day: <span className="font-medium text-foreground">{cs.due_date_override}</span></p>
+                        )}
+                        {cs.notes && <p>Notes: <span className="text-foreground">{cs.notes}</span></p>}
                       </div>
                     )}
                   </div>
                 );
               })}
+              {serviceCategories.length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center">No services configured.</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1050,43 +1030,6 @@ const ClientDetail = () => {
           </Card>
         </TabsContent>}
 
-        {/* Tab 4: Work Groups */}
-        <TabsContent value="groups">
-          <div className="space-y-4">
-            <Card>
-              <CardHeader><CardTitle className="text-sm">Client Groups</CardTitle></CardHeader>
-              <CardContent><ClientGroupsSection clientId={client.id} /></CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader><CardTitle className="text-sm">ITR Work Group</CardTitle></CardHeader>
-              <CardContent>
-                {clientItrProfile ? (
-                  <div className="space-y-2">
-                    <p className="text-sm"><span className="text-muted-foreground">Current Group:</span> <span className="font-medium">{itrWorkGroups.find(g => g.id === clientItrProfile.itr_work_group_id)?.name || "Unassigned"}</span></p>
-                    <Select
-                      value={clientItrProfile.itr_work_group_id || "__none__"}
-                      onValueChange={async v => {
-                        const val = v === "__none__" ? null : v;
-                        await supabase.from("itr_profiles").update({ itr_work_group_id: val } as any).eq("id", clientItrProfile.id);
-                        setClientItrProfile((p: any) => ({ ...p, itr_work_group_id: val }));
-                        toast({ title: "Work group updated" });
-                      }}
-                    >
-                      <SelectTrigger className="w-64"><SelectValue placeholder="Select work group" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Unassigned</SelectItem>
-                        {itrWorkGroups.map(g => <SelectItem key={g.id} value={g.id}>{g.code} — {g.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No ITR profile exists for this client. Create an ITR filing first.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
       </Tabs>
 
       {/* ═══ TDS Activation Modal ═══ */}

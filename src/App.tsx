@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,63 +14,80 @@ import { ChatFloatingWidget } from "./components/ChatFloatingWidget";
 import { PermissionsProvider } from "./hooks/usePermissions";
 import { AuditContextProvider } from "./hooks/useAuditContext";
 import { Skeleton } from "./components/ui/skeleton";
-import Index from "./pages/Index";
-import Clients from "./pages/Clients";
-import ImportTrialBalance from "./pages/ImportTrialBalance";
-import AuditScrutiny from "./pages/AuditScrutiny";
-import ClientDetail from "./pages/ClientDetail";
-import NewClientWizard from "./pages/NewClientWizard";
-import TdsFilings from "./pages/TdsFilings";
-import ItReturns from "./pages/ItReturns";
-import ItrAisRecon from "./pages/ItrAisRecon";
-import ItrDemands from "./pages/ItrDemands";
-import Billing from "./pages/Billing";
-import NewInvoice from "./pages/NewInvoice";
-import ErpLedger from "./pages/ErpLedger";
-import Timesheets from "./pages/Timesheets";
-import BankRecon from "./pages/BankRecon";
-import AuditIntelligence from "./pages/AuditIntelligence";
-import EngagementDetail from "./pages/EngagementDetail";
-import Documents from "./pages/Documents";
-import SettingsPage from "./pages/SettingsPage";
-import CoaMappings from "./pages/CoaMappings";
-import AuditFirms from "./pages/AuditFirms";
-import ClientGroups from "./pages/ClientGroups";
-import Form3CD      from "./pages/Form3CD";
-import Form3Reports from "./pages/Form3Reports";
-import NotesToAccounts from "./pages/NotesToAccounts";
-import ComparativeStatements from "./pages/ComparativeStatements";
-import UserManagement from "./pages/UserManagement";
-import ChangePassword from "./pages/ChangePassword";
-import AdminOverview from "./pages/admin/AdminOverview";
-import AdminFirms from "./pages/admin/AdminFirms";
-import AdminLogs from "./pages/admin/AdminLogs";
-import AdminAiSkills from "./pages/admin/AdminAiSkills";
-import AdminThemeStudio from "./pages/admin/AdminThemeStudio";
-import Login from "./pages/Login";
-import ForgotPassword from "./pages/ForgotPassword";
-import ResetPassword from "./pages/ResetPassword";
-import PortalHome from "./pages/PortalHome";
-import NotFound from "./pages/NotFound";
-import AuditRedirect from "./pages/AuditRedirect";
-import AuditPreliminary from "./pages/AuditPreliminary";
-import AuditQueryTracker from "./pages/AuditQueryTracker";
-import AuditQueryDispatch from "./pages/AuditQueryDispatch";
-import AuditReportEngine from "./pages/AuditReportEngine";
-import PortalQueries from "./pages/PortalQueries";
-import NoticeTracker from "./pages/NoticeTracker";
-import NoticeDetail from "./pages/NoticeDetail";
-import RolesPermissions from "./pages/RolesPermissions";
-import FirmSettings from "./pages/FirmSettings";
-import ServiceMasters from "./pages/ServiceMasters";
-import TaxAuditTemplateSettings from "./pages/TaxAuditTemplateSettings";
-import Chat from "./pages/Chat";
-import Depreciation from "./pages/Depreciation";
-import AuditPipeline from "./pages/AuditPipeline";
-import AuditMasterConfig from "./pages/AuditMasterConfig";
-import AuditWorksheetPageWrapper from "./pages/AuditWorksheetPageWrapper";
-import AuditTracker from "./pages/AuditTracker";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+
+// ─── Lazy-loaded pages ────────────────────────────────────────────────────────
+// Each page is split into its own JS chunk so the browser only downloads the
+// code that is actually needed for the current route.
+const Index                    = lazy(() => import("./pages/Index"));
+const Clients                  = lazy(() => import("./pages/Clients"));
+const ImportTrialBalance       = lazy(() => import("./pages/ImportTrialBalance"));
+const AuditScrutiny            = lazy(() => import("./pages/AuditScrutiny"));
+const ClientDetail             = lazy(() => import("./pages/ClientDetail"));
+const NewClientWizard          = lazy(() => import("./pages/NewClientWizard"));
+const TdsFilings               = lazy(() => import("./pages/TdsFilings"));
+const ItReturns                = lazy(() => import("./pages/ItReturns"));
+const ItrAisRecon              = lazy(() => import("./pages/ItrAisRecon"));
+const ItrDemands               = lazy(() => import("./pages/ItrDemands"));
+const Billing                  = lazy(() => import("./pages/Billing"));
+const NewInvoice               = lazy(() => import("./pages/NewInvoice"));
+const ErpLedger                = lazy(() => import("./pages/ErpLedger"));
+const Timesheets               = lazy(() => import("./pages/Timesheets"));
+const BankRecon                = lazy(() => import("./pages/BankRecon"));
+const AuditIntelligence        = lazy(() => import("./pages/AuditIntelligence"));
+const EngagementDetail         = lazy(() => import("./pages/EngagementDetail"));
+const Documents                = lazy(() => import("./pages/Documents"));
+const SettingsPage             = lazy(() => import("./pages/SettingsPage"));
+const CoaMappings              = lazy(() => import("./pages/CoaMappings"));
+const AuditFirms               = lazy(() => import("./pages/AuditFirms"));
+const ClientGroups             = lazy(() => import("./pages/ClientGroups"));
+const Form3CD                  = lazy(() => import("./pages/Form3CD"));
+const Form3Reports             = lazy(() => import("./pages/Form3Reports"));
+const NotesToAccounts          = lazy(() => import("./pages/NotesToAccounts"));
+const ComparativeStatements    = lazy(() => import("./pages/ComparativeStatements"));
+const UserManagement           = lazy(() => import("./pages/UserManagement"));
+const ChangePassword           = lazy(() => import("./pages/ChangePassword"));
+const AdminOverview            = lazy(() => import("./pages/admin/AdminOverview"));
+const AdminFirms               = lazy(() => import("./pages/admin/AdminFirms"));
+const AdminLogs                = lazy(() => import("./pages/admin/AdminLogs"));
+const AdminAiSkills            = lazy(() => import("./pages/admin/AdminAiSkills"));
+const AdminThemeStudio         = lazy(() => import("./pages/admin/AdminThemeStudio"));
+const Login                    = lazy(() => import("./pages/Login"));
+const ForgotPassword           = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword            = lazy(() => import("./pages/ResetPassword"));
+const PortalHome               = lazy(() => import("./pages/PortalHome"));
+const NotFound                 = lazy(() => import("./pages/NotFound"));
+const AuditRedirect            = lazy(() => import("./pages/AuditRedirect"));
+const AuditPreliminary         = lazy(() => import("./pages/AuditPreliminary"));
+const AuditQueryTracker        = lazy(() => import("./pages/AuditQueryTracker"));
+const AuditQueryDispatch       = lazy(() => import("./pages/AuditQueryDispatch"));
+const AuditReportEngine        = lazy(() => import("./pages/AuditReportEngine"));
+const PortalQueries            = lazy(() => import("./pages/PortalQueries"));
+const NoticeDetail             = lazy(() => import("./pages/NoticeDetail"));
+const RolesPermissions         = lazy(() => import("./pages/RolesPermissions"));
+const FirmSettings             = lazy(() => import("./pages/FirmSettings"));
+const ServiceMasters           = lazy(() => import("./pages/ServiceMasters"));
+const TaxAuditTemplateSettings = lazy(() => import("./pages/TaxAuditTemplateSettings"));
+const Chat                     = lazy(() => import("./pages/Chat"));
+const Depreciation             = lazy(() => import("./pages/Depreciation"));
+const AuditPipeline            = lazy(() => import("./pages/AuditPipeline"));
+const AuditMasterConfig        = lazy(() => import("./pages/AuditMasterConfig"));
+const AuditWorksheetPageWrapper = lazy(() => import("./pages/AuditWorksheetPageWrapper"));
+const AuditTracker             = lazy(() => import("./pages/AuditTracker"));
+
+// Minimal fallback shown while a lazy page chunk is downloading
+function PageLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="space-y-4 w-64">
+        <Skeleton className="h-8 w-48 mx-auto" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-4 w-1/2" />
+      </div>
+    </div>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -125,6 +143,7 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <PermissionsProvider>
+            <Suspense fallback={<PageLoader />}>
             <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -214,6 +233,7 @@ const App = () => (
             </Route>
             <Route path="*" element={<NotFound />} />
             </Routes>
+            </Suspense>
             <FeedbackWidget />
             <ChatFloatingWidget />
             </PermissionsProvider>

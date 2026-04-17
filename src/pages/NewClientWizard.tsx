@@ -1,4 +1,18 @@
 import { useState, useEffect, useMemo } from "react";
+
+/** Parse a DB date string (YYYY-MM-DD) as a LOCAL date to avoid UTC-offset shift. */
+const parseLocalDate = (s: string): Date => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
+/** Serialise a Date back to YYYY-MM-DD using LOCAL calendar day (not UTC). */
+const toLocalDateStr = (dt: Date): string => {
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -36,10 +50,11 @@ const defaultBasicInfo: BasicInfoData = {
   pan: "",
   entity_type: "",
   email: "",
-  contact_person: "",
   mobile: "",
   address: "",
   gstins: [""],
+  gstin_states: {},
+  gstin_addresses: {},
   tan_number: "",
 };
 
@@ -261,8 +276,24 @@ const NewClientWizard = () => {
         pan: client.pan || "",
         entity_type: client.entity_type || "",
         gstins: Array.isArray(client.gstin) && client.gstin.length > 0 ? client.gstin : [""],
+        gstin_states: (client.gstin_states && typeof client.gstin_states === "object" && !Array.isArray(client.gstin_states))
+          ? (client.gstin_states as Record<string, string>)
+          : {},
+        gstin_addresses: (() => {
+          const saved = (client.gstin_addresses && typeof client.gstin_addresses === "object" && !Array.isArray(client.gstin_addresses))
+            ? { ...(client.gstin_addresses as Record<string, string>) }
+            : {};
+          // Auto-fill: if client has a main address and a GSTIN but no per-GSTIN address yet,
+          // pre-populate it so the field shows something meaningful immediately.
+          if (client.address) {
+            const gstinList: string[] = Array.isArray(client.gstin) ? client.gstin : [];
+            gstinList.filter((g: string) => g.trim()).forEach((g: string) => {
+              if (!saved[g]) saved[g] = client.address;
+            });
+          }
+          return saved;
+        })(),
         email: client.email || "",
-        contact_person: client.contact_person || "",
         mobile: client.mobile || "",
         address: client.address || "",
         tan_number: client.tan_number || "",
@@ -277,12 +308,13 @@ const NewClientWizard = () => {
         classification: fyClass?.classification || "",
         audit_firm_id: fyClass?.audit_firm_id || "",
         responsible_person_id: client.responsible_person_id || "",
-        date_of_incorporation: client.date_of_incorporation ? new Date(client.date_of_incorporation) : undefined,
+        contact_person: client.contact_person || "",
+        date_of_incorporation: client.date_of_incorporation ? parseLocalDate(client.date_of_incorporation) : undefined,
         registered_state: client.registered_state || "",
         business_nature: client.business_activity || "",
         cin: client.cin || "",
         dsc_number: client.dsc_number || "",
-        dsc_expiry_date: client.dsc_expiry_date ? new Date(client.dsc_expiry_date) : undefined,
+        dsc_expiry_date: client.dsc_expiry_date ? parseLocalDate(client.dsc_expiry_date) : undefined,
         work_group_type: client.work_group_type || "",
       });
 
@@ -298,32 +330,67 @@ const NewClientWizard = () => {
         });
       }
 
-      // ── FIX: Load existing client_services so the Services tab is pre-populated ──
-      // Without this, activeServices was always {}, making services appear lost on reload.
+      // ── Load Services & Billing ──────────────────────────────────────────────
       const { data: existingServices } = await supabase
         .from("client_services")
         .select("*")
         .eq("client_id", clientId!)
         .eq("is_active", true);
 
-      if (existingServices && existingServices.length > 0) {
-        const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
-        for (const svc of existingServices as any[]) {
-          activeServicesMap[svc.service_category_id] = {
-            frequency: svc.frequency_override || "monthly",
-            reminder_date: svc.reminder_date ?? 1,
-            billing_amount: svc.billing_amount ?? 0,
-            invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
-          };
-        }
-        setServiceBilling({
-          billingMode: ((existingServices[0] as any).billing_mode === "package_wise"
-            ? "package_wise"
-            : "service_specific") as "service_specific" | "package_wise",
-          activeServices: activeServicesMap,
-          packageConfig: { ...emptyPackageConfig },
-        });
+      // Load the most-recent package regardless of is_active so we always find it
+      const pkgRes = await (supabase
+        .from("client_service_packages")
+        .select("*")
+        .eq("client_id", clientId!)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle() as any);
+      const activePkgRow = pkgRes?.data ?? null;
+
+      // Determine billing mode:
+      // 1. Package row exists in client_service_packages → package_wise
+      // 2. client_services row with billing_mode = "package_wise" → package_wise
+      // 3. Otherwise → service_specific
+      const hasPkgRow = !!activePkgRow;
+      const svcBillingMode = (existingServices?.[0] as any)?.billing_mode;
+      const billingMode: "service_specific" | "package_wise" =
+        hasPkgRow || svcBillingMode === "package_wise" ? "package_wise" : "service_specific";
+
+      // Build individual services map (for "not in package" rows)
+      const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
+      for (const svc of (existingServices || []) as any[]) {
+        activeServicesMap[svc.service_category_id] = {
+          frequency: svc.frequency_override || "monthly",
+          reminder_date: svc.reminder_date ?? 1,
+          billing_amount: svc.billing_amount ?? 0,
+          invoice_gen_type: (svc.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+        };
       }
+
+      // Load package config
+      let loadedPkg = { ...emptyPackageConfig };
+      if (billingMode === "package_wise" && activePkgRow) {
+        const rawIds = activePkgRow.service_category_ids;
+        const serviceIds: string[] = Array.isArray(rawIds)
+          ? rawIds
+          : typeof rawIds === "string"
+          ? JSON.parse(rawIds)
+          : [];
+        loadedPkg = {
+          package_name: activePkgRow.package_name || "",
+          service_ids: serviceIds,
+          frequency: activePkgRow.frequency || "monthly",
+          reminder_date: activePkgRow.reminder_date ?? 1,
+          billing_amount: activePkgRow.billing_amount ?? 0,
+          invoice_gen_type: (activePkgRow.invoice_gen_type === "auto" ? "auto" : "reminder") as "auto" | "reminder",
+        };
+      }
+
+      setServiceBilling({
+        billingMode,
+        activeServices: activeServicesMap,
+        packageConfig: loadedPkg,
+      });
 
       setLoadingClient(false);
     };
@@ -362,11 +429,14 @@ const NewClientWizard = () => {
       errors.mobile = "Mobile number must be 10 digits";
     }
     if (basicInfo.pan && !errors.pan) {
-      // GAP-5: restrict uniqueness check to the current firm — PANs are unique per firm, not globally
+      // GAP-5: restrict uniqueness check to the current firm — PANs are unique per firm, not globally.
+      // Only check against published (non-draft) clients — drafts may have the same PAN
+      // during import and the conflict is resolved at finalization time.
       let panQuery = supabase
         .from("clients")
         .select("id")
         .eq("pan", basicInfo.pan)
+        .eq("is_draft", false)
         .is("deleted_at", null);
       if (effectiveFirmId) panQuery = panQuery.eq("firm_id", effectiveFirmId);
       const { data: existing } = await panQuery.limit(1);
@@ -425,22 +495,31 @@ const NewClientWizard = () => {
   /* ───── Payload builders ───── */
   const buildClientPayload = () => {
     const gstins = basicInfo.gstins.filter((g) => g.trim());
+    // Keep only states/addresses for GSTINs that are still in the list
+    const gstin_states: Record<string, string> = {};
+    const gstin_addresses: Record<string, string> = {};
+    gstins.forEach((g) => {
+      if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g];
+      if (basicInfo.gstin_addresses[g]) gstin_addresses[g] = basicInfo.gstin_addresses[g];
+    });
     return {
       name: basicInfo.name.trim(),
       customer_id: basicInfo.customer_id?.trim() || null,
       pan: basicInfo.pan || null,
       entity_type: basicInfo.entity_type || null,
       gstin: gstins.length > 0 ? gstins : null,
+      gstin_states,
+      gstin_addresses,
       email: basicInfo.email || null,
-      contact_person: basicInfo.contact_person?.trim() || null,
+      contact_person: advancedInfo.contact_person?.trim() || null,
       mobile: basicInfo.mobile || null,
       address: basicInfo.address || null,
       tan_number: basicInfo.tan_number || null,
       dsc_number: advancedInfo.dsc_number || null,
-      dsc_expiry_date: advancedInfo.dsc_expiry_date?.toISOString().split("T")[0] || null,
+      dsc_expiry_date: advancedInfo.dsc_expiry_date ? toLocalDateStr(advancedInfo.dsc_expiry_date) : null,
       work_group_type: advancedInfo.work_group_type || null,
       responsible_person_id: advancedInfo.responsible_person_id || null,
-      date_of_incorporation: advancedInfo.date_of_incorporation?.toISOString().split("T")[0] || null,
+      date_of_incorporation: advancedInfo.date_of_incorporation ? toLocalDateStr(advancedInfo.date_of_incorporation) : null,
       registered_state: advancedInfo.registered_state || null,
       business_activity: advancedInfo.business_nature || null,
       cin: advancedInfo.cin || null,
@@ -455,7 +534,13 @@ const NewClientWizard = () => {
     const firmId = effectiveFirmId ?? loadedClientFirmId;
     if (!firmId) return;
 
-    const newActiveIds = Object.keys(serviceBilling.activeServices);
+    const isPackageMode = serviceBilling.billingMode === "package_wise";
+
+    // In package mode the active set comes from packageConfig.service_ids;
+    // in service-specific mode it comes from the activeServices map.
+    const newActiveIds = isPackageMode
+      ? serviceBilling.packageConfig.service_ids
+      : Object.keys(serviceBilling.activeServices);
 
     // FIX: deactivate any services removed from the wizard (previously active but no longer selected)
     if (newActiveIds.length > 0) {
@@ -475,31 +560,60 @@ const NewClientWizard = () => {
         .eq("is_active", true);
     }
 
-    // Save active individual services
-    const serviceEntries = Object.entries(serviceBilling.activeServices);
-    if (serviceEntries.length > 0) {
-      const rows = serviceEntries.map(([serviceId, cfg]) => ({
+    if (isPackageMode && newActiveIds.length > 0) {
+      // Package mode: write one client_services row per service in the package
+      // so Service Activation tab correctly shows all of them as Active.
+      const pkg = serviceBilling.packageConfig;
+      const rows = newActiveIds.map(serviceId => ({
         client_id: targetClientId,
         service_category_id: serviceId,
         is_active: true,
-        frequency_override: cfg.frequency,
-        billing_amount: cfg.billing_amount,
-        reminder_date: cfg.reminder_date,
-        invoice_gen_type: cfg.invoice_gen_type,
-        billing_mode: serviceBilling.billingMode,
+        frequency_override: pkg.frequency || null,
+        billing_amount: null,    // billing handled at package level
+        reminder_date: pkg.reminder_date || null,
+        invoice_gen_type: pkg.invoice_gen_type || null,
+        billing_mode: "package_wise",
       }));
       const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
         onConflict: "client_id,service_category_id",
       });
       if (svcError) {
-        console.error("[Services] upsert error:", svcError);
+        console.error("[Services] package upsert error:", svcError);
         throw svcError;
+      }
+    } else {
+      // Save active individual services (service-specific mode)
+      const serviceEntries = Object.entries(serviceBilling.activeServices);
+      if (serviceEntries.length > 0) {
+        const rows = serviceEntries.map(([serviceId, cfg]) => ({
+          client_id: targetClientId,
+          service_category_id: serviceId,
+          is_active: true,
+          frequency_override: cfg.frequency,
+          billing_amount: cfg.billing_amount,
+          reminder_date: cfg.reminder_date,
+          invoice_gen_type: cfg.invoice_gen_type,
+          billing_mode: serviceBilling.billingMode,
+        }));
+        const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
+          onConflict: "client_id,service_category_id",
+        });
+        if (svcError) {
+          console.error("[Services] upsert error:", svcError);
+          throw svcError;
+        }
       }
     }
 
-    // Save package if package mode
+    // Save package if package mode — deactivate ALL old packages first, then insert
     if (serviceBilling.billingMode === "package_wise" && serviceBilling.packageConfig.service_ids.length > 0) {
       const pkg = serviceBilling.packageConfig;
+      // Deactivate ALL existing packages for this client (no is_active filter)
+      await supabase
+        .from("client_service_packages")
+        .update({ is_active: false } as any)
+        .eq("client_id", targetClientId);
+      // Insert the new/updated package
       const { error: pkgError } = await supabase.from("client_service_packages").insert({
         client_id: targetClientId,
         package_name: pkg.package_name,
@@ -508,11 +622,19 @@ const NewClientWizard = () => {
         reminder_date: pkg.reminder_date,
         billing_amount: pkg.billing_amount,
         invoice_gen_type: pkg.invoice_gen_type,
+        is_active: true,
       } as any);
       if (pkgError) {
         console.error("[Services] package insert error:", pkgError);
         throw pkgError;
       }
+    } else if (serviceBilling.billingMode === "service_specific") {
+      // Switching back from package mode — deactivate all packages
+      await supabase
+        .from("client_service_packages")
+        .update({ is_active: false, updated_at: new Date().toISOString() } as any)
+        .eq("client_id", targetClientId)
+        .eq("is_active", true);
     }
 
     // Create billing reminders
@@ -553,12 +675,15 @@ const NewClientWizard = () => {
     const oldClassification: string | null = existingFYRow?.classification ?? null;
 
     // Upsert current classification (single source of truth per client+FY).
+    // firm_id is stored directly so ClassificationByFYView can query without a large IN() list.
     // onConflict targets only the exact (client_id, financial_year) row — other FY rows are untouched.
+    const classFirmId = effectiveFirmId ?? loadedClientFirmId ?? null;
     const { error } = await supabase.from("client_fy_classifications").upsert({
       client_id:      targetClientId,
       financial_year: advancedInfo.financial_year,
       classification: advancedInfo.classification,
       audit_firm_id:  advancedInfo.audit_firm_id || null,
+      firm_id:        classFirmId,
     } as any, { onConflict: "client_id,financial_year" });
     if (error) throw error;
 
@@ -645,14 +770,12 @@ const NewClientWizard = () => {
       .limit(1);
     const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
 
-    // ── 3. Check at least one active service ──
-    const { data: svcRows } = await supabase
-      .from("client_services")
-      .select("id")
-      .eq("client_id", clientId)
-      .eq("is_active", true)
-      .limit(1);
-    const svcOk = (svcRows?.length ?? 0) > 0;
+    // ── 3. Check at least one active service (service_specific) OR active package (package_wise) ──
+    const [svcRes, pkgRes] = await Promise.all([
+      supabase.from("client_services").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
+      supabase.from("client_service_packages").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
+    ]);
+    const svcOk = (svcRes.data?.length ?? 0) > 0 || (pkgRes.data?.length ?? 0) > 0;
 
     console.log("[Wizard] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
 
@@ -710,6 +833,12 @@ const NewClientWizard = () => {
       if (stepId === "basic") {
         if (!(await validateBasicInfo())) { setSaving(false); return; }
         const gstins = basicInfo.gstins.filter((g) => g.trim());
+        const gstin_states: Record<string, string> = {};
+        const gstin_addresses: Record<string, string> = {};
+        gstins.forEach((g) => {
+          if (basicInfo.gstin_states[g]) gstin_states[g] = basicInfo.gstin_states[g];
+          if (basicInfo.gstin_addresses[g]) gstin_addresses[g] = basicInfo.gstin_addresses[g];
+        });
         const { error } = await supabase
           .from("clients")
           .update({
@@ -718,6 +847,8 @@ const NewClientWizard = () => {
             pan: basicInfo.pan || null,
             entity_type: basicInfo.entity_type || null,
             gstin: gstins.length > 0 ? gstins : null,
+            gstin_states,
+            gstin_addresses,
             email: basicInfo.email || null,
             mobile: basicInfo.mobile || null,
             address: basicInfo.address || null,
@@ -743,11 +874,12 @@ const NewClientWizard = () => {
         const { error } = await supabase
           .from("clients")
           .update({
+            contact_person: advancedInfo.contact_person?.trim() || null,
             dsc_number: advancedInfo.dsc_number || null,
-            dsc_expiry_date: advancedInfo.dsc_expiry_date?.toISOString().split("T")[0] || null,
+            dsc_expiry_date: advancedInfo.dsc_expiry_date ? toLocalDateStr(advancedInfo.dsc_expiry_date) : null,
             work_group_type: advancedInfo.work_group_type || null,
             responsible_person_id: advancedInfo.responsible_person_id || null,
-            date_of_incorporation: advancedInfo.date_of_incorporation?.toISOString().split("T")[0] || null,
+            date_of_incorporation: advancedInfo.date_of_incorporation ? toLocalDateStr(advancedInfo.date_of_incorporation) : null,
             registered_state: advancedInfo.registered_state || null,
             business_activity: advancedInfo.business_nature || null,
             cin: advancedInfo.cin || null,

@@ -39,6 +39,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // ── Step 1: Unblock UI immediately using JWT claims ──────────────────────
+      // The JWT payload already contains user_metadata written at sign-up/update.
+      // We use it to show the app instantly while the DB profile loads in the
+      // background — eliminating the "Signing in…" stall on every page load.
+      const meta = session.user.user_metadata ?? {};
+      const optimisticUser: AuthUser = {
+        id: session.user.id,
+        email: session.user.email || null,
+        name: meta.name || session.user.email || null,
+        role: meta.role || null,
+        firm_id: meta.firm_id || null,
+        must_change_password: meta.must_change_password ?? false,
+        avatar_url: meta.avatar_url || null,
+      };
+      setUser(optimisticUser);
+      setLoading(false);   // ← UI can render immediately
+
+      // ── Step 2: Fetch DB profile in background to get authoritative data ─────
       try {
         const { data: profile } = await supabase
           .from("users")
@@ -60,25 +78,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             p_user_name: profile.name || session.user.email || "Unknown",
             p_user_role: profile.role || "staff_article",
           });
-        } else {
-          setUser({
-            id: session.user.id,
-            email: session.user.email || null,
-            name: session.user.user_metadata?.name || session.user.email || null,
-            role: session.user.user_metadata?.role || null,
-            firm_id: null,
-            must_change_password: false,
-            avatar_url: null,
-          });
         }
-      } finally {
-        if (isActive) {
-          setLoading(false);
-        }
+      } catch {
+        // Profile fetch failed — optimistic user from JWT is still set, app keeps working
       }
     };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Supabase uses setTimeout for token refresh — browser throttles timers in
+    // background tabs, so the refresh may never fire while the user is idle.
+    // When the tab becomes visible again, proactively refresh the token so the
+    // user never gets silently logged out after returning to the app.
+    const handleVisibilityChange = () => {
+      if (!isActive || document.hidden) return;
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          // Session still in storage — force a token refresh in case it expired
+          supabase.auth.refreshSession().then(({ data: { session: refreshed } }) => {
+            if (refreshed && isActive) void applySession(refreshed);
+          });
+        }
+        // If no session at all, auth state change will handle setting user to null
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // Ignore spurious SIGNED_OUT events that fire during background token refresh
+      // attempts — only act on them when the tab is visible (user is actually there).
+      if (event === "SIGNED_OUT" && document.hidden) return;
       void applySession(session);
     });
 
@@ -88,6 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       isActive = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       subscription.unsubscribe();
     };
   }, []);

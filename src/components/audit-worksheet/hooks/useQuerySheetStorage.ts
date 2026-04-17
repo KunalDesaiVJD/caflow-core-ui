@@ -10,7 +10,8 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ export function useQuerySheetStorage(
   engagementId: string,
   firmId?: string | null
 ) {
+  const { user } = useAuth();
   const [data, setData]     = useState<QuerySheetData>(BLANK_DATA);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -61,11 +63,16 @@ export function useQuerySheetStorage(
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
-    if (saved && typeof saved === "object" && Array.isArray(saved.queries)) {
-      setData(saved);
-    }
     setLoaded(true);
+    const cached = awLoad<QuerySheetData>(engagementId, "query_sheet_json");
+    if (cached && typeof cached === "object" && Array.isArray(cached.queries)) {
+      setData(cached);
+    }
+    awLoadFromDB<QuerySheetData>(engagementId, "query_sheet_json").then(remote => {
+      if (remote && typeof remote === "object" && Array.isArray(remote.queries)) {
+        setData(remote);
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Persist ───────────────────────────────────────────────────────────────
@@ -73,7 +80,7 @@ export function useQuerySheetStorage(
     async (snapshot: QuerySheetData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "query_sheet_json", snapshot);
+        awSave(engagementId, "query_sheet_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Query Sheet saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");
@@ -132,6 +139,19 @@ export function useQuerySheetStorage(
     [debounce]
   );
 
+  // CP-17: bulk-add multiple rows (used by Excel import)
+  const bulkAddQueries = useCallback(
+    (rows: Array<Omit<QueryRow, "id">>) => {
+      setData(prev => {
+        const newRows = rows.map(r => ({ id: newId(), ...BLANK_QUERY, ...r }));
+        const next: QuerySheetData = { queries: [...prev.queries, ...newRows] };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     return persist(data, false);
@@ -149,6 +169,7 @@ export function useQuerySheetStorage(
     addQuery,
     updateQuery,
     deleteQuery,
+    bulkAddQueries,
     manualSave,
     saving,
     loaded,

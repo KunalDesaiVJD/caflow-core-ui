@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import AuditWorksheetPage from "@/components/audit-worksheet/AuditWorksheetPage";
+import WorksheetVersionHistoryPanel from "@/components/audit-worksheet/WorksheetVersionHistoryPanel";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, History, Loader2 } from "lucide-react";
+import { useWorksheetHistory } from "@/components/audit-worksheet/hooks/useWorksheetHistory";
 
 interface PipelineStage6Props {
   engagementId: string;
@@ -13,7 +15,9 @@ interface PipelineStage6Props {
 }
 
 export default function PipelineStage6({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage6Props) {
-  const [saving, setSaving] = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const { logSave } = useWorksheetHistory(engagementId);
 
   // ─── SAVE ALL ───
   const saveAll = async (complete: boolean) => {
@@ -44,6 +48,14 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
           <p className="text-sm text-muted-foreground">Audit working papers and engagement documentation</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1"
+            onClick={() => setShowHistory(true)}
+          >
+            <History size={14} /> Version History
+          </Button>
           <Button variant="outline" size="sm" onClick={() => saveAll(false)} disabled={saving}>
             {saving && <Loader2 className="w-3 h-3 animate-spin mr-1" />} Save Draft
           </Button>
@@ -54,7 +66,17 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
       </div>
 
       {/* ═══ AUDIT SHEET — Full Worksheet Module ═══ */}
-      <AuditWorksheetPage engagementId={engagementId} />
+      <AuditWorksheetPage
+        engagementId={engagementId}
+        onSaved={(sectionName) => logSave(sectionName)}
+      />
+
+      {/* ═══ CP-16: Version History slide-over ═══ */}
+      <WorksheetVersionHistoryPanel
+        engagementId={engagementId}
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+      />
     </div>
   );
 }

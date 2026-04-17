@@ -38,11 +38,31 @@ export interface BasicInfoData {
   pan: string;
   entity_type: string;
   email: string;
-  contact_person: string;
   mobile: string;
   address: string;
   gstins: string[];
+  gstin_states: Record<string, string>;    // key = GSTIN, value = state name
+  gstin_addresses: Record<string, string>; // key = GSTIN, value = registered address
   tan_number: string;
+}
+
+// ─── GSTIN State Code Map ─────────────────────────────────────────────────────
+const GSTIN_STATE_CODES: Record<string, string> = {
+  "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
+  "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana", "07": "Delhi",
+  "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim",
+  "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur", "15": "Mizoram",
+  "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal",
+  "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh",
+  "24": "Gujarat", "25": "Daman & Diu", "26": "Dadra & Nagar Haveli",
+  "27": "Maharashtra", "28": "Andhra Pradesh (Old)", "29": "Karnataka", "30": "Goa",
+  "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu", "34": "Puducherry",
+  "35": "Andaman & Nicobar", "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh",
+};
+
+function detectStateFromGstin(gstin: string): string {
+  if (!gstin || gstin.length < 2) return "";
+  return GSTIN_STATE_CODES[gstin.substring(0, 2)] ?? "";
 }
 
 const ENTITY_TYPES = [
@@ -83,15 +103,41 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
   };
 
   const updateGstin = (index: number, value: string) => {
+    const upper = value.toUpperCase();
     const gstins = [...data.gstins];
-    gstins[index] = value.toUpperCase();
-    onChange({ ...data, gstins });
+    const old = gstins[index];
+    gstins[index] = upper;
+    // Auto-detect state from new GSTIN prefix; preserve manual overrides for existing GSTINs
+    const states = { ...data.gstin_states };
+    const addresses = { ...data.gstin_addresses };
+    if (old && old !== upper) { delete states[old]; delete addresses[old]; }
+    if (upper.length >= 2) {
+      const detected = detectStateFromGstin(upper);
+      if (detected && !states[upper]) states[upper] = detected;
+    }
+    // Auto-fill registered address from client's main address when not already set
+    if (upper.length > 0 && data.address && !addresses[upper]) {
+      addresses[upper] = data.address;
+    }
+    onChange({ ...data, gstins, gstin_states: states, gstin_addresses: addresses });
+  };
+
+  const updateGstinState = (gstin: string, stateName: string) => {
+    onChange({ ...data, gstin_states: { ...data.gstin_states, [gstin]: stateName } });
+  };
+
+  const updateGstinAddress = (gstin: string, address: string) => {
+    onChange({ ...data, gstin_addresses: { ...data.gstin_addresses, [gstin]: address } });
   };
 
   const addGstin = () => onChange({ ...data, gstins: [...data.gstins, ""] });
   const removeGstin = (i: number) => {
+    const removed = data.gstins[i];
     const gstins = data.gstins.filter((_, idx) => idx !== i);
-    onChange({ ...data, gstins: gstins.length ? gstins : [""] });
+    const states = { ...data.gstin_states };
+    const addresses = { ...data.gstin_addresses };
+    if (removed) { delete states[removed]; delete addresses[removed]; }
+    onChange({ ...data, gstins: gstins.length ? gstins : [""], gstin_states: states, gstin_addresses: addresses });
   };
 
   return (
@@ -212,19 +258,7 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
         {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
       </div>
 
-      {/* 7. Contact Person */}
-      <div className="space-y-1.5">
-        <Label>Contact Person</Label>
-        <Input
-          value={data.contact_person}
-          onChange={(e) => update("contact_person", e.target.value)}
-          placeholder="e.g. Ramesh Kumar (MD)"
-        />
-        <p className="text-xs text-muted-foreground">Name of the authorised signatory or primary contact</p>
-        {errors.contact_person && <p className="text-xs text-destructive">{errors.contact_person}</p>}
-      </div>
-
-      {/* 8. Mobile Number */}
+      {/* 7. Mobile Number */}
       <div className="space-y-1.5">
         <Label>Mobile Number</Label>
         <Input
@@ -253,27 +287,68 @@ export const StepBasicInfo = ({ data, onChange, errors }: Props) => {
       {/* 10. GSTIN (dynamic rows) */}
       <div className="space-y-2">
         <Label>GSTIN</Label>
-        {data.gstins.map((g, i) => (
-          <div key={i} className="space-y-1">
-            <div className="flex gap-2">
-              <Input
-                value={g}
-                onChange={(e) => updateGstin(i, e.target.value)}
-                placeholder="22AAAAA0000A1Z5"
-                maxLength={15}
-                className="flex-1"
-              />
-              {data.gstins.length > 1 && (
-                <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => removeGstin(i)}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+        {data.gstins.map((g, i) => {
+          const detectedState = g.length >= 2 ? (detectStateFromGstin(g) || "") : "";
+          const savedState = g ? (data.gstin_states[g] ?? detectedState) : "";
+          return (
+            <div key={i} className="space-y-1">
+              <div className="flex gap-2">
+                <Input
+                  value={g}
+                  onChange={(e) => updateGstin(i, e.target.value)}
+                  placeholder="22AAAAA0000A1Z5"
+                  maxLength={15}
+                  className="flex-1"
+                />
+                {data.gstins.length > 1 && (
+                  <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0" onClick={() => removeGstin(i)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                )}
+              </div>
+              {/* Per-GSTIN Registered State */}
+              {g.length >= 2 && (
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="text-xs text-muted-foreground w-28 shrink-0">Registered State:</span>
+                  <Select
+                    value={savedState}
+                    onValueChange={(v) => g && updateGstinState(g, v)}
+                  >
+                    <SelectTrigger className="h-7 text-xs flex-1">
+                      <SelectValue placeholder="Auto-detected / Select state" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(GSTIN_STATE_CODES).map(([code, name]) => (
+                        <SelectItem key={code} value={name} className="text-xs">
+                          {code} — {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {detectedState && savedState === detectedState && (
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">auto</span>
+                  )}
+                </div>
+              )}
+              {/* Per-GSTIN Registered Address */}
+              {g.length >= 2 && (
+                <div className="flex items-start gap-2 pl-1">
+                  <span className="text-xs text-muted-foreground w-28 shrink-0 pt-1.5">Registered Address:</span>
+                  <Textarea
+                    value={data.gstin_addresses[g] ?? ""}
+                    onChange={(e) => g && updateGstinAddress(g, e.target.value)}
+                    placeholder={`Address for ${g}`}
+                    rows={2}
+                    className="text-xs flex-1 min-h-[3rem]"
+                  />
+                </div>
+              )}
+              {errors[`gstin_${i}`] && (
+                <p className="text-xs text-destructive">{errors[`gstin_${i}`]}</p>
               )}
             </div>
-            {errors[`gstin_${i}`] && (
-              <p className="text-xs text-destructive">{errors[`gstin_${i}`]}</p>
-            )}
-          </div>
-        ))}
+          );
+        })}
         <Button variant="outline" size="sm" className="gap-1" onClick={addGstin}>
           <Plus className="h-3 w-3" /> Add Another GSTIN
         </Button>

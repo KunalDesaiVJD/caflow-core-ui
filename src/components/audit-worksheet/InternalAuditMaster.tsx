@@ -43,6 +43,7 @@ import type { AuditWorksheetData }   from "./hooks/useAuditWorksheetData";
 interface Props {
   data:          AuditWorksheetData;
   engagementId:  string;
+  onSaved?:      () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ function EmpSelect({
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export default function InternalAuditMaster({ data, engagementId }: Props) {
+export default function InternalAuditMaster({ data, engagementId, onSaved }: Props) {
   const { data: m, setField, patchFields, manualSave, saving, loaded } =
     useInternalMasterStorage(engagementId, data.engagement?.firm_id);
 
@@ -195,7 +196,7 @@ export default function InternalAuditMaster({ data, engagementId }: Props) {
           <Button
             size="sm"
             className="gap-1 h-7 text-xs bg-emerald-700 hover:bg-emerald-800"
-            onClick={manualSave}
+            onClick={async () => { await manualSave(); onSaved?.(); }}
             disabled={saving}
           >
             {saving

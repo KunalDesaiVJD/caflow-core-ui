@@ -71,7 +71,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   }
 
   // ── Calendar callbacks ─────────────────────────────────────────────────────
-  async function handleAdd(data: PlanSaveData) { await addEntry(data); }
+  async function handleAdd(data: PlanSaveData) { await addEntry({ ...data, financial_year: selectedFY }); }
   async function handleUpdate(id: string, patch: Partial<PlanEntry>) { await updateEntry(id, patch as any); }
   async function handleDelete(id: string) { await removeEntry(id); }
 

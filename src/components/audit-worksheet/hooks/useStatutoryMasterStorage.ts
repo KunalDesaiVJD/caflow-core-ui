@@ -12,7 +12,8 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { awLoad, awSave } from "@/lib/awStorage";
+import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
+import { useAuth } from "@/hooks/useAuth";
 
 // ─── Data shape ─────────────────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ export const BLANK_STATUTORY_MASTER: StatutoryMasterData = {
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useStatutoryMasterStorage(engagementId: string, firmId?: string | null) {
+  const { user } = useAuth();
   const [data, setData]     = useState<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -132,11 +134,16 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagementId || loaded) return;
-    const saved = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
-    if (saved && typeof saved === "object" && Object.keys(saved).length > 0) {
-      setData({ ...BLANK_STATUTORY_MASTER, ...saved });
-    }
     setLoaded(true);
+    const cached = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
+    if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
+      setData({ ...BLANK_STATUTORY_MASTER, ...cached });
+    }
+    awLoadFromDB<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json").then(remote => {
+      if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
+        setData({ ...BLANK_STATUTORY_MASTER, ...remote });
+      }
+    });
   }, [engagementId, loaded]);
 
   // ── Internal save ────────────────────────────────────────────────────────
@@ -144,7 +151,7 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     async (snapshot: StatutoryMasterData, silent: boolean) => {
       setSaving(true);
       try {
-        awSave(engagementId, "statutory_master_json", snapshot);
+        awSave(engagementId, "statutory_master_json", snapshot, firmId, user?.id, user?.name || "");
         if (!silent) toast.success("Statutory Audit Master saved");
       } catch (e: any) {
         if (!silent) toast.error(e.message || "Failed to save");

@@ -3,8 +3,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2 } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
+import { MRLTab } from '@/components/stage7/MRLTab';
+import { NCENotesToAccounts } from '@/components/stage7/NotesToAccounts';
+import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 
 interface Props {
@@ -21,17 +24,11 @@ export default function PipelineStage7Combined({
   const [activeTab, setActiveTab] = useState('notes');
 
   // ─── Corporate entity check ───
-  // engagement.entity_type (set at creation): "company" | "llp" | "individual" | "firm" | "trust" | "huf" | "aop"
-  // engagement.clients.entity_type (from client profile): "Private Ltd" | "Public Ltd" | "Private Limited" |
-  //   "Public Limited" | "LLP" | "Partnership" | etc.
-  // Fix (Issue 4): CARO 2020 + full Notes apply ONLY to companies (Private/Public Ltd).
-  // Include all spelling variants; LLP is intentionally excluded from CARO scope.
-  const engEntityType = (engagement?.entity_type || "").toLowerCase();
-  const clientEntityType = (engagement?.clients?.entity_type || "");
-  const CORPORATE_CLIENT_TYPES = ["Private Ltd", "Public Ltd", "Private Limited", "Public Limited"];
+  // isCompanyEntity checks both engagement.entity_type and clients.entity_type.
+  // CARO 2020 and MRL apply ONLY to companies (Private/Public Limited / OPC).
   const isCorporate =
-    engEntityType === "company" ||
-    CORPORATE_CLIENT_TYPES.includes(clientEntityType);
+    isCompanyEntity(engagement?.entity_type) ||
+    isCompanyEntity(engagement?.clients?.entity_type);
 
   const markComplete = async () => {
     setSaving(true);
@@ -69,11 +66,11 @@ export default function PipelineStage7Combined({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            {isCorporate ? 'Stage 7 — Notes to Accounts & CARO' : 'Stage 7 — Notes to Accounts'}
+            {isCorporate ? 'Stage 7 — Notes, CARO & MRL' : 'Stage 7 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isCorporate
-              ? 'Notes to financial statements and CARO 2020 reporting'
+              ? 'Notes to financial statements, CARO 2020 reporting and Management Representation Letter'
               : 'Notes to financial statements'}
           </p>
         </div>
@@ -96,6 +93,9 @@ export default function PipelineStage7Combined({
             <TabsTrigger value="caro" className="gap-1">
               <Shield size={14} /> CARO 2020
             </TabsTrigger>
+            <TabsTrigger value="mrl" className="gap-1">
+              <ClipboardList size={14} /> MRL
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="notes" className="mt-4">
@@ -109,10 +109,14 @@ export default function PipelineStage7Combined({
               onUpdate={() => {}}
             />
           </TabsContent>
+
+          <TabsContent value="mrl" className="mt-4">
+            <MRLTab engagementId={engagementId} engagement={engagement} />
+          </TabsContent>
         </Tabs>
       ) : (
-        /* Non-corporate: Notes to Accounts only — no CARO tab at all */
-        <NotesToAccounts engagementIdProp={engagementId} isCorporate={false} />
+        /* Non-corporate: NCE Notes to Accounts — no CARO or MRL */
+        <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
       )}
     </div>
   );

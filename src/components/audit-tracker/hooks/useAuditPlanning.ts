@@ -96,7 +96,7 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
   // ── Planning CRUD ──────────────────────────────────────────────────────────
 
   async function addEntry(
-    input: Pick<PlanEntry, "client_id"|"client_name"|"planned_from"|"planned_to"|"employee_ids"|"employee_names">
+    input: Pick<PlanEntry, "client_id"|"client_name"|"planned_from"|"planned_to"|"employee_ids"|"employee_names"> & { financial_year?: string }
   ): Promise<PlanEntry | null> {
     const draft: PlanEntry = {
       ...input,
@@ -165,11 +165,11 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
     }
 
     // Part B — Auto-create audit_status row as "Scheduled".
-    // Plain INSERT so we don't depend on a specific DB unique-constraint name
-    // existing.  Duplicate-key (23505) is silently ignored — the client already
+    // Include financial_year so the row appears in the FY-filtered Audit Status grid.
+    // Plain INSERT; duplicate-key (23505) silently ignored — the client already
     // has a status row and we must not overwrite existing data.
     {
-      const { error: statusErr } = await supabase.from("audit_status").insert({
+      const statusPayload: Record<string, any> = {
         firm_id:                  firmId,
         client_id:                input.client_id,
         party_name:               input.client_name,
@@ -177,7 +177,9 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
         physical_audit_conducted: "No",
         accounting_data:          "No",
         scanned:                  "No",
-      });
+      };
+      if (input.financial_year) statusPayload.financial_year = input.financial_year;
+      const { error: statusErr } = await supabase.from("audit_status").insert(statusPayload);
       if (statusErr && (statusErr as any).code !== "23505") {
         console.warn("[useAuditPlanning] audit_status auto-create:", statusErr.message);
       }

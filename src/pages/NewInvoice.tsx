@@ -127,6 +127,8 @@ interface Client {
   name: string | null;
   pan: string | null;
   gstin: string[] | null;
+  gstin_states: Record<string, string> | null;
+  gstin_addresses: Record<string, string> | null;
   entity_type: string | null;
   address: string | null;
   registered_office: string | null;
@@ -300,6 +302,11 @@ const NewInvoice = () => {
   // Source document info (for converted docs)
   const [sourceDocInfo, setSourceDocInfo] = useState<{ invoice_no: string; document_type: string; invoice_date: string; total_amount: number } | null>(null);
 
+  // Multi-GSTIN picker — shown when selected client has > 1 GSTIN
+  const [clientGstins, setClientGstins] = useState<string[]>([]);
+  const [clientGstinStates, setClientGstinStates] = useState<Record<string, string>>({});
+  const [clientGstinAddresses, setClientGstinAddresses] = useState<Record<string, string>>({});
+
   // Credit note specific
   const [clientInvoices, setClientInvoices] = useState<any[]>([]);
 
@@ -338,7 +345,11 @@ const NewInvoice = () => {
     if (firmGstin && toGstin) {
       setIsIntraState(isIntraStateFromGstins(firmGstin, toGstin));
     }
-  }, [firmGstin, toGstin]);
+    // When user picks a GSTIN from the multi-picker, auto-fill per-GSTIN address
+    if (toGstin && clientGstins.length > 1 && clientGstinAddresses[toGstin]) {
+      setToAddress(clientGstinAddresses[toGstin]);
+    }
+  }, [firmGstin, toGstin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch firms list
   useEffect(() => {
@@ -403,7 +414,7 @@ const NewInvoice = () => {
   // Fetch clients
   useEffect(() => {
     (async () => {
-      let cq = supabase.from("clients").select("id, name, pan, gstin, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
+      let cq = supabase.from("clients").select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).order("name");
       if (!isSuperadmin && user?.firm_id) cq = cq.eq("firm_id", user.firm_id);
       const { data: clientData } = await cq;
       setClients(clientData || []);
@@ -502,16 +513,33 @@ const NewInvoice = () => {
 
   // Auto-fill client details & check audit classification
   useEffect(() => {
-    if (!clientId) { setIsAuditClient(false); return; }
+    if (!clientId) { setIsAuditClient(false); setClientGstins([]); setClientGstinStates({}); return; }
     const client = clients.find(c => c.id === clientId);
     if (client) {
       setToName(client.name || "");
-      setToGstin(client.gstin?.[0] || "");
-      // Auto-fetch address from client management
-      const addrParts = [client.address, client.registered_office].filter(Boolean);
-      if (addrParts.length > 0) {
-        setToAddress(addrParts.join(", "));
+      const gstins = client.gstin ?? [];
+      const states = (client.gstin_states && typeof client.gstin_states === "object") ? client.gstin_states as Record<string, string> : {};
+      const addresses = (client.gstin_addresses && typeof client.gstin_addresses === "object") ? client.gstin_addresses as Record<string, string> : {};
+      setClientGstins(gstins);
+      setClientGstinStates(states);
+      setClientGstinAddresses(addresses);
+      if (gstins.length === 1) {
+        // Single GSTIN — auto-fill as before
+        setToGstin(gstins[0]);
+        // Use per-GSTIN address if available, else fall back to client address
+        const perGstinAddr = addresses[gstins[0]];
+        if (perGstinAddr) {
+          setToAddress(perGstinAddr);
+        } else {
+          const addrParts = [client.address, client.registered_office].filter(Boolean);
+          if (addrParts.length > 0) setToAddress(addrParts.join(", "));
+        }
+      } else if (gstins.length === 0) {
+        setToGstin("");
+        const addrParts = [client.address, client.registered_office].filter(Boolean);
+        if (addrParts.length > 0) setToAddress(addrParts.join(", "));
       }
+      // Multiple GSTINs: don't auto-fill address; it will update when user picks a GSTIN
     }
     // Check audit classification & fetch turnover
     (async () => {
@@ -1012,10 +1040,43 @@ const NewInvoice = () => {
               <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
               <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.pan})</SelectItem>)}</SelectContent>
             </Select>
+            {/* Multi-GSTIN Picker — shown only when client has 2+ GSTINs */}
+            {clientId && clientGstins.length > 1 && (
+              <div className="mt-2">
+                <Label className="text-xs text-muted-foreground mb-1 block">Bill from which GSTIN?</Label>
+                <Select
+                  value={toGstin}
+                  onValueChange={setToGstin}
+                  disabled={isLocked}
+                >
+                  <SelectTrigger className="text-xs">
+                    <SelectValue placeholder="Select GSTIN to bill from" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clientGstins.map((g) => {
+                      const stateName = clientGstinStates[g] || getStateFromGstin(g)?.name || "";
+                      return (
+                        <SelectItem key={g} value={g} className="text-xs">
+                          <span className="font-mono">{g}</span>
+                          {stateName && <span className="ml-2 text-muted-foreground">— {stateName}</span>}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {clientId && (
               <div className="grid grid-cols-2 gap-2 mt-2">
                 <Input value={toName} onChange={e => setToName(e.target.value)} placeholder="Customer Name" disabled={isLocked} />
-                <Input value={toGstin} onChange={e => setToGstin(e.target.value)} placeholder="GSTIN" disabled={isLocked} />
+                {/* Single-GSTIN clients: editable input as before; multi-GSTIN: readonly (controlled by picker above) */}
+                <Input
+                  value={toGstin}
+                  onChange={e => setToGstin(e.target.value)}
+                  placeholder="GSTIN"
+                  disabled={isLocked || clientGstins.length > 1}
+                  className={clientGstins.length > 1 ? "bg-muted/40" : ""}
+                />
                 <Input value={toAddress} onChange={e => setToAddress(e.target.value)} placeholder="Address" disabled={isLocked} className="col-span-2" />
               </div>
             )}

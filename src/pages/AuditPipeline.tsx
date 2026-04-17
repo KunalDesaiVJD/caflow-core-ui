@@ -84,13 +84,17 @@ const PERIOD_TYPES = [
 function getAuditOptionsForClient(client: any) {
   if (!client) return AUDIT_TYPES;
   const opts: { value: string; label: string }[] = [];
-  const hasStat = !!client.statutory_audit_applicable;
-  const hasTax  = !!client.tax_audit_type && client.tax_audit_type !== "Not Applicable";
-  if (hasStat)          opts.push({ value: "statutory",  label: "Statutory Audit" });
-  if (hasTax)           opts.push({ value: "tax_audit",  label: "Tax Audit" });
+  // hasStat / hasTax can come from either client_fy_audit_setup (boolean flags)
+  // OR from client_services active rows (linked_module = "audit")
+  const hasStat = !!client.statutory_audit_applicable || !!client.has_statutory_service;
+  const hasTax  = !!client.tax_audit_applicable       || !!client.has_tax_audit_service;
+  if (hasStat)           opts.push({ value: "statutory", label: "Statutory Audit" });
+  if (hasTax)            opts.push({ value: "tax_audit", label: "Tax Audit" });
   if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
-  if (client.internal_audit_applicable) opts.push({ value: "internal", label: "Internal Audit" });
-  if (client.stock_audit_applicable)    opts.push({ value: "stock",    label: "Stock Audit" });
+  if (client.internal_audit_applicable || client.has_internal_audit_service)
+                         opts.push({ value: "internal",  label: "Internal Audit" });
+  if (client.stock_audit_applicable)
+                         opts.push({ value: "stock",     label: "Stock Audit" });
   return opts;
 }
 
@@ -177,7 +181,7 @@ export default function AuditPipeline() {
   // ─── Stage 1 form state — must be declared before any useQuery that references form1A ───
   const [form1A, setForm1A] = useState({
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
-    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "",
+    audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "",
   });
   const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
   const [planning, setPlanning] = useState({
@@ -188,30 +192,90 @@ export default function AuditPipeline() {
   // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
-  // ─── All active firm clients for new engagement ───
-  // Show all active, non-draft clients for the firm so users can create
-  // engagements for any client regardless of audit flags.
+  // ─── Clients with audit services enabled (for new engagement dropdown) ───
+  // Only shows clients that have at least one audit service activated —
+  // either via client_fy_audit_setup boolean flags OR via an active
+  // client_services row whose service_category has linked_module = "audit".
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
+      // 1. All active non-draft clients
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .order("name", { ascending: true });
-
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
-
       const { data: allFirmClients } = await clientQuery;
+      if (!allFirmClients?.length) return [];
 
-      return (allFirmClients || []).map((c: any) => ({
-        id:          c.id as string,
-        name:        (c.name as string) ?? "",
-        entity_type: (c.entity_type as string) ?? "",
-      }));
+      const clientIds = allFirmClients.map((c: any) => c.id as string);
+
+      // 2. Fetch audit setup flags from client_fy_audit_setup
+      const { data: auditSetupRows } = await supabase
+        .from("client_fy_audit_setup")
+        .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
+        .in("client_id", clientIds);
+
+      // 3. Fetch active audit services from client_services + service_categories
+      const { data: auditServiceRows } = await supabase
+        .from("client_services")
+        .select("client_id, is_active, service_categories!inner(name, linked_module)")
+        .in("client_id", clientIds)
+        .eq("is_active", true);
+
+      // Build per-client audit flags from setup table
+      const setupMap: Record<string, any> = {};
+      for (const row of auditSetupRows ?? []) {
+        const r = row as any;
+        setupMap[r.client_id] = r;
+      }
+
+      // Build per-client audit flags from service rows
+      const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
+      for (const row of (auditServiceRows ?? []) as any[]) {
+        const cat = row.service_categories;
+        if (!cat || cat.linked_module !== "audit") continue;
+        if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
+        const nameLower = (cat.name as string).toLowerCase();
+        if (nameLower.includes("statutory"))            serviceMap[row.client_id].hasStat = true;
+        else if (nameLower.includes("tax"))             serviceMap[row.client_id].hasTax = true;
+        else if (nameLower.includes("internal"))        serviceMap[row.client_id].hasInternal = true;
+        else {
+          // Unknown audit service — count as tax audit by default
+          serviceMap[row.client_id].hasTax = true;
+        }
+      }
+
+      // Merge and filter to audit-eligible clients only
+      return (allFirmClients as any[])
+        .map(c => {
+          const setup = setupMap[c.id] ?? {};
+          const svc   = serviceMap[c.id] ?? {};
+          return {
+            id:          c.id as string,
+            name:        (c.name as string) ?? "",
+            entity_type: (c.entity_type as string) ?? "",
+            // audit setup flags (from client_fy_audit_setup)
+            statutory_audit_applicable:  !!setup.statutory_audit_applicable,
+            tax_audit_applicable:        !!setup.tax_audit_applicable,
+            internal_audit_applicable:   !!setup.internal_audit_applicable,
+            stock_audit_applicable:      !!setup.stock_audit_applicable,
+            // derived flags from active services
+            has_statutory_service:       !!svc.hasStat,
+            has_tax_audit_service:       !!svc.hasTax,
+            has_internal_audit_service:  !!svc.hasInternal,
+          };
+        })
+        .filter(c =>
+          c.statutory_audit_applicable || c.tax_audit_applicable ||
+          c.internal_audit_applicable  || c.stock_audit_applicable ||
+          c.has_statutory_service      || c.has_tax_audit_service  ||
+          c.has_internal_audit_service
+        );
     },
     enabled: !!user?.id,
   });
@@ -241,24 +305,25 @@ export default function AuditPipeline() {
     enabled: !!user?.id,
   });
 
-  // ─── Partners from the PRACTICE FIRM's user list ───────────────────────────
-  // Shows ALL users with partner/admin role — is_active intentionally NOT
-  // filtered here so that partners marked inactive still appear in the dropdown.
+  // ─── Partners from FIRM SETTINGS (firms.membership_numbers) ────────────────
+  // Reads the partner membership list configured in Settings → Audit Registration.
+  // These are the actual signing partners of the practice firm.
   const { data: partnersForFirm = [] } = useQuery({
     queryKey: ["practice-firm-partners", user?.firm_id],
     queryFn: async () => {
       if (!user?.firm_id) return [];
       const { data } = await supabase
-        .from("users")
-        .select("id, name, role")
-        .eq("firm_id", user.firm_id)
-        .in("role", ["partner_ca", "firm_admin", "ca", "partner"])
-        .order("name", { ascending: true });
-      return (data || []).map((u: any) => ({
-        id:           u.id as string,
-        partner_name: (u.name as string) ?? u.id,
-        membership_no: null as string | null,
-      }));
+        .from("firms")
+        .select("membership_numbers")
+        .eq("id", user.firm_id)
+        .single();
+      if (!data?.membership_numbers) return [];
+      return ((data.membership_numbers as any[]) || [])
+        .filter((m: any) => m?.partner_name)
+        .map((m: any) => ({
+          partner_name:  m.partner_name  as string,
+          membership_no: (m.membership_no as string) || null,
+        }));
     },
     enabled: !!user?.firm_id,
   });
@@ -319,7 +384,8 @@ export default function AuditPipeline() {
       audit_type: engagement.audit_type || "statutory",
       entity_type: engagement.entity_type || "company",
       audit_firm_id: engagement.audit_firm_id || "",
-      partner_id: engagement.partner_id || "",
+      partner_id:   engagement.partner_id   || "",
+      partner_name: engagement.partner_name || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
       setQuestionnaire(engagement.questionnaire_answers as Record<string, string>);
@@ -349,6 +415,16 @@ export default function AuditPipeline() {
       setForm1A(f => ({ ...f, entity_type: client.entity_type! }));
     }
   }, [form1A.client_id, eligibleClients]);
+
+  // Auto-sync nonCorpFormChoice from preliminary questionnaire answer
+  // When the user answers "Are you audited under any other act?" → auto-select 3CA or 3CB
+  useEffect(() => {
+    const et = (form1A.entity_type || "").toLowerCase().trim();
+    const isCompany = ["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes(et);
+    if (!isCompany) {
+      setNonCorpFormChoice(questionnaire.audited_under_other_act === "yes" ? "3ca" : "3cb");
+    }
+  }, [questionnaire.audited_under_other_act, form1A.entity_type]);
 
   // Auto-determine flags — handle both legacy values ("company","llp") and raw client values ("Private Ltd","LLP",etc.)
   const autoFlags = useMemo(() => {
@@ -418,8 +494,9 @@ export default function AuditPipeline() {
         audit_period_type: form1A.audit_period_type,
         period_label: form1A.period_label || null,
         audit_firm_id: form1A.audit_firm_id || null,
-        // partner_id FK → users; only set when partner is a system user (audit_registration IDs may differ)
-        partner_id: form1A.partner_id || null,
+        // partner_id kept for backward compat; partner_name is the primary display field
+        partner_id:   form1A.partner_id   || null,
+        partner_name: form1A.partner_name || null,
         status: "planning",
         pipeline_stage: 1,
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
@@ -455,6 +532,7 @@ export default function AuditPipeline() {
       audit_period_type: form1A.audit_period_type,
       period_label: form1A.period_label || null,
       audit_firm_id: form1A.audit_firm_id || null,
+      partner_name:  form1A.partner_name  || null,
       questionnaire_answers: questionnaire,
       stage_statuses: newStatuses,
       pipeline_stage: complete ? 2 : 1,
@@ -617,6 +695,34 @@ export default function AuditPipeline() {
                     </Select>
                   )}
                 </div>
+                {/* Engagement Partner — always editable (can be changed after creation) */}
+                <div>
+                  <Label>Engagement Partner</Label>
+                  <Select
+                    value={form1A.partner_name}
+                    onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
+                    disabled={partnersForFirm.length === 0}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={partnersForFirm.length === 0 ? "Add partners in Settings → Audit Registration" : "Select partner"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {partnersForFirm.map(p => (
+                        <SelectItem key={p.partner_name} value={p.partner_name}>
+                          {p.partner_name}
+                          {p.membership_no && (
+                            <span className="ml-2 text-xs text-muted-foreground">({p.membership_no})</span>
+                          )}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {partnersForFirm.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Add partner membership numbers in Settings → Audit Registration.
+                    </p>
+                  )}
+                </div>
                 <div>
                   <Label>Period Type</Label>
                   {engagement ? (
@@ -672,6 +778,35 @@ export default function AuditPipeline() {
                       <YesNo label="AGM / Meeting dates available?" value={questionnaire.agm_dates || ""} onChange={v => setQ("agm_dates", v)} />
                       <YesNo label="Any board composition changes during the year?" value={questionnaire.board_changes || ""} onChange={v => setQ("board_changes", v)} />
                       <YesNo label="Any regulatory actions / show-cause notices?" value={questionnaire.regulatory_actions || ""} onChange={v => setQ("regulatory_actions", v)} />
+                      {/* Non-corporate only: determines 3CA vs 3CB selection in Stage 8 */}
+                      {!["company", "private ltd", "public ltd", "opc", "pvt_ltd", "public_ltd"].includes((form1A.entity_type || "").toLowerCase().trim()) && (
+                        <div className="space-y-3 border-t pt-3 mt-2">
+                          <YesNo
+                            label="Are accounts audited under any other act? (e.g. Companies Act, Societies Act, Co-op Societies Act)"
+                            value={questionnaire.audited_under_other_act || ""}
+                            onChange={v => setQ("audited_under_other_act", v)}
+                          />
+                          {questionnaire.audited_under_other_act === "yes" && (
+                            <div className="space-y-1.5 pl-4">
+                              <Label className="text-xs">Mention the Act under which accounts are audited</Label>
+                              <Input
+                                placeholder="e.g. Societies Registration Act, Co-op Societies Act..."
+                                value={questionnaire.other_act_name || ""}
+                                onChange={e => setQ("other_act_name", e.target.value)}
+                                className="max-w-sm text-sm"
+                              />
+                              <p className="text-[11px] text-primary">
+                                ✓ Stage 8 will auto-select <strong>Form 3CA + 3CD</strong> (audited under another law)
+                              </p>
+                            </div>
+                          )}
+                          {questionnaire.audited_under_other_act === "no" && (
+                            <p className="text-[11px] text-muted-foreground pl-4">
+                              Stage 8 will use <strong>Form 3CB + 3CD</strong> (not audited under any other law)
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </AccordionContent>
                   </AccordionItem>
 
@@ -1034,28 +1169,31 @@ export default function AuditPipeline() {
               </Select>
             </div>
 
-            {/* Engagement Partner — from practice firm's users (role: partner_ca / firm_admin) */}
+            {/* Engagement Partner — from firm settings (Settings → Audit Registration → Partner Membership Numbers) */}
             <div>
               <Label>Engagement Partner</Label>
               <Select
-                value={form1A.partner_id}
-                onValueChange={v => setForm1A(f => ({ ...f, partner_id: v }))}
+                value={form1A.partner_name}
+                onValueChange={v => setForm1A(f => ({ ...f, partner_name: v }))}
                 disabled={partnersForFirm.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={partnersForFirm.length === 0 ? "No partners found" : "Select partner"} />
+                  <SelectValue placeholder={partnersForFirm.length === 0 ? "Add partners in Settings → Audit Registration" : "Select partner"} />
                 </SelectTrigger>
                 <SelectContent>
                   {partnersForFirm.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
+                    <SelectItem key={p.partner_name} value={p.partner_name}>
                       {p.partner_name}
+                      {p.membership_no && (
+                        <span className="ml-2 text-xs text-muted-foreground">({p.membership_no})</span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {partnersForFirm.length === 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  No partners found. Ensure users have role Partner/CA or Firm Admin in Settings → Users.
+                  Add partner membership numbers in Settings → Audit Registration.
                 </p>
               )}
             </div>

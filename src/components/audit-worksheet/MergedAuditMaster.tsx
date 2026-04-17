@@ -32,6 +32,7 @@ import type { AuditWorksheetData }                       from "./hooks/useAuditW
 interface Props {
   data:         AuditWorksheetData;
   engagementId: string;
+  onSaved?:     () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ function EmpSelect({ label, value, onChange, employees }: {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export default function MergedAuditMaster({ data, engagementId }: Props) {
+export default function MergedAuditMaster({ data, engagementId, onSaved }: Props) {
   // Tax storage = primary (common + tax-unique fields)
   const tax = useTaxMasterStorage(engagementId, data.engagement?.firm_id);
   // Statutory storage = secondary (statutory-unique fields only)
@@ -208,7 +209,7 @@ export default function MergedAuditMaster({ data, engagementId }: Props) {
           <Button
             size="sm"
             className="gap-1 h-7 text-xs bg-indigo-700 hover:bg-indigo-800"
-            onClick={manualSaveAll}
+            onClick={async () => { await manualSaveAll(); onSaved?.(); }}
             disabled={saving}
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}

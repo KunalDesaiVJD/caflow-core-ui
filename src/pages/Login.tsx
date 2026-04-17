@@ -23,6 +23,7 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   // MFA step
   const [mfaStep, setMfaStep] = useState(false);
@@ -42,9 +43,34 @@ const Login = () => {
     });
   };
 
+  // Map Supabase/network errors to human-readable reasons
+  const resolveLoginError = (err: any): string => {
+    const msg = (err?.message || "").toLowerCase();
+    if (msg.includes("invalid login credentials") || msg.includes("invalid email or password") || msg.includes("wrong password")) {
+      return "Incorrect email or password. Please double-check your credentials.";
+    }
+    if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
+      return "Your email address is not confirmed. Please check your inbox for the confirmation link.";
+    }
+    if (msg.includes("too many requests") || msg.includes("rate limit") || msg.includes("over_request_rate_limit")) {
+      return "Too many failed attempts. Please wait a few minutes before trying again.";
+    }
+    if (msg.includes("user not found") || msg.includes("no user")) {
+      return "No account found with this email address. Please contact your administrator.";
+    }
+    if (msg.includes("network") || msg.includes("fetch")) {
+      return "Network error — please check your internet connection and try again.";
+    }
+    if (msg.includes("no session")) {
+      return "Authentication succeeded but no session was returned. Please try again.";
+    }
+    return err?.message || "Sign in failed. Please try again or contact your administrator.";
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setLoginError(null);
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -64,6 +90,10 @@ const Login = () => {
       const role = profile?.role || authUser.user_metadata?.role || "staff";
       const name = profile?.name || authUser.email || "User";
 
+      if (!profile) {
+        throw new Error("User profile not found. Please contact your administrator to set up your account.");
+      }
+
       // Check MFA
       if (profile?.mfa_enabled) {
         setPendingSession({ user: authUser, session, role, name });
@@ -81,9 +111,11 @@ const Login = () => {
         navigate("/", { replace: true });
       }
     } catch (err: any) {
+      const reason = resolveLoginError(err);
+      setLoginError(reason);
       toast({
         title: "Sign in failed",
-        description: err.message || "Invalid credentials",
+        description: reason,
         variant: "destructive",
       });
     } finally {
@@ -188,7 +220,7 @@ const Login = () => {
                     type="email"
                     placeholder="you@example.com"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setLoginError(null); }}
                     required
                     autoComplete="email"
                   />
@@ -201,7 +233,7 @@ const Login = () => {
                       type={showPassword ? "text" : "password"}
                       placeholder="••••••••"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => { setPassword(e.target.value); setLoginError(null); }}
                       required
                       autoComplete="current-password"
                       className="pr-10"
@@ -216,6 +248,13 @@ const Login = () => {
                     </button>
                   </div>
                 </div>
+
+                {loginError && (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive space-y-0.5">
+                    <p className="font-semibold">Sign in failed</p>
+                    <p>{loginError}</p>
+                  </div>
+                )}
 
                 <Button
                   type="submit"

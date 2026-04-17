@@ -2,7 +2,7 @@
  * ClassificationByFYView
  *
  * Renders a per-FY Audit / Non-Audit client registry.
- * Queries client_fy_classifications joined with clients.
+ * Queries client_fy_classifications.firm_id directly (no large IN() list).
  *
  * Props:
  *   firmId       — current effective firm (null when superadmin shows all)
@@ -86,53 +86,63 @@ export function ClassificationByFYView({ firmId, showAllFirms, canEdit }: Props)
     setLoading(true);
 
     try {
-      // ── Counts for all 4 tabs in one round-trip ─────────────────────────────
+      // ── Counts for all 4 tabs ─────────────────────────────────────────────
+      // Query clients as the primary table and use client_fy_classifications!inner
+      // as an embedded filter. This avoids PostgREST embedded-resource filter
+      // issues with { head: true } counts that can cause incorrect 0 results.
       const countResults = await Promise.all(
         CLASSIFICATION_TABS.map(async (tab) => {
           let q = (supabase as any)
-            .from("client_fy_classifications")
-            .select("client_id, clients!inner(id, is_active, deleted_at, firm_id)", { count: "exact", head: true })
-            .eq("financial_year", selectedFY)
-            .eq("classification", tab.key)
-            .eq("clients.is_active", true)
-            .is("clients.deleted_at", null);
-
-          if (!showAllFirms && firmId) q = q.eq("clients.firm_id", firmId);
-
+            .from("clients")
+            .select("id, client_fy_classifications!inner(id)", { count: "exact", head: true })
+            .eq("client_fy_classifications.financial_year", selectedFY)
+            .eq("client_fy_classifications.classification", tab.key)
+            .eq("is_draft", false)
+            .is("deleted_at", null);
+          if (!showAllFirms && firmId) {
+            q = q.eq("firm_id", firmId);
+            q = q.eq("client_fy_classifications.firm_id", firmId);
+          }
           const { count } = await q;
           return { key: tab.key, count: count ?? 0 };
         })
       );
 
-      const newCounts = { ...counts };
+      const newCounts: Record<ClassificationKey, number> = {
+        "Audit": 0, "Non-Audit": 0, "Partner in Audited Firm": 0, "Not Applicable": 0,
+      };
       countResults.forEach(r => { newCounts[r.key as ClassificationKey] = r.count; });
       setCounts(newCounts);
 
-      // ── Data rows for the active tab ─────────────────────────────────────────
+      // ── Data rows for the active tab — clients primary, classification inner join ─
       let dataQ = (supabase as any)
-        .from("client_fy_classifications")
-        .select("client_id, clients!inner(id, name, entity_type, pan, is_active, deleted_at, firm_id)")
-        .eq("financial_year", selectedFY)
-        .eq("classification", activeTab)
-        .eq("clients.is_active", true)
-        .is("clients.deleted_at", null)
-        .order("clients(name)", { ascending: true });
+        .from("clients")
+        .select("id, name, entity_type, pan, client_fy_classifications!inner(classification, financial_year)")
+        .eq("client_fy_classifications.financial_year", selectedFY)
+        .eq("client_fy_classifications.classification", activeTab)
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .order("name", { ascending: true });
+      if (!showAllFirms && firmId) {
+        dataQ = dataQ.eq("firm_id", firmId);
+        dataQ = dataQ.eq("client_fy_classifications.firm_id", firmId);
+      }
 
-      if (!showAllFirms && firmId) dataQ = dataQ.eq("clients.firm_id", firmId);
+      const { data: fycRows, error: fycErr } = await dataQ;
 
-      const { data, error } = await dataQ;
-      if (error) {
-        console.error("[ClassificationByFYView]", error);
+      if (fycErr) {
+        console.error("[ClassificationByFYView] classifications fetch:", fycErr);
         setRows([]);
       } else {
-        setRows(
-          ((data as any[]) ?? []).map(r => ({
-            client_id:   r.client_id,
-            name:        r.clients?.name ?? null,
-            entity_type: r.clients?.entity_type ?? null,
-            pan:         r.clients?.pan ?? null,
+        const mapped = ((fycRows ?? []) as any[])
+          .map(r => ({
+            client_id:   r.id,
+            name:        r.name ?? null,
+            entity_type: r.entity_type ?? null,
+            pan:         r.pan ?? null,
           }))
-        );
+          .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+        setRows(mapped);
       }
     } finally {
       setLoading(false);

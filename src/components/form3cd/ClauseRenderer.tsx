@@ -101,6 +101,52 @@ function evaluateFormula(formula: string, row: Record<string, any>): number | st
   }
 }
 
+// ── NumericField ────────────────────────────────────────────────────────────────
+// Isolated component so it can hold its own dirty-state for inline validation
+// without lifting state into the top-level ClauseRenderer.
+// Fixes: defaultValue 'Nil' was being passed to type="number", triggering the
+// browser-native "Alphabets are not allowed, only Numbers" validation message.
+interface NumericFieldProps {
+  value: any;
+  onChange: (v: string) => void;
+  onReset: () => void;
+  isLocked: boolean;
+  placeholder?: string;
+}
+function NumericField({ value, onChange, onReset, isLocked, placeholder }: NumericFieldProps) {
+  const [dirty, setDirty] = useState(false);
+  // Never pass 'Nil' or non-numeric strings to type="number" — use '' instead.
+  const numVal = (value !== undefined && value !== null && value !== 'Nil') ? String(value) : '';
+  const invalid = dirty && numVal !== '' && (isNaN(Number(numVal)) || Number(numVal) < 0);
+  return (
+    <div className="flex-1 space-y-1">
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          inputMode="decimal"
+          min="0"
+          value={numVal}
+          onChange={e => { setDirty(true); onChange(e.target.value); }}
+          disabled={isLocked}
+          placeholder={placeholder || '0'}
+          className={invalid ? 'border-destructive focus-visible:ring-destructive' : ''}
+        />
+        <Button
+          variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+          onClick={() => { setDirty(false); onReset(); }}
+          disabled={isLocked}
+          title="Reset"
+        >
+          <RotateCcw className="h-3 w-3" />
+        </Button>
+      </div>
+      {invalid && (
+        <p className="text-xs text-destructive">Please enter a valid positive number.</p>
+      )}
+    </div>
+  );
+}
+
 export default function ClauseRenderer({ definition, value, onChange, isLocked = false, client, parentValues, depth = 0 }: ClauseRendererProps) {
   const data = value || {};
   const control = definition.control;
@@ -312,10 +358,20 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
-    case 'not_applicable_annexure':
+    case 'not_applicable_annexure': {
+      // CP-14: detect if this clause has a TAN column to auto-populate
+      const hasTanColumn = definition.annexureColumns?.some(c => c.key === 'tan');
+      const clientTanValue = (hasTanColumn && client?.tan_number) ? client.tan_number : undefined;
       return (
         <div className={`space-y-3 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
+          {clientTanValue && (
+            <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+              <span className="font-medium">TAN:</span>
+              <span className="font-mono">{clientTanValue}</span>
+              <span className="text-blue-500 dark:text-blue-400">— Auto-fetched from Client Details. Click Edit in a row to override.</span>
+            </div>
+          )}
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 cursor-pointer text-sm">
               <Checkbox
@@ -353,6 +409,7 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
               isLocked={isLocked}
               showTotals={'showTotals' in definition ? definition.showTotals : false}
               totalColumns={'totalColumns' in definition ? definition.totalColumns : undefined}
+              clientTan={clientTanValue}
             />
           )}
           {!data._notApplicable && !data._asPerAnnexure && definition.annexureColumns && (
@@ -363,10 +420,12 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
               isLocked={isLocked}
               showTotals={'showTotals' in definition ? definition.showTotals : false}
               totalColumns={'totalColumns' in definition ? definition.totalColumns : undefined}
+              clientTan={clientTanValue}
             />
           )}
         </div>
       );
+    }
 
     case 'dropdown':
       return (
@@ -390,51 +449,73 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
         </div>
       );
 
-    case 'single_field':
+    case 'single_field': {
+      const isNumeric = 'fieldType' in definition && definition.fieldType === 'number';
+      const isTextarea = 'fieldType' in definition && definition.fieldType === 'textarea';
+      const ph = ('placeholder' in definition && definition.placeholder) || '';
       return (
         <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
           <div className="flex items-center gap-2">
-            {('fieldType' in definition && definition.fieldType === 'textarea') ? (
-              <Textarea
-                value={data._value || definition.defaultValue || ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
-                placeholder={('placeholder' in definition && definition.placeholder) || ''}
+            {isNumeric ? (
+              <NumericField
+                value={data._value}
+                onChange={v => update('_value', v)}
+                onReset={() => update('_value', '')}
+                isLocked={isLocked}
+                placeholder={ph || '0'}
               />
+            ) : isTextarea ? (
+              <>
+                <Textarea
+                  value={data._value || definition.defaultValue || ''}
+                  onChange={e => update('_value', e.target.value)}
+                  disabled={isLocked}
+                  placeholder={ph}
+                />
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                  onClick={() => update('_value', definition.defaultValue || '')}
+                  disabled={isLocked}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+              </>
             ) : (
-              <Input
-                type={('fieldType' in definition && definition.fieldType === 'number') ? 'number' : 'text'}
-                value={data._value || definition.defaultValue || ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
-                placeholder={('placeholder' in definition && definition.placeholder) || ''}
-              />
+              <>
+                <Input
+                  type="text"
+                  value={data._value || definition.defaultValue || ''}
+                  onChange={e => update('_value', e.target.value)}
+                  disabled={isLocked}
+                  placeholder={ph}
+                />
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                  onClick={() => update('_value', definition.defaultValue || '')}
+                  disabled={isLocked}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+              </>
             )}
-            <Button
-              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
-              onClick={() => update('_value', definition.defaultValue || '')}
-              disabled={isLocked}
-            >
-              <RotateCcw className="h-3 w-3" />
-            </Button>
           </div>
         </div>
       );
+    }
 
     case 'amount_remarks':
       return (
         <div className={`space-y-2 ${depth > 0 ? 'border-l-2 border-muted pl-4' : ''}`}>
           {headingEl}
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-start gap-3">
             <div className="flex items-center gap-1">
               <Label className="text-xs text-muted-foreground shrink-0">Amount (₹)</Label>
-              <Input
-                type="number"
-                className="w-36"
-                value={data._value ?? ''}
-                onChange={e => update('_value', e.target.value)}
-                disabled={isLocked}
+              <NumericField
+                value={data._value}
+                onChange={v => update('_value', v)}
+                onReset={() => update('_value', '')}
+                isLocked={isLocked}
                 placeholder="0"
               />
             </div>
@@ -449,14 +530,6 @@ export default function ClauseRenderer({ definition, value, onChange, isLocked =
                 placeholder="If applicable, enter remarks"
               />
             </div>
-            <Button
-              variant="ghost" size="icon" className="h-8 w-8 shrink-0"
-              onClick={() => { update('_value', ''); update('_remarks', ''); }}
-              disabled={isLocked}
-              title="Reset"
-            >
-              <RotateCcw className="h-3 w-3" />
-            </Button>
           </div>
         </div>
       );
@@ -794,20 +867,23 @@ function RadioControl({ name, options, value, onChange, disabled }: {
 }
 
 // ─── Annexure Table (Generic) ───
-function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalColumns }: {
+function AnnexureTable({ columns, rows, onChange, isLocked, showTotals, totalColumns, clientTan }: {
   columns: AnnexureColumn[];
   rows: Record<string, any>[];
   onChange: (rows: Record<string, any>[]) => void;
   isLocked?: boolean;
   showTotals?: boolean;
   totalColumns?: string[];
+  clientTan?: string;           // CP-14: auto-seed TAN column on new rows
 }) {
   function addRow() {
     const emptyRow: Record<string, any> = {};
-    columns.forEach((c, i) => {
-      // Auto-fill serial number for readonly sr_no columns
+    columns.forEach((c) => {
       if (c.key === 'sr_no' && c.type === 'readonly') {
         emptyRow[c.key] = String(rows.length + 1);
+      } else if (c.key === 'tan' && clientTan) {
+        // CP-14: pre-populate TAN from client record
+        emptyRow[c.key] = clientTan;
       } else {
         emptyRow[c.key] = '';
       }
@@ -979,6 +1055,40 @@ function CellInput({ column, value, onChange, onRowChange, disabled, row }: {
   disabled?: boolean;
   row?: Record<string, any>;
 }) {
+  // CP-14: TAN column — read-only by default, toggleable to editable
+  if (column.key === 'tan') {
+    const editable = row?._tan_editable === true;
+    return (
+      <div className="flex items-center gap-1">
+        {editable ? (
+          <Input
+            value={value || ''}
+            onChange={e => onChange(e.target.value.toUpperCase())}
+            disabled={disabled}
+            maxLength={10}
+            placeholder="AAAAA0000A"
+            className="h-8 text-xs font-mono"
+          />
+        ) : (
+          <span className="text-xs px-2 py-1 font-mono text-muted-foreground">
+            {value || '—'}
+          </span>
+        )}
+        {!disabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-[11px] shrink-0"
+            onClick={() => onRowChange?.({ _tan_editable: !editable })}
+          >
+            {editable ? 'Lock' : 'Edit'}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   if (column.key === 'nature_of_payment') {
     const editable = row?._nature_of_payment_editable === true;
     return (

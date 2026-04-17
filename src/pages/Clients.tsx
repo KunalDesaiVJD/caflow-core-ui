@@ -34,7 +34,8 @@ interface Client {
   source?: string | null;
   /** Whether the client is active per the API — NULL means unknown/legacy */
   is_active?: boolean | null;
-  is_draft?: boolean;
+  /** Whether this record is a draft (incomplete wizard) */
+  is_draft?: boolean | null;
   /** Populated only when All Firms selected — joined from firms table */
   firm_name?: string | null;
 }
@@ -105,10 +106,10 @@ const Clients = () => {
       return;
     }
 
-    // Build base selects — include firms(name) join when showing all firms
-    const clientSelect = showAllFirms
-      ? "*, firms(name)"
-      : "*";
+    // Only fetch the columns the list view actually renders — avoids transferring
+    // unused large fields (audit_questions, address blobs, etc.) for 1000+ rows.
+    const clientCols = "id, name, pan, entity_type, cin, gstin, created_at, firm_id, source, is_draft, is_active";
+    const clientSelect = showAllFirms ? `${clientCols}, firms(name)` : clientCols;
 
     let mainQuery = supabase.from("clients").select(clientSelect, { count: "exact" })
       .eq("is_draft", false).is("deleted_at", null)
@@ -120,38 +121,50 @@ const Clients = () => {
       .order("created_at", { ascending: false }).limit(2000);
     if (!showAllFirms && effectiveFirmId) draftQuery = draftQuery.eq("firm_id", effectiveFirmId);
 
-    const [clientsRes, apiDraftRes, groupsRes, membershipsRes, servicesRes] = await Promise.all([
+    // Phase 1: clients + groups in parallel
+    const [clientsRes, apiDraftRes, groupsRes] = await Promise.all([
       mainQuery,
       draftQuery,
       supabase.from("client_groups").select("id, name, color").order("name"),
-      supabase.from("client_group_memberships").select("client_id, group_id, client_groups(id, name, color)"),
-      supabase.from("client_services").select("client_id, is_active"),
     ]);
 
     // Normalise firms(name) join → flat firm_name field
     const normalise = (rows: any[]): Client[] =>
       (rows || []).map(r => ({ ...r, firm_name: r.firms?.name ?? null }));
 
-    // Merge published clients + api_import drafts into one list
-    setClients([
-      ...normalise(clientsRes.data as any[]),
-      ...normalise(apiDraftRes.data as any[]),
-    ]);
+    const allFetchedClients = [
+      ...normalise((clientsRes.data as any[]) || []),
+      ...normalise((apiDraftRes.data as any[]) || []),
+    ];
+    setClients(allFetchedClients);
     setGroups((groupsRes.data as GroupInfo[]) || []);
 
-    const map: Record<string, GroupInfo[]> = {};
-    for (const m of (membershipsRes.data || []) as any[]) {
-      if (!map[m.client_id]) map[m.client_id] = [];
-      if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
-    }
-    setClientGroupMap(map);
+    // Phase 2: memberships + services scoped to the loaded client IDs only.
+    // Without this filter both tables return rows for ALL firms which is very slow.
+    const clientIds = allFetchedClients.map(c => c.id);
+    if (clientIds.length > 0) {
+      const [membershipsRes, servicesRes] = await Promise.all([
+        supabase.from("client_group_memberships")
+          .select("client_id, group_id, client_groups(id, name, color)")
+          .in("client_id", clientIds),
+        supabase.from("client_services")
+          .select("client_id, is_active")
+          .in("client_id", clientIds),
+      ]);
 
-    // Build service count map
-    const svcMap: Record<string, number> = {};
-    for (const s of (servicesRes.data || []) as any[]) {
-      if (s.is_active) svcMap[s.client_id] = (svcMap[s.client_id] || 0) + 1;
+      const map: Record<string, GroupInfo[]> = {};
+      for (const m of (membershipsRes.data || []) as any[]) {
+        if (!map[m.client_id]) map[m.client_id] = [];
+        if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
+      }
+      setClientGroupMap(map);
+
+      const svcMap: Record<string, number> = {};
+      for (const s of (servicesRes.data || []) as any[]) {
+        if (s.is_active) svcMap[s.client_id] = (svcMap[s.client_id] || 0) + 1;
+      }
+      setServiceCountMap(svcMap);
     }
-    setServiceCountMap(svcMap);
 
     setLoading(false);
   };
@@ -311,7 +324,7 @@ const Clients = () => {
     // API sub-tab filter (only applies when sourceTab === "api")
     let matchesApiSub = true;
     if (sourceTab === "api") {
-      if (apiSubTab === "final")         matchesApiSub = !c.is_draft;
+      if (apiSubTab === "final")               matchesApiSub = !c.is_draft;
       else if (apiSubTab === "draft_active")   matchesApiSub = !!c.is_draft && c.is_active !== false;
       else if (apiSubTab === "draft_inactive") matchesApiSub = !!c.is_draft && c.is_active === false;
     }
@@ -650,7 +663,8 @@ const Clients = () => {
                       <TableCell className="font-medium text-sm">
                         <span className="flex items-center gap-1.5">
                           {client.name || "Unnamed"}
-                          {client.source === "api_import" && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                          {client.source === "api_import" && !client.is_draft && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                          {client.source === "api_import" && client.is_draft && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500 text-amber-600">Draft</Badge>}
                         </span>
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>

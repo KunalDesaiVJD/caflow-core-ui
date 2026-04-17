@@ -29,8 +29,9 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet,
 } from "lucide-react";
+import { generateGeniusExport } from "@/lib/genius-export";
 
 // ─── Types ───
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
@@ -264,6 +265,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [carryForwardChallans, setCarryForwardChallans] = useState<{ challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
 
   // Challan dialog
@@ -297,13 +299,53 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       const { data } = await supabase.from("tds_filings").select("*")
         .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", selQuarter).limit(10);
       const match = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
-      setFiling(match as TdsFiling || null);
+
       if (match) {
+        setFiling(match as TdsFiling);
         await fetchChallans((match as TdsFiling).id);
         await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
       } else {
-        setChallans([]); setDeductees([]); setPrevEntries([]);
-        setSelectedChallan(null); setCarryForwardChallans([]);
+        // No filing found — auto-create it if TDS service is active for this client.
+        // This handles clients activated before the auto-create logic existed, and
+        // also allows the workspace to be used immediately after activation.
+        const firmId = await resolveFirmId();
+        const { data: cats } = await supabase
+          .from("service_categories").select("id").eq("linked_module", "tds");
+        const catIds = (cats || []).map((c: any) => c.id);
+        let tdsActive = false;
+        if (catIds.length > 0) {
+          const { data: cs } = await supabase
+            .from("client_services").select("id")
+            .eq("client_id", selClient).eq("is_active", true)
+            .in("service_category_id", catIds).limit(1);
+          tdsActive = (cs?.length ?? 0) > 0;
+        }
+        if (tdsActive) {
+          const { data: clientRow } = await supabase
+            .from("clients").select("tan_number").eq("id", selClient).maybeSingle();
+          const { data: newFiling } = await (supabase.from("tds_filings").insert({
+            client_id:      selClient,
+            firm_id:        firmId,
+            financial_year: selFy,
+            quarter:        selQuarter,
+            tds_forms:      [selForm],
+            work_status:    "Not Started",
+            tan:            (clientRow as any)?.tan_number || null,
+          }).select().single() as any);
+          if (newFiling) {
+            setFiling(newFiling as TdsFiling);
+            await fetchChallans((newFiling as TdsFiling).id);
+            await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+          } else {
+            setFiling(null);
+            setChallans([]); setDeductees([]); setPrevEntries([]);
+            setSelectedChallan(null); setCarryForwardChallans([]);
+          }
+        } else {
+          setFiling(null);
+          setChallans([]); setDeductees([]); setPrevEntries([]);
+          setSelectedChallan(null); setCarryForwardChallans([]);
+        }
       }
     } catch (err: any) {
       // Issue 6: Never show "Something went wrong" — return empty state
@@ -321,29 +363,73 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setCarryForwardChallans([]); setAllChallanDeductees({});
   };
 
-  // ─── Carry Forward (Issue 7H: include origin quarter/FY) ───
+  // CP-03: Auto-load whenever all 4 selector fields are set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (selClient && selFy && selQuarter && selForm) {
+      loadFiling();
+    } else {
+      resetFiling();
+    }
+  }, [selClient, selFy, selQuarter, selForm]); // loadFiling/resetFiling intentionally omitted — stable callbacks
+
+  // ─── Carry Forward — CP-04: cross-FY support ──────────────────────────────
+  //
+  // Convert a (FY, Quarter) pair to a single sortable integer so periods from
+  // different financial years can be compared with plain < / > operators.
+  //   e.g. FY 2026-27 Q3  →  startYear=2026, Q=3  →  20263
+  //        FY 2027-28 Q1  →  startYear=2027, Q=1  →  20271
+  //   20263 < 20271  ✔  so Q3/2026-27 is correctly identified as "prior".
+  //
+  // BUG BEFORE: qNum <= 1 short-circuited Q1 of any year (so Q4-prev-FY→Q1-new-FY
+  // never ran), and `.eq("financial_year", fy)` capped the lookup to the same FY.
+  //
+  // FIX: fetch ALL filings for this client (any FY), keep those whose computed
+  // period number is strictly less than the current period, then run the same
+  // unconsumed-balance check as before.
   const fetchCarryForwardChallans = async (clientId: string, fy: string, quarter: string, form: string) => {
-    const qNum = parseInt(quarter.replace("Q", ""));
-    if (qNum <= 1) { setCarryForwardChallans([]); return; }
-    const priorQuarters = Array.from({ length: qNum - 1 }, (_, i) => `Q${i + 1}`);
-    const { data: priorFilings } = await supabase.from("tds_filings").select("id, quarter, financial_year")
-      .eq("client_id", clientId).eq("financial_year", fy).in("quarter", priorQuarters);
-    if (!priorFilings || priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+    const periodToNum = (periodFy: string, periodQ: string): number => {
+      const startYear = parseInt(periodFy.split("-")[0], 10);
+      const qNum = parseInt(periodQ.replace("Q", ""), 10);
+      return startYear * 10 + qNum;
+    };
+
+    const currentPeriod = periodToNum(fy, quarter);
+
+    // Fetch ALL filings for this client — no FY or quarter filter.
+    const { data: allFilings } = await supabase
+      .from("tds_filings")
+      .select("id, quarter, financial_year")
+      .eq("client_id", clientId);
+
+    if (!allFilings || allFilings.length === 0) { setCarryForwardChallans([]); return; }
+
+    // Keep only filings whose period is strictly before the current one.
+    const priorFilings = allFilings.filter(
+      f => periodToNum(f.financial_year, f.quarter) < currentPeriod
+    );
+
+    if (priorFilings.length === 0) { setCarryForwardChallans([]); return; }
+
     const priorFilingIds = priorFilings.map(f => f.id);
-    // Issue 3 FIX: Do NOT filter by fully_utilized (column may not exist in DB, and the
-    // computed unconsumed check below is the authoritative filter anyway).
+
+    // Issue 3 FIX: Do NOT filter by fully_utilized — unconsumed check below is authoritative.
     const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
       .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
     const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
+
     const challanIds = priorChallans.map(c => c.id);
-    const { data: allDeds } = await supabase.from("tds_deductees").select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+    const { data: allDeds } = await supabase.from("tds_deductees")
+      .select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
       .in("challan_id", challanIds);
+
     const appliedMap = new Map<string, number>();
     (allDeds || []).forEach((d: any) => {
       const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0);
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
     });
+
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
       const applied = appliedMap.get(c.id) || 0;
@@ -840,86 +926,148 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     return Math.max(0, allocatable - bd.applied);
   }, [selectedChallan, getChallanBreakdownAll]);
 
+  // ─── CP-05: Generate Genius Excel ────────────────────────────────────────
+  const handleGeniusExport = async () => {
+    if (!filing || !client) return;
+
+    // Validation — per CP-05 Step 4
+    const tan = client.tan_number || filing.tan;
+    if (!tan) {
+      toast({ title: "TAN is required.", description: "Update the client's TAN before exporting.", variant: "destructive" });
+      return;
+    }
+    if (challans.length === 0) {
+      toast({ title: "No challans found.", description: "Add at least one challan before exporting.", variant: "destructive" });
+      return;
+    }
+    const allDeductees = Object.values(allChallanDeductees).flat();
+    if (allDeductees.length === 0) {
+      toast({ title: "No deductee entries found.", description: "Add at least one deductee entry before exporting.", variant: "destructive" });
+      return;
+    }
+    const invalidPans = allDeductees.filter(d => d.deductee_pan && !isValidPan(d.deductee_pan));
+    if (invalidPans.length > 0) {
+      toast({ title: `Invalid PAN in ${invalidPans.length} entry(s).`, description: `Fix PAN format before exporting. First invalid: ${invalidPans[0].deductee_name}`, variant: "destructive" });
+      return;
+    }
+    const invalidAmts = allDeductees.filter(
+      d => (d.tds_amount !== null && (d.tds_amount ?? 0) < 0) ||
+           (d.amount_paid_credited !== null && (d.amount_paid_credited ?? 0) < 0)
+    );
+    if (invalidAmts.length > 0) {
+      toast({ title: "Negative amounts found.", description: "All TDS amounts must be non-negative.", variant: "destructive" });
+      return;
+    }
+
+    setExportLoading(true);
+    try {
+      await generateGeniusExport(selForm, filing, client, challans, allDeductees);
+      toast({ title: "Genius Excel generated successfully! File downloaded." });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   // ─── Render ───
   return (
     <div className="space-y-4">
-      {/* Filing Selector */}
-      <div className="rounded-lg bg-foreground/5 border p-4">
-        {!filingLoaded ? (
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
-            <div className="flex flex-wrap gap-3 items-end">
-              <div className="space-y-1">
-                <Label className="text-xs">Client</Label>
-                <Select value={selClient} onValueChange={setSelClient}>
-                  <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-                  <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-                </Select>
+      {/* ── CP-03: Filing Selector — always visible, auto-loads on change ── */}
+      <div className="rounded-lg bg-foreground/5 border p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
+          {loading && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 size={13} className="animate-spin" /> Loading…
+            </span>
+          )}
+        </div>
+
+        {/* 4 dropdowns — always editable, never disabled */}
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="space-y-1">
+            <Label className="text-xs">Client</Label>
+            <Select value={selClient} onValueChange={setSelClient}>
+              <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
+              <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">FY</Label>
+            <Select value={selFy} onValueChange={setSelFy}>
+              <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Quarter</Label>
+            <Select value={selQuarter} onValueChange={setSelQuarter}>
+              <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Form</Label>
+            <Select value={selForm} onValueChange={setSelForm}>
+              <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
+              <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Filing info row — shown once auto-load completes */}
+        {filingLoaded && !loading && (
+          filing ? (
+            <div className="flex flex-wrap items-center gap-4 pt-2 border-t">
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Client</p>
+                <p className="text-sm font-semibold">{client?.name || "—"}</p>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">FY</Label>
-                <Select value={selFy} onValueChange={setSelFy}>
-                  <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
-                </Select>
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">TAN</p>
+                <p className="text-sm font-mono">{client?.tan_number || filing.tan || "—"}</p>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Quarter</Label>
-                <Select value={selQuarter} onValueChange={setSelQuarter}>
-                  <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{QUARTER_OPTIONS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
-                </Select>
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Form / Quarter</p>
+                <p className="text-sm font-semibold">{selForm} · {selQuarter} FY {selFy}</p>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Form</Label>
-                <Select value={selForm} onValueChange={setSelForm}>
-                  <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>{TDS_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <Button size="sm" onClick={loadFiling} disabled={loading}>
-                {loading ? "Loading..." : "Load Filing"}
+              <Badge className={cn("text-xs", {
+                "bg-muted text-muted-foreground": filing.work_status === "Not Started",
+                "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
+                "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
+                "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
+              })}>{filing.work_status}</Badge>
+              {isFilingLocked && (
+                <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
+                  <Lock size={10} /> Data Entry Locked — Filed
+                </Badge>
+              )}
+              {/* CP-05: Generate Genius Excel */}
+              <Button
+                size="sm"
+                className="ml-auto gap-1.5"
+                style={{ backgroundColor: "#1A2744", color: "#C9A84C" }}
+                disabled={exportLoading}
+                onClick={handleGeniusExport}
+              >
+                {exportLoading
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <FileSpreadsheet size={14} />}
+                Generate Genius Excel
               </Button>
             </div>
-          </div>
-        ) : filing ? (
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Client</p>
-              <p className="text-sm font-semibold">{client?.name || "—"}</p>
+          ) : (
+            <div className="pt-2 border-t">
+              <p className="text-sm text-muted-foreground">No filing found for this combination.</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Activate TDS in Client Module first.</p>
             </div>
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">TAN</p>
-              <p className="text-sm font-mono">{client?.tan_number || filing.tan || "—"}</p>
-            </div>
-            <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">Form / Quarter</p>
-              <p className="text-sm font-semibold">{selForm} · {selQuarter} FY {selFy}</p>
-            </div>
-            <Badge className={cn("text-xs", {
-              "bg-muted text-muted-foreground": filing.work_status === "Not Started",
-              "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
-              "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
-              "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
-            })}>{filing.work_status}</Badge>
-            {isFilingLocked && (
-              <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
-                <Lock size={10} /> Data Entry Locked — Filed
-              </Badge>
-            )}
-            <div className="flex-1" />
-            <Button size="sm" variant="outline" className="gap-1" onClick={resetFiling}>
-              <RotateCcw size={14} /> Change Filing
-            </Button>
-          </div>
-        ) : (
-          <div className="text-center py-4">
-            <p className="text-sm text-muted-foreground mb-2">No filing found for this combination.</p>
-            <p className="text-xs text-muted-foreground">Activate TDS in Client Module first.</p>
-            <Button size="sm" variant="outline" className="mt-3 gap-1" onClick={resetFiling}>
-              <RotateCcw size={14} /> Change Filing
-            </Button>
-          </div>
+          )
+        )}
+
+        {/* Prompt when client not yet selected */}
+        {!selClient && (
+          <p className="text-xs text-muted-foreground pt-1">Select a client to auto-load the filing.</p>
         )}
       </div>
 
