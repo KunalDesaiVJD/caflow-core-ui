@@ -102,6 +102,21 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       financial_year:  r.financial_year ?? (r.audit_engagements as any)?.financial_year ?? null,
     }));
 
+    // Filter out audit_status rows whose client has been archived (deleted_at set)
+    if (statusRows.length) {
+      const sIds = [...new Set(statusRows.map(r => r.client_id).filter(Boolean))] as string[];
+      if (sIds.length) {
+        const { data: activeClients } = await (supabase as any)
+          .from("clients")
+          .select("id")
+          .in("id", sIds)
+          .eq("is_draft", false)
+          .is("deleted_at", null);
+        const activeIdSet = new Set((activeClients || []).map((c: any) => c.id));
+        statusRows = statusRows.filter(r => !r.client_id || activeIdSet.has(r.client_id));
+      }
+    }
+
     // ── 2. Filter by selected FY if provided ──────────────────────────────
     if (selectedFY) {
       statusRows = statusRows.filter(r => {
@@ -198,6 +213,27 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         .lte("planned_from", fyDateEnd);
       if (!isSuperadmin) planQ = planQ.eq("firm_id", firmId);
       const { data: planData } = await planQ;
+
+      // Build a quick lookup: client_id → planning row (used for both
+      // backfilling audit_employees on existing rows AND creating virtual
+      // rows for clients that are only in planning).
+      const planByClient = new Map<string, any>();
+      for (const plan of ((planData as any[]) || [])) {
+        if (plan.client_id && !planByClient.has(plan.client_id)) {
+          planByClient.set(plan.client_id, plan);
+        }
+      }
+
+      // Backfill audit_employees on existing rows that are missing it
+      statusRows = statusRows.map(r => {
+        if (r.audit_employees || !r.client_id) return r;
+        const plan = planByClient.get(r.client_id);
+        if (!plan) return r;
+        const empNames = Array.isArray(plan.employee_names)
+          ? (plan.employee_names as string[]).join(", ")
+          : (plan.employee_names ?? null);
+        return empNames ? { ...r, audit_employees: empNames } : r;
+      });
 
       // Refresh the set — may have grown after step 3
       const allKnownClientIds = new Set([

@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2, Clock } from "lucide-react";
+import { Check, X, Trash2, Loader2, Clock, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
@@ -421,29 +421,22 @@ export default function AuditStatusRow({
           : <span className="font-medium text-foreground">{row.party_name || "—"}</span>}
       </TCell>
 
-      {/* 3 · Data ✓ — Physical Audit + Accounting Data combined */}
-      <TCell className="w-24">
-        {editing ? (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <span className="w-5 shrink-0">Phy</span>
-              <ESelect value={draft.physical_audit_conducted} onChange={v => set("physical_audit_conducted", v)} options={YES_NO} />
-            </div>
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <span className="w-5 shrink-0">Acc</span>
-              <ESelect value={draft.accounting_data} onChange={v => set("accounting_data", v)} options={YES_NO} />
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            <Badge className={cn("text-[9px] px-1.5 py-0", row.physical_audit_conducted === "Yes" ? "bg-green-100 text-green-700" : "bg-red-50 text-red-600")}>
-              P: {row.physical_audit_conducted || "No"}
-            </Badge>
-            <Badge className={cn("text-[9px] px-1.5 py-0", row.accounting_data === "Yes" ? "bg-green-100 text-green-700" : "bg-red-50 text-red-600")}>
-              A: {row.accounting_data || "No"}
-            </Badge>
-          </div>
-        )}
+      {/* 3 · Physical Audit Conducted */}
+      <TCell className="w-20 text-center">
+        {editing
+          ? <ESelect value={draft.physical_audit_conducted} onChange={v => set("physical_audit_conducted", v)} options={YES_NO} />
+          : <Badge className={cn("text-[10px]", row.physical_audit_conducted === "Yes" ? "bg-green-100 text-green-700" : "bg-red-50 text-red-600")}>
+              {row.physical_audit_conducted || "No"}
+            </Badge>}
+      </TCell>
+
+      {/* 4 · Accounting Data */}
+      <TCell className="w-20 text-center">
+        {editing
+          ? <ESelect value={draft.accounting_data} onChange={v => set("accounting_data", v)} options={YES_NO} />
+          : <Badge className={cn("text-[10px]", row.accounting_data === "Yes" ? "bg-green-100 text-green-700" : "bg-red-50 text-red-600")}>
+              {row.accounting_data || "No"}
+            </Badge>}
       </TCell>
 
       {/* 4 · Audit Employees */}
@@ -485,120 +478,62 @@ export default function AuditStatusRow({
         )}
       </TCell>
 
-      {/* 7 · Report Dates — Print Date + Physical Received */}
-      <TCell className="w-32">
+      {/* 7 · Report Print Date */}
+      <TCell className="w-28">
+        {editing
+          ? <EInput type="date" value={draft.report_print_date} onChange={v => set("report_print_date", v)} />
+          : <span className="text-[11px]">{row.report_print_date || "—"}</span>}
+      </TCell>
+
+      {/* 8 · Physical Report Received Date */}
+      <TCell className="w-28">
+        {editing
+          ? <EInput type="date" value={draft.physical_report_received_date} onChange={v => set("physical_report_received_date", v)} />
+          : <span className="text-[11px]">{row.physical_report_received_date || "—"}</span>}
+      </TCell>
+
+      {/* 9 · Firm */}
+      <TCell className="min-w-[110px]">
+        {editing
+          ? <ESelect value={draft.firm} onChange={handleFirmChange} options={firmNames} placeholder="Firm…" />
+          : <span className="text-[11px] font-medium truncate block" title={row.firm || ""}>{row.firm || "—"}</span>}
+      </TCell>
+
+      {/* 10 · Partner */}
+      <TCell className="min-w-[110px]">
         {editing ? (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-8 shrink-0">Print</span>
-              <EInput type="date" value={draft.report_print_date} onChange={v => set("report_print_date", v)} />
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-8 shrink-0">Recd</span>
-              <EInput type="date" value={draft.physical_report_received_date} onChange={v => set("physical_report_received_date", v)} />
-            </div>
-          </div>
+          partnerOptions.length > 0
+            ? <ESelect value={draft.partner} onChange={v => set("partner", v)} options={partnerOptions} placeholder="Partner…" />
+            : <EInput value={draft.partner} onChange={v => set("partner", v)} placeholder="Partner…" />
         ) : (
-          <div className="space-y-0.5">
-            <div className="text-[10px]">
-              <span className="text-muted-foreground/60 mr-1">Print:</span>
-              <span>{row.report_print_date || "—"}</span>
-            </div>
-            <div className="text-[10px]">
-              <span className="text-muted-foreground/60 mr-1">Recd:</span>
-              <span>{row.physical_report_received_date || "—"}</span>
-            </div>
-          </div>
+          <span className="text-[11px] truncate block" title={row.partner || ""}>{row.partner || "—"}</span>
         )}
       </TCell>
 
-      {/* 8 · Firm / Partner — combined */}
+      {/* 11 · UDIN Tax Audit */}
       <TCell className="min-w-[120px]">
-        {editing ? (
-          <div className="space-y-1">
-            <ESelect value={draft.firm} onChange={handleFirmChange} options={firmNames} placeholder="Firm…" />
-            {partnerOptions.length > 0
-              ? <ESelect value={draft.partner} onChange={v => set("partner", v)} options={partnerOptions} placeholder="Partner…" />
-              : <EInput value={draft.partner} onChange={v => set("partner", v)} placeholder="Partner…" />
-            }
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            <div className="text-[10px] font-medium truncate" title={row.firm || ""}>{row.firm || "—"}</div>
-            <div className="text-[10px] text-muted-foreground truncate" title={row.partner || ""}>{row.partner || "—"}</div>
-          </div>
-        )}
+        {editing
+          ? <EInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" className="font-mono" />
+          : <span className="font-mono text-[11px] truncate block" title={row.udin_tax_audit || ""}>{row.udin_tax_audit || "—"}</span>}
       </TCell>
 
-      {/* 9 · UDIN — Tax + Statutory (conditional) + Date */}
-      <TCell className="min-w-[160px]">
-        {editing ? (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-6 shrink-0">Tax</span>
-              <EInput value={draft.udin_tax_audit} onChange={v => handleUdinField("udin_tax_audit", v)} placeholder="UDIN…" className="font-mono" />
-            </div>
-            {showUdinStatutoryEdit && (
-              <div className="flex items-center gap-1">
-                <span className="text-[9px] text-muted-foreground w-6 shrink-0">Stat</span>
-                <EInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" className="font-mono" />
-              </div>
-            )}
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-6 shrink-0">Dt</span>
-              <EInput type="date" value={draft.udin_date} onChange={v => set("udin_date", v)} />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            <div className="font-mono text-[10px] truncate" title={row.udin_tax_audit || ""}>
-              <span className="text-muted-foreground/60 mr-1">T:</span>{row.udin_tax_audit || "—"}
-            </div>
-            {showUdinStatutoryView && (
-              <div className="font-mono text-[10px] truncate" title={row.udin_statutory_audit || ""}>
-                <span className="text-muted-foreground/60 mr-1">S:</span>{row.udin_statutory_audit || "—"}
-              </div>
-            )}
-            <div className="text-[10px] text-muted-foreground">{row.udin_date || "—"}</div>
-          </div>
-        )}
+      {/* 12 · UDIN Statutory Audit (conditional) */}
+      <TCell className="min-w-[120px]">
+        {editing && showUdinStatutoryEdit
+          ? <EInput value={draft.udin_statutory_audit} onChange={v => handleUdinField("udin_statutory_audit", v)} placeholder="UDIN…" className="font-mono" />
+          : !editing && showUdinStatutoryView
+            ? <span className="font-mono text-[11px] truncate block" title={row.udin_statutory_audit || ""}>{row.udin_statutory_audit || "—"}</span>
+            : <span className="text-muted-foreground/40 text-[11px]">—</span>}
       </TCell>
 
-      {/* 10 · 3CA Prep / Checked (Uploaded By hidden but still saved) */}
-      <TCell className="min-w-[130px]">
-        {editing ? (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-6 shrink-0">Prp</span>
-              <UserCombobox value={draft.prepared_by} onChange={v => set("prepared_by", v)} users={users} placeholder="Prepared…" />
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-6 shrink-0">Chk</span>
-              <UserCombobox value={draft.checked_by} onChange={v => set("checked_by", v)} users={users} placeholder="Checked…" />
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground w-6 shrink-0">Upl</span>
-              <UserCombobox value={draft.uploaded_by} onChange={v => set("uploaded_by", v)} users={users} placeholder="Uploaded…" />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            <div className="text-[10px] truncate">
-              <span className="text-muted-foreground/60 mr-1">Prep:</span>{row.prepared_by || "—"}
-            </div>
-            <div className="text-[10px] truncate">
-              <span className="text-muted-foreground/60 mr-1">Chkd:</span>{row.checked_by || "—"}
-            </div>
-            {row.uploaded_by && (
-              <div className="text-[10px] truncate text-muted-foreground/60">
-                <span className="mr-1">Upld:</span>{row.uploaded_by}
-              </div>
-            )}
-          </div>
-        )}
+      {/* 13 · UDIN Date */}
+      <TCell className="w-28">
+        {editing
+          ? <EInput type="date" value={draft.udin_date} onChange={v => set("udin_date", v)} />
+          : <span className="text-[11px]">{row.udin_date || "—"}</span>}
       </TCell>
 
-      {/* 11 · Scanned */}
+      {/* 14 · Scanned */}
       <TCell className="w-20 text-center">
         {editing
           ? <ESelect value={draft.scanned} onChange={v => set("scanned", v)} options={YES_NO} />
@@ -607,40 +542,44 @@ export default function AuditStatusRow({
             </Badge>}
       </TCell>
 
-      {/* 12 · Remarks */}
-      <TCell className="min-w-[130px]">
-        {editing ? (
-          <div className="flex items-center gap-1">
-            <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
-            <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
-              onClick={cancelEdit} title="Cancel edits">
-              <X size={11} />
-            </Button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 group">
-            <span className="text-muted-foreground line-clamp-2 text-[11px] flex-1">{row.remarks || "—"}</span>
-            {/* Edit trigger — visible on row hover */}
-            <Button size="sm" variant="ghost"
-              className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-indigo-600"
-              onClick={startEdit} title="Edit row">
-              ✎
-            </Button>
-          </div>
-        )}
+      {/* 15 · Prepared By */}
+      <TCell className="min-w-[110px]">
+        {editing
+          ? <UserCombobox value={draft.prepared_by} onChange={v => set("prepared_by", v)} users={users} placeholder="Prepared…" />
+          : <span className="text-[11px] truncate block" title={row.prepared_by || ""}>{row.prepared_by || "—"}</span>}
       </TCell>
 
-      {/* 20 · Actions */}
-      <TCell className="w-16 text-center">
-        {isNew ? (
-          /* BUG A — new row: explicit Save + Cancel buttons */
+      {/* 16 · Checked By */}
+      <TCell className="min-w-[110px]">
+        {editing
+          ? <UserCombobox value={draft.checked_by} onChange={v => set("checked_by", v)} users={users} placeholder="Checked…" />
+          : <span className="text-[11px] truncate block" title={row.checked_by || ""}>{row.checked_by || "—"}</span>}
+      </TCell>
+
+      {/* 17 · Uploaded By */}
+      <TCell className="min-w-[110px]">
+        {editing
+          ? <UserCombobox value={draft.uploaded_by} onChange={v => set("uploaded_by", v)} users={users} placeholder="Uploaded…" />
+          : <span className="text-[11px] truncate block" title={row.uploaded_by || ""}>{row.uploaded_by || "—"}</span>}
+      </TCell>
+
+      {/* 18 · Remarks */}
+      <TCell className="min-w-[130px]">
+        {editing
+          ? <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
+          : <span className="text-muted-foreground line-clamp-2 text-[11px]">{row.remarks || "—"}</span>}
+      </TCell>
+
+      {/* 20 · Actions — always-visible Edit / Save / Cancel / History / Delete */}
+      <TCell className="w-20 text-center">
+        {editing ? (
+          /* Save + Cancel when editing (works for new AND existing rows) */
           <div className="flex items-center justify-center gap-1">
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
               onClick={commitSave}
               disabled={saving}
-              title="Save new row"
+              title={isNew ? "Save new row" : "Save changes"}
             >
               {saving
                 ? <Loader2 size={10} className="animate-spin" />
@@ -649,14 +588,21 @@ export default function AuditStatusRow({
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
               onClick={cancelEdit}
-              title="Discard new row"
+              title={isNew ? "Discard new row" : "Cancel edits"}
             >
               <X size={11} />
             </Button>
           </div>
         ) : (
-          /* BUG B + C — existing rows: Clock (history) + Trash (direct delete, no 2-step) */
+          /* Existing rows: Edit (always visible) + History + Delete */
           <div className="flex items-center justify-center gap-0.5">
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+              onClick={startEdit}
+              title="Edit row"
+            >
+              <Pencil size={12} />
+            </Button>
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
               onClick={() => onHistory?.(row.id)}

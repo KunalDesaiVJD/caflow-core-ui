@@ -300,28 +300,26 @@ const ItReturns = () => {
       const auditClassifiedClientIds = Array.from(classMapRaw.keys());
 
       // ── Step 2: Build combined pool ──────────────────────────────────────────
-      // Audit-engaged + ITR-service + explicitly classified as Audit
-      const allClientIds = [...new Set([
-        ...auditClientIds,
-        ...itrClientIds,
-        ...auditClassifiedClientIds,
-      ])];
+      // Fetch ALL active clients in the firm — the IT Returns module should
+      // show every client by default, since most CA-firm clients need ITR
+      // filing.  Service-category / audit-engagement / classification data
+      // is still used only for resolving the Audited / Non-Audited tab.
+      let cQ = supabase
+        .from("clients")
+        .select("id, name, pan, entity_type, responsible_person_id, work_group_type")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .order("name");
+      if (!isSuperadmin && firmId) cQ = cQ.eq("firm_id", firmId);
+      const { data: cData } = await cQ;
+      const clientMap = new Map((cData || []).map(c => [c.id, c]));
+      const allClientIds = (cData || []).map(c => c.id);
       if (allClientIds.length === 0) return [];
 
       let q = supabase.from("itr_profiles").select("*").eq("assessment_year", selectedAY);
       if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
       q = q.in("client_id", allClientIds);
       const { data: pData } = await q;
-
-      // Fetch client details — include work_group_type which is set in Advanced Info
-      const { data: cData } = await supabase
-        .from("clients")
-        .select("id, name, pan, entity_type, responsible_person_id, work_group_type")
-        .eq("is_draft", false)
-        .is("deleted_at", null)
-        .in("id", allClientIds)
-        .order("name");
-      const clientMap = new Map((cData || []).map(c => [c.id, c]));
 
       // Classification logic:
       // 1. Client has audit engagement for this FY → "Audit"

@@ -38,26 +38,28 @@ const PAGE_SIZE = 25;
 
 const YES_NO_OPTIONS = ["Yes", "No"];
 
-// ─── Redesigned columns: 13 (was 20) ─────────────────────────────────────────
-// Combined: Physical+Accounting → "Data ✓"
-//           Report Print Date + Phys. Received → "Report Dates"
-//           Firm + Partner → "Firm / Partner"
-//           UDIN Tax + Statutory + Date → "UDIN"
-//           3CA Prepared By + Checked By → "3CA" (Uploaded By removed from view)
+// ─── Separate columns (20) — un-merged per user request ─────────────────────
 const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"|"select"|"date"|"yesno"|"status"|"none" }[] = [
-  { label: "Sr No",             id: "_srno",                        filterType: "none"   },
-  { label: "Party Name",        id: "party_name",       sortable: true, filterType: "text" },
-  { label: "Data ✓",            id: "_data_check",                  filterType: "none"   },
-  { label: "Audit Employees",   id: "audit_employees",              filterType: "text"   },
-  { label: "Report Prep. By",   id: "audit_report_prepared_by",     filterType: "text"   },
-  { label: "Audit Status",      id: "audit_status",     sortable: true, filterType: "status" },
-  { label: "Report Dates",      id: "report_print_date", sortable: true, filterType: "date" },
-  { label: "Firm / Partner",    id: "firm",                         filterType: "text"   },
-  { label: "UDIN",              id: "udin_tax_audit",               filterType: "text"   },
-  { label: "3CA Prep / Checked",id: "prepared_by",                  filterType: "text"   },
-  { label: "Scanned",           id: "scanned",                      filterType: "yesno"  },
-  { label: "Remarks",           id: "remarks",                      filterType: "text"   },
-  { label: "",                  id: "_actions",                     filterType: "none"   },
+  { label: "Sr No",                 id: "_srno",                          filterType: "none"   },
+  { label: "Party Name",            id: "party_name",       sortable: true, filterType: "text" },
+  { label: "Physical Audit",        id: "physical_audit_conducted",       filterType: "yesno"  },
+  { label: "Accounting Data",       id: "accounting_data",                filterType: "yesno"  },
+  { label: "Audit Employees",       id: "audit_employees",                filterType: "text"   },
+  { label: "Audit Report Prep. By", id: "audit_report_prepared_by",       filterType: "text"   },
+  { label: "Audit Status",          id: "audit_status",     sortable: true, filterType: "status" },
+  { label: "Report Print Date",     id: "report_print_date", sortable: true, filterType: "date" },
+  { label: "Phys. Report Recd",     id: "physical_report_received_date",  filterType: "date"   },
+  { label: "Firm",                  id: "firm",                           filterType: "text"   },
+  { label: "Partner",               id: "partner",                        filterType: "text"   },
+  { label: "UDIN Tax Audit",        id: "udin_tax_audit",                 filterType: "text"   },
+  { label: "UDIN Statutory",        id: "udin_statutory_audit",           filterType: "text"   },
+  { label: "UDIN Date",             id: "udin_date",                      filterType: "date"   },
+  { label: "Scanned",               id: "scanned",                        filterType: "yesno"  },
+  { label: "Prepared By",           id: "prepared_by",                    filterType: "text"   },
+  { label: "Checked By",            id: "checked_by",                     filterType: "text"   },
+  { label: "Uploaded By",           id: "uploaded_by",                    filterType: "text"   },
+  { label: "Remarks",               id: "remarks",                        filterType: "text"   },
+  { label: "",                      id: "_actions",                       filterType: "none"   },
 ];
 
 // ─── Blank template for a new row ─────────────────────────────────────────────
@@ -303,7 +305,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       {/* Table */}
       <div className="border rounded-lg overflow-hidden w-full">
         <div className="overflow-auto w-full" style={{ maxHeight: "calc(100vh - 320px)" }}>
-          <table className="border-collapse text-xs" style={{ minWidth: 1480, tableLayout: "fixed" }}>
+          <table className="border-collapse text-xs" style={{ minWidth: 2200, tableLayout: "fixed" }}>
 
             {/* ── Sticky header row ── */}
             <thead className="sticky top-0 z-30">
