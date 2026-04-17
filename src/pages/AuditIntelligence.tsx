@@ -105,7 +105,7 @@ export default function AuditIntelligence() {
     refreshEngagements,
   } = useAuditContext();
 
-  const [users, setUsers] = useState<{ id: string; name: string | null }[]>([]);
+  const [users, setUsers] = useState<{ id: string; name: string | null; role: string | null }[]>([]);
   const [auditFirms, setAuditFirms] = useState<{ id: string; name: string }[]>([]);
   const [metrics, setMetrics] = useState({ ledgers: 0, queriesRaised: 0, queriesPending: 0, workpapers: 0, caroCompleted: 0 });
 
@@ -128,7 +128,7 @@ export default function AuditIntelligence() {
   // Edit form — must be declared BEFORE editDialogClients useMemo
   const [engForm, setEngForm] = useState({
     audit_firm_id: "", client_id: "", financial_year: "2024-25", audit_type: "statutory",
-    entity_type: "company", audit_period_type: "annual",
+    entity_type: "company", audit_period_type: "annual", partner_id: "",
   });
 
   // For the Edit Engagement dialog: always include the existing engagement's client
@@ -148,7 +148,7 @@ export default function AuditIntelligence() {
 
   useEffect(() => {
     if (!user?.firm_id) return;
-    supabase.from("users").select("id, name").eq("firm_id", user.firm_id).eq("is_active", true)
+    supabase.from("users").select("id, name, role").eq("firm_id", user.firm_id).eq("is_active", true)
       .then(({ data }) => setUsers(data || []));
   }, [user?.firm_id]);
 
@@ -260,6 +260,7 @@ export default function AuditIntelligence() {
       audit_type: target.audit_type || "statutory",
       entity_type: target.entity_type || target.client_entity_type || "",
       audit_period_type: target.audit_period_type || "annual",
+      partner_id: target.partner_id || "",
     });
     setShowEditDialog(true);
   };
@@ -273,6 +274,7 @@ export default function AuditIntelligence() {
       audit_type: engForm.audit_type,
       entity_type: engForm.entity_type,
       audit_period_type: engForm.audit_period_type,
+      partner_id: engForm.partner_id || null,
     } as any).eq("id", selectedEngagementId);
     setFormSaving(false);
     if (error) { toast.error(error.message); return; }
@@ -297,6 +299,12 @@ export default function AuditIntelligence() {
   };
 
   const userMap = useMemo(() => new Map(users.map(u => [u.id, u.name])), [users]);
+
+  // Partners = firm_admin + partner_ca roles (eligible engagement partners)
+  const partners = useMemo(
+    () => users.filter(u => u.role === "partner_ca" || u.role === "firm_admin" || u.role === "superadmin"),
+    [users]
+  );
 
   const selectedClientName = useMemo(() => {
     if (!selectedClientId || selectedClientId === "all") return "";
@@ -684,6 +692,18 @@ export default function AuditIntelligence() {
                   </Select>
                 );
               })()}
+            </div>
+            <div>
+              <Label>Engagement Partner</Label>
+              <Select value={engForm.partner_id || "__none__"} onValueChange={v => setEngForm(f => ({ ...f, partner_id: v === "__none__" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Select partner" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— Not assigned —</SelectItem>
+                  {partners.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.name || p.id}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>Period Type</Label>
