@@ -79,7 +79,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     // ── 1. Fetch actual audit_status rows ──────────────────────────────────
     let q = (supabase as any)
       .from("audit_status")
-      .select("*, audit_engagements!left(engagement_type, financial_year, client_id)")
+      .select("*, audit_engagements!left(audit_type, financial_year, client_id)")
       .order("created_at", { ascending: true });
     if (!isSuperadmin) q = q.eq("firm_id", firmId);
 
@@ -97,7 +97,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     // Flatten nested engagement fields
     let statusRows: StatusEntry[] = ((rawData as any[]) || []).map(r => ({
       ...r,
-      engagement_type: (r.audit_engagements as any)?.engagement_type ?? null,
+      // audit_engagements column is audit_type (not engagement_type)
+      engagement_type: (r.audit_engagements as any)?.audit_type ?? null,
       financial_year:  r.financial_year ?? (r.audit_engagements as any)?.financial_year ?? null,
     }));
 
@@ -124,8 +125,9 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     if (selectedFY) {
       let engQ = (supabase as any)
         .from("audit_engagements")
-        .select("id, client_id, financial_year, engagement_type")
-        .eq("financial_year", selectedFY);
+        .select("id, client_id, financial_year, audit_type")
+        .eq("financial_year", selectedFY)
+        .neq("status", "archived");
       if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
       const { data: engData } = await engQ;
 
@@ -170,7 +172,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             engagement_id:                eng.id,
             financial_year:               selectedFY,
             created_at:                   "",
-            engagement_type:              eng.engagement_type ?? null,
+            engagement_type:              eng.audit_type ?? null,
             isVirtual:                    true,
           };
           statusRows.push(virtualRow);

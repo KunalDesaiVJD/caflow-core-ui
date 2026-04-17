@@ -403,12 +403,12 @@ const ItReturns = () => {
 
       return enriched.sort((a, b) => (a.client_name || "").localeCompare(b.client_name || ""));
     },
-    // Wait until at least one client pool is loaded before running.
-    // The query itself also fetches audit-classified clients internally, so
-    // it will still add them even when auditClientIds/itrClientIds are empty.
-    // Restoring the guard prevents an early empty-array run from being cached
-    // and blocking subsequent renders when itrClientIds loads.
-    enabled: !!user?.id && (itrClientIds.length > 0 || auditClientIds.length > 0),
+    // Run as soon as user is available. The queryKey includes itrClientIds and
+    // auditClientIds so React Query re-runs automatically when those pools load.
+    // Removed the itrClientIds.length > 0 guard — it was preventing the query
+    // from running in cases where itrClientIds hadn't resolved yet, causing
+    // clients to only appear after manual "Add Row" instead of auto-populating.
+    enabled: !!user?.id,
   });
 
   // ─── Filtered profiles ───
