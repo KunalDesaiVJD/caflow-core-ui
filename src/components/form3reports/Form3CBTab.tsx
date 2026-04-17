@@ -1,47 +1,75 @@
 /**
- * Form3CBTab
+ * Form3CBTab  — fully editable
  *
- * Renders Form 3CB (audit report under section 44AB, clause (b) —
- * for persons whose accounts are NOT required to be audited under any other law).
+ * Every paragraph is an auto-resizing textarea so the CA firm can customise
+ * any sentence for each client.  Paragraph overrides are saved in the
+ * form_3cb_paragraphs JSONB column on audit_engagements.
  *
- * Auto-filled: client name / address / PAN, firm name / FRN / city,
- *              partner name / membership no, financial year.
- *
- * Editable fields saved to audit_engagements columns:
- *   form_3cb_observations, form_3cb_qualifications, form_3cb_signature_date, udin
+ * Dedicated sign-off fields (signature_date, udin) are saved to their own
+ * audit_engagements columns and are also used by the Excel export.
  */
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, FileDown, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CBFormData {
-  observation_text:   string;
-  qualification_text: string;
-  signature_date:     string;
-  udin:               string;
+  // Sign-off (dedicated columns)
+  signature_date: string;
+  udin:           string;
+  // Form paragraphs (stored in form_3cb_paragraphs JSONB)
+  p1:  string;
+  p2:  string;
+  p3:  string;
+  p4:  string;
+  p5a: string;
+  p5b: string;
+  // Annexure paragraphs
+  anx_assessee_1: string;
+  anx_assessee_2: string;
+  anx_assessee_3: string;
+  anx_auditor_1:  string;
+  anx_auditor_2:  string;
+  anx_auditor_3:  string;
 }
 
 const TODAY = new Date().toISOString().split("T")[0];
 
-const DEFAULT_DATA: CBFormData = {
-  observation_text:   "- Please see Notes on Accounts",
-  qualification_text: "- As per Annexure attached",
-  signature_date:     TODAY,
-  udin:               "",
-};
+/** Build statutory template paragraphs interpolated with engagement data. */
+function buildDefaults(
+  clientName: string,
+  clientPAN:  string,
+  endYear:    string,
+): Omit<CBFormData, "signature_date" | "udin"> {
+  const panPart = clientPAN ? ` (PAN: ${clientPAN})` : "";
+  const yr      = endYear || "____";
+  const nm      = clientName || "[Client Name]";
+  return {
+    p1: `I/We have examined the balance sheet as at 31st March, ${yr}, and the Profit and Loss Account for the year ended on that date, attached herewith, of ${nm}${panPart}.`,
+    p2: `In my/our opinion and to the best of my/our information and according to explanations given to me/us, the said accounts give a true and fair view of the state of the affairs of the assessee as at 31st March, ${yr} and of its profit/loss for the year ended on that date.`,
+    p3: `The statement of particulars required to be furnished under section 44AB is annexed herewith in Form No. 3CD.`,
+    p4: `In my/our opinion and to the best of my/our information and according to the explanations given to me/us, the particulars given in the said Form No. 3CD and the Annexure thereto are true and correct.`,
+    p5a: `- Please see Notes on Accounts`,
+    p5b: `- As per Annexure attached`,
+    anx_assessee_1:
+      `The assessee is responsible for the preparation of the aforesaid financial statements that give a true and fair view of the financial position and financial performance in accordance with the applicable Accounting Standards issued by the Institute of Chartered Accountants of India. This responsibility includes the design, implementation and maintenance of internal control relevant to the preparation and presentation of the financial statements that give a true and fair view and are free from material misstatement, whether due to fraud or error.`,
+    anx_assessee_2:
+      `The assessee is also responsible for the preparation of the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962 that give true and correct particulars as per the provisions of the Income-tax Act, 1961 read with Rules, Notifications, circulars, etc that are to be included in the Statement.`,
+    anx_assessee_3: `Assessee are also responsible for overseeing the entity's financial reporting process.`,
+    anx_auditor_1:
+      `Our objectives are to obtain reasonable assurance about whether the financial statements as a whole are free from material misstatement, whether due to fraud or error, and to issue an auditor's report that includes our opinion. Reasonable assurance is a high level of assurance, but is not a guarantee that an audit conducted in accordance with SAs will always detect a material misstatement when it exists. Misstatements can arise from fraud or error and are considered material if, individually or in the aggregate, they could reasonably be expected to influence the economic decisions of users taken on the basis of these financial statements.`,
+    anx_auditor_2: `We believe that the audit evidence we have obtained is sufficient and appropriate to provide a basis for our audit opinion.`,
+    anx_auditor_3:
+      `We are also responsible for verifying the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962. We have conducted our verification of the statement in accordance with Guidance Note on Tax Audit under section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered Accountants of India.`,
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function fyStartYear(fy: string): string {
-  const m = fy.match(/^(\d{4})/);
-  return m ? m[1] : fy;
-}
 function fyEndYear(fy: string): string {
   const parts = fy.split("-");
   if (parts.length < 2) return fy;
@@ -56,9 +84,43 @@ function fmtDate(d: string): string {
   });
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Auto-resizing editable paragraph ─────────────────────────────────────────
 
-/** Highlighted auto-filled value — amber/gold to match software convention */
+function EditablePara({
+  value,
+  onChange,
+  className = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+  }, [value]);
+
+  return (
+    <>
+      {/* Screen: editable textarea */}
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className={`print:hidden w-full resize-none bg-transparent border-0 border-b border-transparent hover:border-amber-300 focus:border-amber-400 focus:outline-none focus:ring-0 leading-7 text-sm text-justify px-0 py-0.5 transition-colors ${className}`}
+        rows={1}
+      />
+      {/* Print: plain text */}
+      <span className="hidden print:inline whitespace-pre-wrap">{value}</span>
+    </>
+  );
+}
+
+/** Highlighted auto-filled value */
 function AutoVal({ v, placeholder = "—" }: { v?: string | null; placeholder?: string }) {
   return v ? (
     <span className="bg-amber-50 text-amber-800 font-medium border-b border-amber-300 px-0.5 print:bg-transparent print:border-0 print:font-bold">
@@ -69,22 +131,9 @@ function AutoVal({ v, placeholder = "—" }: { v?: string | null; placeholder?: 
   );
 }
 
-/** Label + value row for client detail sub-block */
-function DetailRow({ label, value, placeholder }: { label: string; value?: string | null; placeholder?: string }) {
-  return (
-    <div className="flex gap-2 text-sm leading-7">
-      <span className="font-medium min-w-[120px]">{label}</span>
-      <span>:</span>
-      <AutoVal v={value} placeholder={placeholder ?? `[${label}]`} />
-    </div>
-  );
-}
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-interface Props {
-  engagementId: string;
-}
+interface Props { engagementId: string; }
 
 export default function Form3CBTab({ engagementId }: Props) {
   const [loading,     setLoading]     = useState(true);
@@ -92,14 +141,15 @@ export default function Form3CBTab({ engagementId }: Props) {
   const [saved,       setSaved]       = useState(false);
   const [engagement,  setEngagement]  = useState<any>(null);
   const [client,      setClient]      = useState<any>(null);
-  const [auditFirm,   setAuditFirm]   = useState<any>(null);  // audit_firms row (explicit override)
-  const [caFirm,      setCaFirm]      = useState<any>(null);  // firms row (own CA practice)
-  const [partnerUser, setPartnerUser] = useState<any>(null);  // users row (signing partner)
-  const [formData,    setFormData]    = useState<CBFormData>(DEFAULT_DATA);
+  const [auditFirm,   setAuditFirm]   = useState<any>(null);
+  const [caFirm,      setCaFirm]      = useState<any>(null);
+  const [partnerUser, setPartnerUser] = useState<any>(null);
+  const [formData,    setFormData]    = useState<CBFormData>({
+    signature_date: TODAY, udin: "",
+    ...buildDefaults("", "", ""),
+  });
 
   const autoSaveRef = useRef<ReturnType<typeof setTimeout>>();
-
-  // ── Load ─────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!engagementId) { setLoading(false); return; }
@@ -108,8 +158,6 @@ export default function Form3CBTab({ engagementId }: Props) {
 
   async function load() {
     setLoading(true);
-
-    // ── 1. Engagement + client + own CA firm in one query ──────────────────
     const { data: eng } = await supabase
       .from("audit_engagements")
       .select("*, clients(*), firms(*)")
@@ -118,41 +166,39 @@ export default function Form3CBTab({ engagementId }: Props) {
 
     if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }
     setEngagement(eng);
-    setClient((eng as any).clients || null);
-    setCaFirm((eng as any).firms   || null);
+    const cl = (eng as any).clients || null;
+    setClient(cl);
+    setCaFirm((eng as any).firms || null);
 
-    // ── 2. Audit firm (explicit external auditor override, if set) ─────────
     if ((eng as any).audit_firm_id) {
       const { data: af } = await supabase
-        .from("audit_firms")
-        .select("*")
-        .eq("id", (eng as any).audit_firm_id)
-        .single();
+        .from("audit_firms").select("*").eq("id", (eng as any).audit_firm_id).single();
       setAuditFirm(af || null);
     }
-
-    // ── 3. Signing partner ─────────────────────────────────────────────────
     if ((eng as any).partner_id) {
-      const { data: partner } = await supabase
-        .from("users")
-        .select("name, membership_number")
-        .eq("id", (eng as any).partner_id)
-        .single();
-      setPartnerUser(partner || null);
+      const { data: pu } = await supabase
+        .from("users").select("name, membership_number").eq("id", (eng as any).partner_id).single();
+      setPartnerUser(pu || null);
     }
 
-    // ── 4. Populate editable fields from engagement columns ───────────────
+    // Build defaults from loaded engagement data
+    const fy      = (eng as any).financial_year || "";
+    const endYr   = fyEndYear(fy);
+    const cName   = cl?.name  || "";
+    const cPAN    = cl?.pan   || "";
+    const defaults = buildDefaults(cName, cPAN, endYr);
+
+    // Merge: saved overrides win over defaults (absent keys fall back to defaults)
+    const saved = ((eng as any).form_3cb_paragraphs as Record<string, string>) || {};
     setFormData({
-      observation_text:   (eng as any).form_3cb_observations  || DEFAULT_DATA.observation_text,
-      qualification_text: (eng as any).form_3cb_qualifications || DEFAULT_DATA.qualification_text,
-      signature_date:     (eng as any).form_3cb_signature_date || TODAY,
-      udin:               (eng as any).udin                   || "",
+      signature_date: (eng as any).form_3cb_signature_date || TODAY,
+      udin:           (eng as any).udin || "",
+      ...defaults,
+      ...saved,  // saved keys override defaults
     });
 
     setLoading(false);
   }
-
-  // ── Patch ─────────────────────────────────────────────────────────────────
 
   const patch = useCallback(<K extends keyof CBFormData>(key: K, value: CBFormData[K]) => {
     setFormData(prev => {
@@ -164,26 +210,23 @@ export default function Form3CBTab({ engagementId }: Props) {
     setSaved(false);
   }, [engagementId]);
 
-  // ── Save — writes editable fields directly to audit_engagements ──────────
-
   async function doSave(data: CBFormData, silent = false) {
     if (!engagementId) return;
     setSaving(true);
+    // Split: dedicated columns + paragraphs JSONB
+    const { signature_date, udin, ...paragraphs } = data;
     const { error } = await supabase
       .from("audit_engagements")
       .update({
-        form_3cb_observations:   data.observation_text,
-        form_3cb_qualifications: data.qualification_text,
-        form_3cb_signature_date: data.signature_date,
-        udin:                    data.udin,
+        form_3cb_signature_date: signature_date,
+        udin,
+        form_3cb_paragraphs: paragraphs,
       } as any)
       .eq("id", engagementId);
     setSaving(false);
     if (error) { if (!silent) toast.error("Save failed: " + error.message); }
     else       { setSaved(true); if (!silent) toast.success("Form 3CB saved"); }
   }
-
-  // ── Download PDF ─────────────────────────────────────────────────────────
 
   function handleDownloadPDF() {
     const safeClient = (clientName || "Client").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_");
@@ -196,38 +239,19 @@ export default function Form3CBTab({ engagementId }: Props) {
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  const fy            = engagement?.financial_year || "";
-  const startYear     = fyStartYear(fy);   // e.g. "2025"
-  const endYear       = fyEndYear(fy);     // e.g. "2026"
-
-  const clientName    = client?.name             || "";
-  const clientAddress = client?.address          || client?.registered_office || "";
-  const clientPAN     = client?.pan              || "";
-
-  // Priority: auditFirm (explicit override) → caFirm (own CA firm) → partnerUser (signing partner)
-  const firmName    = auditFirm?.name         || caFirm?.name             || "";
+  const fy          = engagement?.financial_year || "";
+  const clientName  = client?.name || "";
+  const firmName    = auditFirm?.name         || caFirm?.name            || "";
   const firmFRN     = auditFirm?.icai_reg_no  || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
   const firmCity    = auditFirm?.city         || (caFirm?.address as any)?.city || "";
-  const partnerName = auditFirm?.partner_name || partnerUser?.name         || "";
+  const partnerName = auditFirm?.partner_name || partnerUser?.name        || "";
   const membershipNo= auditFirm?.partner_icai_no || partnerUser?.membership_number || "";
 
-  // ─────────────────────────────────────────────────────────────────────────
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-48">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (!engagementId) {
-    return (
-      <p className="p-8 text-center text-muted-foreground">
-        Open Form 3CB from an engagement (Stage 8).
-      </p>
-    );
-  }
+  if (loading) return (
+    <div className="flex items-center justify-center h-48">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -249,19 +273,10 @@ export default function Form3CBTab({ engagementId }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm" variant="outline"
-            className="h-8 gap-1.5 text-xs print:hidden"
-            onClick={handleDownloadPDF}
-          >
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs print:hidden" onClick={handleDownloadPDF}>
             <FileDown size={13} /> Download PDF
           </Button>
-          <Button
-            size="sm"
-            className="h-8 gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700"
-            onClick={() => doSave(formData)}
-            disabled={saving}
-          >
+          <Button size="sm" className="h-8 gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700" onClick={() => doSave(formData)} disabled={saving}>
             <Save size={13} /> Save Form
           </Button>
         </div>
@@ -275,209 +290,96 @@ export default function Form3CBTab({ engagementId }: Props) {
           <p className="text-xl font-bold uppercase tracking-widest">FORM NO. 3CB</p>
           <p className="text-xs text-gray-500 tracking-wide">[See rule 6G (1) (b)]</p>
           <p className="text-sm font-semibold italic mt-3 max-w-2xl mx-auto leading-relaxed">
-            Audit Report under section 44AB of the Income-tax Act, 1961 in a case of a person
-            referred to in clause(b) of Sub-rule(1) of rule 6G
+            Audit report under section 44AB of the Income-tax Act, 1961, in a case where the accounts of the
+            business or profession of a person have not been audited under any other law
           </p>
         </div>
 
         <hr className="border-gray-300 mb-6" />
 
-        {/* ─── POINT 1 ─── */}
-        <div className="mb-5">
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">1.</span>{" "}
-            We have examined the Balance Sheet as on{" "}
-            <span className="font-semibold">31st March, {endYear}</span>{" "}
-            and the Profit and Loss account for the period beginning from{" "}
-            <span className="font-semibold">1st April, {startYear}</span>{" "}
-            to ending on{" "}
-            <span className="font-semibold">31st March, {endYear}</span>,
-            attached herewith, of ...
-          </p>
-
-          {/* Client detail sub-block */}
-          <div className="ml-6 mt-2 space-y-0.5">
-            <DetailRow label="Name"      value={clientName}    placeholder="[Client Name]" />
-            <DetailRow label="Address"   value={clientAddress} placeholder="[Client Address]" />
-            <DetailRow label="P.A.Number" value={clientPAN}    placeholder="[PAN]" />
+        {/* ─── POINTS 1–4 ─── */}
+        {([
+          { num: "1.", key: "p1" as keyof CBFormData },
+          { num: "2.", key: "p2" as keyof CBFormData },
+          { num: "3.", key: "p3" as keyof CBFormData },
+          { num: "4.", key: "p4" as keyof CBFormData },
+        ]).map(({ num, key }) => (
+          <div key={key} className="mb-4 flex gap-2 items-start">
+            <span className="font-semibold text-sm flex-shrink-0 mt-1">{num}</span>
+            <EditablePara value={formData[key] as string} onChange={v => patch(key, v)} className="flex-1" />
           </div>
-        </div>
-
-        {/* ─── POINT 2 ─── */}
-        <div className="mb-5">
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">2.</span>{" "}
-            We certify that the Balance Sheet and the Profit and Loss account are in agreement
-            with the books of account maintained at the head office at above address.
-          </p>
-        </div>
-
-        {/* ─── POINT 3 ─── */}
-        <div className="mb-5 space-y-3">
-
-          {/* 3(a) */}
-          <div>
-            <p className="text-sm leading-7">
-              <span className="font-semibold">3. (a)</span>{" "}
-              We report the following observation/comments/discrepancies/inconsistencies, if any:
-            </p>
-            <div className="ml-6 mt-1">
-              {/* Editable — shown on screen */}
-              <Textarea
-                value={formData.observation_text}
-                onChange={e => patch("observation_text", e.target.value)}
-                placeholder="Enter observations…"
-                className="text-sm min-h-[60px] resize-none print:hidden"
-              />
-              {/* Print version */}
-              <p className="hidden print:block text-sm whitespace-pre-wrap border-b border-gray-300 pb-1 min-h-[32px]">
-                {formData.observation_text}
-              </p>
-            </div>
-          </div>
-
-          {/* 3(b) */}
-          <p className="text-sm leading-7 ml-4">
-            <span className="font-semibold">(b)</span>{" "}
-            Subject to above
-          </p>
-
-          {/* 3(A) */}
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">(A)</span>{" "}
-            We have obtained all the information and explanations which, to the best of our
-            knowledge and belief, were necessary for the purpose of the audit.
-          </p>
-
-          {/* 3(B) */}
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">(B)</span>{" "}
-            In our opinion proper books of account have been kept by the head office and the
-            branches, if any, of the assessee so far as appears from the examination of the books.
-          </p>
-
-          {/* 3(C) */}
-          <div>
-            <p className="text-sm leading-7 text-justify">
-              <span className="font-semibold">(C)</span>{" "}
-              In our opinion, and to the best of our information and according to explanations
-              given to us, the said accounts, read with notes thereon, if any, give true and
-              fair view:
-            </p>
-            {/* 3(C)(i) */}
-            <p className="text-sm leading-7 ml-6 text-justify">
-              <span className="font-semibold">(i)</span>{" "}
-              in the case of the Balance Sheet, of the state of the affairs of the assessee as
-              at <span className="font-semibold">31st March, {endYear}</span>; and
-            </p>
-            {/* 3(C)(ii) */}
-            <p className="text-sm leading-7 ml-6 text-justify">
-              <span className="font-semibold">(ii)</span>{" "}
-              in the case of the Profit and Loss account, of the Profit of the assessee for the
-              year ended on that date.
-            </p>
-          </div>
-
-        </div>
-
-        {/* ─── POINT 4 ─── */}
-        <div className="mb-5">
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">4.</span>{" "}
-            The statement of particulars required to be furnished under section 44AB is annexed
-            herewith in Form No.3CD and annexure thereto.
-          </p>
-        </div>
+        ))}
 
         {/* ─── POINT 5 ─── */}
         <div className="mb-8">
-          <p className="text-sm leading-7 text-justify">
-            <span className="font-semibold">5.</span>{" "}
-            In our opinion, and to the best of our information and according to explanations
-            given to us, the particulars given in the said Form No. 3CD and annexure thereto
-            are true and correct, subject to following observations/qualifications, if any:
-          </p>
-          <div className="ml-6 mt-1">
-            {/* Editable — shown on screen */}
-            <Textarea
-              value={formData.qualification_text}
-              onChange={e => patch("qualification_text", e.target.value)}
-              placeholder="Enter qualifications or 'Nil'…"
-              className="text-sm min-h-[60px] resize-none print:hidden"
-            />
-            {/* Print version */}
-            <p className="hidden print:block text-sm whitespace-pre-wrap border-b border-gray-300 pb-1 min-h-[32px]">
-              {formData.qualification_text}
+          <p className="text-sm font-semibold mb-2">5.</p>
+
+          {/* 5(a) Observations */}
+          <div className="mb-3 ml-4">
+            <p className="text-sm font-medium mb-1">
+              (a) The observations and comments given below have a material effect on the accounts:
             </p>
+            <EditablePara
+              value={formData.p5a}
+              onChange={v => patch("p5a", v)}
+              className="ml-2 border-l-2 border-gray-200 pl-3"
+            />
+          </div>
+
+          {/* 5(b) Qualifications */}
+          <div className="ml-4">
+            <p className="text-sm font-medium mb-1">
+              (b) Subject to the above, in my/our opinion and to the best of my/our information and
+              according to the explanations given to me/us, the said accounts, read with the notes
+              thereon, give the information required by the Act, etc. and also give respectively a
+              true and fair view subject to the following qualifications:
+            </p>
+            <EditablePara
+              value={formData.p5b}
+              onChange={v => patch("p5b", v)}
+              className="ml-2 border-l-2 border-gray-200 pl-3"
+            />
           </div>
         </div>
 
         {/* ─── SIGNATURE BLOCK ─── */}
         <div className="flex justify-end">
-          <div className="text-sm space-y-1 text-right min-w-[260px]">
-
-            {/* Firm line */}
-            <p>
-              For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" />
-            </p>
+          <div className="text-sm space-y-1 text-right min-w-[280px]">
+            <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
             <p>Chartered Accountants</p>
-            <p>
-              FRN: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" />
-            </p>
+            <p>FRN: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
 
-            {/* Place */}
-            <p className="mt-3">
-              Place: <AutoVal v={firmCity} placeholder="[City]" />
-            </p>
+            <p className="mt-3">Place: <AutoVal v={firmCity} placeholder="[City]" /></p>
 
-            {/* Date */}
             <p className="flex items-center justify-end gap-2">
               <span>Date:</span>
               <span className="print:hidden">
-                <Input
-                  type="date"
-                  value={formData.signature_date}
+                <Input type="date" value={formData.signature_date}
                   onChange={e => patch("signature_date", e.target.value)}
-                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36"
-                />
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36" />
               </span>
               <span className="hidden print:inline">{fmtDate(formData.signature_date)}</span>
             </p>
 
-            {/* UDIN */}
             <p className="flex items-center justify-end gap-2">
               <span>UDIN:</span>
               <span className="print:hidden">
-                <Input
-                  value={formData.udin}
-                  onChange={e => patch("udin", e.target.value)}
+                <Input value={formData.udin} onChange={e => patch("udin", e.target.value)}
                   placeholder="Enter UDIN"
-                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48"
-                />
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48" />
               </span>
-              <span className="hidden print:inline font-mono">
-                {formData.udin || "___________________"}
-              </span>
+              <span className="hidden print:inline font-mono">{formData.udin || "___________________"}</span>
             </p>
 
-            {/* Partner */}
-            <p className="mt-4 font-semibold">
-              <AutoVal v={partnerName} placeholder="[Partner Name]" />
-            </p>
+            <p className="mt-4 font-semibold"><AutoVal v={partnerName} placeholder="[Partner Name]" /></p>
             <p>Partner</p>
-            <p>
-              Membership No.: <AutoVal v={membershipNo} placeholder="[Membership No]" />
-            </p>
-
+            <p>Membership No.: <AutoVal v={membershipNo} placeholder="[Membership No]" /></p>
           </div>
         </div>
-        {/* ═══════════════════════════════════════════════════════════════ */}
-        {/* ANNEXURE TO FORM NO. 3CB                                       */}
-        {/* ═══════════════════════════════════════════════════════════════ */}
 
+        {/* ═══════════════════════ ANNEXURE ═══════════════════════ */}
         <hr className="border-gray-400 border-t-2 my-10" />
 
-        {/* ─── Annexure Header ─── */}
         <div className="text-center mb-6 space-y-1">
           <p className="text-lg font-bold uppercase tracking-widest">ANNEXURE</p>
           <p className="text-sm font-semibold uppercase tracking-wide">
@@ -490,68 +392,31 @@ export default function Form3CBTab({ engagementId }: Props) {
 
         <hr className="border-gray-300 mb-6" />
 
-        {/* ─── Section 1 ─── */}
+        {/* ─── Assessee Responsibilities ─── */}
         <p className="text-sm font-bold underline underline-offset-2 mb-3">
-          Responsibilities of Assessee (include Assessee's Management) and those charged
-          with Governance for the Financial Statements
+          Responsibilities of Assessee (include Assessee's Management) and those charged with Governance for the Financial Statements
         </p>
 
-        <p className="text-sm leading-7 text-justify mb-4">
-          The assessee is responsible for the preparation of the aforesaid financial
-          statements that give a true and fair view of the financial position and financial
-          performance in accordance with the applicable Accounting Standards issued by the
-          Institute of Chartered Accountants of India. This responsibility includes the design,
-          implementation and maintenance of internal control relevant to the preparation and
-          presentation of the financial statements that give a true and fair view and are free
-          from material misstatement, whether due to fraud or error.
-        </p>
+        {(["anx_assessee_1", "anx_assessee_2", "anx_assessee_3"] as const).map(key => (
+          <div key={key} className="mb-4">
+            <EditablePara value={formData[key]} onChange={v => patch(key, v)} />
+          </div>
+        ))}
 
-        <p className="text-sm leading-7 text-justify mb-4">
-          The assessee is also responsible for the preparation of the statement of particulars
-          required to be furnished under section 44AB of the Income-tax Act, 1961 annexed
-          herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962 that give
-          true and correct particulars as per the provisions of the Income-tax Act, 1961 read
-          with Rules, Notifications, circulars, etc that are to be included in the Statement.
-        </p>
-
-        <p className="text-sm leading-7 text-justify mb-6">
-          Assessee are also responsible for overseeing the entity's financial reporting process.
-        </p>
-
-        {/* ─── Section 2 ─── */}
-        <p className="text-sm font-bold underline underline-offset-2 mb-3">
+        {/* ─── Auditor's Responsibilities ─── */}
+        <p className="text-sm font-bold underline underline-offset-2 mb-3 mt-6">
           Auditor's Responsibility for the Audit of the Financial Statements
         </p>
 
-        <p className="text-sm leading-7 text-justify mb-4">
-          Our objectives are to obtain reasonable assurance about whether the financial
-          statements as a whole are free from material misstatement, whether due to fraud or
-          error, and to issue an auditor's report that includes our opinion. Reasonable assurance
-          is a high level of assurance, but is not a guarantee that an audit conducted in
-          accordance with SAs will always detect a material misstatement when it exists.
-          Misstatements can arise from fraud or error and are considered material if,
-          individually or in the aggregate, they could reasonably be expected to influence the
-          economic decisions of users taken on the basis of these financial statements.
-        </p>
+        {(["anx_auditor_1", "anx_auditor_2", "anx_auditor_3"] as const).map(key => (
+          <div key={key} className="mb-4">
+            <EditablePara value={formData[key]} onChange={v => patch(key, v)} />
+          </div>
+        ))}
 
-        <p className="text-sm leading-7 text-justify mb-4">
-          We believe that the audit evidence we have obtained is sufficient and appropriate to
-          provide a basis for our audit opinion.
-        </p>
-
-        <p className="text-sm leading-7 text-justify mb-8">
-          We are also responsible for verifying the statement of particulars required to be
-          furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form
-          No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962. We have conducted our
-          verification of the statement in accordance with Guidance Note on Tax Audit under
-          section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered
-          Accountants of India.
-        </p>
-
-        {/* ─── Annexure Signature Block (same data as main form) ─── */}
-        <div className="flex justify-end">
-          <div className="text-sm space-y-1 text-right min-w-[260px]">
-
+        {/* ─── Annexure Signature Block ─── */}
+        <div className="flex justify-end mt-8">
+          <div className="text-sm space-y-1 text-right min-w-[280px]">
             <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
             <p>Chartered Accountants</p>
             <p>FRN: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
@@ -561,12 +426,9 @@ export default function Form3CBTab({ engagementId }: Props) {
             <p className="flex items-center justify-end gap-2">
               <span>Date:</span>
               <span className="print:hidden">
-                <Input
-                  type="date"
-                  value={formData.signature_date}
+                <Input type="date" value={formData.signature_date}
                   onChange={e => patch("signature_date", e.target.value)}
-                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36"
-                />
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36" />
               </span>
               <span className="hidden print:inline">{fmtDate(formData.signature_date)}</span>
             </p>
@@ -574,28 +436,19 @@ export default function Form3CBTab({ engagementId }: Props) {
             <p className="flex items-center justify-end gap-2">
               <span>UDIN:</span>
               <span className="print:hidden">
-                <Input
-                  value={formData.udin}
-                  onChange={e => patch("udin", e.target.value)}
+                <Input value={formData.udin} onChange={e => patch("udin", e.target.value)}
                   placeholder="Enter UDIN"
-                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48"
-                />
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48" />
               </span>
-              <span className="hidden print:inline font-mono">
-                {formData.udin || "___________________"}
-              </span>
+              <span className="hidden print:inline font-mono">{formData.udin || "___________________"}</span>
             </p>
 
-            <p className="mt-4 font-semibold">
-              <AutoVal v={partnerName} placeholder="[Partner Name]" />
-            </p>
+            <p className="mt-4 font-semibold"><AutoVal v={partnerName} placeholder="[Partner Name]" /></p>
             <p>Partner</p>
             <p>Membership No.: <AutoVal v={membershipNo} placeholder="[Membership No]" /></p>
-
           </div>
         </div>
 
-        {/* end document */}
       </div>
     </div>
   );
