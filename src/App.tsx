@@ -44,7 +44,7 @@ const ClientGroups             = lazy(() => import("./pages/ClientGroups"));
 const Form3CD                  = lazy(() => import("./pages/Form3CD"));
 const Form3Reports             = lazy(() => import("./pages/Form3Reports"));
 const NotesToAccounts          = lazy(() => import("./pages/NotesToAccounts"));
-const ComparativeStatements    = lazy(() => import("./pages/ComparativeStatements"));
+// REMOVED: const ComparativeStatements = lazy(() => import("./pages/ComparativeStatements")); — removed per client request
 const UserManagement           = lazy(() => import("./pages/UserManagement"));
 const ChangePassword           = lazy(() => import("./pages/ChangePassword"));
 const AdminOverview            = lazy(() => import("./pages/admin/AdminOverview"));
@@ -189,10 +189,9 @@ const App = () => (
               <Route path="/audit/3cd" element={<Form3CD />} />
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
               <Route path="/audit/3reports" element={<Form3Reports />} />
-              <Route path="/audit/comparative" element={<ComparativeStatements />} />
+              {/* REMOVED: /audit/comparative and /audit/:clientId/comparative — removed per client request */}
               <Route path="/audit/master-config" element={<AuditMasterConfig />} />
               <Route path="/audit/tracker" element={<AuditTracker />} />
-              <Route path="/audit/:clientId/comparative" element={<ComparativeStatements />} />
               <Route path="/audit/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/:clientId/preliminary" element={<AuditPreliminary />} />
               <Route path="/audit/queries" element={<AuditQueryTracker />} />
