@@ -23,8 +23,8 @@ const corsHeaders = {
 
 const BUCKET = "tax_audit_templates";
 const TEMPLATE_PATHS: Record<string, string> = {
-  "3CA-3CD": "v3/3ca_3cd.xlsx",
-  "3CB-3CD": "v3/3cb_3cd.xlsx",
+  "3CA-3CD": "v1/3ca_3cd.xlsx",
+  "3CB-3CD": "v1/3cb_3cd.xlsx",
 };
 
 // ── General helpers ───────────────────────────────────────────────────────────
@@ -367,6 +367,104 @@ function setCellInXml(xml: string, addr: string, value: string): string {
   );
 }
 
+// ── Formula-cell direct fill ──────────────────────────────────────────────────
+//
+// Some template cells use Excel named-range formulas (e.g. <f>FIRM_NAME</f>).
+// The named-range target cell in 01_Control gets filled by the named-range pass,
+// but those formula cells still carry their stale cached <v>0</v>.
+//
+// PROBLEM: when the workbook also contains broken external-workbook named ranges
+// (e.g. Report_Date → [73]Index!$C$22) Excel shows an "Update external links?"
+// dialog.  If the user clicks "Don't Update" the full recalculation is suppressed
+// and every formula cell is frozen at its cached value (0 / blank).
+//
+// FIX: scan every sheet for cells whose <f> text exactly matches one of our known
+// field-name keys and write the resolved value directly as an inlineStr — no
+// Excel recalculation needed at all.
+
+/** All named-range keys we know how to resolve (mirrors NR_TO_FIELD values + keys). */
+const FORMULA_FIELD_NAMES = new Set([
+  ...Object.keys(NR_TO_FIELD),
+  ...Object.values(NR_TO_FIELD),
+]);
+
+/**
+ * Scan sheetXml for cells whose formula text is exactly a known field-name key,
+ * and return (cellAddr → resolvedValue) for each match.
+ */
+function resolveFormulaCells(
+  sheetXml: string,
+  autoValues: Record<string, string>,
+): Map<string, string> {
+  const result = new Map<string, string>();
+  // Match <c r="ADDR" ...><f ...>FORMULA_TEXT</f>...</c>
+  const cellRe = /<c\b([^>]*?)>([\s\S]*?)<\/c>/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = cellRe.exec(sheetXml)) !== null) {
+    const attrs = cm[1];
+    const inner = cm[2];
+    const addrM = attrs.match(/\br="([A-Z]+\d+)"/);
+    if (!addrM) continue;
+    const addr = addrM[1];
+    // Extract formula content — handles <f>NAME</f> and <f t="...">NAME</f>
+    const fM = inner.match(/<f[^>]*>([^<]+)<\/f>/);
+    if (!fM) continue;
+    const formulaText = fM[1].trim();
+    if (!FORMULA_FIELD_NAMES.has(formulaText)) continue;
+    // Resolve: try the formula text itself as a key, then via NR_TO_FIELD mapping
+    const value =
+      autoValues[formulaText] ||
+      autoValues[NR_TO_FIELD[formulaText] ?? ""] ||
+      "";
+    if (value) result.set(addr, value);
+  }
+  return result;
+}
+
+// ── External workbook ref stripper ────────────────────────────────────────────
+//
+// If any <definedName> in workbook.xml references an external workbook
+// (its value contains "["), Excel shows "Update external links?" on open.
+// When the user clicks "Don't Update" ALL formula recalculation is suppressed —
+// even cells that use only local named ranges — so every formula cell stays at 0.
+//
+// Fix: rewrite those broken names to point to well-known local 01_Control cells
+// so Excel never needs to fetch an external workbook.
+//
+// Known broken names and their correct local targets:
+const EXTERNAL_NR_FIXUP: Record<string, string> = {
+  Report_Date:    "'01_Control'!$F$25",
+  Place:          "'01_Control'!$F$26",
+  BS_Date:        "'01_Control'!$G$16",
+  REPORT_DATE:    "'01_Control'!$F$25",
+  PLACE:          "'01_Control'!$F$26",
+  BS_DATE:        "'01_Control'!$G$16",
+  REPORT_DATE_0:  "'01_Control'!$F$25",
+  PLACE_0:        "'01_Control'!$F$26",
+};
+
+/**
+ * Rewrite any <definedName> whose value contains "[" (external workbook ref)
+ * to the corresponding local 01_Control cell, or strip it if unknown.
+ * Also removes the xl/externalLinks/ entries that cause the "update?" dialog.
+ */
+function fixExternalNamedRanges(wbXml: string): string {
+  return wbXml.replace(
+    /(<definedName\b([^>]*)>)([\s\S]*?)(<\/definedName>)/g,
+    (match, openTag, attrs, value, closeTag) => {
+      if (!value.includes("[")) return match;  // local ref — keep as-is
+      const nameM = attrs.match(/\bname="([^"]+)"/);
+      if (!nameM) return match;
+      const localTarget = EXTERNAL_NR_FIXUP[nameM[1]];
+      if (localTarget) {
+        return `${openTag}${localTarget}${closeTag}`;
+      }
+      // Unknown external ref — remove the definedName entirely to avoid the dialog
+      return "";
+    },
+  );
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -605,8 +703,21 @@ serve(async (req) => {
 
     // -1. Named-range fill — primary mechanism for 01_Control-based templates.
     //     Reads workbook.xml defined names, resolves sheet+cell, writes autoValues.
-    const wbXml = wbEntry ? _dec.decode(wbEntry) : "";
+    let wbXml = wbEntry ? _dec.decode(wbEntry) : "";
     if (wbXml) {
+      // ── Fix broken external-workbook named ranges BEFORE parsing ─────────────
+      // Some templates were copied from other workbooks and carry named ranges
+      // that point to external files ([73]Index!$C$22 etc.).  Excel displays an
+      // "Update external links?" dialog on open; if the user clicks "Don't Update"
+      // ALL formula recalculation is suppressed and every cell stays at v=0.
+      // Rewrite known external names to local 01_Control cells and strip unknowns.
+      const wbXmlFixed = fixExternalNamedRanges(wbXml);
+      if (wbXmlFixed !== wbXml) {
+        console.log("[Named-range fix] Rewrote external-workbook named ranges in workbook.xml");
+        wbXml = wbXmlFixed;
+        zip["xl/workbook.xml"] = _enc.encode(wbXml);
+      }
+
       const namedRanges = parseNamedRanges(wbXml);
       let nrFilled = 0;
       for (const [rangeName, { sheetName, cellAddr }] of namedRanges) {
@@ -646,6 +757,25 @@ serve(async (req) => {
         addUpdate(sheetName, addr, value);
       }
     }
+
+    // 0b. Formula-cell direct fill — find cells whose <f> content is exactly a
+    //     known field-name key (e.g. <f>FIRM_NAME</f>) and write the resolved value
+    //     directly as an inlineStr. This bypasses Excel recalculation entirely, so
+    //     even if the user opens the file without recalculating, all fields show up.
+    let formulaCellsTotal = 0;
+    for (const [sheetName, sheetPath] of sheetPaths) {
+      if (!zip[sheetPath]) continue;
+      const sheetXml = _dec.decode(zip[sheetPath]);
+      const formulaMappings = resolveFormulaCells(sheetXml, autoValues);
+      if (formulaMappings.size > 0) {
+        console.log(`[Formula-cell fill] ${sheetName}: ${formulaMappings.size} formula cell(s) resolved`);
+        formulaCellsTotal += formulaMappings.size;
+      }
+      for (const [addr, value] of formulaMappings) {
+        addUpdate(sheetName, addr, value);
+      }
+    }
+    console.log(`[Formula-cell fill] total: ${formulaCellsTotal} cells directly filled`);
 
     // 1. Header values from cell_map (overrides AUTO scan where both match)
     for (const cm of cellMapRows ?? []) {
