@@ -178,11 +178,14 @@ const ItReturns = () => {
   const { data: itrClientIds = [] } = useQuery({
     queryKey: ["itr_client_ids", firmId],
     queryFn: async () => {
-      // Step 1: Get all ITR service category IDs (linked_module = 'itr')
+      // Step 1: Get all ITR service category IDs.
+      // Primary match: linked_module = 'itr'.
+      // Fallback: category name contains "itr" or "income tax" (catches categories
+      // where the admin forgot to set linked_module).
       const { data: cats } = await supabase
         .from("service_categories")
         .select("id")
-        .eq("linked_module", "itr");
+        .or("linked_module.eq.itr,name.ilike.%itr%,name.ilike.%income tax%,name.ilike.%it return%");
       if (!cats?.length) return [];
       const catIdSet = new Set(cats.map(c => c.id));
       const catIds = [...catIdSet];
@@ -292,10 +295,9 @@ const ItReturns = () => {
         Array.from(classMapRaw.entries()).map(([id, v]) => [id, v.cls])
       );
 
-      // Clients explicitly classified as "Audit" in client_fy_classifications
-      const auditClassifiedClientIds = Array.from(classMapRaw.entries())
-        .filter(([, v]) => v.cls?.toLowerCase() === "audit")
-        .map(([id]) => id);
+      // All clients that have ANY classification in client_fy_classifications
+      // (Audit, Non-Audited, Partner in Audited Firm — all appear in IT Returns)
+      const auditClassifiedClientIds = Array.from(classMapRaw.keys());
 
       // ── Step 2: Build combined pool ──────────────────────────────────────────
       // Audit-engaged + ITR-service + explicitly classified as Audit
@@ -612,8 +614,9 @@ function FilingTab({
   );
 
   const openAddRowDialog = async () => {
-    // Fetch all clients with ITR service active
-    const { data: cats } = await supabase.from("service_categories").select("id").eq("linked_module", "itr");
+    // Fetch all clients with ITR service active (match by linked_module OR name)
+    const { data: cats } = await supabase.from("service_categories").select("id")
+      .or("linked_module.eq.itr,name.ilike.%itr%,name.ilike.%income tax%,name.ilike.%it return%");
     if (!cats?.length) { toast({ title: "No ITR service category found", variant: "destructive" }); return; }
     const catIds = cats.map(c => c.id);
     const { data: cs } = await supabase.from("client_services").select("client_id").in("service_category_id", catIds).eq("is_active", true);
