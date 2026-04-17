@@ -1082,86 +1082,90 @@ const ClientDetail = () => {
           })()}
         </TabsContent>
 
-        {/* Tab 3: Audit Setup */}
+        {/* Tab 3: Audit Setup — READ-ONLY */}
         {isAuditClient && <TabsContent value="audit">
           <Card>
-            <CardHeader><CardTitle className="text-sm">Audit Configuration</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border border-border rounded-lg p-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Audit Configuration</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Configured during client setup. To change, use{" "}
+                <Button variant="link" className="h-auto p-0 text-xs" onClick={() => navigate(`/clients/edit/${client.id}`)}>
+                  Edit Client
+                </Button>.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {([
+                {
+                  label: "Statutory Audit Applicable",
+                  sub: "Companies Act 2013 requirements",
+                  on: auditForm.statutory_audit_applicable,
+                  detail: null,
+                },
+                {
+                  label: "Tax Audit Applicable",
+                  sub: "Section 44AB — 3CA/3CB/3CD",
+                  on: !!auditForm.tax_audit_type,
+                  detail: auditForm.tax_audit_type || null,
+                },
+                {
+                  label: "CARO Applicable",
+                  sub: "Companies (Auditor's Report) Order",
+                  on: auditForm.caro_applicable,
+                  detail: null,
+                },
+                {
+                  label: "Internal Audit Applicable",
+                  sub: "Section 138 / voluntary",
+                  on: auditForm.internal_audit_applicable,
+                  detail: null,
+                },
+                {
+                  label: "Stock Audit Applicable",
+                  sub: "Bank-mandated or voluntary",
+                  on: auditForm.stock_audit_applicable,
+                  detail: null,
+                },
+              ] as const).map(({ label, sub, on, detail }) => (
+                <div
+                  key={label}
+                  className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+                    on
+                      ? "border-green-200 bg-green-50/40 dark:border-green-800 dark:bg-green-900/10"
+                      : "border-border bg-muted/20 opacity-60"
+                  }`}
+                >
+                  <span className={`mt-0.5 text-sm font-bold shrink-0 ${on ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                    {on ? "✓" : "✗"}
+                  </span>
                   <div>
-                    <p className="text-sm font-medium">Statutory Audit Applicable</p>
-                    <p className="text-xs text-muted-foreground">Companies Act 2013 requirements</p>
+                    <p className="text-sm font-medium text-foreground">{label}</p>
+                    <p className="text-xs text-muted-foreground">{sub}</p>
+                    {on && detail && (
+                      <Badge variant="outline" className="text-[10px] mt-1">{detail}</Badge>
+                    )}
                   </div>
-                  <Switch checked={auditForm.statutory_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, statutory_audit_applicable: v }))} />
                 </div>
+              ))}
 
-                <div className="border border-border rounded-lg p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium">Tax Audit Applicable</p>
-                      <p className="text-xs text-muted-foreground">Section 44AB — 3CA/3CB/3CD</p>
-                    </div>
-                    <Switch checked={!!auditForm.tax_audit_type} onCheckedChange={v => setAuditForm(p => ({ ...p, tax_audit_type: v ? "3CB-3CD" : "" }))} />
-                  </div>
-                  {auditForm.tax_audit_type && (
-                    <Select value={auditForm.tax_audit_type} onValueChange={v => setAuditForm(p => ({ ...p, tax_audit_type: v }))}>
-                      <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3CA-3CD">3CA + 3CD (Company)</SelectItem>
-                        <SelectItem value="3CB-3CD">3CB + 3CD (Non-Company)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between border border-border rounded-lg p-4">
-                  <div>
-                    <p className="text-sm font-medium">CARO Applicable</p>
-                    <p className="text-xs text-muted-foreground">Companies (Auditor's Report) Order</p>
-                  </div>
-                  <Switch checked={auditForm.caro_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, caro_applicable: v }))} />
-                </div>
-
-                <div className="flex items-center justify-between border border-border rounded-lg p-4">
-                  <div>
-                    <p className="text-sm font-medium">Internal Audit Applicable</p>
-                    <p className="text-xs text-muted-foreground">Section 138 / voluntary</p>
-                  </div>
-                  <Switch checked={auditForm.internal_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, internal_audit_applicable: v }))} />
-                </div>
-
-                <div className="flex items-center justify-between border border-border rounded-lg p-4">
-                  <div>
-                    <p className="text-sm font-medium">Stock Audit Applicable</p>
-                    <p className="text-xs text-muted-foreground">Bank-mandated or voluntary</p>
-                  </div>
-                  <Switch checked={auditForm.stock_audit_applicable} onCheckedChange={v => setAuditForm(p => ({ ...p, stock_audit_applicable: v }))} />
-                </div>
-
-                <div className="border border-border rounded-lg p-4 space-y-2">
-                  <div>
-                    <p className="text-sm font-medium">Base Turnover / Gross Receipts</p>
-                    <p className="text-xs text-muted-foreground">For billing reference only — not printed on invoices</p>
-                  </div>
-                  <Input
-                    type="number"
-                    value={auditForm.audit_turnover}
-                    onChange={e => setAuditForm(p => ({ ...p, audit_turnover: e.target.value }))}
-                    placeholder="₹ Enter turnover amount"
-                    className="max-w-xs"
-                  />
-                  {auditForm.audit_turnover && Number(auditForm.audit_turnover) > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      ₹{Number(auditForm.audit_turnover).toLocaleString("en-IN")}
-                    </p>
-                  )}
-                </div>
+              {/* Base Turnover */}
+              <div className="rounded-lg border border-border px-4 py-3">
+                <p className="text-sm font-medium text-foreground">Base Turnover / Gross Receipts</p>
+                <p className="text-xs text-muted-foreground">For billing reference only</p>
+                <p className="text-sm font-semibold text-foreground mt-1">
+                  {auditForm.audit_turnover && Number(auditForm.audit_turnover) > 0
+                    ? `₹${Number(auditForm.audit_turnover).toLocaleString("en-IN")}`
+                    : <span className="text-muted-foreground font-normal italic">Not entered</span>
+                  }
+                </p>
               </div>
 
-              <Button onClick={saveAuditSetup} disabled={auditSaving} className="gap-2">
-                {auditSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Audit Setup
-              </Button>
+              <p className="text-xs text-muted-foreground pt-1 border-t border-border">
+                To change audit configuration →{" "}
+                <Button variant="link" className="h-auto p-0 text-xs" onClick={() => navigate(`/clients/edit/${client.id}`)}>
+                  Edit Client
+                </Button>
+              </p>
             </CardContent>
           </Card>
         </TabsContent>}
