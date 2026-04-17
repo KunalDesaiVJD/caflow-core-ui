@@ -343,7 +343,7 @@ function setCellInXml(xml: string, addr: string, value: string): string {
     const sA   = sM ? ` s="${sM[1]}"` : "";
     return (
       xml.slice(0, selfM.index) +
-      `<c r="${addr}"${sA} t="inlineStr"><is><t>${esc}</t></is></c>` +
+      `<c r="${addr}"${sA} t="str"><v>${esc}</v></c>` +
       xml.slice(selfM.index + selfM[0].length)
     );
   }
@@ -362,7 +362,7 @@ function setCellInXml(xml: string, addr: string, value: string): string {
 
   return (
     xml.slice(0, openM.index) +
-    `<c r="${addr}"${sA} t="inlineStr"><is><t>${esc}</t></is></c>` +
+    `<c r="${addr}"${sA} t="str"><v>${esc}</v></c>` +
     xml.slice(closeIdx + 4)
   );
 }
@@ -600,13 +600,23 @@ serve(async (req) => {
 
     // UDIN: form_3ca_3cb.data.udin → engagement.udin
     const udin = form3Data?.udin || (eng as any).udin || "";
-    // Report date: form_3ca_3cb.data.audit_report_date → engagement.sign_off_date
+    // Report date: form_3ca_3cb.data.audit_report_date
+    //   → engagement.form_3ca_report_date (new column, saved by UI)
+    //   → engagement.sign_off_date (legacy fallback)
     const reportDate = formatDate(
-      form3Data?.audit_report_date || (eng as any).sign_off_date || ""
+      form3Data?.audit_report_date ||
+      (tab === "3ca" ? (eng as any).form_3ca_report_date : null) ||
+      (eng as any).sign_off_date || ""
     );
-    // Sign date: form_3ca_3cb.data.signature_date → engagement.sign_off_date
+    // Sign date: form_3ca_3cb.data.signature_date
+    //   → engagement.form_3ca_signature_date / form_3cb_signature_date (new columns)
+    //   → engagement.sign_off_date (legacy fallback)
     const signDate = formatDate(
-      form3Data?.signature_date || (eng as any).sign_off_date || ""
+      form3Data?.signature_date ||
+      (tab === "3ca"
+        ? (eng as any).form_3ca_signature_date
+        : (eng as any).form_3cb_signature_date) ||
+      (eng as any).sign_off_date || ""
     );
 
     // ── Resolve firm-level sign-off fields with fallbacks ─────────────────────
@@ -833,6 +843,33 @@ serve(async (req) => {
 
       buildClauseValues(clauseRecord, mockWb, client.name ?? undefined);
     }
+
+    // ── Direct cell writes (belt-and-suspenders for cells with no formula/AUTO) ─
+    // These cells in the template are plain inlineStr placeholders with no formula
+    // and no AUTO marker — the named-range pass and AUTO scan miss them entirely.
+    // We write them by hardcoded address so they always appear in the export.
+
+    if (form_type === "3CB-3CD") {
+      // Form_3CB display cells (assessee info + sign-off block)
+      addUpdate("Form_3CB", "D10", autoValues.ENTITY_NAME);
+      addUpdate("Form_3CB", "D12", autoValues.ENTITY_ADDRESS);
+      addUpdate("Form_3CB", "D15", autoValues.PAN);
+      addUpdate("Form_3CB", "F38", autoValues.FIRM_NAME);
+      addUpdate("Form_3CB", "H40", autoValues.FRN);
+      addUpdate("Form_3CB", "C41", autoValues.PLACE);
+      addUpdate("Form_3CB", "H46", autoValues.MEMBERSHIP_NO);
+      // ANX_Form3CB sign-off block (formula cells that returned 0 due to inlineStr)
+      addUpdate("ANX_Form3CB", "A21", autoValues.FIRM_NAME);
+      addUpdate("ANX_Form3CB", "A27", autoValues.PARTNER_NAME);
+      addUpdate("ANX_Form3CB", "G23", autoValues.FRN);
+      addUpdate("ANX_Form3CB", "C24", autoValues.PLACE);
+      addUpdate("ANX_Form3CB", "F29", autoValues.MEMBERSHIP_NO);
+    }
+
+    // Form_3CD signature block — same cells exist in both 3CA-3CD and 3CB-3CD
+    addUpdate("Form_3CD", "H235", autoValues.FIRM_NAME);
+    addUpdate("Form_3CD", "I237", autoValues.FRN);
+    addUpdate("Form_3CD", "I243", autoValues.MEMBERSHIP_NO);
 
     // ── Apply updates directly into sheet XMLs ────────────────────────────────
     for (const [sheetName, cellUpdates] of updates) {
