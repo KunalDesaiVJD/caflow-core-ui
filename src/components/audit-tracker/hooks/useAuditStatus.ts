@@ -361,7 +361,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       return draft;
     }
 
-    const payload: any = { ...input, firm_id: firmId };
+    const payload: any = normalizeDates({ ...input, firm_id: firmId });
     delete payload.isVirtual;
     delete payload.engagement_type;
     const { data, error } = await supabase.from("audit_status").insert(payload).select().single();
@@ -369,6 +369,27 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     toast.success("Row added");
     await load();
     return data as StatusEntry;
+  }
+
+  // Date/timestamp columns on `audit_status` — empty strings from cleared
+  // <input type="date"> fields would crash PostgREST with
+  //   "invalid input syntax for type timestamp with time zone: ''"
+  // so we coerce "" → null before any insert/update.
+  const DATE_COLS = new Set([
+    'report_print_date',
+    'udin_date',
+    'physical_report_received_date',
+    'planned_from',
+    'planned_to',
+  ]);
+  function normalizeDates<T extends Record<string, any>>(obj: T): T {
+    const out: any = { ...obj };
+    for (const k of Object.keys(out)) {
+      if (DATE_COLS.has(k) && (out[k] === '' || out[k] === undefined)) {
+        out[k] = null;
+      }
+    }
+    return out as T;
   }
 
   async function updateRow(id: string, patch: StatusPatch) {
@@ -394,7 +415,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     }
 
     const oldRow = rows.find(r => r.id === id);
-    const cleanPatch: any = { ...patch };
+    const cleanPatch: any = normalizeDates({ ...patch });
     delete cleanPatch.isVirtual;
     delete cleanPatch.engagement_type;
 
