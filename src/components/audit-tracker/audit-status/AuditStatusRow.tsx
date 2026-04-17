@@ -409,16 +409,29 @@ export default function AuditStatusRow({
         {srNo || <span className="text-indigo-400 text-[10px]">new</span>}
       </TCell>
 
-      {/* 2 · Party Name */}
+      {/* 2 · Party Name (tooltip shows audit employees / firm / partner on hover) */}
       <TCell className="min-w-[140px] sticky left-10 z-10 bg-card">
-        {editing
-          ? <ClientCombobox
-              value={draft.party_name}
-              onChange={handleClientSelect}
-              clients={clients}
-              placeholder="Search party…"
-            />
-          : <span className="font-medium text-foreground">{row.party_name || "—"}</span>}
+        {editing ? (
+          <ClientCombobox
+            value={draft.party_name}
+            onChange={handleClientSelect}
+            clients={clients}
+            placeholder="Search party…"
+          />
+        ) : (
+          <span
+            className="font-medium text-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
+            title={
+              [
+                `Audit Employees: ${row.audit_employees || "—"}`,
+                `Firm: ${row.firm || "—"}`,
+                `Partner: ${row.partner || "—"}`,
+              ].join("\n")
+            }
+          >
+            {row.party_name || "—"}
+          </span>
+        )}
       </TCell>
 
       {/* 3 · Physical Audit Conducted */}
@@ -437,13 +450,6 @@ export default function AuditStatusRow({
           : <Badge className={cn("text-[10px]", row.accounting_data === "Yes" ? "bg-green-100 text-green-700" : "bg-red-50 text-red-600")}>
               {row.accounting_data || "No"}
             </Badge>}
-      </TCell>
-
-      {/* 4 · Audit Employees */}
-      <TCell className="min-w-[130px]">
-        {editing
-          ? <EInput value={draft.audit_employees} onChange={v => set("audit_employees", v)} placeholder="Names…" />
-          : <span title={row.audit_employees || ""} className="text-muted-foreground text-[11px] truncate block max-w-[130px]">{row.audit_employees || "—"}</span>}
       </TCell>
 
       {/* 6 · Audit Report Prepared By */}
@@ -490,24 +496,6 @@ export default function AuditStatusRow({
         {editing
           ? <EInput type="date" value={draft.physical_report_received_date} onChange={v => set("physical_report_received_date", v)} />
           : <span className="text-[11px]">{row.physical_report_received_date || "—"}</span>}
-      </TCell>
-
-      {/* 9 · Firm */}
-      <TCell className="min-w-[110px]">
-        {editing
-          ? <ESelect value={draft.firm} onChange={handleFirmChange} options={firmNames} placeholder="Firm…" />
-          : <span className="text-[11px] font-medium truncate block" title={row.firm || ""}>{row.firm || "—"}</span>}
-      </TCell>
-
-      {/* 10 · Partner */}
-      <TCell className="min-w-[110px]">
-        {editing ? (
-          partnerOptions.length > 0
-            ? <ESelect value={draft.partner} onChange={v => set("partner", v)} options={partnerOptions} placeholder="Partner…" />
-            : <EInput value={draft.partner} onChange={v => set("partner", v)} placeholder="Partner…" />
-        ) : (
-          <span className="text-[11px] truncate block" title={row.partner || ""}>{row.partner || "—"}</span>
-        )}
       </TCell>
 
       {/* 11 · UDIN Tax Audit */}

@@ -137,30 +137,66 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     );
 
     // ── 3. Auto-populate virtual rows from audit_engagements ──────────────
+    // Also build a client_id → { firm, partner } map from the most recent
+    // engagement, so we can backfill firm/partner on existing status rows.
+    const engagementInfoByClient = new Map<string, { firm: string | null; partner: string | null }>();
     if (selectedFY) {
       let engQ = (supabase as any)
         .from("audit_engagements")
-        .select("id, client_id, financial_year, audit_type")
+        .select("id, client_id, financial_year, audit_type, audit_firm_id, partner_id, status")
         .eq("financial_year", selectedFY)
         .neq("status", "archived");
       if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
       const { data: engData } = await engQ;
 
       if (engData?.length) {
-        // Fetch client names for the engagement client_ids
+        // Fetch client names + active filter
         const engClientIds = [...new Set((engData as any[]).map((e: any) => e.client_id).filter(Boolean))];
         const { data: clientsData } = await (supabase as any)
           .from("clients")
-          .select("id, name")
+          .select("id, name, is_draft, deleted_at")
           .in("id", engClientIds);
-        const clientNameMap = new Map((clientsData || []).map((c: any) => [c.id, c.name]));
+        const clientNameMap = new Map(
+          (clientsData || [])
+            .filter((c: any) => c.is_draft === false && !c.deleted_at)
+            .map((c: any) => [c.id, c.name])
+        );
 
-        // Create virtual rows for engagements that don't have a status row.
-        // Skip if the client already has a real row for this FY (e.g. auto-created
-        // by planning calendar without engagement_id).
+        // Resolve audit firm and partner names
+        const firmIds    = [...new Set((engData as any[]).map((e: any) => e.audit_firm_id).filter(Boolean))];
+        const partnerIds = [...new Set((engData as any[]).map((e: any) => e.partner_id).filter(Boolean))];
+        const [{ data: firmRows }, { data: partnerRows }] = await Promise.all([
+          firmIds.length
+            ? (supabase as any).from("audit_firms").select("id, name").in("id", firmIds)
+            : Promise.resolve({ data: [] }),
+          partnerIds.length
+            ? (supabase as any).from("users").select("id, name").in("id", partnerIds)
+            : Promise.resolve({ data: [] }),
+        ]);
+        const firmNameMap    = new Map((firmRows    || []).map((f: any) => [f.id, f.name]));
+        const partnerNameMap = new Map((partnerRows || []).map((p: any) => [p.id, p.name]));
+
+        // Build engagementInfoByClient (one entry per client — first eng wins)
+        for (const eng of (engData as any[])) {
+          if (!eng.client_id || engagementInfoByClient.has(eng.client_id)) continue;
+          engagementInfoByClient.set(eng.client_id, {
+            firm:    (firmNameMap.get(eng.audit_firm_id) as string | undefined) ?? null,
+            partner: (partnerNameMap.get(eng.partner_id) as string | undefined) ?? null,
+          });
+        }
+
+        // Create at most ONE virtual row per client (dedup engagement duplicates).
+        // Skip if the client already has a real row, or already has a virtual row
+        // we just created in this loop.
+        const seenVirtualClientIds = new Set<string>();
         for (const eng of (engData as any[])) {
           if (engagementIdsWithStatus.has(eng.id)) continue;
           if (clientIdsWithStatus.has(eng.client_id)) continue;
+          if (seenVirtualClientIds.has(eng.client_id)) continue;
+          if (!clientNameMap.has(eng.client_id)) continue;     // client archived → skip
+          seenVirtualClientIds.add(eng.client_id);
+
+          const info = engagementInfoByClient.get(eng.client_id);
           const virtualRow: StatusEntry = {
             id:                           `virtual_${eng.id}`,
             firm_id:                      firmId,
@@ -173,8 +209,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             audit_status:                 null,
             audit_status_other:           null,
             report_print_date:            null,
-            firm:                         null,
-            partner:                      null,
+            firm:                         info?.firm    ?? null,
+            partner:                      info?.partner ?? null,
             udin_tax_audit:               null,
             udin_statutory_audit:         null,
             udin_date:                    null,
@@ -194,6 +230,18 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         }
       }
     }
+
+    // Backfill firm/partner on existing real rows that are missing them
+    statusRows = statusRows.map(r => {
+      if (!r.client_id || (r.firm && r.partner)) return r;
+      const info = engagementInfoByClient.get(r.client_id);
+      if (!info) return r;
+      return {
+        ...r,
+        firm:    r.firm    || info.firm    || null,
+        partner: r.partner || info.partner || null,
+      };
+    });
 
     // ── 4. Auto-populate virtual rows from audit_planning ─────────────────
     // Safety net: if addEntry auto-create failed, or if a planning entry was

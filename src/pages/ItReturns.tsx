@@ -1043,13 +1043,11 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
   const p = profile;
   const [ackNo, setAckNo] = useState(p.acknowledgment_no || "");
   const [remarks, setRemarks] = useState((p as any).remarks || "");
-  const [itrForm, setItrForm] = useState(p.itr_form || "");
   const { toast } = useToast();
 
   useEffect(() => {
     setAckNo(p.acknowledgment_no || "");
     setRemarks((p as any).remarks || "");
-    setItrForm(p.itr_form || "");
   }, [p.id]);
 
   const handleSave = () => {
@@ -1059,7 +1057,6 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
       return;
     }
     if (ackNo !== (p.acknowledgment_no || "")) onUpdate(p, "acknowledgment_no", ackNo);
-    if (itrForm !== (p.itr_form || "")) onUpdate(p, "itr_form", itrForm || null);
     if (remarks !== ((p as any).remarks || "")) onUpdate(p, "remarks", remarks || null);
     onOpenChange(false);
   };
@@ -1071,16 +1068,6 @@ function InfoPanel({ open, onOpenChange, profile, onUpdate, staffUsers }: {
           <SheetTitle>{p.client_name} — Info</SheetTitle>
         </SheetHeader>
         <div className="space-y-4 mt-4">
-          <div className="space-y-1.5">
-            <Label>ITR Form</Label>
-            <Select value={itrForm || "none"} onValueChange={v => setItrForm(v === "none" ? "" : v)}>
-              <SelectTrigger><SelectValue placeholder="Select form" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">—</SelectItem>
-                {ITR_FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="space-y-1.5">
             <Label>Ack No {(p.filing_status === "Filed" || p.filing_status === "Verified" || p.filing_status === "Sent to CPC") && <span className="text-destructive">*</span>}</Label>
             <Input value={ackNo} onChange={e => setAckNo(e.target.value)} placeholder="Enter acknowledgement number" />
