@@ -14,7 +14,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import {
   ArrowLeft, Check, X, Loader2, Download, Upload, Pencil, Trash2,
   ChevronRight, ChevronDown, FolderTree, AlertTriangle, Database, FileSpreadsheet,
-  Building2, Users, Briefcase
+  Building2, Users, Briefcase, RefreshCw
 } from "lucide-react";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import * as XLSX from "xlsx";
@@ -347,6 +347,7 @@ const CoaMappings = () => {
   const [masterDbRows, setMasterDbRows] = useState<CoaMasterDbRow[]>([]);
   const [seedingMaster, setSeedingMaster] = useState(false);
   const [importingMaster, setImportingMaster] = useState(false);
+  const [importingFromTally, setImportingFromTally] = useState(false);
 
   // Derived: active COA category tab and client-inferred category
   const activeCOACat = (masterEntityFilter === "all" ? "corporate" : masterEntityFilter) as "corporate" | "llp" | "nce";
@@ -696,6 +697,63 @@ const CoaMappings = () => {
     XLSX.writeFile(wb, `coa_master_${activeCOACat}_export.xlsx`);
   }
 
+  async function handleImportFromTally() {
+    if (!selectedEngagement) {
+      toast({ title: "Select an engagement first", variant: "destructive" });
+      return;
+    }
+    setImportingFromTally(true);
+    try {
+      const { data: ledgers, error } = await supabase
+        .from("tally_ledgers")
+        .select("ledger_name, parent_group")
+        .eq("engagement_id", selectedEngagement);
+
+      if (error) throw error;
+      if (!ledgers || ledgers.length === 0) {
+        toast({
+          title: "No Tally ledgers found",
+          description: "Run the Tally sync agent first (Tally Sync tab) to populate ledgers.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const existing = new Set(mappings.map(m => (m.raw_ledger_name || "").toLowerCase()));
+      const toInsert = ledgers.filter(l => !existing.has((l.ledger_name || "").toLowerCase()));
+
+      if (toInsert.length === 0) {
+        toast({ title: "All Tally ledgers already present in COA Mappings" });
+        setImportingFromTally(false);
+        return;
+      }
+
+      const rows = toInsert.map(l => {
+        const match = fuzzyMatchFromMaster(l.ledger_name, activeCOACat);
+        return {
+          firm_id: firmId,
+          raw_ledger_name: l.ledger_name,
+          standard_head: match?.account_head ?? "",
+          bs_pl: match?.bs_pl ?? "BS",
+          account_group: l.parent_group ?? "",
+        };
+      });
+
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const { error: insErr } = await supabase.from("coa_mappings").insert(chunk);
+        if (insErr) throw insErr;
+      }
+
+      toast({ title: `Imported ${toInsert.length} ledgers from Tally into COA Mappings` });
+      await loadData();
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setImportingFromTally(false);
+    }
+  }
+
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -827,6 +885,29 @@ const CoaMappings = () => {
           Only leaf-level amounts are aggregated — no double-counting of parent + child totals.
         </AlertDescription>
       </Alert>
+
+      {/* Import from Tally */}
+      <div className="flex items-center gap-3 p-3 bg-muted/40 border rounded-lg">
+        <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-foreground">Import Ledgers from Tally Sync</p>
+          <p className="text-xs text-muted-foreground truncate">
+            Pull all ledgers from the last Tally sync into unmapped list. Run Tally Sync first if ledgers are empty.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          onClick={handleImportFromTally}
+          disabled={importingFromTally || !selectedEngagement}
+        >
+          {importingFromTally
+            ? <><RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Importing…</>
+            : <><RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Import from Tally</>
+          }
+        </Button>
+      </div>
 
       <Tabs defaultValue="master" className="space-y-4">
         <TabsList className="flex-wrap">
