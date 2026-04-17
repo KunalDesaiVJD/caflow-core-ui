@@ -174,22 +174,47 @@ const ItReturns = () => {
   const [filterPreparedBy, setFilterPreparedBy] = useState("");
   const [filterCheckedBy, setFilterCheckedBy] = useState("");
 
-  // ─── Fetch ITR-activated clients ───
+  // ─── Fetch ITR-activated clients (service-specific AND package billing) ───
   const { data: itrClientIds = [] } = useQuery({
     queryKey: ["itr_client_ids", firmId],
     queryFn: async () => {
+      // Step 1: Get all ITR service category IDs (linked_module = 'itr')
       const { data: cats } = await supabase
         .from("service_categories")
         .select("id")
         .eq("linked_module", "itr");
       if (!cats?.length) return [];
-      const catIds = cats.map(c => c.id);
+      const catIdSet = new Set(cats.map(c => c.id));
+      const catIds = [...catIdSet];
+
+      // Step 2: Service-specific — client_services rows with an ITR category
       const { data: cs } = await supabase
         .from("client_services")
         .select("client_id")
         .in("service_category_id", catIds)
         .eq("is_active", true);
-      return [...new Set((cs || []).map(c => c.client_id))];
+      const specificIds = (cs || []).map(c => c.client_id).filter(Boolean) as string[];
+
+      // Step 3: Package billing — client_service_packages whose service_category_ids
+      // JSON array contains at least one ITR category ID.
+      // service_category_ids is stored as Json (JSONB array of UUID strings).
+      // Fetch all active packages and filter client-side — volume is low (1 per client).
+      const { data: pkgs } = await supabase
+        .from("client_service_packages")
+        .select("client_id, service_category_ids")
+        .eq("is_active", true);
+      const packageIds = (pkgs || [])
+        .filter(p => {
+          const ids: string[] = Array.isArray(p.service_category_ids)
+            ? (p.service_category_ids as string[])
+            : [];
+          return ids.some(id => catIdSet.has(id));
+        })
+        .map(p => p.client_id)
+        .filter(Boolean) as string[];
+
+      // Step 4: Merge and deduplicate
+      return [...new Set([...specificIds, ...packageIds])];
     },
   });
 
