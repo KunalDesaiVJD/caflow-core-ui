@@ -401,6 +401,7 @@ export default function AuditStatusRow({
     <tr className={cn(
       "hover:bg-muted/10 transition-colors",
       editing && "bg-indigo-50/40",
+      !editing && row.isPlanning && "bg-slate-50/70",
     )}>
 
       {/* 1 · Sr No */}

@@ -9,7 +9,7 @@ import {
   LayoutDashboard, Users, Receipt, FileText, CreditCard, BookOpen,
   Search, Settings, LogOut, PanelLeftClose, PanelLeft, Shield,
   Building2, FolderOpen, ChevronDown, ChevronRight, FileSearch,
-  BarChart3, ClipboardCheck, CalendarDays, AlertTriangle, FileCheck,
+  ClipboardCheck, CalendarDays, AlertTriangle, FileCheck,
   BookMarked, Calculator, MessageSquare, BrainCircuit, FileOutput,
   HelpCircle, Package, Send, Eye, Award, Upload, RefreshCw
 } from "lucide-react";
@@ -48,7 +48,7 @@ const auditUtilities = [
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Documents", path: "/documents", icon: FolderOpen },
-  { title: "Comparative Reports", path: "/audit/comparative", icon: BarChart3 },
+  // REMOVED: Comparative Reports — removed per client request
 ];
 
 const settingsItem = { title: "Settings", path: "/settings", icon: Settings };
