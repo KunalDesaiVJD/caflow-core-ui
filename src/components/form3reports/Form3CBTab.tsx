@@ -466,6 +466,129 @@ export default function Form3CBTab({ engagementId }: Props) {
 
           </div>
         </div>
+        {/* ═══════════════════════════════════════════════════════════════ */}
+        {/* ANNEXURE TO FORM NO. 3CB                                       */}
+        {/* ═══════════════════════════════════════════════════════════════ */}
+
+        <hr className="border-gray-400 border-t-2 my-10" />
+
+        {/* ─── Annexure Header ─── */}
+        <div className="text-center mb-6 space-y-1">
+          <p className="text-sm font-bold uppercase tracking-wide">
+            ANNEXURE TO FORM NO. 3CB [See rule 6G (1) (b)] OF
+          </p>
+          <p className="text-sm font-bold uppercase">
+            <AutoVal v={clientName} placeholder="[CLIENT NAME]" />
+          </p>
+        </div>
+
+        <hr className="border-gray-300 mb-6" />
+
+        {/* ─── Section 1 ─── */}
+        <p className="text-sm font-bold underline underline-offset-2 mb-3">
+          Responsibilities of Assessee (include Assessee's Management) and those charged
+          with Governance for the Financial Statements
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-4">
+          The assessee is responsible for the preparation of the aforesaid financial
+          statements that give a true and fair view of the financial position and financial
+          performance in accordance with the applicable Accounting Standards issued by the
+          Institute of Chartered Accountants of India. This responsibility includes the design,
+          implementation and maintenance of internal control relevant to the preparation and
+          presentation of the financial statements that give a true and fair view and are free
+          from material misstatement, whether due to fraud or error.
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-4">
+          The assessee is also responsible for the preparation of the statement of particulars
+          required to be furnished under section 44AB of the Income-tax Act, 1961 annexed
+          herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962 that give
+          true and correct particulars as per the provisions of the Income-tax Act, 1961 read
+          with Rules, Notifications, circulars, etc that are to be included in the Statement.
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-6">
+          Assessee are also responsible for overseeing the entity's financial reporting process.
+        </p>
+
+        {/* ─── Section 2 ─── */}
+        <p className="text-sm font-bold underline underline-offset-2 mb-3">
+          Auditor's Responsibility for the Audit of the Financial Statements
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-4">
+          Our objectives are to obtain reasonable assurance about whether the financial
+          statements as a whole are free from material misstatement, whether due to fraud or
+          error, and to issue an auditor's report that includes our opinion. Reasonable assurance
+          is a high level of assurance, but is not a guarantee that an audit conducted in
+          accordance with SAs will always detect a material misstatement when it exists.
+          Misstatements can arise from fraud or error and are considered material if,
+          individually or in the aggregate, they could reasonably be expected to influence the
+          economic decisions of users taken on the basis of these financial statements.
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-4">
+          We believe that the audit evidence we have obtained is sufficient and appropriate to
+          provide a basis for our audit opinion.
+        </p>
+
+        <p className="text-sm leading-7 text-justify mb-8">
+          We are also responsible for verifying the statement of particulars required to be
+          furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form
+          No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962. We have conducted our
+          verification of the statement in accordance with Guidance Note on Tax Audit under
+          section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered
+          Accountants of India.
+        </p>
+
+        {/* ─── Annexure Signature Block (same data as main form) ─── */}
+        <div className="flex justify-end">
+          <div className="text-sm space-y-1 text-right min-w-[260px]">
+
+            <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
+            <p>Chartered Accountants</p>
+            <p>FRN: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
+
+            <p className="mt-3">Place: <AutoVal v={firmCity} placeholder="[City]" /></p>
+
+            <p className="flex items-center justify-end gap-2">
+              <span>Date:</span>
+              <span className="print:hidden">
+                <Input
+                  type="date"
+                  value={formData.signature_date}
+                  onChange={e => patch("signature_date", e.target.value)}
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36"
+                />
+              </span>
+              <span className="hidden print:inline">{fmtDate(formData.signature_date)}</span>
+            </p>
+
+            <p className="flex items-center justify-end gap-2">
+              <span>UDIN:</span>
+              <span className="print:hidden">
+                <Input
+                  value={formData.udin}
+                  onChange={e => patch("udin", e.target.value)}
+                  placeholder="Enter UDIN"
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48"
+                />
+              </span>
+              <span className="hidden print:inline font-mono">
+                {formData.udin || "___________________"}
+              </span>
+            </p>
+
+            <p className="mt-4 font-semibold">
+              <AutoVal v={partnerName} placeholder="[Partner Name]" />
+            </p>
+            <p>Partner</p>
+            <p>Membership No.: <AutoVal v={membershipNo} placeholder="[Membership No]" /></p>
+
+          </div>
+        </div>
+
         {/* end document */}
       </div>
     </div>
