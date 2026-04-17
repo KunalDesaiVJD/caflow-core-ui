@@ -23,7 +23,6 @@ import { supabase }            from "@/integrations/supabase/client";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge }               from "@/components/ui/badge";
 import { Loader2 }             from "lucide-react";
-import { ScrollArea }          from "@/components/ui/scroll-area";
 
 import Form3CATab from "@/components/form3reports/Form3CATab";
 import Form3CBTab from "@/components/form3reports/Form3CBTab";
@@ -161,16 +160,12 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
           <Form3CD engagementIdProp={engagementId} />
         </TabsContent>
 
-        {/* ── Tab 2: Form 3CB or 3CA — full form + annexure in one scroll ── */}
+        {/* ── Tab 2: Form 3CB or 3CA — full form + annexure, natural page scroll ── */}
         <TabsContent value="form">
-          <ScrollArea className="h-[calc(100vh-240px)]">
-            <div className="pr-3">
-              {auditType === "3cb"
-                ? <Form3CBTab engagementId={engagementId} />
-                : <Form3CATab engagementId={engagementId} />
-              }
-            </div>
-          </ScrollArea>
+          {auditType === "3cb"
+            ? <Form3CBTab engagementId={engagementId} />
+            : <Form3CATab engagementId={engagementId} />
+          }
         </TabsContent>
 
       </Tabs>
