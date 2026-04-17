@@ -11,7 +11,7 @@ import {
   Building2, FolderOpen, ChevronDown, ChevronRight, FileSearch,
   BarChart3, ClipboardCheck, CalendarDays, AlertTriangle, FileCheck,
   BookMarked, Calculator, MessageSquare, BrainCircuit, FileOutput,
-  HelpCircle, Package, Send, Eye, Award, Upload
+  HelpCircle, Package, Send, Eye, Award, Upload, RefreshCw
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -31,8 +31,9 @@ const topNavItems = [
 const auditStages = [
   { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
   { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
-  { title: "Audit Tracker",             path: "/audit/tracker",  icon: ClipboardCheck  },
-  { title: "Trial Balance Import",      path: "/audit/pipeline", icon: Upload,       stage: 2  },
+  { title: "Audit Tracker",             path: "/audit/tracker",       icon: ClipboardCheck  },
+  { title: "Tally Sync",               path: "/audit/tally-sync",    icon: RefreshCw       },
+  { title: "Trial Balance Import",      path: "/audit/pipeline",      icon: Upload,       stage: 2  },
   { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
   { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
   { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },

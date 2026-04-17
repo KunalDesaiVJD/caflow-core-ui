@@ -60,6 +60,8 @@ export default function ComparativeStatements() {
   const [loading, setLoading] = useState(true);
   const [commentary, setCommentary] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [dataSource, setDataSource] = useState<"snapshots" | "tally">("snapshots");
+  const [tallyLedgers, setTallyLedgers] = useState<any[]>([]);
 
   useEffect(() => {
     if (!clientId) return;
@@ -68,12 +70,14 @@ export default function ComparativeStatements() {
 
   async function loadData() {
     setLoading(true);
-    const [snapRes, mapRes] = await Promise.all([
+    const [snapRes, mapRes, tallyRes] = await Promise.all([
       supabase.from("trial_balance_snapshots").select("*").eq("client_id", clientId!).order("financial_year", { ascending: false }).limit(2),
       supabase.from("coa_mappings").select("*"),
+      supabase.from("tally_trial_balance").select("ledger_name,parent_group,closing_balance,balance_type").eq("client_id", clientId!),
     ]);
     setSnapshots(snapRes.data || []);
     setMappings(mapRes.data || []);
+    setTallyLedgers(tallyRes.data || []);
     setLoading(false);
   }
 
@@ -102,8 +106,29 @@ export default function ComparativeStatements() {
   const cySnapshot = snapshots[0];
   const pySnapshot = snapshots[1];
 
-  const cyGroups = useMemo(() => cySnapshot ? groupLedgers(Array.isArray(cySnapshot.normalised_data) ? cySnapshot.normalised_data : []) : {}, [cySnapshot, mappingLookup]);
-  const pyGroups = useMemo(() => pySnapshot ? groupLedgers(Array.isArray(pySnapshot.normalised_data) ? pySnapshot.normalised_data : []) : {}, [pySnapshot, mappingLookup]);
+  // Build groups from tally_trial_balance + coa_mappings
+  function groupTallyLedgers(ledgers: any[]): Record<string, number> {
+    const groups: Record<string, number> = {};
+    for (const l of ledgers) {
+      const name = (l.ledger_name || "").toLowerCase();
+      const mapping = mappingLookup[name];
+      const group = mapping?.account_group || l.parent_group || "Other";
+      const sign = (l.balance_type === "Cr" || l.balance_type === "CR") ? -1 : 1;
+      const balance = Number(l.closing_balance || 0) * sign;
+      groups[group] = (groups[group] || 0) + balance;
+    }
+    return groups;
+  }
+
+  const cyGroups = useMemo(() => {
+    if (dataSource === "tally") return groupTallyLedgers(tallyLedgers);
+    return cySnapshot ? groupLedgers(Array.isArray(cySnapshot.normalised_data) ? cySnapshot.normalised_data : []) : {};
+  }, [cySnapshot, mappingLookup, dataSource, tallyLedgers]);
+
+  const pyGroups = useMemo(() => {
+    if (dataSource === "tally") return {}; // tally TB is single-period
+    return pySnapshot ? groupLedgers(Array.isArray(pySnapshot.normalised_data) ? pySnapshot.normalised_data : []) : {};
+  }, [pySnapshot, mappingLookup, dataSource]);
 
   // Computed P&L metrics
   function getMetrics(groups: Record<string, number>) {
@@ -283,9 +308,36 @@ export default function ComparativeStatements() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Comparative Financial Statements</h1>
-        <p className="text-sm text-muted-foreground">{cySnapshot?.financial_year} vs {pySnapshot?.financial_year}</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Comparative Financial Statements</h1>
+          <p className="text-sm text-muted-foreground">
+            {dataSource === "tally"
+              ? `Tally Sync data — ${tallyLedgers.length} ledgers`
+              : `${cySnapshot?.financial_year} vs ${pySnapshot?.financial_year}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Data source:</span>
+          <Button
+            size="sm"
+            variant={dataSource === "snapshots" ? "default" : "outline"}
+            className="h-7 text-xs"
+            onClick={() => setDataSource("snapshots")}
+          >
+            Uploaded TB
+          </Button>
+          <Button
+            size="sm"
+            variant={dataSource === "tally" ? "default" : "outline"}
+            className="h-7 text-xs"
+            onClick={() => setDataSource("tally")}
+            disabled={tallyLedgers.length === 0}
+            title={tallyLedgers.length === 0 ? "No Tally data — run Tally Sync first" : ""}
+          >
+            Tally Sync {tallyLedgers.length > 0 && `(${tallyLedgers.length})`}
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="bs">
