@@ -572,17 +572,8 @@ export default function AuditIntelligence() {
             </CardContent>
           </Card>
 
-          {/* Metrics + Quick Actions Row */}
-          <div className="grid gap-6 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider">Key Audit Metrics</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <MetricCard icon={BarChart3} label="Queries Raised" value={metrics.queriesRaised} />
-                <MetricCard icon={AlertTriangle} label="Pending Responses" value={metrics.queriesPending} color="text-amber-600" />
-                <MetricCard icon={FileText} label="Workpapers" value={metrics.workpapers} />
-                <MetricCard icon={CheckCircle2} label="CARO Completed" value={metrics.caroCompleted} color="text-emerald-600" />
-              </div>
-            </div>
+          {/* Quick Actions Row */}
+          <div className="grid gap-6">
             <div>
               <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider">Quick Actions</h3>
               <div className="grid grid-cols-2 gap-2">
