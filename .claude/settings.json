@@ -6,9 +6,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -Command \"$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; $cmd = $d.tool_input.command; if ($cmd -match 'git commit|git merge') { Set-Location 'C:/Users/kvdes/OneDrive/Desktop/Audit/caflow-core-ui-main'; $branch = git rev-parse --abbrev-ref HEAD 2>$null; if ($branch) { git push origin $branch 2>&1 | Out-Null } }\" 2>/dev/null || true",
+            "command": "powershell -Command \"$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; $cmd = $d.tool_input.command; if ($cmd -match 'git commit|git merge') { Set-Location 'C:/Users/Admin/OneDrive/Documents/GitHub/caflow-core-ui'; $branch = git rev-parse --abbrev-ref HEAD 2>$null; if ($branch -and $branch -ne 'HEAD') { git push origin $branch 2>&1 | Out-Null } }\" 2>/dev/null || true",
             "timeout": 30,
             "statusMessage": "Pushing to GitHub..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"C:/Users/Admin/OneDrive/Documents/GitHub/caflow-core-ui/.claude/hooks/session-end.ps1\"",
+            "timeout": 60,
+            "statusMessage": "Merging session branch and pushing to GitHub..."
           }
         ]
       }
