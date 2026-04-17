@@ -1844,6 +1844,7 @@ export type Database = {
           gstin: string[] | null
           id: string
           internal_audit_applicable: boolean | null
+          is_active: boolean | null
           is_draft: boolean
           mobile: string | null
           name: string | null
@@ -1880,6 +1881,7 @@ export type Database = {
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          is_active?: boolean | null
           is_draft?: boolean
           mobile?: string | null
           name?: string | null
@@ -1915,6 +1917,7 @@ export type Database = {
           gstin?: string[] | null
           id?: string
           internal_audit_applicable?: boolean | null
+          is_active?: boolean | null
           is_draft?: boolean
           mobile?: string | null
           name?: string | null

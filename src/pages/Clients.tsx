@@ -30,8 +30,11 @@ interface Client {
   gstin: string[] | null;
   created_at: string | null;
   firm_id: string | null;
-  /** 'manual' | 'import' — requires DB migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual' */
+  /** 'manual' | 'api_import' — origin tracking */
   source?: string | null;
+  /** Whether the client is active per the API — NULL means unknown/legacy */
+  is_active?: boolean | null;
+  is_draft?: boolean;
   /** Populated only when All Firms selected — joined from firms table */
   firm_name?: string | null;
 }
@@ -84,6 +87,9 @@ const Clients = () => {
 
   const [manageGroupsClient, setManageGroupsClient] = useState<Client | null>(null);
   const [manageGroupsSaving, setManageGroupsSaving] = useState(false);
+
+  // Secondary sub-tab within "Clients via API": Final | Draft Active | Draft Inactive
+  const [apiSubTab, setApiSubTab] = useState<"final" | "draft_active" | "draft_inactive">("final");
 
   // GAP-6: draft management
   const [drafts, setDrafts] = useState<Client[]>([]);
@@ -301,11 +307,21 @@ const Clients = () => {
       sourceTab === "all" ||
       (sourceTab === "manual" && (c.source === "manual" || !c.source)) ||
       (sourceTab === "api" && c.source === "api_import");
-    return matchesSearch && matchesEntity && matchesGroup && matchesSource;
+
+    // API sub-tab filter (only applies when sourceTab === "api")
+    let matchesApiSub = true;
+    if (sourceTab === "api") {
+      if (apiSubTab === "final")         matchesApiSub = !c.is_draft;
+      else if (apiSubTab === "draft_active")   matchesApiSub = !!c.is_draft && c.is_active !== false;
+      else if (apiSubTab === "draft_inactive") matchesApiSub = !!c.is_draft && c.is_active === false;
+    }
+
+    return matchesSearch && matchesEntity && matchesGroup && matchesSource && matchesApiSub;
   });
 
-  // Reset page when filters change
-  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab]);
+  // Reset page when filters change; reset apiSubTab when leaving API tab
+  useEffect(() => { setCurrentPage(1); }, [search, entityFilter, groupFilter, sourceTab, apiSubTab]);
+  useEffect(() => { if (sourceTab !== "api") setApiSubTab("final"); }, [sourceTab]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -483,43 +499,75 @@ const Clients = () => {
 
       {/* Source Tabs — ABOVE search/filter per spec */}
       {(() => {
-        const allCount = clients.length;
-        const apiCount = clients.filter(c => c.source === "api_import").length;
+        const allCount    = clients.length;
+        const apiCount    = clients.filter(c => c.source === "api_import").length;
         const manualCount = clients.filter(c => c.source === "manual" || !c.source).length;
         const tabs = [
-          { key: "all" as const,    label: "All Clients",             count: allCount },
-          { key: "api" as const,    label: "Clients via API",         count: apiCount },
-          { key: "manual" as const, label: "Clients added Manually",  count: manualCount },
+          { key: "all" as const,    label: "All Clients",            count: allCount },
+          { key: "api" as const,    label: "Clients via API",        count: apiCount },
+          { key: "manual" as const, label: "Clients added Manually", count: manualCount },
         ];
+
+        // Sub-tab counts (within api_import clients only)
+        const apiClients       = clients.filter(c => c.source === "api_import");
+        const finalCount        = apiClients.filter(c => !c.is_draft).length;
+        const draftActiveCount  = apiClients.filter(c => !!c.is_draft && c.is_active !== false).length;
+        const draftInactiveCount = apiClients.filter(c => !!c.is_draft && c.is_active === false).length;
+
         return (
-          <div className="flex items-center border-b border-border overflow-x-auto">
-            {tabs.map(({ key, label, count }) => (
-              <button
-                key={key}
-                onClick={() => {
-                  setSourceTab(key);
-                  // Reset search/filter state on tab switch (spec: "reset is simpler")
-                  setSearch("");
-                  setEntityFilter("all");
-                  setGroupFilter([]);
-                  setCurrentPage(1);
-                }}
-                className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                  sourceTab === key
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {label}
-                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-                  sourceTab === key
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted text-muted-foreground"
-                }`}>
-                  {count}
-                </span>
-              </button>
-            ))}
+          <div className="space-y-0">
+            {/* Main tabs */}
+            <div className="flex items-center border-b border-border overflow-x-auto">
+              {tabs.map(({ key, label, count }) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    setSourceTab(key);
+                    setSearch(""); setEntityFilter("all"); setGroupFilter([]); setCurrentPage(1);
+                  }}
+                  className={`whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                    sourceTab === key
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                    sourceTab === key ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                  }`}>{count}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Secondary sub-tabs — only shown inside "Clients via API" tab */}
+            {sourceTab === "api" && (
+              <div className="flex items-center gap-2 pt-3 pb-1 px-0.5 flex-wrap">
+                {[
+                  { key: "final"          as const, label: "Final",          count: finalCount,        color: "emerald" },
+                  { key: "draft_active"   as const, label: "Draft Active",   count: draftActiveCount,  color: "amber"   },
+                  { key: "draft_inactive" as const, label: "Draft Inactive", count: draftInactiveCount, color: "rose"   },
+                ].map(({ key, label, count, color }) => {
+                  const isActive = apiSubTab === key;
+                  const colorMap: Record<string, { active: string; inactive: string; dot: string }> = {
+                    emerald: { active: "bg-emerald-100 text-emerald-800 border-emerald-400 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-600", inactive: "bg-muted text-muted-foreground border-border hover:border-emerald-300", dot: "bg-emerald-500" },
+                    amber:   { active: "bg-amber-100 text-amber-800 border-amber-400 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-600",   inactive: "bg-muted text-muted-foreground border-border hover:border-amber-300",   dot: "bg-amber-500"   },
+                    rose:    { active: "bg-rose-100 text-rose-800 border-rose-400 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-600",         inactive: "bg-muted text-muted-foreground border-border hover:border-rose-300",   dot: "bg-rose-500"    },
+                  };
+                  const cls = colorMap[color];
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => { setApiSubTab(key); setCurrentPage(1); }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${isActive ? cls.active : cls.inactive}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? cls.dot : "bg-muted-foreground/40"}`} />
+                      {label}
+                      <span className={`ml-0.5 font-bold ${isActive ? "" : "text-muted-foreground"}`}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })()}
@@ -567,8 +615,12 @@ const Clients = () => {
           <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Users className="h-10 w-10 mb-3 opacity-40" />
             <p>
-              {sourceTab === "api"
-                ? "No clients imported via API"
+              {sourceTab === "api" && apiSubTab === "final"
+                ? "No finalised API clients yet"
+                : sourceTab === "api" && apiSubTab === "draft_active"
+                ? "No active draft clients from API"
+                : sourceTab === "api" && apiSubTab === "draft_inactive"
+                ? "No inactive draft clients from API"
                 : sourceTab === "manual"
                 ? "No manually added clients found"
                 : "No clients found"}

@@ -100,8 +100,8 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
                   </tr>
                   {sync.inactiveCount > 0 && (
                     <tr className="border-b">
-                      <td className="px-4 py-2.5 text-muted-foreground">Inactive (skipped)</td>
-                      <td className="px-4 py-2.5 font-semibold text-right text-muted-foreground">
+                      <td className="px-4 py-2.5 text-muted-foreground">Inactive (will draft as inactive)</td>
+                      <td className="px-4 py-2.5 font-semibold text-right text-amber-600">
                         {sync.inactiveCount}
                       </td>
                     </tr>

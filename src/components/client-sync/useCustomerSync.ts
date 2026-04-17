@@ -317,11 +317,11 @@ export function useCustomerSync() {
       console.log("[Sync] Total records from API:", records.length);
       setApiRecords(records);
 
-      // ── Filter: active clients only ─────────────────────────────────────────
-      const activeRecords  = records.filter(isActiveRecord);
-      const filteredOut    = records.length - activeRecords.length;
-      console.log(`[Sync] Active: ${activeRecords.length}, Inactive filtered: ${filteredOut}`);
-      setInactiveCount(filteredOut);
+      // ── Split active vs inactive (ALL records are now imported, is_active stored) ─
+      const activeRecords   = records.filter(r => isActiveRecord(r));
+      const inactiveRecords = records.filter(r => !isActiveRecord(r));
+      console.log(`[Sync] Active: ${activeRecords.length}, Inactive: ${inactiveRecords.length}`);
+      setInactiveCount(inactiveRecords.length);
 
       // ── Deduplicate against DB (check BOTH published + drafts) ──────────────
       setStatus("previewing");
@@ -345,7 +345,8 @@ export function useCustomerSync() {
       const toUpdate:  ApiRecord[] = [];
       let   invalid = 0;
 
-      for (const r of activeRecords) {
+      // Import ALL records (active + inactive) — is_active stored per-record
+      for (const r of records) {
         const custId = r.CustomerId != null ? String(r.CustomerId) : "";
         if (!custId) { invalid++; continue; }
         if (existingIds.has(custId)) { toUpdate.push(r); }
@@ -492,10 +493,11 @@ export function useCustomerSync() {
                 .insert({
                   customer_id,
                   ...payload,
-                  firm_id:  firmId,
-                  user_id:  userId,
-                  is_draft: true,
-                  source:   "api_import",
+                  firm_id:   firmId,
+                  user_id:   userId,
+                  is_draft:  true,
+                  source:    "api_import",
+                  is_active: isActiveRecord(r),
                 } as any);
 
               if (error) {
@@ -511,7 +513,7 @@ export function useCustomerSync() {
               // ── UPDATE existing client (all API fields, never touches customer_id / is_draft / source) ─
               const { error } = await supabase
                 .from("clients")
-                .update(payload as any)
+                .update({ ...payload, is_active: isActiveRecord(r) } as any)
                 .eq("customer_id", customer_id)
                 .is("deleted_at", null);
 
