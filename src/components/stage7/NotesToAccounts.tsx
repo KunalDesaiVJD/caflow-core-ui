@@ -1,9 +1,15 @@
 /**
  * NCENotesToAccounts — Notes to Accounts for Non-Corporate Entities (NCE)
- * Stage 7 | Non-corporate only | 8 notes with sub-variants
- * Persists to `notes_to_accounts_data` table (separate from corporate `notes_to_accounts`).
+ * Stage 7 | Non-corporate only | 8 standard notes + custom notes
+ * Persists to `notes_to_accounts_data` table.
+ *
+ * Capabilities:
+ *   • Add custom notes          — "Add Note" button / dashed bottom area
+ *   • Edit note title inline    — hover pencil icon on title
+ *   • Delete any note           — trash icon; built-in notes ask confirmation
+ *   • Reorder notes             — ▲ / ▼ arrows on every card
  */
-import { useState, useEffect, useCallback, Fragment, useRef } from "react";
+import { useState, useEffect, useCallback, Fragment, useRef, ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -18,8 +24,11 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Save, Loader2, CheckSquare, Square, Pencil, Printer, FileText, FileDown } from "lucide-react";
-import { getBSDate, getAuditYear } from "@/utils/entityUtils";
+import {
+  Save, Loader2, CheckSquare, Square, Pencil, Printer,
+  FileText, FileDown, ChevronUp, ChevronDown, Trash2, Plus, Check, X,
+} from "lucide-react";
+import { getAuditYear } from "@/utils/entityUtils";
 import { exportToPdf } from "@/lib/exportUtils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -43,70 +52,51 @@ const NOTE3_VARIANTS: Record<string, string> = {
     "Assessee being a builder and developer, revenue was recognised on the basis of Sale deed executed plus sales under construction offered based on cost incurred and advance received from customers under percentage of completion Method on estimation basis. Construction work completed at the end of the year after revenue recognition was transferred to work in progress. This being the technical matter, construction work in progress credited in the books of A/c. was taken as certified by the partner. (This para only for a builder and developer)",
 };
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 interface NCENote {
   id: string;
   label: string;
   title: string;
   selected: boolean;
   text: string;
+  isCustom?: boolean;
 }
+
+// ─── Template builder ─────────────────────────────────────────────────────────
 
 function buildNotesTemplate(auditYear: string): NCENote[] {
   return [
     {
-      id: "note-1",
-      label: "Note 1",
-      title: "Balance Confirmation",
-      selected: true,
+      id: "note-1", label: "Note 1", title: "Balance Confirmation", selected: true,
       text: "All debit and credit balances and accounts squared up during the year are subject to confirmation from respective parties.",
     },
     {
-      id: "note-2",
-      label: "Note 2",
-      title: "Rearrangement of Figures",
-      selected: true,
+      id: "note-2", label: "Note 2", title: "Rearrangement of Figures", selected: true,
       text: "The figures are rearranged/regrouped wherever considered necessary and rounded off to the nearest rupee.",
     },
     {
-      id: "note-3",
-      label: "Note 3",
-      title: "Cash Balance & Closing Stock",
-      selected: true,
+      id: "note-3", label: "Note 3", title: "Cash Balance & Closing Stock", selected: true,
       text: `Cash balance on hand was Rs. [CASH_AMOUNT]/- and value of Closing Stock Rs. [CLOSING_STOCK]/- as at 31st March, ${auditYear} are taken as certified by proprietor.`,
     },
     {
-      id: "note-4",
-      label: "Note 4",
-      title: "Current Assets Valuation",
-      selected: true,
+      id: "note-4", label: "Note 4", title: "Current Assets Valuation", selected: true,
       text: "In opinion of assessee, current assets, loans & advances are approximately of the value at which these are stated in the balance sheet.",
     },
     {
-      id: "note-5",
-      label: "Note 5",
-      title: "Fixed Assets",
-      selected: true,
+      id: "note-5", label: "Note 5", title: "Fixed Assets", selected: true,
       text: "Fixed Assets are stated at Cost less depreciation as shown in Note- [FA_NOTE]. Details of rate and amount of Depreciation claimed has been stated in Note-[DEP_NOTE].",
     },
     {
-      id: "note-6",
-      label: "Note 6",
-      title: "Reliance on Vouchers",
-      selected: true,
+      id: "note-6", label: "Note 6", title: "Reliance on Vouchers", selected: true,
       text: "Whenever the supporting proof for the entries made in the books of accounts are not available for the purpose of audit, we are relied on the vouchers prepared and authenticated by the partner.",
     },
     {
-      id: "note-7",
-      label: "Note 7",
-      title: "Loans via Cheque/DD/ECS",
-      selected: true,
+      id: "note-7", label: "Note 7", title: "Loans via Cheque/DD/ECS", selected: true,
       text: "As informed by the partner, the amount of loan or deposits or specified sums taken or accepted or repaid by the assessee through a/c. payee cheque/demand draft or ECS only. However, it is not possible for us to verify the same as necessary evidence are not in possession of the assessee.",
     },
     {
-      id: "note-8",
-      label: "Note 8",
-      title: "Notes form Part of Accounts",
-      selected: true,
+      id: "note-8", label: "Note 8", title: "Notes form Part of Accounts", selected: true,
       text: `Notes No. 1 to [LAST_NOTE] forms part of accounts for the year ended on 31st March, ${auditYear}.`,
     },
   ];
@@ -114,14 +104,11 @@ function buildNotesTemplate(auditYear: string): NCENote[] {
 
 // ─── Inline token renderer ────────────────────────────────────────────────────
 
-/** Renders a note text with special inline tokens replaced by inputs/spans. */
 function InlineNoteText({
-  text,
-  tokenMap,
-  disabled,
+  text, tokenMap, disabled,
 }: {
   text: string;
-  tokenMap: Record<string, React.ReactNode>;
+  tokenMap: Record<string, ReactNode>;
   disabled: boolean;
 }) {
   const TOKEN_RE = /\[(CASH_AMOUNT|CLOSING_STOCK|FA_NOTE|DEP_NOTE|LAST_NOTE)\]/g;
@@ -152,16 +139,13 @@ function InlineNoteText({
   );
 }
 
-/** Renders arbitrary text and highlights any [PLACEHOLDER] tokens in orange. */
 function OrangePlaceholderPreview({ text }: { text: string }) {
   const parts = text.split(/(\[[^\]]+\])/g);
   return (
     <div className="text-sm leading-relaxed rounded bg-muted/40 px-3 py-2 whitespace-pre-wrap">
       {parts.map((p, i) =>
         p.startsWith("[") && p.endsWith("]") ? (
-          <span key={i} className="text-orange-500 bg-orange-50 px-1 rounded font-medium">
-            {p}
-          </span>
+          <span key={i} className="text-orange-500 bg-orange-50 px-1 rounded font-medium">{p}</span>
         ) : (
           <Fragment key={i}>{p}</Fragment>
         )
@@ -170,7 +154,221 @@ function OrangePlaceholderPreview({ text }: { text: string }) {
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── EditTextExpander ─────────────────────────────────────────────────────────
+
+function EditTextExpander({
+  text, onChange, disabled,
+}: { text: string; onChange: (t: string) => void; disabled: boolean }) {
+  return (
+    <details className="group">
+      <summary className="flex items-center gap-1 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none w-fit">
+        <Pencil className="w-3 h-3" /> Edit note text
+      </summary>
+      <div className="mt-2">
+        <Textarea
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          rows={4}
+          className="text-sm resize-y font-mono"
+          disabled={disabled}
+        />
+      </div>
+    </details>
+  );
+}
+
+// ─── NoteCard component ───────────────────────────────────────────────────────
+
+interface NoteCardProps {
+  note: NCENote;
+  displayNumber: number;
+  isFirst: boolean;
+  isLast: boolean;
+  onToggle: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDelete: () => void;
+  onEditTitle: (title: string) => void;
+  mainContent: ReactNode;
+  badge?: ReactNode;
+}
+
+function NoteCard({
+  note, displayNumber, isFirst, isLast,
+  onToggle, onMoveUp, onMoveDown, onDelete, onEditTitle,
+  mainContent, badge,
+}: NoteCardProps) {
+  const [editingTitle, setEditingTitle]   = useState(false);
+  const [titleDraft, setTitleDraft]       = useState(note.title);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Keep draft in sync if parent updates title (e.g. on load)
+  useEffect(() => { setTitleDraft(note.title); }, [note.title]);
+
+  const commitTitle = () => {
+    const v = titleDraft.trim();
+    if (v) onEditTitle(v);
+    else setTitleDraft(note.title);
+    setEditingTitle(false);
+  };
+
+  const handleDeleteClick = () => {
+    if (note.isCustom) {
+      onDelete();
+    } else if (confirmDelete) {
+      onDelete();
+      setConfirmDelete(false);
+    } else {
+      setConfirmDelete(true);
+      // Auto-dismiss after 3 s
+      setTimeout(() => setConfirmDelete(false), 3000);
+    }
+  };
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      {/* ── Header row ── */}
+      <div className="flex items-center gap-2 px-3 py-2.5 bg-card select-none">
+
+        {/* Checkbox */}
+        <span onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={note.selected}
+            onCheckedChange={onToggle}
+            id={`nce-${note.id}`}
+          />
+        </span>
+
+        {/* "Note N" number — clicking toggles selection */}
+        <Label
+          htmlFor={`nce-${note.id}`}
+          className="cursor-pointer font-semibold text-sm w-14 shrink-0"
+          onClick={onToggle}
+        >
+          Note {displayNumber}
+        </Label>
+
+        {/* Editable title */}
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          {editingTitle ? (
+            <div className="flex items-center gap-1 flex-1" onClick={(e) => e.stopPropagation()}>
+              <Input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter")  commitTitle();
+                  if (e.key === "Escape") { setTitleDraft(note.title); setEditingTitle(false); }
+                }}
+                className="h-6 text-xs py-0 flex-1 max-w-[200px]"
+                autoFocus
+              />
+              <button
+                onClick={commitTitle}
+                className="p-0.5 text-green-600 hover:text-green-700"
+                title="Confirm"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => { setTitleDraft(note.title); setEditingTitle(false); }}
+                className="p-0.5 text-muted-foreground hover:text-foreground"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 group/title min-w-0">
+              <span className="text-xs text-muted-foreground truncate">{note.title}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingTitle(true);
+                  setTitleDraft(note.title);
+                }}
+                className="opacity-0 group-hover/title:opacity-100 p-0.5 text-muted-foreground hover:text-foreground transition-opacity shrink-0"
+                title="Edit title"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {badge}
+
+        {!note.selected && (
+          <Badge variant="outline" className="ml-1 text-xs text-muted-foreground shrink-0">
+            Excluded
+          </Badge>
+        )}
+
+        {/* ── Reorder + Delete controls ── */}
+        <div
+          className="flex items-center gap-0.5 ml-auto shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={onMoveUp}
+            disabled={isFirst}
+            title="Move up"
+            className="p-1 rounded hover:bg-muted disabled:opacity-25 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onMoveDown}
+            disabled={isLast}
+            title="Move down"
+            className="p-1 rounded hover:bg-muted disabled:opacity-25 disabled:cursor-not-allowed text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Delete — built-in notes require 1-tap confirmation */}
+          {confirmDelete ? (
+            <div className="flex items-center gap-0.5 ml-1.5 pl-1.5 border-l border-border">
+              <span className="text-xs text-red-500 font-medium">Delete?</span>
+              <button
+                onClick={handleDeleteClick}
+                title="Confirm delete"
+                className="p-1 rounded hover:bg-red-50 text-red-600 hover:text-red-700"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                title="Cancel"
+                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleDeleteClick}
+              title={note.isCustom ? "Delete note" : "Delete (will ask confirmation)"}
+              className="p-1 ml-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-600 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Body — dims when excluded ── */}
+      <div
+        className={`px-4 pb-4 pt-2 space-y-3 transition-opacity ${
+          !note.selected ? "opacity-40 pointer-events-none" : ""
+        }`}
+      >
+        {mainContent}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component interfaces ────────────────────────────────────────────────
 
 interface SigData {
   assesseeNameOverride: string;
@@ -192,31 +390,22 @@ interface HeaderOverrides {
 
 function emptyHeader(): HeaderOverrides {
   return {
-    entityNameOverride: "",
-    cashAmount: "",
-    closingStock: "",
-    faNoteNum: "",
-    depNoteNum: "",
-    lastNoteOverride: "",
-    note3VariantText: "",
+    entityNameOverride: "", cashAmount: "", closingStock: "",
+    faNoteNum: "", depNoteNum: "", lastNoteOverride: "", note3VariantText: "",
   };
 }
 
 function emptySig(): SigData {
   const today = new Date().toISOString().slice(0, 10);
-  return {
-    assesseeNameOverride: "",
-    assesseePlace: "",
-    assesseeDate: today,
-    partnerNameOverride: "",
-    sigDate: today,
-  };
+  return { assesseeNameOverride: "", assesseePlace: "", assesseeDate: today, partnerNameOverride: "", sigDate: today };
 }
 
 interface Props {
   engagementId: string;
   engagement: any;
 }
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const { user } = useAuth();
@@ -225,35 +414,29 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const fy: string = engagement?.financial_year ?? "";
   const auditYear = getAuditYear(fy);
 
-  // ── Note state ──
-  const [notes, setNotes] = useState<NCENote[]>(() => buildNotesTemplate(auditYear));
-  const [header, setHeader] = useState<HeaderOverrides>(emptyHeader);
-  const [sig, setSig] = useState<SigData>(emptySig);
-
-  // ── Note 1 new entity toggle ──
-  const [note1NewEntity, setNote1NewEntity] = useState(false);
+  // ── State ──
+  const [notes, setNotes]               = useState<NCENote[]>(() => buildNotesTemplate(auditYear));
+  const [header, setHeader]             = useState<HeaderOverrides>(emptyHeader);
+  const [sig, setSig]                   = useState<SigData>(emptySig);
+  const [note1NewEntity, setNote1NewEntity]         = useState(false);
   const [note1NewEntityText, setNote1NewEntityText] = useState("");
-
-  // ── Note 3 variant ──
   const [note3Variant, setNote3Variant] = useState("none");
 
-  // ── Remote data: client + firm + partner ──
-  const [clientDetails, setClientDetails] = useState<any>(null);
-  const [firmDetails, setFirmDetails] = useState<any>(null);
+  const [clientDetails, setClientDetails]   = useState<any>(null);
+  const [firmDetails, setFirmDetails]       = useState<any>(null);
   const [partnerDetails, setPartnerDetails] = useState<any>(null);
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving]   = useState(false);
 
-  // ── Reactive last-note count (CONFLICT-3: useEffect on [notes], not inline) ──
+  // Auto-count selected notes for LAST_NOTE token
   const [lastNote, setLastNote] = useState(8);
   useEffect(() => {
-    const count = notes.filter((n) => n.selected).length;
-    setLastNote(count);
+    setLastNote(notes.filter((n) => n.selected).length);
   }, [notes]);
   const displayLastNote = header.lastNoteOverride || String(lastNote);
 
-  // ── Fetch client/firm/partner ──
+  // ── Remote data fetches ──
   useEffect(() => {
     if (!engagement?.client_id) return;
     supabase
@@ -299,83 +482,133 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
     if (data) {
       if (data.notes_json?.length) {
-        const savedMap = new Map<string, { selected: boolean; text: string }>(
-          (data.notes_json as any[]).map((r: any) => [r.id, r])
-        );
-        setNotes(
-          buildNotesTemplate(auditYear).map((n) => {
-            const saved = savedMap.get(n.id);
-            return saved ? { ...n, selected: saved.selected, text: saved.text } : n;
-          })
-        );
+        const templateMap = new Map(buildNotesTemplate(auditYear).map((n) => [n.id, n]));
+        const loaded: NCENote[] = (data.notes_json as any[]).map((r: any) => {
+          const tmpl = templateMap.get(r.id);
+          if (tmpl) {
+            // Built-in note — merge saved overrides into template
+            return {
+              ...tmpl,
+              selected: r.selected ?? tmpl.selected,
+              text:     r.text     ?? tmpl.text,
+              title:    r.title    ?? tmpl.title,
+            };
+          }
+          // Custom note — restore from saved data
+          return {
+            id:       r.id,
+            label:    r.label    ?? "Custom",
+            title:    r.title    ?? "Custom Note",
+            selected: r.selected ?? true,
+            text:     r.text     ?? "",
+            isCustom: true,
+          };
+        });
+        setNotes(loaded);
       }
-      if (data.note3_variant) setNote3Variant(data.note3_variant);
+      if (data.note3_variant)           setNote3Variant(data.note3_variant);
       setNote1NewEntity(data.note1_new_entity_enabled ?? false);
       setNote1NewEntityText(data.note1_new_entity_text ?? "");
-      if (data.header_overrides) setHeader((prev) => ({ ...prev, ...data.header_overrides }));
-      if (data.signature_data) setSig((prev) => ({ ...prev, ...data.signature_data }));
+      if (data.header_overrides)        setHeader((prev) => ({ ...prev, ...data.header_overrides }));
+      if (data.signature_data)          setSig((prev)    => ({ ...prev, ...data.signature_data }));
     }
     setLoading(false);
   }, [engagementId, auditYear]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Note 1 new entity — build initial text when toggled ON ──
+  // ── Note 1 — build new-entity text on first toggle ──
   useEffect(() => {
     if (!note1NewEntity || note1NewEntityText) return;
-    const et = clientDetails?.entity_type || null;
+    const et  = clientDetails?.entity_type || null;
     const doi = clientDetails?.date_of_incorporation
       ? new Date(clientDetails.date_of_incorporation).toLocaleDateString("en-IN", {
           day: "2-digit", month: "2-digit", year: "numeric",
         })
       : null;
     let text = NEW_ENTITY_TEMPLATE;
-    if (et) text = text.replace("[ENTITY_TYPE]", et);
+    if (et)  text = text.replace("[ENTITY_TYPE]", et);
     if (doi) text = text.replace("[DATE_OF_INCORPORATION]", doi);
     setNote1NewEntityText(text);
   }, [note1NewEntity, note1NewEntityText, clientDetails]);
 
   // ── Note manipulators ──
-  const toggleNote = (id: string) => setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, selected: !n.selected } : n)));
-  const updateNoteText = (id: string, text: string) => setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, text } : n)));
-  const selectAll = () => setNotes((prev) => prev.map((n) => ({ ...n, selected: true })));
-  const deselectAll = () => setNotes((prev) => prev.map((n) => ({ ...n, selected: false })));
+  const toggleNote      = (id: string) => setNotes((p) => p.map((n) => n.id === id ? { ...n, selected: !n.selected } : n));
+  const updateNoteText  = (id: string, text: string) => setNotes((p) => p.map((n) => n.id === id ? { ...n, text } : n));
+  const updateNoteTitle = (id: string, title: string) => setNotes((p) => p.map((n) => n.id === id ? { ...n, title } : n));
+  const selectAll       = () => setNotes((p) => p.map((n) => ({ ...n, selected: true })));
+  const deselectAll     = () => setNotes((p) => p.map((n) => ({ ...n, selected: false })));
+
+  const moveNoteUp = (id: string) => setNotes((p) => {
+    const idx = p.findIndex((n) => n.id === id);
+    if (idx <= 0) return p;
+    const next = [...p];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    return next;
+  });
+
+  const moveNoteDown = (id: string) => setNotes((p) => {
+    const idx = p.findIndex((n) => n.id === id);
+    if (idx >= p.length - 1) return p;
+    const next = [...p];
+    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    return next;
+  });
+
+  const deleteNote = (id: string) => setNotes((p) => p.filter((n) => n.id !== id));
+
+  const addNote = () => {
+    const newNote: NCENote = {
+      id:       `custom-${Date.now()}`,
+      label:    `Note ${notes.length + 1}`,
+      title:    "Custom Note",
+      selected: true,
+      text:     "",
+      isCustom: true,
+    };
+    setNotes((p) => [...p, newNote]);
+  };
 
   const setH = <K extends keyof HeaderOverrides>(k: K, v: HeaderOverrides[K]) =>
-    setHeader((prev) => ({ ...prev, [k]: v }));
+    setHeader((p) => ({ ...p, [k]: v }));
   const setS = <K extends keyof SigData>(k: K, v: SigData[K]) =>
-    setSig((prev) => ({ ...prev, [k]: v }));
+    setSig((p) => ({ ...p, [k]: v }));
 
-  // ── Note 3 variant change ──
   const handleVariantChange = (variant: string) => {
     setNote3Variant(variant);
-    const tpl = NOTE3_VARIANTS[variant] ?? "";
-    setH("note3VariantText", tpl.replace(/\[YEAR\]/g, auditYear));
+    setH("note3VariantText", (NOTE3_VARIANTS[variant] ?? "").replace(/\[YEAR\]/g, auditYear));
   };
 
   // ── Save ──
   const saveAll = async () => {
     setSaving(true);
-    const notesJson = notes.map((n) => ({ id: n.id, selected: n.selected, text: n.text }));
+    const notesJson = notes.map((n) => ({
+      id:       n.id,
+      selected: n.selected,
+      text:     n.text,
+      title:    n.title,
+      label:    n.label,
+      isCustom: n.isCustom ?? false,
+    }));
     const { error } = await (supabase as any)
       .from("notes_to_accounts_data")
       .upsert(
         {
-          engagement_id: engagementId,
-          notes_json: notesJson,
-          note3_variant: note3Variant,
-          note1_new_entity_enabled: note1NewEntity,
-          note1_new_entity_text: note1NewEntityText || null,
-          header_overrides: header,
-          signature_data: sig,
-          updated_at: new Date().toISOString(),
-          updated_by: user?.id ?? null,
+          engagement_id:             engagementId,
+          notes_json:                notesJson,
+          note3_variant:             note3Variant,
+          note1_new_entity_enabled:  note1NewEntity,
+          note1_new_entity_text:     note1NewEntityText || null,
+          header_overrides:          header,
+          signature_data:            sig,
+          updated_at:                new Date().toISOString(),
+          updated_by:                user?.id ?? null,
         },
         { onConflict: "engagement_id" }
       );
     setSaving(false);
     if (error) toast.error("Failed to save: " + error.message);
-    else toast.success("Notes to Accounts saved");
+    else       toast.success("Notes to Accounts saved");
   };
 
   // ── Display helpers ──
@@ -384,24 +617,215 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     clientDetails?.name ||
     engagement?.clients?.name ||
     "[ENTITY NAME]";
-
-  const firmName = firmDetails?.display_name || firmDetails?.name || "[Firm Name]";
-  const firmFRN = firmDetails?.icai_firm_reg_no || firmDetails?.icai_reg_no || "[FRN]";
-  const firmAddr = firmDetails?.address as any;
-  const firmCity = firmAddr?.city || firmAddr?.district || firmDetails?.state || "[City]";
-  const partnerName = sig.partnerNameOverride || partnerDetails?.name || "[Partner Name]";
+  const firmName         = firmDetails?.display_name || firmDetails?.name || "[Firm Name]";
+  const firmFRN          = firmDetails?.icai_firm_reg_no || firmDetails?.icai_reg_no || "[FRN]";
+  const firmAddr         = firmDetails?.address as any;
+  const firmCity         = firmAddr?.city || firmAddr?.district || firmDetails?.state || "[City]";
   const partnerMembership = partnerDetails?.icai_reg_no || "[Membership No.]";
-  const assesseePlace = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
-
-  const selectedCount = notes.filter((n) => n.selected).length;
+  const assesseePlace    = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
+  const selectedCount    = notes.filter((n) => n.selected).length;
 
   const handleExportPdf = async () => {
     if (!contentRef.current) return;
-    const fySlug = (engagement?.financial_year ?? "FY").replace("/", "-");
+    const fySlug   = (engagement?.financial_year ?? "FY").replace("/", "-");
     const nameSlug = displayEntityName.replace(/\s+/g, "_").slice(0, 30);
     await exportToPdf(contentRef.current, `Notes_${nameSlug}_${fySlug}.pdf`);
   };
 
+  // ── Per-note main content (special rendering by id, generic otherwise) ──
+  const getMainContent = (note: NCENote): ReactNode => {
+    switch (note.id) {
+
+      case "note-1":
+        return (
+          <div className="space-y-3">
+            <p className="text-sm">{note.text}</p>
+            <div className="flex items-center gap-3 pt-1">
+              <Switch
+                id="note1-new-entity"
+                checked={note1NewEntity}
+                onCheckedChange={(v) => { setNote1NewEntity(v); if (!v) setNote1NewEntityText(""); }}
+                disabled={!note.selected}
+              />
+              <Label htmlFor="note1-new-entity" className="text-xs cursor-pointer">
+                New Entity — Add new entity paragraph
+              </Label>
+            </div>
+            {note1NewEntity && (
+              <div className="space-y-2 pl-2 border-l-2 border-orange-300">
+                <OrangePlaceholderPreview text={note1NewEntityText || NEW_ENTITY_TEMPLATE} />
+                <details className="group">
+                  <summary className="flex items-center gap-1 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none w-fit">
+                    <Pencil className="w-3 h-3" /> Edit paragraph
+                  </summary>
+                  <div className="mt-2">
+                    <Textarea
+                      value={note1NewEntityText}
+                      onChange={(e) => setNote1NewEntityText(e.target.value)}
+                      rows={5}
+                      className="text-sm resize-y"
+                    />
+                  </div>
+                </details>
+              </div>
+            )}
+            <EditTextExpander text={note.text} onChange={(t) => updateNoteText("note-1", t)} disabled={!note.selected} />
+          </div>
+        );
+
+      case "note-3":
+        return (
+          <div className="space-y-3">
+            <div className="rounded bg-muted/40 px-3 py-2">
+              <InlineNoteText
+                text={note.text}
+                disabled={!note.selected}
+                tokenMap={{
+                  CASH_AMOUNT: (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={header.cashAmount}
+                        onChange={(e) => setH("cashAmount", e.target.value)}
+                        disabled={!note.selected}
+                        placeholder="Amount"
+                        className="text-orange-600 bg-orange-50 border-b-2 border-orange-400 w-24 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
+                      />
+                    </span>
+                  ),
+                  CLOSING_STOCK: (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={header.closingStock}
+                        onChange={(e) => setH("closingStock", e.target.value)}
+                        disabled={!note.selected}
+                        placeholder="Amount"
+                        className="text-orange-600 bg-orange-50 border-b-2 border-orange-400 w-24 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
+                      />
+                    </span>
+                  ),
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Label className="text-xs shrink-0 w-52">Business Type — additional paragraph:</Label>
+              <Select value={note3Variant} onValueChange={handleVariantChange} disabled={!note.selected}>
+                <SelectTrigger className="w-48 h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  <SelectItem value="service">Service Provider</SelectItem>
+                  <SelectItem value="transporter">Transporter</SelectItem>
+                  <SelectItem value="share">Share Trading</SelectItem>
+                  <SelectItem value="other">Other (stock by partner)</SelectItem>
+                  <SelectItem value="contractor">Contractor (RA Bill/WIP)</SelectItem>
+                  <SelectItem value="builder">Builder / Developer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {note3Variant !== "none" && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Additional paragraph (editable):</Label>
+                <Textarea
+                  value={header.note3VariantText}
+                  onChange={(e) => setH("note3VariantText", e.target.value)}
+                  rows={4}
+                  className="text-sm resize-y"
+                  disabled={!note.selected}
+                />
+              </div>
+            )}
+            <EditTextExpander text={note.text} onChange={(t) => updateNoteText("note-3", t)} disabled={!note.selected} />
+          </div>
+        );
+
+      case "note-5":
+        return (
+          <div className="space-y-2">
+            <div className="rounded bg-muted/40 px-3 py-2">
+              <InlineNoteText
+                text={note.text}
+                disabled={!note.selected}
+                tokenMap={{
+                  FA_NOTE: (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={header.faNoteNum}
+                        onChange={(e) => setH("faNoteNum", e.target.value)}
+                        disabled={!note.selected}
+                        placeholder="#"
+                        className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
+                        maxLength={3}
+                      />
+                    </span>
+                  ),
+                  DEP_NOTE: (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={header.depNoteNum}
+                        onChange={(e) => setH("depNoteNum", e.target.value)}
+                        disabled={!note.selected}
+                        placeholder="#"
+                        className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
+                        maxLength={3}
+                      />
+                    </span>
+                  ),
+                }}
+              />
+            </div>
+            <EditTextExpander text={note.text} onChange={(t) => updateNoteText("note-5", t)} disabled={!note.selected} />
+          </div>
+        );
+
+      case "note-8":
+        return (
+          <div className="space-y-2">
+            <div className="rounded bg-muted/40 px-3 py-2">
+              <InlineNoteText
+                text={note.text}
+                disabled={!note.selected}
+                tokenMap={{
+                  LAST_NOTE: (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={header.lastNoteOverride || String(lastNote)}
+                        onChange={(e) => setH("lastNoteOverride", e.target.value)}
+                        disabled={!note.selected}
+                        className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
+                        maxLength={2}
+                      />
+                    </span>
+                  ),
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Count auto-updates as notes are checked/unchecked. Edit the inline input above to override.
+            </p>
+            <EditTextExpander text={note.text} onChange={(t) => updateNoteText("note-8", t)} disabled={!note.selected} />
+          </div>
+        );
+
+      default:
+        // Standard note (2, 4, 6, 7) or any custom note
+        return (
+          <div className="space-y-2">
+            <p className="text-sm">{note.text}</p>
+            <EditTextExpander
+              text={note.text}
+              onChange={(t) => updateNoteText(note.id, t)}
+              disabled={!note.selected}
+            />
+          </div>
+        );
+    }
+  };
+
+  // ── Loading state ──
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -427,6 +851,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           <Button variant="outline" size="sm" onClick={deselectAll} className="gap-1">
             <Square className="w-4 h-4" /> Deselect All
           </Button>
+          <Button variant="outline" size="sm" onClick={addNote} className="gap-1">
+            <Plus className="w-4 h-4" /> Add Note
+          </Button>
           <Separator orientation="vertical" className="h-8" />
           <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
             <FileDown className="w-4 h-4" /> Export PDF
@@ -444,359 +871,126 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       {/* ── Exportable content ── */}
       <div ref={contentRef} className="space-y-6">
 
-      {/* ── Header ── */}
-      <div className="border rounded-lg p-5 space-y-3 bg-card">
-        <div className="flex items-center gap-3">
-          <Label className="text-xs w-28 shrink-0">Entity Name</Label>
-          <Input
-            value={header.entityNameOverride || displayEntityName}
-            onChange={(e) => setH("entityNameOverride", e.target.value)}
-            placeholder={displayEntityName}
-            className="max-w-sm"
-          />
-        </div>
-        <p className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">
-            Notes forming part of the Financial Statements
-          </span>{" "}
-          for the year ended, 31st March, {auditYear}
-        </p>
-        <p className="text-sm font-semibold">Note: Summary of Significant Accounting Policies</p>
-      </div>
-
-      {/* ── Notes ── */}
-      <div className="space-y-4">
-
-        {/* ── Note 1 ── */}
-        {renderNoteCard({
-          note: notes[0],
-          onToggle: () => toggleNote("note-1"),
-          mainContent: (
-            <div className="space-y-3">
-              <p className="text-sm">{notes[0].text}</p>
-
-              {/* New entity sub-toggle */}
-              <div className="flex items-center gap-3 pt-1">
-                <Switch
-                  id="note1-new-entity"
-                  checked={note1NewEntity}
-                  onCheckedChange={(v) => {
-                    setNote1NewEntity(v);
-                    if (!v) setNote1NewEntityText("");
-                  }}
-                  disabled={!notes[0].selected}
-                />
-                <Label htmlFor="note1-new-entity" className="text-xs cursor-pointer">
-                  New Entity — Add new entity paragraph
-                </Label>
-              </div>
-
-              {note1NewEntity && (
-                <div className="space-y-2 pl-2 border-l-2 border-orange-300">
-                  <OrangePlaceholderPreview text={note1NewEntityText || NEW_ENTITY_TEMPLATE} />
-                  <details className="group">
-                    <summary className="flex items-center gap-1 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none w-fit">
-                      <Pencil className="w-3 h-3" /> Edit paragraph
-                    </summary>
-                    <div className="mt-2">
-                      <Textarea
-                        value={note1NewEntityText}
-                        onChange={(e) => setNote1NewEntityText(e.target.value)}
-                        rows={5}
-                        className="text-sm resize-y"
-                      />
-                    </div>
-                  </details>
-                </div>
-              )}
-
-              {/* Edit main text */}
-              <EditTextExpander
-                text={notes[0].text}
-                onChange={(t) => updateNoteText("note-1", t)}
-                disabled={!notes[0].selected}
-              />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 2 ── */}
-        {renderNoteCard({
-          note: notes[1],
-          onToggle: () => toggleNote("note-2"),
-          mainContent: (
-            <div className="space-y-2">
-              <p className="text-sm">{notes[1].text}</p>
-              <EditTextExpander text={notes[1].text} onChange={(t) => updateNoteText("note-2", t)} disabled={!notes[1].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 3 ── */}
-        {renderNoteCard({
-          note: notes[2],
-          onToggle: () => toggleNote("note-3"),
-          mainContent: (
-            <div className="space-y-3">
-              {/* Main text with inline inputs */}
-              <div className="rounded bg-muted/40 px-3 py-2">
-                <InlineNoteText
-                  text={notes[2].text}
-                  disabled={!notes[2].selected}
-                  tokenMap={{
-                    CASH_AMOUNT: (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={header.cashAmount}
-                          onChange={(e) => setH("cashAmount", e.target.value)}
-                          disabled={!notes[2].selected}
-                          placeholder="Amount"
-                          className="text-orange-600 bg-orange-50 border-b-2 border-orange-400 w-24 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
-                        />
-                      </span>
-                    ),
-                    CLOSING_STOCK: (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={header.closingStock}
-                          onChange={(e) => setH("closingStock", e.target.value)}
-                          disabled={!notes[2].selected}
-                          placeholder="Amount"
-                          className="text-orange-600 bg-orange-50 border-b-2 border-orange-400 w-24 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
-                        />
-                      </span>
-                    ),
-                  }}
-                />
-              </div>
-
-              {/* Business type dropdown */}
-              <div className="flex items-center gap-3">
-                <Label className="text-xs shrink-0 w-52">Business Type — additional paragraph:</Label>
-                <Select value={note3Variant} onValueChange={handleVariantChange} disabled={!notes[2].selected}>
-                  <SelectTrigger className="w-48 h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="service">Service Provider</SelectItem>
-                    <SelectItem value="transporter">Transporter</SelectItem>
-                    <SelectItem value="share">Share Trading</SelectItem>
-                    <SelectItem value="other">Other (stock by partner)</SelectItem>
-                    <SelectItem value="contractor">Contractor (RA Bill/WIP)</SelectItem>
-                    <SelectItem value="builder">Builder / Developer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Variant text editable */}
-              {note3Variant !== "none" && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Additional paragraph (editable):</Label>
-                  <Textarea
-                    value={header.note3VariantText}
-                    onChange={(e) => setH("note3VariantText", e.target.value)}
-                    rows={4}
-                    className="text-sm resize-y"
-                    disabled={!notes[2].selected}
-                  />
-                </div>
-              )}
-
-              <EditTextExpander text={notes[2].text} onChange={(t) => updateNoteText("note-3", t)} disabled={!notes[2].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 4 ── */}
-        {renderNoteCard({
-          note: notes[3],
-          onToggle: () => toggleNote("note-4"),
-          mainContent: (
-            <div className="space-y-2">
-              <p className="text-sm">{notes[3].text}</p>
-              <EditTextExpander text={notes[3].text} onChange={(t) => updateNoteText("note-4", t)} disabled={!notes[3].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 5 ── */}
-        {renderNoteCard({
-          note: notes[4],
-          onToggle: () => toggleNote("note-5"),
-          mainContent: (
-            <div className="space-y-2">
-              <div className="rounded bg-muted/40 px-3 py-2">
-                <InlineNoteText
-                  text={notes[4].text}
-                  disabled={!notes[4].selected}
-                  tokenMap={{
-                    FA_NOTE: (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={header.faNoteNum}
-                          onChange={(e) => setH("faNoteNum", e.target.value)}
-                          disabled={!notes[4].selected}
-                          placeholder="#"
-                          className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
-                          maxLength={3}
-                        />
-                      </span>
-                    ),
-                    DEP_NOTE: (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={header.depNoteNum}
-                          onChange={(e) => setH("depNoteNum", e.target.value)}
-                          disabled={!notes[4].selected}
-                          placeholder="#"
-                          className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
-                          maxLength={3}
-                        />
-                      </span>
-                    ),
-                  }}
-                />
-              </div>
-              <EditTextExpander text={notes[4].text} onChange={(t) => updateNoteText("note-5", t)} disabled={!notes[4].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 6 ── */}
-        {renderNoteCard({
-          note: notes[5],
-          onToggle: () => toggleNote("note-6"),
-          mainContent: (
-            <div className="space-y-2">
-              <p className="text-sm">{notes[5].text}</p>
-              <EditTextExpander text={notes[5].text} onChange={(t) => updateNoteText("note-6", t)} disabled={!notes[5].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 7 ── */}
-        {renderNoteCard({
-          note: notes[6],
-          onToggle: () => toggleNote("note-7"),
-          mainContent: (
-            <div className="space-y-2">
-              <p className="text-sm">{notes[6].text}</p>
-              <EditTextExpander text={notes[6].text} onChange={(t) => updateNoteText("note-7", t)} disabled={!notes[6].selected} />
-            </div>
-          ),
-        })}
-
-        {/* ── Note 8 ── */}
-        {renderNoteCard({
-          note: notes[7],
-          onToggle: () => toggleNote("note-8"),
-          badge: (
-            <span className="text-xs text-muted-foreground ml-2">
-              (auto-count: {lastNote})
-            </span>
-          ),
-          mainContent: (
-            <div className="space-y-2">
-              <div className="rounded bg-muted/40 px-3 py-2">
-                <InlineNoteText
-                  text={notes[7].text}
-                  disabled={!notes[7].selected}
-                  tokenMap={{
-                    LAST_NOTE: (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={header.lastNoteOverride || String(lastNote)}
-                          onChange={(e) => setH("lastNoteOverride", e.target.value)}
-                          disabled={!notes[7].selected}
-                          className="text-orange-600 bg-orange-50 border-2 border-orange-400 rounded w-10 text-center px-1 mx-0.5 focus:outline-none focus:border-orange-600 text-sm font-medium disabled:opacity-40"
-                          maxLength={2}
-                        />
-                      </span>
-                    ),
-                  }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Count auto-updates as notes are checked/unchecked. Edit the inline input above to override.
-              </p>
-              <EditTextExpander text={notes[7].text} onChange={(t) => updateNoteText("note-8", t)} disabled={!notes[7].selected} />
-            </div>
-          ),
-        })}
-      </div>
-
-      {/* ── Signature Block ── */}
-      <div className="border rounded-lg p-5 space-y-4 bg-card">
-        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-          Signature Block
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Left — Assessee */}
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">For,</Label>
-              <Input
-                value={sig.assesseeNameOverride || displayEntityName}
-                onChange={(e) => setS("assesseeNameOverride", e.target.value)}
-                placeholder={displayEntityName}
-              />
-            </div>
-            <div className="border-b border-border w-48 pt-6" />
-            <p className="text-xs text-muted-foreground">Signature of assessee</p>
-            <div className="space-y-1">
-              <Label className="text-xs">Place</Label>
-              <Input
-                value={sig.assesseePlace || assesseePlace}
-                onChange={(e) => setS("assesseePlace", e.target.value)}
-                placeholder={assesseePlace}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Date</Label>
-              <input
-                type="date"
-                value={sig.assesseeDate}
-                onChange={(e) => setS("assesseeDate", e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </div>
+        {/* ── Header card ── */}
+        <div className="border rounded-lg p-5 space-y-3 bg-card">
+          <div className="flex items-center gap-3">
+            <Label className="text-xs w-28 shrink-0">Entity Name</Label>
+            <Input
+              value={header.entityNameOverride || displayEntityName}
+              onChange={(e) => setH("entityNameOverride", e.target.value)}
+              placeholder={displayEntityName}
+              className="max-w-sm"
+            />
           </div>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">
+              Notes forming part of the Financial Statements
+            </span>{" "}
+            for the year ended, 31st March, {auditYear}
+          </p>
+          <p className="text-sm font-semibold">Note: Summary of Significant Accounting Policies</p>
+        </div>
 
-          {/* Right — CA Firm */}
-          <div className="space-y-2">
-            <p className="text-sm font-medium">For {firmName}</p>
-            <p className="text-sm text-muted-foreground">Chartered Accountants</p>
-            <p className="text-xs text-muted-foreground">FRN: {firmFRN}</p>
-            <div className="border-b border-border w-48 pt-6" />
-            <div className="space-y-1">
-              <Label className="text-xs">Partner Name</Label>
-              <Input
-                value={sig.partnerNameOverride || partnerDetails?.name || ""}
-                onChange={(e) => setS("partnerNameOverride", e.target.value)}
-                placeholder={partnerDetails?.name || "Partner name"}
-              />
+        {/* ── Notes list (dynamic) ── */}
+        <div className="space-y-4">
+          {notes.map((note, idx) => (
+            <NoteCard
+              key={note.id}
+              note={note}
+              displayNumber={idx + 1}
+              isFirst={idx === 0}
+              isLast={idx === notes.length - 1}
+              onToggle={() => toggleNote(note.id)}
+              onMoveUp={() => moveNoteUp(note.id)}
+              onMoveDown={() => moveNoteDown(note.id)}
+              onDelete={() => deleteNote(note.id)}
+              onEditTitle={(title) => updateNoteTitle(note.id, title)}
+              badge={
+                note.id === "note-8"
+                  ? <span className="text-xs text-muted-foreground ml-1">(auto-count: {lastNote})</span>
+                  : undefined
+              }
+              mainContent={getMainContent(note)}
+            />
+          ))}
+        </div>
+
+        {/* ── Add note — dashed area at bottom ── */}
+        <button
+          onClick={addNote}
+          className="w-full py-3 border-2 border-dashed border-muted-foreground/25 rounded-lg text-sm text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors flex items-center justify-center gap-2"
+        >
+          <Plus className="w-4 h-4" /> Add Custom Note
+        </button>
+
+        {/* ── Signature Block ── */}
+        <div className="border rounded-lg p-5 space-y-4 bg-card">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+            Signature Block
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+
+            {/* Left — Assessee */}
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label className="text-xs">For,</Label>
+                <Input
+                  value={sig.assesseeNameOverride || displayEntityName}
+                  onChange={(e) => setS("assesseeNameOverride", e.target.value)}
+                  placeholder={displayEntityName}
+                />
+              </div>
+              <div className="border-b border-border w-48 pt-6" />
+              <p className="text-xs text-muted-foreground">Signature of assessee</p>
+              <div className="space-y-1">
+                <Label className="text-xs">Place</Label>
+                <Input
+                  value={sig.assesseePlace || assesseePlace}
+                  onChange={(e) => setS("assesseePlace", e.target.value)}
+                  placeholder={assesseePlace}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Date</Label>
+                <input
+                  type="date"
+                  value={sig.assesseeDate}
+                  onChange={(e) => setS("assesseeDate", e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">Partner</p>
-            <p className="text-xs text-muted-foreground">Membership No.: {partnerMembership}</p>
-            <p className="text-xs text-muted-foreground">Place: {firmCity}</p>
-            <div className="space-y-1">
-              <Label className="text-xs">Date</Label>
-              <input
-                type="date"
-                value={sig.sigDate}
-                onChange={(e) => setS("sigDate", e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
+
+            {/* Right — CA Firm */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium">For {firmName}</p>
+              <p className="text-sm text-muted-foreground">Chartered Accountants</p>
+              <p className="text-xs text-muted-foreground">FRN: {firmFRN}</p>
+              <div className="border-b border-border w-48 pt-6" />
+              <div className="space-y-1">
+                <Label className="text-xs">Partner Name</Label>
+                <Input
+                  value={sig.partnerNameOverride || partnerDetails?.name || ""}
+                  onChange={(e) => setS("partnerNameOverride", e.target.value)}
+                  placeholder={partnerDetails?.name || "Partner name"}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">Partner</p>
+              <p className="text-xs text-muted-foreground">Membership No.: {partnerMembership}</p>
+              <p className="text-xs text-muted-foreground">Place: {firmCity}</p>
+              <div className="space-y-1">
+                <Label className="text-xs">Date</Label>
+                <input
+                  type="date"
+                  value={sig.sigDate}
+                  onChange={(e) => setS("sigDate", e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+              </div>
             </div>
+
           </div>
         </div>
-      </div>
 
       </div>{/* end contentRef */}
 
@@ -807,74 +1001,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
           Save Notes to Accounts
         </Button>
       </div>
-    </div>
-  );
-}
 
-// ─── Helpers (defined outside component for readability) ─────────────────────
-
-function EditTextExpander({
-  text, onChange, disabled,
-}: { text: string; onChange: (t: string) => void; disabled: boolean }) {
-  return (
-    <details className="group">
-      <summary className="flex items-center gap-1 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none w-fit">
-        <Pencil className="w-3 h-3" /> Edit note text
-      </summary>
-      <div className="mt-2">
-        <Textarea
-          value={text}
-          onChange={(e) => onChange(e.target.value)}
-          rows={4}
-          className="text-sm resize-y font-mono"
-          disabled={disabled}
-        />
-      </div>
-    </details>
-  );
-}
-
-function renderNoteCard({
-  note,
-  onToggle,
-  mainContent,
-  badge,
-}: {
-  note: NCENote;
-  onToggle: () => void;
-  mainContent: React.ReactNode;
-  badge?: React.ReactNode;
-}) {
-  return (
-    <div key={note.id} className="border rounded-lg overflow-hidden">
-      {/* Checkbox row — always fully interactive (never dimmed) */}
-      <div
-        className="flex items-center gap-3 px-4 py-3 bg-card cursor-pointer select-none"
-        onClick={onToggle}
-      >
-        <span onClick={(e) => e.stopPropagation()}>
-          <Checkbox checked={note.selected} onCheckedChange={onToggle} id={`nce-${note.id}`} />
-        </span>
-        <Label htmlFor={`nce-${note.id}`} className="cursor-pointer font-medium text-sm">
-          {note.label}
-        </Label>
-        <span className="text-xs text-muted-foreground">{note.title}</span>
-        {badge}
-        {!note.selected && (
-          <Badge variant="outline" className="ml-auto text-xs text-muted-foreground">
-            Excluded
-          </Badge>
-        )}
-      </div>
-
-      {/* Content — dims when excluded */}
-      <div
-        className={`px-4 pb-4 pt-2 space-y-3 transition-opacity ${
-          !note.selected ? "opacity-40 pointer-events-none" : ""
-        }`}
-      >
-        {mainContent}
-      </div>
     </div>
   );
 }
