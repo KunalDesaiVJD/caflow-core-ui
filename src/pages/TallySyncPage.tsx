@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   RefreshCw, CheckCircle2, XCircle, AlertTriangle, Clock,
   Database, Wifi, WifiOff, Building2, FileText, Layers, Receipt, Search,
+  ChevronRight, ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -58,6 +60,14 @@ interface TallyTB {
   opening_type: string;
   closing_balance: number;
   balance_type: string;
+  debit_amount?: number;
+  credit_amount?: number;
+}
+
+interface VoucherLineItem {
+  ledger_name: string;
+  amount: number;
+  dr_cr: string;
 }
 
 interface TallyVoucher {
@@ -69,6 +79,7 @@ interface TallyVoucher {
   amount: number;
   dr_cr: string;
   narration: string;
+  line_items?: VoucherLineItem[];
 }
 
 interface RowCounts {
@@ -126,6 +137,7 @@ export default function TallySyncPage() {
   const { selectedEngagementId, selectedEngagement } = useAuditContext();
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [batches, setBatches]       = useState<SyncBatch[]>([]);
   const [groups, setGroups]         = useState<TallyGroup[]>([]);
@@ -143,6 +155,19 @@ export default function TallySyncPage() {
   const [groupSearch, setGroupSearch]     = useState("");
   const [tbSearch, setTbSearch]           = useState("");
   const [voucherSearch, setVoucherSearch] = useState("");
+
+  // Collapse/expand state for TB group rows and voucher line-items
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedVoucher, setExpandedVoucher] = useState<string | null>(null);
+
+  function toggleGroup(groupName: string) {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupName)) next.delete(groupName);
+      else next.add(groupName);
+      return next;
+    });
+  }
 
   // ── Load all data ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -222,8 +247,8 @@ export default function TallySyncPage() {
       supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
       supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", engId).order("ledger_name").limit(2000),
-      supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
-      supabase.from("tally_vouchers" as any).select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration").eq("engagement_id", engId).order("voucher_date", { ascending: false }).limit(5000),
+      supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
+      supabase.from("tally_vouchers" as any).select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration,line_items").eq("engagement_id", engId).order("voucher_date", { ascending: false }).limit(5000),
     ]);
 
     if (batchRes.data) setBatches(batchRes.data as SyncBatch[]);
@@ -325,8 +350,11 @@ export default function TallySyncPage() {
   );
 
   // TB totals (for footer)
-  const tbDrTotal = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
-  const tbCrTotal = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
+  const tbDrTotal     = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
+  const tbCrTotal     = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
+  const tbDebitTotal  = filteredTB.reduce((s, r) => s + (r.debit_amount  ?? 0), 0);
+  const tbCreditTotal = filteredTB.reduce((s, r) => s + (r.credit_amount ?? 0), 0);
+  const hasDebitCredit = filteredTB.some(r => (r.debit_amount ?? 0) > 0 || (r.credit_amount ?? 0) > 0);
 
   // ── Group map for BS/PL classification ───────────────────────────────────────
   const groupInfoMap = useMemo(() => {
@@ -465,24 +493,38 @@ export default function TallySyncPage() {
       if (!byGroup.has(grp)) byGroup.set(grp, []);
       byGroup.get(grp)!.push(r);
     }
-    const result: Array<{ groupName: string; isRevenue: boolean; rows: TallyTB[]; openingTotal: number; openingTotalType: string; closingTotal: number; closingTotalType: string }> = [];
+
+    type TBGroup = {
+      groupName: string; isRevenue: boolean; rows: TallyTB[];
+      openingTotal: number; openingTotalType: string;
+      debitTotal: number; creditTotal: number;
+      closingTotal: number; closingTotalType: string;
+    };
+
+    const makeGroup = (grpName: string, isRevenue: boolean, rows: TallyTB[]): TBGroup => {
+      const sorted  = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+      const netOp   = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl   = sorted.reduce((s, r) => s + (r.balance_type  === "Dr" ? r.closing_balance  : -r.closing_balance), 0);
+      const debit   = sorted.reduce((s, r) => s + (r.debit_amount  ?? 0), 0);
+      const credit  = sorted.reduce((s, r) => s + (r.credit_amount ?? 0), 0);
+      return {
+        groupName: grpName, isRevenue, rows: sorted,
+        openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
+        debitTotal: debit, creditTotal: credit,
+        closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
+      };
+    };
+
+    const result: TBGroup[] = [];
     for (const { group: g } of sortedGroups) {
       const rows = byGroup.get(g.group_name);
       if (!rows || rows.length === 0) continue;
-      const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
-      const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
-      const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
-      result.push({ groupName: g.group_name, isRevenue: g.is_revenue, rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
+      result.push(makeGroup(g.group_name, g.is_revenue, rows));
     }
     // Fallback for TB rows whose group isn't in sortedGroups
     const placed = new Set(result.map(r => r.groupName));
     for (const [grp, rows] of byGroup.entries()) {
-      if (!placed.has(grp)) {
-        const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
-        const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
-        const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
-        result.push({ groupName: grp, isRevenue: isRevenueGroup(grp), rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
-      }
+      if (!placed.has(grp)) result.push(makeGroup(grp, isRevenueGroup(grp), rows));
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -581,13 +623,23 @@ export default function TallySyncPage() {
                 <CardTitle className="text-base">Trial Balance</CardTitle>
                 <CardDescription>
                   {rowCounts.trial_balance > 0
-                    ? `${rowCounts.trial_balance} ledgers · group-wise view · BS first`
+                    ? `${rowCounts.trial_balance} ledgers · group-wise · BS first · click group to collapse`
                     : `Derived from ${rowCounts.ledgers} ledgers`}
                 </CardDescription>
               </div>
-              <div className="relative w-64">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input placeholder="Search ledger / group…" className="pl-8 h-8 text-sm" value={tbSearch} onChange={e => setTbSearch(e.target.value)} />
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedGroups(new Set(groupedTB.map(g => g.groupName)))}>
+                  Collapse All
+                </Button>
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedGroups(new Set())}>
+                  Expand All
+                </Button>
+                <div className="relative w-56">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input placeholder="Search ledger / group…" className="pl-8 h-8 text-sm" value={tbSearch} onChange={e => setTbSearch(e.target.value)} />
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -603,71 +655,116 @@ export default function TallySyncPage() {
                     <Table>
                       <TableHeader className="sticky top-0 bg-background z-10">
                         <TableRow>
-                          <TableHead className="w-[55%]">Particulars</TableHead>
-                          <TableHead className="text-right w-[22%]">Opening Balance</TableHead>
-                          <TableHead className="text-right w-[23%] font-semibold">Closing Balance</TableHead>
+                          <TableHead className="w-[36%]">Particulars</TableHead>
+                          <TableHead className="text-right w-[16%]">Opening Balance</TableHead>
+                          {hasDebitCredit && <TableHead className="text-right w-[13%]">Debit</TableHead>}
+                          {hasDebitCredit && <TableHead className="text-right w-[13%]">Credit</TableHead>}
+                          <TableHead className="text-right font-semibold w-[16%]">Closing Balance</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {groupedTB.map(({ groupName, isRevenue, rows, openingTotal, openingTotalType, closingTotal, closingTotalType }) => (
-                          <>
-                            {/* Group header row with totals */}
-                            <TableRow key={`tb-grp-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
-                              <TableCell className="py-2 px-4">
-                                <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
-                                  {decodeHtml(groupName)}
-                                </span>
-                                <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
-                                  {isRevenue ? "P&L" : "B/S"}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-right py-2 font-bold text-xs">
-                                {openingTotal > 0 ? (
-                                  <span className={openingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
-                                    {fmtAmt(openingTotal)} {openingTotalType}
-                                  </span>
-                                ) : "—"}
-                              </TableCell>
-                              <TableCell className="text-right py-2 font-bold text-xs">
-                                {closingTotal > 0 ? (
-                                  <span className={closingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
-                                    {fmtAmt(closingTotal)} {closingTotalType}
-                                  </span>
-                                ) : "—"}
-                              </TableCell>
-                            </TableRow>
-                            {/* Indented ledger rows */}
-                            {rows.map(r => (
-                              <TableRow key={r.id} className="text-xs hover:bg-muted/20">
-                                <TableCell className="pl-8 text-foreground">{decodeHtml(r.ledger_name)}</TableCell>
-                                <TableCell className="text-right">
-                                  {r.opening_balance > 0 ? (
-                                    <span className={r.opening_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
-                                      {fmtAmt(r.opening_balance)} {r.opening_type}
+                        {groupedTB.map(({ groupName, isRevenue, rows, openingTotal, openingTotalType, debitTotal, creditTotal, closingTotal, closingTotalType }) => {
+                          const isCollapsed = collapsedGroups.has(groupName);
+                          return (
+                            <>
+                              {/* Group header row — clickable to collapse */}
+                              <TableRow
+                                key={`tb-grp-${groupName}`}
+                                className="bg-muted/60 hover:bg-muted/80 cursor-pointer select-none"
+                                onClick={() => toggleGroup(groupName)}
+                              >
+                                <TableCell className="py-2 px-3">
+                                  <div className="flex items-center gap-1.5">
+                                    {isCollapsed
+                                      ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                      : <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                                    <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                      {decodeHtml(groupName)}
+                                    </span>
+                                    <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                      {isRevenue ? "P&L" : "B/S"}
+                                    </Badge>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right py-2 font-bold text-xs">
+                                  {openingTotal > 0 ? (
+                                    <span className={openingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(openingTotal)} {openingTotalType}
                                     </span>
                                   ) : "—"}
                                 </TableCell>
-                                <TableCell className="text-right font-medium">
-                                  {r.closing_balance > 0 ? (
-                                    <span className={r.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
-                                      {fmtAmt(r.closing_balance)} {r.balance_type}
+                                {hasDebitCredit && (
+                                  <TableCell className="text-right py-2 font-bold text-xs text-blue-700">
+                                    {debitTotal > 0 ? fmtAmt(debitTotal) : "—"}
+                                  </TableCell>
+                                )}
+                                {hasDebitCredit && (
+                                  <TableCell className="text-right py-2 font-bold text-xs text-rose-600">
+                                    {creditTotal > 0 ? fmtAmt(creditTotal) : "—"}
+                                  </TableCell>
+                                )}
+                                <TableCell className="text-right py-2 font-bold text-xs">
+                                  {closingTotal > 0 ? (
+                                    <span className={closingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(closingTotal)} {closingTotalType}
                                     </span>
                                   ) : "—"}
                                 </TableCell>
                               </TableRow>
-                            ))}
-                          </>
-                        ))}
+                              {/* Ledger rows — hidden when group is collapsed */}
+                              {!isCollapsed && rows.map(r => (
+                                <TableRow key={r.id} className="text-xs hover:bg-muted/20">
+                                  <TableCell className="pl-8 text-foreground">
+                                    <button
+                                      className="text-left hover:underline hover:text-blue-700 transition-colors"
+                                      onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(r.ledger_name)}`)}
+                                    >
+                                      {decodeHtml(r.ledger_name)}
+                                    </button>
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    {r.opening_balance > 0 ? (
+                                      <span className={r.opening_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                        {fmtAmt(r.opening_balance)} {r.opening_type}
+                                      </span>
+                                    ) : "—"}
+                                  </TableCell>
+                                  {hasDebitCredit && (
+                                    <TableCell className="text-right text-blue-700">
+                                      {(r.debit_amount ?? 0) > 0 ? fmtAmt(r.debit_amount!) : "—"}
+                                    </TableCell>
+                                  )}
+                                  {hasDebitCredit && (
+                                    <TableCell className="text-right text-rose-600">
+                                      {(r.credit_amount ?? 0) > 0 ? fmtAmt(r.credit_amount!) : "—"}
+                                    </TableCell>
+                                  )}
+                                  <TableCell className="text-right font-medium">
+                                    {r.closing_balance > 0 ? (
+                                      <span className={r.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                        {fmtAmt(r.closing_balance)} {r.balance_type}
+                                      </span>
+                                    ) : "—"}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
                   {/* Grand Total footer */}
-                  <div className="border-t bg-muted/40 px-4 py-2 flex justify-end gap-8 text-xs font-semibold">
-                    <span>Total Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
-                    <span>Total Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
-                    <span className={cn("font-bold", Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                      Diff: {fmtAmt(Math.abs(tbDrTotal - tbCrTotal))} {Math.abs(tbDrTotal - tbCrTotal) < 1 ? "✓ Balanced" : "⚠ Check"}
-                    </span>
+                  <div className="border-t bg-muted/40 px-4 py-2 flex flex-wrap justify-end gap-6 text-xs font-semibold">
+                    <span>Closing Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
+                    <span>Closing Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
+                    {hasDebitCredit && <span>Total Debit: <span className="text-blue-700 font-bold">{fmtAmt(tbDebitTotal)}</span></span>}
+                    {hasDebitCredit && <span>Total Credit: <span className="text-rose-600 font-bold">{fmtAmt(tbCreditTotal)}</span></span>}
+                    {hasDebitCredit && (
+                      <span className={cn("font-bold", Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                        {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Balanced" : `⚠ Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
+                      </span>
+                    )}
                   </div>
                 </>
               )}
@@ -722,7 +819,14 @@ export default function TallySyncPage() {
                           </TableRow>
                           {grpLedgers.map(l => (
                             <TableRow key={l.id} className="text-xs">
-                              <TableCell className="font-medium" style={{ paddingLeft: `${depth * 16 + 32}px` }}>{decodeHtml(l.ledger_name)}</TableCell>
+                              <TableCell className="font-medium" style={{ paddingLeft: `${depth * 16 + 32}px` }}>
+                                <button
+                                  className="text-left hover:underline hover:text-blue-700 transition-colors"
+                                  onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(l.ledger_name)}`)}
+                                >
+                                  {decodeHtml(l.ledger_name)}
+                                </button>
+                              </TableCell>
                               <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
                               <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
                                 {l.opening_type}
@@ -815,7 +919,7 @@ export default function TallySyncPage() {
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base">Vouchers</CardTitle>
-                <CardDescription>{rowCounts.vouchers.toLocaleString()} vouchers from Tally</CardDescription>
+                <CardDescription>{rowCounts.vouchers.toLocaleString()} vouchers · click row to see all ledger entries</CardDescription>
               </div>
               <div className="relative w-64">
                 <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
@@ -834,29 +938,102 @@ export default function TallySyncPage() {
                   <Table>
                     <TableHeader className="sticky top-0 bg-background z-10">
                       <TableRow>
+                        <TableHead className="w-6" />
                         <TableHead>Date</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>No.</TableHead>
-                        <TableHead className="w-[30%]">Party Ledger</TableHead>
+                        <TableHead className="w-[28%]">Party Ledger</TableHead>
                         <TableHead className="text-right font-semibold">Amount</TableHead>
                         <TableHead className="text-center">Dr/Cr</TableHead>
-                        <TableHead className="w-[20%]">Narration</TableHead>
+                        <TableHead className="w-[18%]">Narration</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredVouchers.map(v => (
-                        <TableRow key={v.id} className="text-xs">
-                          <TableCell className="whitespace-nowrap">{v.voucher_date}</TableCell>
-                          <TableCell>{v.voucher_type}</TableCell>
-                          <TableCell className="text-muted-foreground">{v.voucher_number || "—"}</TableCell>
-                          <TableCell className="font-medium">{decodeHtml(v.party_ledger) || "—"}</TableCell>
-                          <TableCell className="text-right font-semibold">{fmtAmt(v.amount)}</TableCell>
-                          <TableCell className="text-center">
-                            <span className={cn("text-[10px] font-bold", v.dr_cr === "Cr" ? "text-rose-600" : "text-blue-700")}>{v.dr_cr}</span>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground truncate max-w-[180px]">{decodeHtml(v.narration) || "—"}</TableCell>
-                        </TableRow>
-                      ))}
+                      {filteredVouchers.map(v => {
+                        const isExpanded = expandedVoucher === v.id;
+                        const lineItems  = v.line_items ?? [];
+                        // Resolved party: prefer stored party_ledger, else first line item
+                        const displayParty = decodeHtml(v.party_ledger) || decodeHtml(lineItems[0]?.ledger_name ?? "") || "—";
+                        const extraCount   = lineItems.length > 1 ? lineItems.length - 1 : 0;
+                        return (
+                          <>
+                            <TableRow
+                              key={v.id}
+                              className={cn("text-xs cursor-pointer", isExpanded ? "bg-blue-50/60" : "hover:bg-muted/20")}
+                              onClick={() => setExpandedVoucher(isExpanded ? null : v.id)}
+                            >
+                              <TableCell className="px-2 py-2">
+                                {isExpanded
+                                  ? <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">{v.voucher_date}</TableCell>
+                              <TableCell>{v.voucher_type}</TableCell>
+                              <TableCell className="text-muted-foreground">{v.voucher_number || "—"}</TableCell>
+                              <TableCell className="font-medium">
+                                <span>{displayParty}</span>
+                                {extraCount > 0 && (
+                                  <Badge variant="outline" className="ml-1.5 text-[9px] py-0 border-muted-foreground/40 text-muted-foreground">
+                                    +{extraCount} more
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right font-semibold">{fmtAmt(v.amount)}</TableCell>
+                              <TableCell className="text-center">
+                                <span className={cn("text-[10px] font-bold", v.dr_cr === "Cr" ? "text-rose-600" : "text-blue-700")}>{v.dr_cr}</span>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground truncate max-w-[160px]">{decodeHtml(v.narration) || "—"}</TableCell>
+                            </TableRow>
+                            {/* Expanded sub-table: all line items */}
+                            {isExpanded && (
+                              <TableRow key={`${v.id}-expand`} className="bg-blue-50/40">
+                                <TableCell colSpan={8} className="p-0 pb-1">
+                                  <div className="mx-8 my-1 rounded border border-blue-100 overflow-hidden">
+                                    {v.narration && (
+                                      <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-b border-blue-100 bg-white/60">
+                                        <span className="font-medium text-foreground">Narration: </span>{decodeHtml(v.narration)}
+                                      </div>
+                                    )}
+                                    {lineItems.length > 0 ? (
+                                      <table className="w-full text-xs">
+                                        <thead>
+                                          <tr className="bg-blue-100/60 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                            <th className="text-left px-3 py-1.5 font-semibold">Ledger Name</th>
+                                            <th className="text-right px-3 py-1.5 font-semibold">Amount</th>
+                                            <th className="text-center px-3 py-1.5 font-semibold">Dr/Cr</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {lineItems.map((item, idx) => (
+                                            <tr key={idx} className="border-t border-blue-100/60 bg-white/40">
+                                              <td className="px-3 py-1.5">
+                                                <button
+                                                  className="text-left hover:underline hover:text-blue-700 transition-colors"
+                                                  onClick={e => { e.stopPropagation(); navigate(`/audit/tally-sync/ledger/${encodeURIComponent(item.ledger_name)}`); }}
+                                                >
+                                                  {decodeHtml(item.ledger_name)}
+                                                </button>
+                                              </td>
+                                              <td className="px-3 py-1.5 text-right font-medium">{fmtAmt(item.amount)}</td>
+                                              <td className="px-3 py-1.5 text-center">
+                                                <span className={cn("font-bold text-[10px]", item.dr_cr === "Cr" ? "text-rose-600" : "text-blue-700")}>
+                                                  {item.dr_cr}
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    ) : (
+                                      <p className="px-3 py-2 text-xs text-muted-foreground">No line items — re-sync to populate</p>
+                                    )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
