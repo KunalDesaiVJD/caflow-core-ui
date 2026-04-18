@@ -183,26 +183,36 @@ export default function Form3CBTab({ engagementId }: Props) {
   async function load() {
     setLoading(true);
 
-    // Single fetch — joins clients, firms (CA firm) and partner (users FK)
-    const { data: eng } = await supabase
+    // Engagement + client + CA firm
+    const { data: eng, error: engErr } = await supabase
       .from("audit_engagements")
-      .select("*, clients(*), firms(*), partner:users!partner_id(name, membership_number)")
+      .select("*, clients(*), firms(*)")
       .eq("id", engagementId)
       .single();
 
-    if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }
+    if (engErr || !eng) {
+      setLoading(false);
+      toast.error("Engagement not found" + (engErr ? `: ${engErr.message}` : ""));
+      return;
+    }
     setEngagement(eng);
     const cl = (eng as any).clients || null;
     setClient(cl);
     setCaFirm((eng as any).firms || null);
-    setPartner((eng as any).partner || null);
 
-    // audit_firms holds engagement-specific scalar columns (city,
-    // partner_name, FRN) not present on the parent firms record.
+    // audit_firms — engagement-specific scalar columns (city, partner, FRN)
     if ((eng as any).audit_firm_id) {
       const { data: af } = await supabase
         .from("audit_firms").select("*").eq("id", (eng as any).audit_firm_id).single();
       setAuditFirm(af || null);
+    }
+
+    // Partner — separate fetch (multiple FKs from audit_engagements→users
+    // make PostgREST embed disambiguation unreliable)
+    if ((eng as any).partner_id) {
+      const { data: pu } = await supabase
+        .from("users").select("name, membership_number").eq("id", (eng as any).partner_id).single();
+      setPartner(pu || null);
     }
 
     const fy = (eng as any).financial_year || "";
