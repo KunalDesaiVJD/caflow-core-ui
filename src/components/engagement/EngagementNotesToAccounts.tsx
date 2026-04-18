@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
+import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -354,9 +355,9 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         {/* Tab 1 — existing accordion content, completely unchanged */}
         <TabsContent value="notes">{noteEditorBody}</TabsContent>
 
-        {/* Tab 2 — Capital Account (stub; full implementation TBD) */}
+        {/* Tab 2 — Capital Account */}
         <TabsContent value="capital">
-          <NCECapitalAccount engagementId={engagementId} />
+          <NCECapitalAccount engagementId={engagementId} engagement={engagement} client={client} />
         </TabsContent>
 
         {/* Tab 3 — Detailed Notes to Accounts (stub; full implementation TBD) */}
@@ -392,15 +393,7 @@ function StubPlaceholder({ title, description }: { title: string; description: s
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function NCECapitalAccount({ engagementId }: { engagementId: string }) {
-  return (
-    <StubPlaceholder
-      title="Capital Account"
-      description="Partner-wise capital account schedules — coming soon"
-    />
-  );
-}
+// NCECapitalAccount is imported from @/components/stage8/NCECapitalAccount (real implementation)
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function NCEDetailedNotes({ engagementId }: { engagementId: string }) {
