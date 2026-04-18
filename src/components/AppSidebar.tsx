@@ -31,8 +31,8 @@ const topNavItems = [
 const auditStages = [
   // ── Non-pipeline links ────────────────────────────────────────────────────
   { title: "Audit Dashboard",            path: "/audit",                icon: LayoutDashboard                },
-  { title: "Engagement Setup",           path: "/audit/pipeline",       icon: Building2,    stage: 1        },
   { title: "Audit Tracker",              path: "/audit/tracker",        icon: ClipboardCheck                },
+  { title: "Engagement Setup",           path: "/audit/pipeline",       icon: Building2,    stage: 1        },
   { title: "Tally Sync",                 path: "/audit/tally-sync",     icon: RefreshCw                     },
   // ── Reports & Sign-off (quick access) ────────────────────────────────────
   { title: "3CA / 3CB / 3CD Reports",    path: "/audit/pipeline",       icon: FileCheck,    stage: 8        },
