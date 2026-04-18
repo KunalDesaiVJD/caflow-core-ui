@@ -858,11 +858,18 @@ serve(async (req) => {
       addUpdate("Form_3CB", "H40", autoValues.FRN);
       addUpdate("Form_3CB", "C41", autoValues.PLACE);
       addUpdate("Form_3CB", "H46", autoValues.MEMBERSHIP_NO);
+      // Sign-off date + UDIN on Form_3CB (C42 = date row, C43 = UDIN row)
+      addUpdate("Form_3CB", "C42", autoValues.SIGN_DATE);
+      addUpdate("Form_3CB", "C43", autoValues.UDIN);
       // ANX_Form3CB sign-off block (formula cells that returned 0 due to inlineStr)
       addUpdate("ANX_Form3CB", "A21", autoValues.FIRM_NAME);
       addUpdate("ANX_Form3CB", "A27", autoValues.PARTNER_NAME);
+      addUpdate("ANX_Form3CB", "G21", autoValues.FIRM_NAME);
       addUpdate("ANX_Form3CB", "G23", autoValues.FRN);
+      addUpdate("ANX_Form3CB", "G27", autoValues.PARTNER_NAME);
       addUpdate("ANX_Form3CB", "C24", autoValues.PLACE);
+      addUpdate("ANX_Form3CB", "C25", autoValues.SIGN_DATE);
+      addUpdate("ANX_Form3CB", "C26", autoValues.UDIN);
       addUpdate("ANX_Form3CB", "F29", autoValues.MEMBERSHIP_NO);
     }
 
@@ -871,7 +878,40 @@ serve(async (req) => {
     addUpdate("Form_3CD", "I237", autoValues.FRN);
     addUpdate("Form_3CD", "I243", autoValues.MEMBERSHIP_NO);
 
+    // 01_Control header block — always write for both form types (sign-off visibility)
+    addUpdate("01_Control", "F16", autoValues.BS_DATE);
+    addUpdate("01_Control", "F17", autoValues.BS_DATE);
+    addUpdate("01_Control", "F24", autoValues.UDIN);
+    addUpdate("01_Control", "F25", autoValues.REPORT_DATE);
+
     // ── Apply updates directly into sheet XMLs ────────────────────────────────
+    // Compute the FY end year (e.g. "2026") for boilerplate template substitutions
+    // like "31st March, ____" that appear inside shared-string or inline-string cells.
+    const fyEndYear = (() => {
+      const m = (fy || "").match(/(\d{4})/);
+      return m ? String(parseInt(m[1]) + 1) : "";
+    })();
+
+    // Boilerplate string substitutions — applied as plain-text XML replaces AFTER
+    // cell-level updates, so formatted dates land in templated paragraphs too.
+    function applyBoilerplateSubs(xml: string): string {
+      let out = xml;
+      if (fyEndYear) {
+        // "31st March, ____"  → "31st March, 2026"
+        // Template writers used 3+ underscores as a blank; replace any run of 3+ underscores
+        // that follows "March," with the FY end year.
+        out = out.replace(/(March,\s*)_{3,}/g, `$1${fyEndYear}`);
+        // Standalone "____" after "as on" / "for the year ended" / bare dates
+        out = out.replace(/(\b(?:as on|ended on|as at)\s+[^_<>]{0,40}?)_{3,}/gi, `$1${fyEndYear}`);
+      }
+      // Clear "[No.]_ AUTO" annexure-number placeholders (template artifacts with no
+      // real value source) — replace with a single space so the cell is no longer noisy.
+      out = out.replace(/\[No\.\]_\s*AUTO/g, "");
+      // Clear sign-off "________ AUTO" remnants when we failed to resolve them above
+      out = out.replace(/_{3,}\s*AUTO/g, "");
+      return out;
+    }
+
     for (const [sheetName, cellUpdates] of updates) {
       const sheetPath = sheetPaths.get(sheetName);
       if (!sheetPath || !zip[sheetPath]) continue;
@@ -880,7 +920,18 @@ serve(async (req) => {
       for (const [addr, value] of cellUpdates) {
         xml = setCellInXml(xml, addr, value);
       }
+      xml = applyBoilerplateSubs(xml);
       zip[sheetPath] = _enc.encode(xml);
+    }
+
+    // Apply the same boilerplate subs to sharedStrings.xml — many template paragraphs
+    // live in shared strings rather than inline strings, so cell-level edits miss them.
+    if (zip["xl/sharedStrings.xml"]) {
+      const ssXml = _dec.decode(zip["xl/sharedStrings.xml"]);
+      const ssXmlNew = applyBoilerplateSubs(ssXml);
+      if (ssXmlNew !== ssXml) {
+        zip["xl/sharedStrings.xml"] = _enc.encode(ssXmlNew);
+      }
     }
 
     // ── Rezip and return (all styles / images / rels untouched) ──────────────
