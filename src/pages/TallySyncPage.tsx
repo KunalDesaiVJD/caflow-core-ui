@@ -358,7 +358,7 @@ export default function TallySyncPage() {
     return getPrimaryGroup(groupName)?.is_revenue ?? false;
   }
 
-  // ── Grouped ledgers: BS first, then PL; group headers ────────────────────────
+  // ── Grouped ledgers: same hierarchy order as sortedGroups (BS-first, depth-aware)
   const groupedLedgers = useMemo(() => {
     const byGroup = new Map<string, TallyLedger[]>();
     for (const l of filteredLedgers) {
@@ -366,52 +366,65 @@ export default function TallySyncPage() {
       if (!byGroup.has(grp)) byGroup.set(grp, []);
       byGroup.get(grp)!.push(l);
     }
-    const groupNames = [...byGroup.keys()];
-    groupNames.sort((a, b) => {
-      const aRev = isRevenueGroup(a);
-      const bRev = isRevenueGroup(b);
-      if (aRev !== bRev) return aRev ? 1 : -1;
-      return a.localeCompare(b);
-    });
-    return groupNames.map(grp => ({
-      groupName: grp,
-      isRevenue: isRevenueGroup(grp),
-      ledgers: byGroup.get(grp)!.sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
-    }));
+    // Follow the same hierarchy order as sortedGroups
+    const result: Array<{ groupName: string; isRevenue: boolean; depth: number; ledgers: TallyLedger[] }> = [];
+    for (const { group: g, depth } of sortedGroups) {
+      const grpLedgers = byGroup.get(g.group_name);
+      if (grpLedgers && grpLedgers.length > 0) {
+        result.push({
+          groupName: g.group_name,
+          isRevenue: g.is_revenue,
+          depth,
+          ledgers: grpLedgers.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+        });
+      }
+    }
+    // Fallback for any ledger groups not in sortedGroups
+    const placed = new Set(result.map(r => r.groupName));
+    for (const [grp, leds] of byGroup.entries()) {
+      if (!placed.has(grp)) {
+        result.push({
+          groupName: grp,
+          isRevenue: isRevenueGroup(grp),
+          depth: 0,
+          ledgers: leds.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+        });
+      }
+    }
+    return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredLedgers, groupInfoMap]);
+  }, [filteredLedgers, sortedGroups]);
 
-  // ── Grouped TB: BS-first, group headers with totals, indented ledgers ────────
+  // ── Grouped TB: same hierarchy order as sortedGroups, group totals ───────────
   const groupedTB = useMemo(() => {
     const byGroup = new Map<string, TallyTB[]>();
     for (const r of filteredTB) {
-      const grp = r.parent_group || "Primary";
+      const grp = r.parent_group || "";
       if (!byGroup.has(grp)) byGroup.set(grp, []);
       byGroup.get(grp)!.push(r);
     }
-    const groupNames = [...byGroup.keys()];
-    groupNames.sort((a, b) => {
-      const aRev = isRevenueGroup(a);
-      const bRev = isRevenueGroup(b);
-      if (aRev !== bRev) return aRev ? 1 : -1;
-      return a.localeCompare(b);
-    });
-    return groupNames.map(grp => {
-      const rows = byGroup.get(grp)!.sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
-      const netOp = rows.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
-      const netCl = rows.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
-      return {
-        groupName: grp,
-        isRevenue: isRevenueGroup(grp),
-        rows,
-        openingTotal: Math.abs(netOp),
-        openingTotalType: netOp >= 0 ? "Dr" : "Cr",
-        closingTotal: Math.abs(netCl),
-        closingTotalType: netCl >= 0 ? "Dr" : "Cr",
-      };
-    });
+    const result: Array<{ groupName: string; isRevenue: boolean; rows: TallyTB[]; openingTotal: number; openingTotalType: string; closingTotal: number; closingTotalType: string }> = [];
+    for (const { group: g } of sortedGroups) {
+      const rows = byGroup.get(g.group_name);
+      if (!rows || rows.length === 0) continue;
+      const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+      const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
+      result.push({ groupName: g.group_name, isRevenue: g.is_revenue, rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
+    }
+    // Fallback for TB rows whose group isn't in sortedGroups
+    const placed = new Set(result.map(r => r.groupName));
+    for (const [grp, rows] of byGroup.entries()) {
+      if (!placed.has(grp)) {
+        const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+        const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+        const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
+        result.push({ groupName: grp, isRevenue: isRevenueGroup(grp), rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
+      }
+    }
+    return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredTB, groupInfoMap]);
+  }, [filteredTB, sortedGroups]);
 
   // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
@@ -680,10 +693,10 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {groupedLedgers.map(({ groupName, isRevenue, ledgers: grpLedgers }) => (
+                      {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => (
                         <>
                           <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
-                            <TableCell colSpan={5} className="py-1.5 px-4">
+                            <TableCell colSpan={5} className="py-1.5" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
                               <span className={cn("text-[11px] font-semibold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
                                 {decodeHtml(groupName) || "—"}
                               </span>
@@ -694,7 +707,7 @@ export default function TallySyncPage() {
                           </TableRow>
                           {grpLedgers.map(l => (
                             <TableRow key={l.id} className="text-xs">
-                              <TableCell className="font-medium pl-6">{decodeHtml(l.ledger_name)}</TableCell>
+                              <TableCell className="font-medium" style={{ paddingLeft: `${depth * 16 + 32}px` }}>{decodeHtml(l.ledger_name)}</TableCell>
                               <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
                               <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
                                 {l.opening_type}
