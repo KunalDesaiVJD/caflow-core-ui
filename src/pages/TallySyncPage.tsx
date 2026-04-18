@@ -60,6 +60,17 @@ interface TallyTB {
   balance_type: string;
 }
 
+interface TallyVoucher {
+  id: string;
+  voucher_date: string;
+  voucher_type: string;
+  voucher_number: string;
+  party_ledger: string;
+  amount: number;
+  dr_cr: string;
+  narration: string;
+}
+
 interface RowCounts {
   groups: number;
   ledgers: number;
@@ -68,6 +79,14 @@ interface RowCounts {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function decodeHtml(str: string | null | undefined): string {
+  if (!str) return "";
+  return str
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&#\d+;/g, "");   // strip remaining numeric entities like &#4;
+}
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
@@ -112,6 +131,7 @@ export default function TallySyncPage() {
   const [groups, setGroups]         = useState<TallyGroup[]>([]);
   const [ledgers, setLedgers]       = useState<TallyLedger[]>([]);
   const [tbRows, setTbRows]         = useState<TallyTB[]>([]);
+  const [vouchers, setVouchers]     = useState<TallyVoucher[]>([]);
   const [rowCounts, setRowCounts]   = useState<RowCounts>({ groups: 0, ledgers: 0, trial_balance: 0, vouchers: 0 });
   const [tallyEngId, setTallyEngId]   = useState<string | null>(null);
   const [tallyFy, setTallyFy]         = useState<string | null>(null);
@@ -119,9 +139,10 @@ export default function TallySyncPage() {
   const [syncing, setSyncing]       = useState(false);
   const [pendingRequest, setPendingRequest] = useState(false);
 
-  const [ledgerSearch, setLedgerSearch] = useState("");
-  const [groupSearch, setGroupSearch]   = useState("");
-  const [tbSearch, setTbSearch]         = useState("");
+  const [ledgerSearch, setLedgerSearch]   = useState("");
+  const [groupSearch, setGroupSearch]     = useState("");
+  const [tbSearch, setTbSearch]           = useState("");
+  const [voucherSearch, setVoucherSearch] = useState("");
 
   // ── Load all data ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -186,13 +207,14 @@ export default function TallySyncPage() {
       setGroups([]);
       setLedgers([]);
       setTbRows([]);
+      setVouchers([]);
       setRowCounts({ groups: 0, ledgers: 0, trial_balance: 0, vouchers: 0 });
       setPendingRequest(false);
       setLoading(false);
       return;
     }
 
-    const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData] = await Promise.all([
+    const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData, vchData] = await Promise.all([
       supabase.from("sync_batches" as any).select("*").eq("engagement_id", engId).order("started_at", { ascending: false }).limit(20),
       supabase.from("tally_groups" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_ledgers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
@@ -201,6 +223,7 @@ export default function TallySyncPage() {
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
       supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", engId).order("ledger_name").limit(2000),
       supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
+      supabase.from("tally_vouchers" as any).select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration").eq("engagement_id", engId).order("voucher_date", { ascending: false }).limit(5000),
     ]);
 
     if (batchRes.data) setBatches(batchRes.data as SyncBatch[]);
@@ -211,22 +234,30 @@ export default function TallySyncPage() {
       vouchers: (vchRes as any).count ?? 0,
     });
     if (grpData.data) setGroups(grpData.data as TallyGroup[]);
-    if (ledData.data) setLedgers(ledData.data as TallyLedger[]);
 
-    // TB: prefer tally_trial_balance; fall back to tally_ledgers shape
-    if (tbData.data && tbData.data.length > 0) {
-      setTbRows(tbData.data as TallyTB[]);
-    } else if (ledData.data && ledData.data.length > 0) {
-      setTbRows((ledData.data as TallyLedger[]).map(l => ({
-        id: l.id,
-        ledger_name: l.ledger_name,
-        parent_group: l.parent_group,
-        opening_balance: l.opening_balance,
-        opening_type: l.opening_type,
-        closing_balance: l.closing_balance,
-        balance_type: l.closing_type,
-      })));
+    // Filter out zero-balance ledgers
+    if (ledData.data) {
+      setLedgers((ledData.data as TallyLedger[]).filter(l => l.closing_balance > 0 || l.opening_balance > 0));
     }
+
+    // TB: prefer tally_trial_balance; fall back to tally_ledgers. Filter zeros.
+    if (tbData.data && tbData.data.length > 0) {
+      setTbRows((tbData.data as TallyTB[]).filter(r => r.closing_balance > 0 || r.opening_balance > 0));
+    } else if (ledData.data && ledData.data.length > 0) {
+      setTbRows((ledData.data as TallyLedger[])
+        .filter(l => l.closing_balance > 0 || l.opening_balance > 0)
+        .map(l => ({
+          id: l.id,
+          ledger_name: l.ledger_name,
+          parent_group: l.parent_group,
+          opening_balance: l.opening_balance,
+          opening_type: l.opening_type,
+          closing_balance: l.closing_balance,
+          balance_type: l.closing_type,
+        })));
+    }
+
+    if (vchData.data) setVouchers(vchData.data as TallyVoucher[]);
 
     const { data: pending } = await supabase
       .from("sync_requests" as any)
@@ -271,18 +302,26 @@ export default function TallySyncPage() {
 
   // ── Filtered views ────────────────────────────────────────────────────────────
   const filteredGroups  = groups.filter(g =>
-    !groupSearch || g.group_name.toLowerCase().includes(groupSearch.toLowerCase()) ||
-    (g.parent_group ?? "").toLowerCase().includes(groupSearch.toLowerCase())
+    !groupSearch || decodeHtml(g.group_name).toLowerCase().includes(groupSearch.toLowerCase()) ||
+    decodeHtml(g.parent_group ?? "").toLowerCase().includes(groupSearch.toLowerCase())
   );
 
   const filteredLedgers = ledgers.filter(l =>
-    !ledgerSearch || l.ledger_name.toLowerCase().includes(ledgerSearch.toLowerCase()) ||
-    (l.parent_group ?? "").toLowerCase().includes(ledgerSearch.toLowerCase())
+    !ledgerSearch || decodeHtml(l.ledger_name).toLowerCase().includes(ledgerSearch.toLowerCase()) ||
+    decodeHtml(l.parent_group ?? "").toLowerCase().includes(ledgerSearch.toLowerCase())
   );
 
   const filteredTB = tbRows.filter(r =>
-    !tbSearch || r.ledger_name.toLowerCase().includes(tbSearch.toLowerCase()) ||
-    (r.parent_group ?? "").toLowerCase().includes(tbSearch.toLowerCase())
+    !tbSearch || decodeHtml(r.ledger_name).toLowerCase().includes(tbSearch.toLowerCase()) ||
+    decodeHtml(r.parent_group ?? "").toLowerCase().includes(tbSearch.toLowerCase())
+  );
+
+  const filteredVouchers = vouchers.filter(v =>
+    !voucherSearch ||
+    decodeHtml(v.party_ledger).toLowerCase().includes(voucherSearch.toLowerCase()) ||
+    v.voucher_type.toLowerCase().includes(voucherSearch.toLowerCase()) ||
+    (v.voucher_number ?? "").toLowerCase().includes(voucherSearch.toLowerCase()) ||
+    decodeHtml(v.narration).toLowerCase().includes(voucherSearch.toLowerCase())
   );
 
   // TB totals
@@ -370,6 +409,7 @@ export default function TallySyncPage() {
           <TabsTrigger value="trial-balance">Trial Balance</TabsTrigger>
           <TabsTrigger value="ledgers">Ledgers ({rowCounts.ledgers.toLocaleString()})</TabsTrigger>
           <TabsTrigger value="groups">Groups ({rowCounts.groups})</TabsTrigger>
+          <TabsTrigger value="vouchers">Vouchers ({rowCounts.vouchers.toLocaleString()})</TabsTrigger>
           <TabsTrigger value="overview">Sync Overview</TabsTrigger>
         </TabsList>
 
@@ -414,8 +454,8 @@ export default function TallySyncPage() {
                       <TableBody>
                         {filteredTB.map(r => (
                           <TableRow key={r.id} className="text-xs">
-                            <TableCell className="font-medium">{r.ledger_name}</TableCell>
-                            <TableCell className="text-muted-foreground">{r.parent_group || "—"}</TableCell>
+                            <TableCell className="font-medium">{decodeHtml(r.ledger_name)}</TableCell>
+                            <TableCell className="text-muted-foreground">{decodeHtml(r.parent_group) || "—"}</TableCell>
                             <TableCell className="text-right text-blue-700">
                               {r.opening_type === "Dr" && r.opening_balance > 0 ? fmtAmt(r.opening_balance) : "—"}
                             </TableCell>
@@ -483,8 +523,8 @@ export default function TallySyncPage() {
                     <TableBody>
                       {filteredLedgers.map(l => (
                         <TableRow key={l.id} className="text-xs">
-                          <TableCell className="font-medium">{l.ledger_name}</TableCell>
-                          <TableCell className="text-muted-foreground">{l.parent_group || "—"}</TableCell>
+                          <TableCell className="font-medium">{decodeHtml(l.ledger_name)}</TableCell>
+                          <TableCell className="text-muted-foreground">{decodeHtml(l.parent_group) || "—"}</TableCell>
                           <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
                           <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
                             {l.opening_type}
@@ -538,15 +578,71 @@ export default function TallySyncPage() {
                     <TableBody>
                       {filteredGroups.map(g => (
                         <TableRow key={g.id} className="text-xs">
-                          <TableCell className="font-medium">{g.group_name}</TableCell>
-                          <TableCell className="text-muted-foreground">{g.parent_group || "—"}</TableCell>
-                          <TableCell className="text-muted-foreground">{g.primary_group || "—"}</TableCell>
+                          <TableCell className="font-medium">{decodeHtml(g.group_name)}</TableCell>
+                          <TableCell className="text-muted-foreground">{decodeHtml(g.parent_group) || "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">{decodeHtml(g.primary_group) || "—"}</TableCell>
                           <TableCell className="text-center">
                             {g.is_revenue ? <Badge variant="outline" className="text-emerald-600 border-emerald-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                           <TableCell className="text-center">
                             {g.is_primary ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Vouchers Tab ──────────────────────────────────────────────── */}
+        <TabsContent value="vouchers">
+          <Card>
+            <CardHeader className="pb-3 flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Vouchers</CardTitle>
+                <CardDescription>{rowCounts.vouchers.toLocaleString()} vouchers from Tally</CardDescription>
+              </div>
+              <div className="relative w-64">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input placeholder="Search party / type / narration…" className="pl-8 h-8 text-sm" value={voucherSearch} onChange={e => setVoucherSearch(e.target.value)} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+              ) : filteredVouchers.length === 0 ? (
+                <div className="p-6 text-sm text-muted-foreground">
+                  {hasData ? "No results for search." : "No vouchers — run the Tally sync agent first."}
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[560px]">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-background z-10">
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>No.</TableHead>
+                        <TableHead className="w-[30%]">Party Ledger</TableHead>
+                        <TableHead className="text-right font-semibold">Amount</TableHead>
+                        <TableHead className="text-center">Dr/Cr</TableHead>
+                        <TableHead className="w-[20%]">Narration</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredVouchers.map(v => (
+                        <TableRow key={v.id} className="text-xs">
+                          <TableCell className="whitespace-nowrap">{v.voucher_date}</TableCell>
+                          <TableCell>{v.voucher_type}</TableCell>
+                          <TableCell className="text-muted-foreground">{v.voucher_number || "—"}</TableCell>
+                          <TableCell className="font-medium">{decodeHtml(v.party_ledger) || "—"}</TableCell>
+                          <TableCell className="text-right font-semibold">{fmtAmt(v.amount)}</TableCell>
+                          <TableCell className="text-center">
+                            <span className={cn("text-[10px] font-bold", v.dr_cr === "Cr" ? "text-rose-600" : "text-blue-700")}>{v.dr_cr}</span>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground truncate max-w-[180px]">{decodeHtml(v.narration) || "—"}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
