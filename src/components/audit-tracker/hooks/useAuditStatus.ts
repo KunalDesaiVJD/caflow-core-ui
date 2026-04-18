@@ -143,7 +143,9 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     if (selectedFY) {
       let engQ = (supabase as any)
         .from("audit_engagements")
-        .select("id, client_id, financial_year, audit_type, audit_firm_id, partner_id, status")
+        // NOTE: partner_name is stored directly on the engagement (the dialog saves it as text).
+        // partner_id FK is also stored when available — we use whichever is populated.
+        .select("id, client_id, financial_year, audit_type, audit_firm_id, partner_id, partner_name, status")
         .eq("financial_year", selectedFY)
         .neq("status", "archived");
       if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
@@ -162,7 +164,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             .map((c: any) => [c.id, c.name])
         );
 
-        // Resolve audit firm and partner names
+        // Resolve audit firm names (always via FK)
+        // Resolve partner names: prefer partner_id → users.name; fall back to partner_name text field
         const firmIds    = [...new Set((engData as any[]).map((e: any) => e.audit_firm_id).filter(Boolean))];
         const partnerIds = [...new Set((engData as any[]).map((e: any) => e.partner_id).filter(Boolean))];
         const [{ data: firmRows }, { data: partnerRows }] = await Promise.all([
@@ -176,12 +179,19 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         const firmNameMap    = new Map((firmRows    || []).map((f: any) => [f.id, f.name]));
         const partnerNameMap = new Map((partnerRows || []).map((p: any) => [p.id, p.name]));
 
-        // Build engagementInfoByClient (one entry per client — first eng wins)
+        // Build engagementInfoByClient (one entry per client — first eng wins).
+        // Partner resolution chain:
+        //   1. partner_id → users table (most reliable, available when set)
+        //   2. partner_name text column (used when dialog only stored the name, not the FK)
         for (const eng of (engData as any[])) {
           if (!eng.client_id || engagementInfoByClient.has(eng.client_id)) continue;
+          const resolvedPartner =
+            (partnerNameMap.get(eng.partner_id) as string | undefined) ??
+            (eng.partner_name as string | null | undefined) ??
+            null;
           engagementInfoByClient.set(eng.client_id, {
             firm:    (firmNameMap.get(eng.audit_firm_id) as string | undefined) ?? null,
-            partner: (partnerNameMap.get(eng.partner_id) as string | undefined) ?? null,
+            partner: resolvedPartner,
           });
         }
 
@@ -262,25 +272,39 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       if (!isSuperadmin) planQ = planQ.eq("firm_id", firmId);
       const { data: planData } = await planQ;
 
-      // Build a quick lookup: client_id → planning row (used for both
-      // backfilling audit_employees on existing rows AND creating virtual
-      // rows for clients that are only in planning).
-      const planByClient = new Map<string, any>();
+      // Build lookup: client_id → aggregated unique employee names across ALL
+      // planning entries (a client may have multiple visits with different staff).
+      // Also keep the first planning entry for date/metadata on virtual rows.
+      const empByClient  = new Map<string, string>();  // client_id → "Jay, Umang, Yatin"
+      const planByClient = new Map<string, any>();     // client_id → first plan entry
       for (const plan of ((planData as any[]) || [])) {
-        if (plan.client_id && !planByClient.has(plan.client_id)) {
-          planByClient.set(plan.client_id, plan);
+        if (!plan.client_id) continue;
+        if (!planByClient.has(plan.client_id)) planByClient.set(plan.client_id, plan);
+        // Accumulate employee names across all entries
+        const names: string[] = Array.isArray(plan.employee_names)
+          ? (plan.employee_names as string[]).filter(Boolean)
+          : [];
+        if (names.length) {
+          const existing = empByClient.get(plan.client_id);
+          const merged   = existing ? existing + ", " + names.join(", ") : names.join(", ");
+          empByClient.set(plan.client_id, merged);
         }
       }
+      // Deduplicate employee names per client (same person may appear in multiple visits)
+      for (const [cid, raw] of empByClient) {
+        const unique = [...new Set(raw.split(", ").map(n => n.trim()).filter(Boolean))].join(", ");
+        empByClient.set(cid, unique);
+      }
 
-      // Backfill audit_employees on existing rows that are missing it
+      // Backfill audit_employees on ALL rows (always refresh from planning so
+      // the latest staff assignments are shown — even if the row was saved earlier)
       statusRows = statusRows.map(r => {
-        if (r.audit_employees || !r.client_id) return r;
-        const plan = planByClient.get(r.client_id);
-        if (!plan) return r;
-        const empNames = Array.isArray(plan.employee_names)
-          ? (plan.employee_names as string[]).join(", ")
-          : (plan.employee_names ?? null);
-        return empNames ? { ...r, audit_employees: empNames } : r;
+        if (!r.client_id) return r;
+        const empNames = empByClient.get(r.client_id) ?? null;
+        // Only overwrite if planning has actual data, so manual edits survive
+        // when no planning entries exist for this client
+        if (!empNames) return r;
+        return { ...r, audit_employees: empNames };
       });
 
       // Refresh the set — may have grown after step 3
@@ -300,9 +324,11 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
           party_name:                   plan.client_name ?? null,
           physical_audit_conducted:     "No",
           accounting_data:              "No",
-          audit_employees:              Array.isArray(plan.employee_names)
-                                          ? (plan.employee_names as string[]).join(", ")
-                                          : (plan.employee_names ?? null),
+          audit_employees:              empByClient.get(plan.client_id) ?? (
+                                          Array.isArray(plan.employee_names)
+                                            ? (plan.employee_names as string[]).filter(Boolean).join(", ") || null
+                                            : (plan.employee_names ?? null)
+                                        ),
           audit_report_prepared_by:     null,
           audit_status:                 "Scheduled",
           audit_status_other:           null,

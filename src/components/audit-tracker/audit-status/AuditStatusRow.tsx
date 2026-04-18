@@ -409,7 +409,7 @@ export default function AuditStatusRow({
         {srNo || <span className="text-indigo-400 text-[10px]">new</span>}
       </TCell>
 
-      {/* 2 · Party Name (tooltip shows audit employees / firm / partner on hover) */}
+      {/* 2 · Party Name (hover card shows audit employees / firm / partner) */}
       <TCell className="min-w-[140px] sticky left-10 z-10 bg-card">
         {editing ? (
           <ClientCombobox
@@ -419,18 +419,35 @@ export default function AuditStatusRow({
             placeholder="Search party…"
           />
         ) : (
-          <span
-            className="font-medium text-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
-            title={
-              [
-                `Audit Employees: ${row.audit_employees || "—"}`,
-                `Firm: ${row.firm || "—"}`,
-                `Partner: ${row.partner || "—"}`,
-              ].join("\n")
-            }
-          >
-            {row.party_name || "—"}
-          </span>
+          <div className="relative group/partyname inline-block max-w-full">
+            <span className="font-medium text-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 truncate block">
+              {row.party_name || "—"}
+            </span>
+            {/* Hover card — positioned below the cell, z-50 so it floats above table */}
+            <div className={cn(
+              "absolute left-0 top-full mt-1 z-50 hidden group-hover/partyname:block",
+              "w-60 rounded-md border border-border bg-popover shadow-lg p-2.5 space-y-1.5",
+            )}>
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Audit Employees</p>
+                <p className="text-xs text-foreground">
+                  {row.audit_employees || <span className="italic text-muted-foreground">Not yet planned</span>}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Audit Firm</p>
+                <p className="text-xs text-foreground">
+                  {row.firm || <span className="italic text-muted-foreground">Not assigned</span>}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Partner</p>
+                <p className="text-xs text-foreground">
+                  {row.partner || <span className="italic text-muted-foreground">Not assigned</span>}
+                </p>
+              </div>
+            </div>
+          </div>
         )}
       </TCell>
 
