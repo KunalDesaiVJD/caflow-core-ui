@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { useAuth } from "@/hooks/useAuth";
@@ -328,6 +328,92 @@ export default function TallySyncPage() {
   const tbDrTotal = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
   const tbCrTotal = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
 
+  // ── Group map for BS/PL classification ───────────────────────────────────────
+  const groupInfoMap = useMemo(() => {
+    const map = new Map<string, TallyGroup>();
+    groups.forEach(g => map.set(g.group_name, g));
+    return map;
+  }, [groups]);
+
+  function getPrimaryGroup(groupName: string): TallyGroup | null {
+    let g = groupInfoMap.get(groupName);
+    const visited = new Set<string>();
+    while (g && !g.is_primary && !visited.has(g.group_name)) {
+      visited.add(g.group_name);
+      if (!g.parent_group) break;
+      g = groupInfoMap.get(g.parent_group);
+    }
+    return g ?? null;
+  }
+
+  function isRevenueGroup(groupName: string): boolean {
+    return getPrimaryGroup(groupName)?.is_revenue ?? false;
+  }
+
+  // ── Grouped ledgers: BS first, then PL; group headers ────────────────────────
+  const groupedLedgers = useMemo(() => {
+    const byGroup = new Map<string, TallyLedger[]>();
+    for (const l of filteredLedgers) {
+      const grp = l.parent_group || "";
+      if (!byGroup.has(grp)) byGroup.set(grp, []);
+      byGroup.get(grp)!.push(l);
+    }
+    const groupNames = [...byGroup.keys()];
+    groupNames.sort((a, b) => {
+      const aRev = isRevenueGroup(a);
+      const bRev = isRevenueGroup(b);
+      if (aRev !== bRev) return aRev ? 1 : -1;
+      return a.localeCompare(b);
+    });
+    return groupNames.map(grp => ({
+      groupName: grp,
+      isRevenue: isRevenueGroup(grp),
+      ledgers: byGroup.get(grp)!.sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredLedgers, groupInfoMap]);
+
+  // ── Sorted groups: primary first, BS before PL, sub-groups under parent ──────
+  const sortedGroups = useMemo(() => {
+    const primaries = filteredGroups.filter(g => g.is_primary);
+    const subs = filteredGroups.filter(g => !g.is_primary);
+
+    primaries.sort((a, b) => {
+      const aBs = a.is_revenue ? 1 : 0;
+      const bBs = b.is_revenue ? 1 : 0;
+      if (aBs !== bBs) return aBs - bBs;
+      return a.group_name.localeCompare(b.group_name);
+    });
+
+    const childrenMap = new Map<string, TallyGroup[]>();
+    for (const sub of subs) {
+      const parent = sub.parent_group ?? "";
+      if (!childrenMap.has(parent)) childrenMap.set(parent, []);
+      childrenMap.get(parent)!.push(sub);
+    }
+
+    function flattenGroup(g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> {
+      const result: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
+      const children = (childrenMap.get(g.group_name) ?? []).sort((a, b) => a.group_name.localeCompare(b.group_name));
+      for (const child of children) {
+        result.push(...flattenGroup(child, depth + 1));
+      }
+      return result;
+    }
+
+    const result: Array<{ group: TallyGroup; depth: number }> = [];
+    for (const primary of primaries) {
+      result.push(...flattenGroup(primary, 0));
+    }
+    // Orphans (sub-groups whose parent isn't in the list)
+    const inResult = new Set(result.map(r => r.group.group_name));
+    for (const g of subs) {
+      if (!inResult.has(g.group_name)) result.push({ group: g, depth: 1 });
+    }
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredGroups, groupInfoMap]);
+
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
       {/* Header */}
@@ -513,7 +599,6 @@ export default function TallySyncPage() {
                     <TableHeader className="sticky top-0 bg-background z-10">
                       <TableRow>
                         <TableHead className="w-[40%]">Ledger Name</TableHead>
-                        <TableHead>Group</TableHead>
                         <TableHead className="text-right">Opening</TableHead>
                         <TableHead className="text-right">Dr/Cr</TableHead>
                         <TableHead className="text-right font-semibold">Closing</TableHead>
@@ -521,19 +606,32 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredLedgers.map(l => (
-                        <TableRow key={l.id} className="text-xs">
-                          <TableCell className="font-medium">{decodeHtml(l.ledger_name)}</TableCell>
-                          <TableCell className="text-muted-foreground">{decodeHtml(l.parent_group) || "—"}</TableCell>
-                          <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
-                          <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
-                            {l.opening_type}
-                          </TableCell>
-                          <TableCell className="text-right font-semibold">{fmtAmt(l.closing_balance)}</TableCell>
-                          <TableCell className={cn("text-right text-xs font-semibold", l.closing_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
-                            {l.closing_type}
-                          </TableCell>
-                        </TableRow>
+                      {groupedLedgers.map(({ groupName, isRevenue, ledgers: grpLedgers }) => (
+                        <>
+                          <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
+                            <TableCell colSpan={5} className="py-1.5 px-4">
+                              <span className={cn("text-[11px] font-semibold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                {decodeHtml(groupName) || "—"}
+                              </span>
+                              <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                {isRevenue ? "P&L" : "B/S"}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                          {grpLedgers.map(l => (
+                            <TableRow key={l.id} className="text-xs">
+                              <TableCell className="font-medium pl-6">{decodeHtml(l.ledger_name)}</TableCell>
+                              <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
+                              <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
+                                {l.opening_type}
+                              </TableCell>
+                              <TableCell className="text-right font-semibold">{fmtAmt(l.closing_balance)}</TableCell>
+                              <TableCell className={cn("text-right text-xs font-semibold", l.closing_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
+                                {l.closing_type}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </>
                       ))}
                     </TableBody>
                   </Table>
@@ -576,13 +674,22 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredGroups.map(g => (
-                        <TableRow key={g.id} className="text-xs">
-                          <TableCell className="font-medium">{decodeHtml(g.group_name)}</TableCell>
+                      {sortedGroups.map(({ group: g, depth }) => (
+                        <TableRow key={g.id} className={cn("text-xs", g.is_primary && "bg-muted/40 font-semibold")}>
+                          <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
+                            <span className={cn(g.is_primary ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
+                              {decodeHtml(g.group_name)}
+                            </span>
+                            {g.is_primary && (
+                              <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                {g.is_revenue ? "P&L" : "B/S"}
+                              </Badge>
+                            )}
+                          </TableCell>
                           <TableCell className="text-muted-foreground">{decodeHtml(g.parent_group) || "—"}</TableCell>
                           <TableCell className="text-muted-foreground">{decodeHtml(g.primary_group) || "—"}</TableCell>
                           <TableCell className="text-center">
-                            {g.is_revenue ? <Badge variant="outline" className="text-emerald-600 border-emerald-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
+                            {g.is_revenue ? <Badge variant="outline" className="text-orange-600 border-orange-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                           <TableCell className="text-center">
                             {g.is_primary ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
