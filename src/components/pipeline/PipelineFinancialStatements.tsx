@@ -113,6 +113,82 @@ function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: num
 const FLAT_ITEMS = flattenTree(SCHEDULE_III_DIV_I);
 
 // ═══════════════════════════════════════
+// Non-Corporate Entity detection
+// Exact values stored in audit_engagements.entity_type  (see StepBasicInfo.tsx)
+// ═══════════════════════════════════════
+const NON_CORPORATE_TYPES: string[] = [
+  "Individual",
+  "Proprietorship",
+  "Sole Proprietorship",
+  "Partnership",
+  "LLP",
+  "Limited Liability Partnership",
+  "HUF",
+  "Hindu Undivided Family",
+  "Trust",
+  "AOP",
+  "Association of Persons",
+  "BOI",
+  "Body of Individuals",
+];
+
+// ═══════════════════════════════════════
+// NCE Balance Sheet + P&L row definitions
+// (used only when isNonCorporate === true; SCHEDULE_III_DIV_I is never touched)
+// Sections are prefixed "NCE_BS_" / "NCE_PL_" — no collision with "BS_" / "PL_"
+// ═══════════════════════════════════════
+const NCE_FS_ITEMS: FSLineItem[] = [
+  // ── NCE BALANCE SHEET — LIABILITIES ──
+  { code: "NCE_BS_LIA", name: "LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", children: [
+    { code: "NCE_CAP",  name: "Capital Account(s)",       noteRef: 1, section: "NCE_BS_liabilities" },
+    { code: "NCE_RESV", name: "Reserves & Surplus",       noteRef: null, section: "NCE_BS_liabilities" },
+    { code: "NCE_LTB",  name: "Loans",                    noteRef: null, section: "NCE_BS_liabilities", children: [
+      { code: "NCE_LTB_SEC",   name: "Secured Loans",     noteRef: null, section: "NCE_BS_liabilities" },
+      { code: "NCE_LTB_UNSEC", name: "Unsecured Loans",   noteRef: null, section: "NCE_BS_liabilities" },
+    ]},
+    { code: "NCE_CL",   name: "Current Liabilities",      noteRef: null, section: "NCE_BS_liabilities", children: [
+      { code: "NCE_CL_TP",   name: "Trade Payables (Creditors)",    noteRef: null, section: "NCE_BS_liabilities" },
+      { code: "NCE_CL_OCL",  name: "Other Current Liabilities",     noteRef: null, section: "NCE_BS_liabilities" },
+      { code: "NCE_CL_PROV", name: "Provisions",                    noteRef: null, section: "NCE_BS_liabilities" },
+    ]},
+  ]},
+  // ── NCE BALANCE SHEET — ASSETS ──
+  { code: "NCE_BS_AST", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", children: [
+    { code: "NCE_FA",  name: "Fixed Assets",               noteRef: null, section: "NCE_BS_assets", children: [
+      { code: "NCE_FA_TAN", name: "Tangible Assets",       noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_FA_INT", name: "Intangible Assets",     noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_FA_WIP", name: "Capital Work-in-Progress", noteRef: null, section: "NCE_BS_assets" },
+    ]},
+    { code: "NCE_INV", name: "Investments",                noteRef: null, section: "NCE_BS_assets" },
+    { code: "NCE_CA",  name: "Current Assets",             noteRef: null, section: "NCE_BS_assets", children: [
+      { code: "NCE_CA_STOCK", name: "Inventories (Closing Stock)",     noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_CA_DR",    name: "Sundry Debtors (Trade Receivables)", noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_CA_CASH",  name: "Cash and Bank Balances",          noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_CA_LOANS", name: "Loans and Advances",              noteRef: null, section: "NCE_BS_assets" },
+      { code: "NCE_CA_OCA",   name: "Other Current Assets",            noteRef: null, section: "NCE_BS_assets" },
+    ]},
+  ]},
+  // ── NCE PROFIT & LOSS (TRADING & P&L) — INCOME ──
+  { code: "NCE_PL_INC", name: "INCOME", noteRef: null, section: "NCE_PL_income", children: [
+    { code: "NCE_REV_OPS", name: "Revenue from Business / Profession", noteRef: null, section: "NCE_PL_income" },
+    { code: "NCE_REV_OTH", name: "Other Income",                       noteRef: null, section: "NCE_PL_income" },
+  ]},
+  // ── NCE PROFIT & LOSS — EXPENDITURE ──
+  { code: "NCE_PL_EXP", name: "EXPENDITURE", noteRef: null, section: "NCE_PL_expenses", children: [
+    { code: "NCE_EXP_PURCH",  name: "Purchases / Cost of Materials",   noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_INV",    name: "Changes in Inventories",          noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_DIRECT", name: "Direct & Manufacturing Expenses", noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_EMP",    name: "Employee / Staff Costs",          noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_FIN",    name: "Finance Charges & Interest",      noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_DEPR",   name: "Depreciation",                    noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_ADM",    name: "Administrative Expenses",         noteRef: null, section: "NCE_PL_expenses" },
+    { code: "NCE_EXP_OTH",    name: "Other Expenses",                  noteRef: null, section: "NCE_PL_expenses" },
+  ]},
+];
+
+const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
+
+// ═══════════════════════════════════════
 // Props
 // ═══════════════════════════════════════
 interface PipelineFinancialStatementsProps {
@@ -133,6 +209,18 @@ export default function PipelineFinancialStatements({
 }: PipelineFinancialStatementsProps) {
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
+
+  // ─── Entity-type gate ─────────────────────────────────────────────────────
+  // Single source of truth: checks engagement.entity_type (set on the engagement)
+  // then falls back to clients.entity_type (set on the client record).
+  const entityType: string =
+    (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
+  const isNonCorporate: boolean = NON_CORPORATE_TYPES.includes(entityType);
+
+  // Active row tree and flat list — swaps between NCE and corporate at runtime.
+  // The corporate constants (SCHEDULE_III_DIV_I, FLAT_ITEMS) are never mutated.
+  const activeTree   = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
+  const activeFlatItems = isNonCorporate ? NCE_FLAT_ITEMS : FLAT_ITEMS;
 
   // ─── Override dialog state ───
   const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
@@ -282,25 +370,38 @@ export default function PipelineFinancialStatements({
       amounts[item.code] = total;
       return total;
     };
-    for (const item of SCHEDULE_III_DIV_I) {
+    // Use activeTree so NCE parent totals (NCE_BS_LIA, NCE_BS_AST, etc.) are computed
+    for (const item of activeTree) {
       computeTotal(item);
     }
 
     return amounts;
-  }, [tbAccounts, coaMapping, manualOverrides]);
+  }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
-  // ─── BS check ───
+  // ─── Corporate BS check + P&L summary (unchanged) ───
   const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
   const totalLiabilities =
     (computedAmounts["BS_EQ"] || 0) +
     (computedAmounts["BS_NCL"] || 0) +
     (computedAmounts["BS_CL"] || 0);
   const bsDiff = Math.round((totalAssets - totalLiabilities) * 100) / 100;
-
-  // ─── P&L summary ───
   const totalRevenue = (computedAmounts["PL_REV"] || 0);
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);
   const netProfit = Math.round((totalRevenue - totalExpenses) * 100) / 100;
+
+  // ─── NCE BS check + P&L summary ───
+  // NCE_BS_LIA and NCE_BS_AST are the computed parent totals from computedAmounts
+  const nceTotalLiabilities = computedAmounts["NCE_BS_LIA"] || 0;
+  const nceTotalAssets      = computedAmounts["NCE_BS_AST"] || 0;
+  const nceBsDiff           = Math.round((nceTotalAssets - nceTotalLiabilities) * 100) / 100;
+  const nceRevenue          = computedAmounts["NCE_PL_INC"] || 0;
+  const nceExpenses         = computedAmounts["NCE_PL_EXP"] || 0;
+  const nceNetProfit        = Math.round((nceRevenue - nceExpenses) * 100) / 100;
+
+  // ─── Active summary values (swap between NCE and corporate in JSX) ───
+  const activeBsDiff   = isNonCorporate ? nceBsDiff   : bsDiff;
+  const activeTotalAssets = isNonCorporate ? nceTotalAssets : totalAssets;
+  const activeNetProfit   = isNonCorporate ? nceNetProfit   : netProfit;
 
   // ─── Open override dialog ───
   const openOverride = (code: string, name: string) => {
@@ -337,7 +438,7 @@ export default function PipelineFinancialStatements({
         });
       };
 
-      for (const item of FLAT_ITEMS) addItem(item);
+      for (const item of activeFlatItems) addItem(item);
 
       const BATCH = 50;
       for (let i = 0; i < rows.length; i += BATCH) {
@@ -357,8 +458,11 @@ export default function PipelineFinancialStatements({
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
 
-    const bsItems = FLAT_ITEMS.filter(i => i.section.startsWith("BS_"));
-    const plItems = FLAT_ITEMS.filter(i => i.section.startsWith("PL_"));
+    // Use activeFlatItems + appropriate section prefix for NCE vs corporate
+    const bsPrefix = isNonCorporate ? "NCE_BS_" : "BS_";
+    const plPrefix = isNonCorporate ? "NCE_PL_" : "PL_";
+    const bsItems = activeFlatItems.filter(i => i.section.startsWith(bsPrefix));
+    const plItems = activeFlatItems.filter(i => i.section.startsWith(plPrefix));
 
     const toRows = (items: typeof bsItems) =>
       items.map(i => ({
@@ -487,7 +591,11 @@ export default function PipelineFinancialStatements({
           <h1 className="text-xl font-bold text-foreground">Stage 7 — Financial Statements</h1>
           <p className="text-sm text-muted-foreground">
             {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
-            {engagement.schedule_iii_division === "div_ii" ? "Ind AS (Div II)" : "Schedule III (Div I)"}
+            {isNonCorporate
+              ? entityType                                                             // e.g. "Partnership"
+              : engagement.schedule_iii_division === "div_ii"
+                ? "Ind AS (Div II)"
+                : "Schedule III (Div I)"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -506,24 +614,24 @@ export default function PipelineFinancialStatements({
 
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-3">
-        <Card className={cn(bsDiff === 0 ? "border-primary/30" : "border-destructive/30")}>
+        <Card className={cn(activeBsDiff === 0 ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
-            <p className={cn("text-2xl font-bold", bsDiff === 0 ? "text-primary" : "text-destructive")}>
-              {bsDiff === 0 ? "✓" : `₹${Math.abs(bsDiff).toLocaleString("en-IN")}`}
+            <p className={cn("text-2xl font-bold", activeBsDiff === 0 ? "text-primary" : "text-destructive")}>
+              {activeBsDiff === 0 ? "✓" : `₹${Math.abs(activeBsDiff).toLocaleString("en-IN")}`}
             </p>
             <p className="text-[10px] text-muted-foreground uppercase">BS Check</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-foreground">₹{Math.abs(totalAssets).toLocaleString("en-IN")}</p>
+            <p className="text-2xl font-bold text-foreground">₹{Math.abs(activeTotalAssets).toLocaleString("en-IN")}</p>
             <p className="text-[10px] text-muted-foreground uppercase">Total Assets</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <p className={cn("text-2xl font-bold", netProfit >= 0 ? "text-primary" : "text-destructive")}>
-              {netProfit >= 0 ? "+" : ""}₹{Math.abs(netProfit).toLocaleString("en-IN")}
+            <p className={cn("text-2xl font-bold", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
+              {activeNetProfit >= 0 ? "+" : ""}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}
             </p>
             <p className="text-[10px] text-muted-foreground uppercase">Net Profit / (Loss)</p>
           </CardContent>
@@ -567,14 +675,20 @@ export default function PipelineFinancialStatements({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {renderFSRows(FLAT_ITEMS.filter(i => i.section.startsWith("BS_")))}
+                  {renderFSRows(
+                    activeFlatItems.filter(i =>
+                      isNonCorporate
+                        ? i.section.startsWith("NCE_BS_")
+                        : i.section.startsWith("BS_")
+                    )
+                  )}
                 </TableBody>
               </Table>
             </div>
-            {bsDiff !== 0 && (
+            {activeBsDiff !== 0 && (
               <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
                 <AlertTriangle size={13} />
-                Balance Sheet is out of balance by ₹{Math.abs(bsDiff).toLocaleString("en-IN")}. Check COA mapping or apply manual overrides.
+                Balance Sheet is out of balance by ₹{Math.abs(activeBsDiff).toLocaleString("en-IN")}. Check COA mapping or apply manual overrides.
               </div>
             )}
           </TabsContent>
@@ -592,12 +706,18 @@ export default function PipelineFinancialStatements({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {renderFSRows(FLAT_ITEMS.filter(i => i.section.startsWith("PL_")))}
+                  {renderFSRows(
+                    activeFlatItems.filter(i =>
+                      isNonCorporate
+                        ? i.section.startsWith("NCE_PL_")
+                        : i.section.startsWith("PL_")
+                    )
+                  )}
                   {/* Net Profit / Loss summary row */}
                   <TableRow className="bg-muted/60 font-bold border-t-2">
                     <TableCell className="text-xs pl-2">NET PROFIT / (LOSS) FOR THE YEAR</TableCell>
-                    <TableCell className={cn("text-right text-xs font-mono tabular-nums", netProfit >= 0 ? "text-primary" : "text-destructive")}>
-                      {netProfit >= 0 ? "" : "("}₹{Math.abs(netProfit).toLocaleString("en-IN")}{netProfit < 0 ? ")" : ""}
+                    <TableCell className={cn("text-right text-xs font-mono tabular-nums", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
+                      {activeNetProfit >= 0 ? "" : "("}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}{activeNetProfit < 0 ? ")" : ""}
                     </TableCell>
                     <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">—</TableCell>
                     <TableCell />
@@ -607,11 +727,13 @@ export default function PipelineFinancialStatements({
             </div>
           </TabsContent>
 
-          {/* ── Cash Flow ── */}
+          {/* ── Cash Flow / Receipts & Payments ── */}
           <TabsContent value="cf" className="mt-3">
             <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
               <Droplets size={32} className="text-muted-foreground/40" />
-              <p className="text-sm font-medium text-muted-foreground">Cash Flow Statement</p>
+              <p className="text-sm font-medium text-muted-foreground">
+                {isNonCorporate ? "Receipts & Payments Account" : "Cash Flow Statement"}
+              </p>
               <p className="text-xs text-muted-foreground">Coming soon — will auto-derive from Balance Sheet movements</p>
             </div>
           </TabsContent>
