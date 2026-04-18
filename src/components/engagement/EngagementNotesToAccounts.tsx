@@ -12,6 +12,7 @@ import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties } f
 import { Json } from "@/integrations/supabase/types";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
+import { NCEPPESchedule } from "@/components/stage8/NCEPPESchedule";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -366,9 +367,9 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
           <NCEDetailedNotes engagementId={engagementId} engagement={engagement} client={client} />
         </TabsContent>
 
-        {/* Tab 4 — PPE Schedule (stub; full implementation TBD) */}
+        {/* Tab 4 — PPE Schedule */}
         <TabsContent value="ppe">
-          <NCEPPESchedule engagementId={engagementId} />
+          <NCEPPESchedule engagementId={engagementId} engagement={engagement} client={client} />
         </TabsContent>
       </Tabs>
     );
@@ -379,30 +380,8 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// NCE Tab stub components
-// Each accepts engagementId so full implementations can query Supabase directly.
-// Replace these shells with the real implementations as each tab is built.
+// NCE Tab implementations (all stubs replaced — real components below)
+// NCECapitalAccount — @/components/stage8/NCECapitalAccount
+// NCEDetailedNotes  — @/components/stage8/NCEDetailedNotes
+// NCEPPESchedule    — @/components/stage8/NCEPPESchedule
 // ═══════════════════════════════════════════════════════════════════════════
-
-function StubPlaceholder({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-20 gap-3 border rounded-lg bg-muted/20">
-      <FileText size={32} className="text-muted-foreground/40" />
-      <p className="text-sm font-medium text-muted-foreground">{title}</p>
-      <p className="text-xs text-muted-foreground">{description}</p>
-    </div>
-  );
-}
-
-// NCECapitalAccount  — imported from @/components/stage8/NCECapitalAccount  (real implementation)
-// NCEDetailedNotes   — imported from @/components/stage8/NCEDetailedNotes   (real implementation)
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function NCEPPESchedule({ engagementId }: { engagementId: string }) {
-  return (
-    <StubPlaceholder
-      title="PPE Schedule"
-      description="Property, Plant & Equipment depreciation schedule — coming soon"
-    />
-  );
-}
