@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
+import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -360,9 +361,9 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
           <NCECapitalAccount engagementId={engagementId} engagement={engagement} client={client} />
         </TabsContent>
 
-        {/* Tab 3 — Detailed Notes to Accounts (stub; full implementation TBD) */}
+        {/* Tab 3 — Detailed Notes to Accounts */}
         <TabsContent value="detailed-notes">
-          <NCEDetailedNotes engagementId={engagementId} />
+          <NCEDetailedNotes engagementId={engagementId} engagement={engagement} client={client} />
         </TabsContent>
 
         {/* Tab 4 — PPE Schedule (stub; full implementation TBD) */}
@@ -393,17 +394,8 @@ function StubPlaceholder({ title, description }: { title: string; description: s
   );
 }
 
-// NCECapitalAccount is imported from @/components/stage8/NCECapitalAccount (real implementation)
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function NCEDetailedNotes({ engagementId }: { engagementId: string }) {
-  return (
-    <StubPlaceholder
-      title="Notes to Accounts"
-      description="NCE-format notes (Note 2 onwards) — coming soon"
-    />
-  );
-}
+// NCECapitalAccount  — imported from @/components/stage8/NCECapitalAccount  (real implementation)
+// NCEDetailedNotes   — imported from @/components/stage8/NCEDetailedNotes   (real implementation)
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function NCEPPESchedule({ engagementId }: { engagementId: string }) {
