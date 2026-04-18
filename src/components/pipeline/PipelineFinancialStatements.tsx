@@ -253,7 +253,9 @@ export default function PipelineFinancialStatements({
   // then falls back to clients.entity_type (set on the client record).
   const entityType: string =
     (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
-  const isNonCorporate: boolean = NON_CORPORATE_TYPES.includes(entityType);
+  const isNonCorporate: boolean = NON_CORPORATE_TYPES.some(
+    t => t.toLowerCase() === entityType.toLowerCase()
+  );
 
   // Active row tree and flat list — swaps between NCE and corporate at runtime.
   // The corporate constants (SCHEDULE_III_DIV_I, FLAT_ITEMS) are never mutated.
