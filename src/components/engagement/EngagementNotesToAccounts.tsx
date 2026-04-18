@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Eye, FileText } from "lucide-react";
+import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
@@ -32,6 +33,26 @@ const STANDARD_NOTES = [
   { num: 43, title: "Details of Benami Property",           autoKey: "benami",       corporateOnly: false },
   { num: 44, title: "Events After Reporting Period",        autoKey: "subsequent",   corporateOnly: false },
   { num: 45, title: "Previous Year Figures",                autoKey: "previous_year",corporateOnly: false },
+];
+
+// Exact entity_type values stored in audit_engagements that indicate non-corporate.
+// isCompanyEntity() in entityUtils.ts is the canonical test for the corporate side;
+// this list covers the NCE side explicitly so the Stage 8 tab structure can be
+// activated without importing a utility that doesn't cover all NCE variants.
+const NON_CORPORATE_TYPES: string[] = [
+  "Partnership",
+  "LLP",
+  "Proprietorship",
+  "Sole Proprietorship",
+  "HUF",
+  "Trust",
+  "AOP",
+  "BOI",
+  "Individual",
+  "Hindu Undivided Family",
+  "Limited Liability Partnership",
+  "Association of Persons",
+  "Body of Individuals",
 ];
 
 interface NoteData {
@@ -185,8 +206,19 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
   };
 
   const current = notes[selectedNote];
+  const engagementId: string = engagement?.id || "";
 
-  return (
+  // ── NCE detection ─────────────────────────────────────────────────────────
+  // Checks engagement.entity_type first; falls back to client.entity_type.
+  // Corporate path (isNonCorporate === false) renders EXACTLY as before.
+  const entityType: string =
+    (engagement?.entity_type || client?.entity_type || "").trim();
+  const isNonCorporate: boolean = NON_CORPORATE_TYPES.includes(entityType);
+
+  // ── Shared editor body ─────────────────────────────────────────────────────
+  // Extracted so it can be placed inside a TabsContent (NCE) or returned
+  // directly (corporate) without duplicating JSX.
+  const noteEditorBody = (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -298,5 +330,94 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         )}
       </div>
     </div>
+  ); // end noteEditorBody
+
+  // ── NCE: wrap in 4-tab structure ──────────────────────────────────────────
+  if (isNonCorporate) {
+    return (
+      <Tabs defaultValue="notes" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="notes" className="gap-1.5">
+            <FileText size={13} /> Note 1
+          </TabsTrigger>
+          <TabsTrigger value="capital" className="gap-1.5">
+            <LayoutList size={13} /> Capital Account
+          </TabsTrigger>
+          <TabsTrigger value="detailed-notes" className="gap-1.5">
+            <Eye size={13} /> Notes to Accounts
+          </TabsTrigger>
+          <TabsTrigger value="ppe" className="gap-1.5">
+            <TableProperties size={13} /> PPE Schedule
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Tab 1 — existing accordion content, completely unchanged */}
+        <TabsContent value="notes">{noteEditorBody}</TabsContent>
+
+        {/* Tab 2 — Capital Account (stub; full implementation TBD) */}
+        <TabsContent value="capital">
+          <NCECapitalAccount engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 3 — Detailed Notes to Accounts (stub; full implementation TBD) */}
+        <TabsContent value="detailed-notes">
+          <NCEDetailedNotes engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 4 — PPE Schedule (stub; full implementation TBD) */}
+        <TabsContent value="ppe">
+          <NCEPPESchedule engagementId={engagementId} />
+        </TabsContent>
+      </Tabs>
+    );
+  }
+
+  // ── Corporate: return existing content directly — ZERO change ────────────
+  return noteEditorBody;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NCE Tab stub components
+// Each accepts engagementId so full implementations can query Supabase directly.
+// Replace these shells with the real implementations as each tab is built.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function StubPlaceholder({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 gap-3 border rounded-lg bg-muted/20">
+      <FileText size={32} className="text-muted-foreground/40" />
+      <p className="text-sm font-medium text-muted-foreground">{title}</p>
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function NCECapitalAccount({ engagementId }: { engagementId: string }) {
+  return (
+    <StubPlaceholder
+      title="Capital Account"
+      description="Partner-wise capital account schedules — coming soon"
+    />
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function NCEDetailedNotes({ engagementId }: { engagementId: string }) {
+  return (
+    <StubPlaceholder
+      title="Notes to Accounts"
+      description="NCE-format notes (Note 2 onwards) — coming soon"
+    />
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function NCEPPESchedule({ engagementId }: { engagementId: string }) {
+  return (
+    <StubPlaceholder
+      title="PPE Schedule"
+      description="Property, Plant & Equipment depreciation schedule — coming soon"
+    />
   );
 }
