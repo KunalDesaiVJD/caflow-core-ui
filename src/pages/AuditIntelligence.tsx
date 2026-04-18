@@ -29,7 +29,7 @@ import {
   Building2, FileText, Calculator, Eye, ClipboardCheck, Shield,
   BookMarked, Layers, Award, ChevronRight, Plus,
   CalendarDays, CheckCircle2, Circle, Loader2,
-  MoreVertical, Pencil, Trash2, ChevronsUpDown, Check
+  MoreVertical, Pencil, Trash2, ChevronsUpDown, Check, FileOutput
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,7 +37,8 @@ import { toast } from "sonner";
 const STAGES = [
   { num: 1,  label: "Engagement Setup",           icon: Building2      },
   { num: 2,  label: "Trial Balance Import",        icon: FileText       },
-  { num: 3,  label: "COA & Financial Statements",  icon: Calculator     },
+  { num: 3,  label: "COA Mapping",                 icon: Calculator     },
+  { num: 10, label: "Financial Statements",        icon: FileOutput     },
   { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
   { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
   { num: 6,  label: "Workpapers & Audit Sheet",    icon: Shield         },
@@ -245,7 +246,7 @@ export default function AuditIntelligence() {
 
   const stageStatuses = selectedEngagement?.stage_statuses || {};
   const completedStages = Object.values(stageStatuses).filter((s: any) => s === "complete").length;
-  const progressPct = Math.round((completedStages / 9) * 100);
+  const progressPct = Math.round((completedStages / 10) * 100);
 
   const getStageColor = (status: string) => {
     if (status === "complete") return "bg-emerald-500";
@@ -533,13 +534,13 @@ export default function AuditIntelligence() {
             </Card>
           </div>
 
-          {/* 9-Stage Audit Progress Tracker */}
+          {/* 10-Stage Audit Progress Tracker */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Audit Progress</CardTitle>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground">{completedStages}/9 stages</span>
+                  <span className="text-sm text-muted-foreground">{completedStages}/10 stages</span>
                   <span className="text-sm font-semibold text-foreground">{progressPct}%</span>
                 </div>
               </div>
@@ -547,7 +548,7 @@ export default function AuditIntelligence() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                {STAGES.map(stage => {
+                {STAGES.map((stage, idx) => {
                   const status = stageStatuses[String(stage.num)] || "not_started";
                   const Icon = stage.icon;
                   return (
@@ -565,7 +566,7 @@ export default function AuditIntelligence() {
                         "w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold",
                         getStageColor(status)
                       )}>
-                        {status === "complete" ? <CheckCircle2 size={16} /> : stage.num}
+                        {status === "complete" ? <CheckCircle2 size={16} /> : idx + 1}
                       </div>
                       <span className="text-[11px] font-medium text-center leading-tight text-foreground">{stage.label}</span>
                       <span className={cn("text-[9px] font-medium uppercase tracking-wider", getStageTextColor(status))}>
