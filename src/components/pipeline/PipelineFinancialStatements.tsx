@@ -138,55 +138,93 @@ const NON_CORPORATE_TYPES: string[] = [
 // Sections are prefixed "NCE_BS_" / "NCE_PL_" — no collision with "BS_" / "PL_"
 // ═══════════════════════════════════════
 const NCE_FS_ITEMS: FSLineItem[] = [
-  // ── NCE BALANCE SHEET — LIABILITIES ──
-  { code: "NCE_BS_LIA", name: "LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", children: [
-    { code: "NCE_CAP",  name: "Capital Account(s)",       noteRef: 1, section: "NCE_BS_liabilities" },
-    { code: "NCE_RESV", name: "Reserves & Surplus",       noteRef: null, section: "NCE_BS_liabilities" },
-    { code: "NCE_LTB",  name: "Loans",                    noteRef: null, section: "NCE_BS_liabilities", children: [
-      { code: "NCE_LTB_SEC",   name: "Secured Loans",     noteRef: null, section: "NCE_BS_liabilities" },
-      { code: "NCE_LTB_UNSEC", name: "Unsecured Loans",   noteRef: null, section: "NCE_BS_liabilities" },
+  // ── NCE BALANCE SHEET — EQUITY AND LIABILITIES ──
+  { code: "NCE_EL", name: "EQUITY AND LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", children: [
+    { code: "NCE_OWN", name: "(1) Owners Funds", noteRef: null, section: "NCE_BS_liabilities", children: [
+      { code: "NCE_CAP", name: "(a) Owners' Capital Account", noteRef: 2, section: "NCE_BS_liabilities" },
     ]},
-    { code: "NCE_CL",   name: "Current Liabilities",      noteRef: null, section: "NCE_BS_liabilities", children: [
-      { code: "NCE_CL_TP",   name: "Trade Payables (Creditors)",    noteRef: null, section: "NCE_BS_liabilities" },
-      { code: "NCE_CL_OCL",  name: "Other Current Liabilities",     noteRef: null, section: "NCE_BS_liabilities" },
-      { code: "NCE_CL_PROV", name: "Provisions",                    noteRef: null, section: "NCE_BS_liabilities" },
+    { code: "NCE_NCL", name: "(2) Non-Current Liabilities", noteRef: null, section: "NCE_BS_liabilities", children: [
+      { code: "NCE_LTB",  name: "(a) Long-term borrowings",       noteRef: 3, section: "NCE_BS_liabilities" },
+      { code: "NCE_OLTL", name: "(b) Other long-term liabilities", noteRef: 4, section: "NCE_BS_liabilities" },
+      { code: "NCE_LTP",  name: "(c) Long-term provisions",        noteRef: 5, section: "NCE_BS_liabilities" },
+    ]},
+    { code: "NCE_CL", name: "(3) Current Liabilities", noteRef: null, section: "NCE_BS_liabilities", children: [
+      { code: "NCE_STB", name: "(a) Short-term borrowings",      noteRef: 6, section: "NCE_BS_liabilities" },
+      { code: "NCE_TP",  name: "(b) Trade payables",             noteRef: 7, section: "NCE_BS_liabilities" },
+      { code: "NCE_OCL", name: "(c) Other current liabilities",  noteRef: 8, section: "NCE_BS_liabilities" },
+      { code: "NCE_STP", name: "(d) Short-term provisions",      noteRef: 9, section: "NCE_BS_liabilities" },
     ]},
   ]},
   // ── NCE BALANCE SHEET — ASSETS ──
-  { code: "NCE_BS_AST", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", children: [
-    { code: "NCE_FA",  name: "Fixed Assets",               noteRef: null, section: "NCE_BS_assets", children: [
-      { code: "NCE_FA_TAN", name: "Tangible Assets",       noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_FA_INT", name: "Intangible Assets",     noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_FA_WIP", name: "Capital Work-in-Progress", noteRef: null, section: "NCE_BS_assets" },
+  { code: "NCE_AST", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", children: [
+    { code: "NCE_NCA", name: "(1) Non-Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
+      { code: "NCE_PPE",   name: "(a)(i) Property, plant and equipment", noteRef: 10, section: "NCE_BS_assets" },
+      { code: "NCE_CWIP",  name: "(a)(ii) Capital work-in-progress",     noteRef: 11, section: "NCE_BS_assets" },
+      { code: "NCE_INTG",  name: "(a)(iii) Intangible assets",           noteRef: 12, section: "NCE_BS_assets" },
+      { code: "NCE_NCINV", name: "(b) Non-current investments",          noteRef: 13, section: "NCE_BS_assets" },
+      { code: "NCE_LTLA",  name: "(c) Long-term loans and advances",     noteRef: 14, section: "NCE_BS_assets" },
+      { code: "NCE_ONCA",  name: "(d) Other non-current assets",         noteRef: 15, section: "NCE_BS_assets" },
     ]},
-    { code: "NCE_INV", name: "Investments",                noteRef: null, section: "NCE_BS_assets" },
-    { code: "NCE_CA",  name: "Current Assets",             noteRef: null, section: "NCE_BS_assets", children: [
-      { code: "NCE_CA_STOCK", name: "Inventories (Closing Stock)",     noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_CA_DR",    name: "Sundry Debtors (Trade Receivables)", noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_CA_CASH",  name: "Cash and Bank Balances",          noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_CA_LOANS", name: "Loans and Advances",              noteRef: null, section: "NCE_BS_assets" },
-      { code: "NCE_CA_OCA",   name: "Other Current Assets",            noteRef: null, section: "NCE_BS_assets" },
+    { code: "NCE_CA", name: "(2) Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
+      { code: "NCE_CINV", name: "(a) Current investments",          noteRef: 16, section: "NCE_BS_assets" },
+      { code: "NCE_STCK", name: "(b) Inventories",                  noteRef: 17, section: "NCE_BS_assets" },
+      { code: "NCE_TR",   name: "(c) Trade receivables",            noteRef: 18, section: "NCE_BS_assets" },
+      { code: "NCE_CASH", name: "(d) Cash and bank balances",       noteRef: 19, section: "NCE_BS_assets" },
+      { code: "NCE_STLA", name: "(e) Short-term loans and advances",noteRef: 20, section: "NCE_BS_assets" },
+      { code: "NCE_OCA",  name: "(f) Other current assets",         noteRef: 21, section: "NCE_BS_assets" },
     ]},
   ]},
-  // ── NCE PROFIT & LOSS (TRADING & P&L) — INCOME ──
-  { code: "NCE_PL_INC", name: "INCOME", noteRef: null, section: "NCE_PL_income", children: [
-    { code: "NCE_REV_OPS", name: "Revenue from Business / Profession", noteRef: null, section: "NCE_PL_income" },
-    { code: "NCE_REV_OTH", name: "Other Income",                       noteRef: null, section: "NCE_PL_income" },
+  // ── NCE BS FOOTNOTE ──
+  { code: "NCE_ACCTPOL", name: "Summary of Significant Accounting Policies", noteRef: 1, section: "NCE_BS_footnote" },
+  // ── NCE PROFIT & LOSS — INCOME (I + II → NCE_PL_INC auto-summed by computeTotal) ──
+  { code: "NCE_PL_INC", name: "III. Total Income (I + II)", noteRef: null, section: "NCE_PL_income", children: [
+    { code: "NCE_REV_OPS", name: "I.   Revenue from operations", noteRef: 22, section: "NCE_PL_income" },
+    { code: "NCE_REV_OTH", name: "II.  Other income",            noteRef: 23, section: "NCE_PL_income" },
   ]},
-  // ── NCE PROFIT & LOSS — EXPENDITURE ──
-  { code: "NCE_PL_EXP", name: "EXPENDITURE", noteRef: null, section: "NCE_PL_expenses", children: [
-    { code: "NCE_EXP_PURCH",  name: "Purchases / Cost of Materials",   noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_INV",    name: "Changes in Inventories",          noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_DIRECT", name: "Direct & Manufacturing Expenses", noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_EMP",    name: "Employee / Staff Costs",          noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_FIN",    name: "Finance Charges & Interest",      noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_DEPR",   name: "Depreciation",                    noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_ADM",    name: "Administrative Expenses",         noteRef: null, section: "NCE_PL_expenses" },
-    { code: "NCE_EXP_OTH",    name: "Other Expenses",                  noteRef: null, section: "NCE_PL_expenses" },
+  // ── NCE PROFIT & LOSS — EXPENSES (a–e → NCE_PL_EXP auto-summed by computeTotal) ──
+  { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", children: [
+    { code: "NCE_COGS",     name: "(a) Cost of goods sold",            noteRef: 24, section: "NCE_PL_expenses" },
+    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",     noteRef: 25, section: "NCE_PL_expenses" },
+    { code: "NCE_FIN_COST", name: "(c) Finance costs",                 noteRef: 26, section: "NCE_PL_expenses" },
+    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation", noteRef: 27, section: "NCE_PL_expenses" },
+    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",               noteRef: 28, section: "NCE_PL_expenses" },
   ]},
+  // ── NCE PROFIT CHAIN (V → XIII; computed in useMemo after computeTotal) ──
+  // "NCE_PL_profit" section prefix keeps these in the NCE_PL_ filter
+  { code: "NCE_PROF_V",   name: "V.    Profit/(Loss) before exceptional items, partners' remuneration and tax", noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_EXCEP",    name: "VI.   Exceptional items",                                                      noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_PROF_VII", name: "VII.  Profit before extraordinary items and tax",                              noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_EXTORD",   name: "VIII. Extraordinary items",                                                    noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_PROF_IX",  name: "IX.   Profit before partners' remuneration and tax",                          noteRef: null, section: "NCE_PL_profit" },
+  { code: "NCE_PART_REM", name: "X.    Partners' remuneration",                                                noteRef: 29,   section: "NCE_PL_profit" },
+  { code: "NCE_PROF_XI",  name: "XI.   Profit before tax (IX − X)",                                           noteRef: null, section: "NCE_PL_profit" },
+  // Tax group — children auto-summed into NCE_TAX by computeTotal
+  { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", children: [
+    { code: "NCE_CUR_TAX",   name: "(1) Current tax",                                   noteRef: null, section: "NCE_PL_profit" },
+    { code: "NCE_PRIOR_TAX", name: "(2) Short/excess provision for earlier years",       noteRef: null, section: "NCE_PL_profit" },
+  ]},
+  { code: "NCE_NET_PROF", name: "XIII. Profit / (Loss) for the year (XI − XII)", noteRef: null, section: "NCE_PL_profit" },
 ];
 
 const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
+
+// ─── NCE leaf-code sets for stats bar ────────────────────────────────────────
+// Sum individual line items directly — independent of computeTotal parent nodes.
+// 12 asset codes (ppe → other_ca), 8 liability codes (capital → short-term prov).
+const NCE_ASSET_IDS: string[] = [
+  // Non-Current Assets (notes 10–15)
+  "NCE_PPE", "NCE_CWIP", "NCE_INTG", "NCE_NCINV", "NCE_LTLA", "NCE_ONCA",
+  // Current Assets (notes 16–21)
+  "NCE_CINV", "NCE_STCK", "NCE_TR", "NCE_CASH", "NCE_STLA", "NCE_OCA",
+];
+const NCE_LIAB_IDS: string[] = [
+  // Owners Funds (note 2)
+  "NCE_CAP",
+  // Non-Current Liabilities (notes 3–5)
+  "NCE_LTB", "NCE_OLTL", "NCE_LTP",
+  // Current Liabilities (notes 6–9)
+  "NCE_STB", "NCE_TP", "NCE_OCL", "NCE_STP",
+];
 
 // ═══════════════════════════════════════
 // Props
@@ -222,6 +260,13 @@ export default function PipelineFinancialStatements({
   const activeTree   = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
   const activeFlatItems = isNonCorporate ? NCE_FLAT_ITEMS : FLAT_ITEMS;
 
+  // ─── Comparative year ─────────────────────────────────────────────────────
+  // engagement.financial_year format: "2025-26"  → CY = 2026, PY = 2025
+  const fyStr  = engagement?.financial_year || "";
+  const fyPart = fyStr.split("-")[1];
+  const cyYear = fyPart ? parseInt(fyPart) + 2000 : new Date().getFullYear();
+  const pyYear = cyYear - 1;
+
   // ─── Override dialog state ───
   const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
   const [overrideAmount, setOverrideAmount] = useState<string>("");
@@ -230,6 +275,11 @@ export default function PipelineFinancialStatements({
   // ─── Manual overrides & PY amounts ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
+
+  // ─── NCE Signature block editable state ──────────────────────────────────
+  const [sigSignatoryName, setSigSignatoryName] = useState("");
+  const [sigPlace,         setSigPlace]         = useState("");
+  const [sigDate,          setSigDate]           = useState(() => new Date().toISOString().split("T")[0]);
 
   // ─── Fetch TB data (legacy snapshot path) ───
   const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
@@ -294,6 +344,34 @@ export default function PipelineFinancialStatements({
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
+  });
+
+  // ─── Firm data (NCE signature block) ─────────────────────────────────────
+  const { data: firmData } = useQuery({
+    queryKey: ["firm-detail-fs", engagement?.firm_id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("firms")
+        .select("name, icai_firm_reg_no, address")
+        .eq("id", engagement.firm_id)
+        .maybeSingle();
+      return data as any;
+    },
+    enabled: !!engagement?.firm_id && isNonCorporate,
+  });
+
+  // ─── Partner user data (NCE signature block) ──────────────────────────────
+  const { data: partnerData } = useQuery({
+    queryKey: ["partner-user-fs", (engagement as any)?.partner_id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("users")
+        .select("name, membership_number")
+        .eq("id", (engagement as any).partner_id)
+        .maybeSingle();
+      return data as any;
+    },
+    enabled: !!(engagement as any)?.partner_id && isNonCorporate,
   });
 
   // ─── TB accounts ───
@@ -370,9 +448,25 @@ export default function PipelineFinancialStatements({
       amounts[item.code] = total;
       return total;
     };
-    // Use activeTree so NCE parent totals (NCE_BS_LIA, NCE_BS_AST, etc.) are computed
+    // Use activeTree so NCE parent totals (NCE_EL, NCE_AST, etc.) are computed
     for (const item of activeTree) {
       computeTotal(item);
+    }
+
+    // ── NCE P&L profit chain (V → XIII) ─────────────────────────────────────
+    // computeTotal handles additive parents; subtraction-based subtotals are
+    // computed here so they are available in the rendered table and on save.
+    // Manual overrides on NCE_EXCEP / NCE_EXTORD / NCE_PART_REM are respected
+    // because override.amount was already written into `amounts` above.
+    if (isNonCorporate) {
+      const nceInc  = amounts["NCE_PL_INC"] || 0;
+      const nceExp  = amounts["NCE_PL_EXP"] || 0;
+      amounts["NCE_PROF_V"]   = Math.round((nceInc - nceExp) * 100) / 100;
+      amounts["NCE_PROF_VII"] = Math.round((amounts["NCE_PROF_V"]   - (amounts["NCE_EXCEP"]    || 0)) * 100) / 100;
+      amounts["NCE_PROF_IX"]  = Math.round((amounts["NCE_PROF_VII"] - (amounts["NCE_EXTORD"]   || 0)) * 100) / 100;
+      amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
+      // NCE_TAX was already summed by computeTotal (NCE_CUR_TAX + NCE_PRIOR_TAX)
+      amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
     }
 
     return amounts;
@@ -389,19 +483,34 @@ export default function PipelineFinancialStatements({
   const totalExpenses = (computedAmounts["PL_EXP"] || 0);
   const netProfit = Math.round((totalRevenue - totalExpenses) * 100) / 100;
 
-  // ─── NCE BS check + P&L summary ───
-  // NCE_BS_LIA and NCE_BS_AST are the computed parent totals from computedAmounts
-  const nceTotalLiabilities = computedAmounts["NCE_BS_LIA"] || 0;
-  const nceTotalAssets      = computedAmounts["NCE_BS_AST"] || 0;
+  // ─── NCE stats bar ───────────────────────────────────────────────────────────
+  // Sum individual leaf codes so the stats bar is independent of computeTotal
+  // parent nodes. NCE_NET_PROF (row XIII) comes from the profit-chain block.
+  const nceTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
+  const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
   const nceBsDiff           = Math.round((nceTotalAssets - nceTotalLiabilities) * 100) / 100;
-  const nceRevenue          = computedAmounts["NCE_PL_INC"] || 0;
-  const nceExpenses         = computedAmounts["NCE_PL_EXP"] || 0;
-  const nceNetProfit        = Math.round((nceRevenue - nceExpenses) * 100) / 100;
+  const nceBsBalanced       = Math.abs(nceTotalAssets - nceTotalLiabilities) < 1;
+  const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
-  // ─── Active summary values (swap between NCE and corporate in JSX) ───
-  const activeBsDiff   = isNonCorporate ? nceBsDiff   : bsDiff;
+  // ─── Active summary values (swap between NCE and corporate in JSX) ───────
+  const corpBsBalanced    = Math.abs(bsDiff) < 1;
+  const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
+  const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
   const activeTotalAssets = isNonCorporate ? nceTotalAssets : totalAssets;
   const activeNetProfit   = isNonCorporate ? nceNetProfit   : netProfit;
+
+  // ─── NCE Signature — derived values ─────────────────────────────────────
+  const sigFirmName     = firmData?.name             || "";
+  const sigFirmFRN      = firmData?.icai_firm_reg_no || "";
+  const sigFirmCity     = (firmData?.address as any)?.city || "";
+  const sigPartnerName  = partnerData?.name              || "";
+  const sigMembershipNo = partnerData?.membership_number || "";
+  const sigClientName   = engagement?.clients?.name      || "";
+
+  // Pre-fill Place once firm data loads (only if user hasn't typed)
+  useEffect(() => {
+    if (sigFirmCity && !sigPlace) setSigPlace(sigFirmCity);
+  }, [sigFirmCity]);
 
   // ─── Open override dialog ───
   const openOverride = (code: string, name: string) => {
@@ -583,6 +692,59 @@ export default function PipelineFinancialStatements({
       );
     });
 
+  // ─── NCE Signature Block (reused in BS + P&L tabs) ───────────────────────
+  // Shown only when isNonCorporate === true. Corporate signature handling is
+  // managed elsewhere and must not be changed.
+  const nceSignatureBlock = isNonCorporate ? (
+    <div className="mt-6 pt-5 border-t grid grid-cols-2 gap-10 text-xs">
+      {/* Left — Audit Firm (auto-linked) */}
+      <div className="space-y-1 text-muted-foreground">
+        <p className="font-semibold text-foreground">
+          For, {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
+        </p>
+        <p>Chartered Accountants</p>
+        <p>FRN: {sigFirmFRN || <span className="italic">[FRN]</span>}</p>
+        <div className="mt-8 space-y-0.5">
+          <p className="font-semibold text-foreground">
+            {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
+          </p>
+          <p>Partner</p>
+          <p>Membership No. {sigMembershipNo || <span className="italic">[M.No.]</span>}</p>
+        </div>
+      </div>
+      {/* Right — Client / Editable fields */}
+      <div className="space-y-2">
+        <p className="font-semibold text-foreground">
+          For, {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
+        </p>
+        <Input
+          placeholder="Authorised Signatory Name"
+          value={sigSignatoryName}
+          onChange={e => setSigSignatoryName(e.target.value)}
+          className="h-7 text-xs"
+        />
+        <div className="flex items-center gap-2">
+          <Label className="text-xs w-10 shrink-0 text-muted-foreground">Place</Label>
+          <Input
+            placeholder="City"
+            value={sigPlace}
+            onChange={e => setSigPlace(e.target.value)}
+            className="h-7 text-xs"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-xs w-10 shrink-0 text-muted-foreground">Date</Label>
+          <Input
+            type="date"
+            value={sigDate}
+            onChange={e => setSigDate(e.target.value)}
+            className="h-7 text-xs"
+          />
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="max-w-6xl space-y-4">
       {/* Header */}
@@ -614,10 +776,10 @@ export default function PipelineFinancialStatements({
 
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-3">
-        <Card className={cn(activeBsDiff === 0 ? "border-primary/30" : "border-destructive/30")}>
+        <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
-            <p className={cn("text-2xl font-bold", activeBsDiff === 0 ? "text-primary" : "text-destructive")}>
-              {activeBsDiff === 0 ? "✓" : `₹${Math.abs(activeBsDiff).toLocaleString("en-IN")}`}
+            <p className={cn("text-2xl font-bold", activeBsBalanced ? "text-primary" : "text-destructive")}>
+              {activeBsBalanced ? "✓" : `₹${Math.abs(activeBsDiff).toLocaleString("en-IN")}`}
             </p>
             <p className="text-[10px] text-muted-foreground uppercase">BS Check</p>
           </CardContent>
@@ -669,8 +831,8 @@ export default function PipelineFinancialStatements({
                 <TableHeader>
                   <TableRow className="bg-muted/50">
                     <TableHead className="text-xs">Particulars</TableHead>
-                    <TableHead className="text-xs text-right">CY (₹)</TableHead>
-                    <TableHead className="text-xs text-right">PY (₹)</TableHead>
+                    <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
+                    <TableHead className="text-xs text-right">PY {pyYear} (₹)</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
@@ -685,12 +847,13 @@ export default function PipelineFinancialStatements({
                 </TableBody>
               </Table>
             </div>
-            {activeBsDiff !== 0 && (
+            {!activeBsBalanced && (
               <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
                 <AlertTriangle size={13} />
                 Balance Sheet is out of balance by ₹{Math.abs(activeBsDiff).toLocaleString("en-IN")}. Check COA mapping or apply manual overrides.
               </div>
             )}
+            {nceSignatureBlock}
           </TabsContent>
 
           {/* ── P&L Statement ── */}
@@ -700,8 +863,8 @@ export default function PipelineFinancialStatements({
                 <TableHeader>
                   <TableRow className="bg-muted/50">
                     <TableHead className="text-xs">Particulars</TableHead>
-                    <TableHead className="text-xs text-right">CY (₹)</TableHead>
-                    <TableHead className="text-xs text-right">PY (₹)</TableHead>
+                    <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
+                    <TableHead className="text-xs text-right">PY {pyYear} (₹)</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
@@ -713,18 +876,22 @@ export default function PipelineFinancialStatements({
                         : i.section.startsWith("PL_")
                     )
                   )}
-                  {/* Net Profit / Loss summary row */}
-                  <TableRow className="bg-muted/60 font-bold border-t-2">
-                    <TableCell className="text-xs pl-2">NET PROFIT / (LOSS) FOR THE YEAR</TableCell>
-                    <TableCell className={cn("text-right text-xs font-mono tabular-nums", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
-                      {activeNetProfit >= 0 ? "" : "("}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}{activeNetProfit < 0 ? ")" : ""}
-                    </TableCell>
-                    <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">—</TableCell>
-                    <TableCell />
-                  </TableRow>
+                  {/* Net Profit / Loss summary row — corporate only.
+                      NCE: row XIII (NCE_NET_PROF) is already rendered inline above. */}
+                  {!isNonCorporate && (
+                    <TableRow className="bg-muted/60 font-bold border-t-2">
+                      <TableCell className="text-xs pl-2">NET PROFIT / (LOSS) FOR THE YEAR</TableCell>
+                      <TableCell className={cn("text-right text-xs font-mono tabular-nums", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
+                        {activeNetProfit >= 0 ? "" : "("}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}{activeNetProfit < 0 ? ")" : ""}
+                      </TableCell>
+                      <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">—</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
+            {nceSignatureBlock}
           </TabsContent>
 
           {/* ── Cash Flow / Receipts & Payments ── */}
