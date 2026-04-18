@@ -113,7 +113,8 @@ export default function TallySyncPage() {
   const [ledgers, setLedgers]       = useState<TallyLedger[]>([]);
   const [tbRows, setTbRows]         = useState<TallyTB[]>([]);
   const [rowCounts, setRowCounts]   = useState<RowCounts>({ groups: 0, ledgers: 0, trial_balance: 0, vouchers: 0 });
-  const [tallyEngId, setTallyEngId] = useState<string | null>(null);
+  const [tallyEngId, setTallyEngId]   = useState<string | null>(null);
+  const [tallyFy, setTallyFy]         = useState<string | null>(null);
   const [loading, setLoading]       = useState(true);
   const [syncing, setSyncing]       = useState(false);
   const [pendingRequest, setPendingRequest] = useState(false);
@@ -128,20 +129,38 @@ export default function TallySyncPage() {
     setLoading(true);
 
     // Resolve the engagements.id that tally sync writes data under.
-    // audit_engagements.id ≠ engagements.id — we match via client_id + financial_year.
+    // audit_engagements.id ≠ engagements.id — match via client_id + financial_year.
+    // If the selected FY has no engagements row, fall back to the most recent FY
+    // that does have tally data for this client.
     const clientId = (selectedEngagement as any).client_id;
     const fy       = (selectedEngagement as any).financial_year;
     let engId: string | null = null;
+    let resolvedFy: string | null = fy;
     if (clientId && fy) {
-      const { data: engRow } = await supabase
+      const { data: exact } = await supabase
         .from("engagements" as any)
         .select("id")
         .eq("client_id", clientId)
         .eq("financial_year", fy)
         .maybeSingle();
-      engId = (engRow as any)?.id ?? null;
+      engId = (exact as any)?.id ?? null;
+    }
+    // Fallback: find any engagements row for this client (most recent FY)
+    if (!engId && clientId) {
+      const { data: anyEng } = await supabase
+        .from("engagements" as any)
+        .select("id, financial_year")
+        .eq("client_id", clientId)
+        .order("financial_year", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (anyEng) {
+        engId = (anyEng as any).id;
+        resolvedFy = (anyEng as any).financial_year;
+      }
     }
     setTallyEngId(engId);
+    setTallyFy(resolvedFy);
 
     if (!engId) {
       // No engagements row for this client/FY — clear everything and stop
@@ -282,10 +301,16 @@ export default function TallySyncPage() {
         </div>
       </div>
 
-      {/* No engagements row warning */}
+      {/* FY mismatch notice — showing fallback FY data */}
+      {selectedEngagementId && !loading && tallyEngId && tallyFy && tallyFy !== (selectedEngagement as any)?.financial_year && (
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-800">
+          <strong>Showing Tally data for FY {tallyFy}</strong> — no tally sync exists for the selected engagement FY ({(selectedEngagement as any)?.financial_year}). Select the {tallyFy} engagement or run <code className="bg-blue-100 px-1 rounded">node auto-setup.js</code> for the current FY.
+        </div>
+      )}
+      {/* No engagements row at all */}
       {selectedEngagementId && !loading && !tallyEngId && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
-          <strong>Tally sync not set up for this client / FY.</strong> Run <code className="bg-amber-100 px-1 rounded">node auto-setup.js</code> in the tally-sync folder first, then run <code className="bg-amber-100 px-1 rounded">node auto-sync.js</code>.
+          <strong>Tally sync not set up for this client.</strong> Run <code className="bg-amber-100 px-1 rounded">node auto-setup.js</code> in the tally-sync folder first, then run <code className="bg-amber-100 px-1 rounded">node auto-sync.js</code>.
         </div>
       )}
 
@@ -543,7 +568,7 @@ export default function TallySyncPage() {
             <CardContent>
               <div className="grid sm:grid-cols-3 gap-4">
                 <DiagItem label="Engagement" ok={!!tallyEngId}
-                  detail={tallyEngId ? `${(selectedEngagement as any)?.financial_year ?? ""} · engagements ID found` : selectedEngagementId ? "No engagements row for this client/FY — run node auto-setup.js" : "None selected"}
+                  detail={tallyEngId ? `FY ${tallyFy ?? ""} · tally engagements ID found` : selectedEngagementId ? "No engagements row for this client — run node auto-setup.js" : "None selected"}
                   icon={Building2} />
                 <DiagItem label="Tally Data" ok={hasData}
                   detail={hasData ? `${rowCounts.ledgers.toLocaleString()} ledgers synced` : "No data synced yet"}
