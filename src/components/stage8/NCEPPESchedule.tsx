@@ -38,8 +38,6 @@ interface AssetRowDef {
 
 interface Props {
   engagementId: string;
-  engagement?:  any;
-  client?:      any;
 }
 
 // ─── Static row config ────────────────────────────────────────────────────────
@@ -146,13 +144,15 @@ function NumInput({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEPPESchedule({ engagementId, engagement, client }: Props) {
+export function NCEPPESchedule({ engagementId }: Props) {
   const [rows,    setRows]    = useState<AssetRow[]>(initRows);
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
+  const [eng,     setEng]     = useState<any>(null);
 
-  const financialYear = (engagement?.financial_year as string) || "";
-  const clientName    = (client?.name as string) || (engagement?.client_name as string) || "";
+  // ── Derived year labels (from self-fetched engagement) ───────────────────
+  const financialYear = (eng?.financial_year as string) || "";
+  const clientName    = (eng?.clients?.name  as string) || "";
   const { cy: cyYear, py: pyYear } = useMemo(() => parseFY(financialYear), [financialYear]);
 
   // ── Load ────────────────────────────────────────────────────────────────
@@ -161,6 +161,17 @@ export function NCEPPESchedule({ engagementId, engagement, client }: Props) {
     let cancelled = false;
     (async () => {
       setLoading(true);
+
+      // 1. Fetch engagement — get FY and client name
+      const { data: engRow } = await supabase
+        .from("audit_engagements")
+        .select("financial_year, clients(name), firms(*), partner:users!partner_id(name)")
+        .eq("id", engagementId)
+        .single();
+      if (cancelled) return;
+      if (engRow) setEng(engRow);
+
+      // 2. Fetch PPE rows for this engagement
       const { data, error } = await supabase
         .from("nce_ppe_schedule")
         .select("*")

@@ -53,8 +53,6 @@ interface NoteData {
 
 interface Props {
   engagementId: string;
-  engagement?: any;
-  client?: any;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -896,13 +894,15 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId, engagement, client }: Props) {
+export function NCEDetailedNotes({ engagementId }: Props) {
   const [noteData, setNoteData]   = useState<Record<string, NoteData>>({});
   const [loading, setLoading]     = useState(true);
   const [saving, setSaving]       = useState(false);
+  const [eng, setEng]             = useState<any>(null);
 
-  const financialYear = (engagement?.financial_year as string) || "";
-  const clientName    = (client?.name as string) || (engagement?.client_name as string) || "";
+  // ── Derived year labels (from self-fetched engagement) ──────────────────
+  const financialYear = (eng?.financial_year as string) || "";
+  const clientName    = (eng?.clients?.name  as string) || "";
   const { cy: cyYear, py: pyYear } = useMemo(() => parseFY(financialYear), [financialYear]);
 
   // ── Load ────────────────────────────────────────────────────────────────
@@ -911,6 +911,17 @@ export function NCEDetailedNotes({ engagementId, engagement, client }: Props) {
     let cancelled = false;
     (async () => {
       setLoading(true);
+
+      // 1. Fetch engagement — get FY and client name
+      const { data: engRow } = await supabase
+        .from("audit_engagements")
+        .select("financial_year, clients(name), firms(*), partner:users!partner_id(name)")
+        .eq("id", engagementId)
+        .single();
+      if (cancelled) return;
+      if (engRow) setEng(engRow);
+
+      // 2. Fetch all saved notes for this engagement
       const { data, error } = await supabase
         .from("nce_financial_notes")
         .select("note_type, cy_data, py_data")

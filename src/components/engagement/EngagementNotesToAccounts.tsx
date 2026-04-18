@@ -359,17 +359,17 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
 
         {/* Tab 2 — Capital Account */}
         <TabsContent value="capital">
-          <NCECapitalAccount engagementId={engagementId} engagement={engagement} client={client} />
+          <NCECapitalAccount engagementId={engagementId} />
         </TabsContent>
 
         {/* Tab 3 — Detailed Notes to Accounts */}
         <TabsContent value="detailed-notes">
-          <NCEDetailedNotes engagementId={engagementId} engagement={engagement} client={client} />
+          <NCEDetailedNotes engagementId={engagementId} />
         </TabsContent>
 
         {/* Tab 4 — PPE Schedule */}
         <TabsContent value="ppe">
-          <NCEPPESchedule engagementId={engagementId} engagement={engagement} client={client} />
+          <NCEPPESchedule engagementId={engagementId} />
         </TabsContent>
       </Tabs>
     );
