@@ -35,6 +35,7 @@ import {
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
+import PipelineFinancialStatements from "@/components/pipeline/PipelineFinancialStatements";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
@@ -1121,11 +1122,10 @@ export default function AuditPipeline() {
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
         ) : activeStage === 10 ? (
-          /* STAGE 10 — Financial Statements (split from Stage 3) */
-          <PipelineStage3
+          /* STAGE 10 — Financial Statements */
+          <PipelineFinancialStatements
             engagementId={selectedEngId}
             engagement={engagement}
-            initialTab="fs"
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
