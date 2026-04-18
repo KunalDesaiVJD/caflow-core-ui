@@ -36,15 +36,14 @@ const auditStages = [
   { title: "Workpapers & Audit Sheet",   path: "/audit/pipeline",       icon: Shield,       stage: 6        },
   { title: "Query Tracker",              path: "/audit/pipeline",       icon: MessageSquare, stage: 5       },
   { title: "Tally Sync",                 path: "/audit/tally-sync",     icon: RefreshCw                     },
-  // ── Reports & Sign-off (quick access) ────────────────────────────────────
-  { title: "Sign-off & UDIN",            path: "/audit/pipeline",       icon: Award,        stage: 9        },
-  // ── Analysis pipeline (reordered) ────────────────────────────────────────
+  // ── Analysis pipeline ────────────────────────────────────────────────────
   { title: "Scrutiny Engine",            path: "/audit/pipeline",       icon: Eye,          stage: 4        },
   { title: "Trial Balance Import",       path: "/audit/pipeline",       icon: Upload,       stage: 2        },
   { title: "Notes to Accounts & CARO",   path: "/audit/pipeline",       icon: BookMarked,   stage: 7        },
   { title: "COA Mapping",                path: "/audit/pipeline",       icon: Calculator,   stage: 3        },
   { title: "3CA / 3CB / 3CD Reports",    path: "/audit/pipeline",       icon: FileCheck,    stage: 8        },
   { title: "Financial Statements",       path: "/audit/pipeline",       icon: FileOutput,   stage: 10       },
+  { title: "Sign-off & UDIN",            path: "/audit/pipeline",       icon: Award,        stage: 9        },
 ];
 
 const auditUtilities = [
