@@ -82,7 +82,7 @@ function getAuditOptionsForClient(client: any) {
   if (!client) return AUDIT_TYPES;
   const opts: { value: string; label: string }[] = [];
   const hasStat = !!client.statutory_audit_applicable || !!client.has_statutory_service;
-  const hasTax  = !!client.tax_audit_applicable       || !!client.has_tax_audit_service;
+  const hasTax  = !!client.tax_audit_applicable || !!client.tax_audit_type || !!client.has_tax_audit_service;
   if (hasStat)           opts.push({ value: "statutory", label: "Statutory Audit" });
   if (hasTax)            opts.push({ value: "tax_audit", label: "Tax Audit" });
   if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
@@ -90,6 +90,8 @@ function getAuditOptionsForClient(client: any) {
                          opts.push({ value: "internal",  label: "Internal Audit" });
   if (client.stock_audit_applicable)
                          opts.push({ value: "stock",     label: "Stock Audit" });
+  // Fallback: classification-only clients (no specific flags set) — offer all types
+  if (opts.length === 0) return AUDIT_TYPES;
   return opts;
 }
 

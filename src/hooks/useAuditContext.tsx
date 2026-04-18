@@ -31,7 +31,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
     let clientQuery: any = supabase
       .from("clients")
-      .select("id, name, entity_type")
+      .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
       .eq("is_draft", false)
       .is("deleted_at", null);
 
@@ -130,6 +130,7 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
         const svc   = svcMap[c.id]   ?? {};
         return (
           auditClientIdSet.has(c.id) ||
+          c.statutory_audit_applicable || !!c.tax_audit_type ||
           setup.statutory_audit_applicable || setup.tax_audit_applicable ||
           setup.internal_audit_applicable  || setup.stock_audit_applicable ||
           svc.hasStat || svc.hasTax        || svc.hasInternal
@@ -140,8 +141,9 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
         const svc   = svcMap[c.id]   ?? {};
         return {
           ...c,
-          statutory_audit_applicable:  !!(setup.statutory_audit_applicable || svc.hasStat),
-          tax_audit_applicable:        !!(setup.tax_audit_applicable        || svc.hasTax),
+          tax_audit_type:              (c.tax_audit_type as string) ?? null,
+          statutory_audit_applicable:  !!(c.statutory_audit_applicable || setup.statutory_audit_applicable || svc.hasStat),
+          tax_audit_applicable:        !!(c.tax_audit_type || setup.tax_audit_applicable || svc.hasTax),
           internal_audit_applicable:   !!(setup.internal_audit_applicable   || svc.hasInternal),
           stock_audit_applicable:      !!setup.stock_audit_applicable,
           has_statutory_service:       !!svc.hasStat,

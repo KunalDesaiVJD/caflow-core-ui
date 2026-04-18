@@ -86,10 +86,12 @@ const PERIOD_TYPES = [
 function getAuditOptionsForClient(client: any) {
   if (!client) return AUDIT_TYPES;
   const opts: { value: string; label: string }[] = [];
-  // hasStat / hasTax can come from either client_fy_audit_setup (boolean flags)
-  // OR from client_services active rows (linked_module = "audit")
+  // hasStat: client_fy_audit_setup flag OR direct clients.statutory_audit_applicable
+  //          OR active statutory service
   const hasStat = !!client.statutory_audit_applicable || !!client.has_statutory_service;
-  const hasTax  = !!client.tax_audit_applicable       || !!client.has_tax_audit_service;
+  // hasTax:  client_fy_audit_setup flag OR clients.tax_audit_type being set
+  //          OR active tax audit service
+  const hasTax  = !!client.tax_audit_applicable || !!client.tax_audit_type || !!client.has_tax_audit_service;
   if (hasStat)           opts.push({ value: "statutory", label: "Statutory Audit" });
   if (hasTax)            opts.push({ value: "tax_audit", label: "Tax Audit" });
   if (hasStat && hasTax) opts.push({ value: "both",      label: "Both (Statutory + Tax)" });
@@ -97,6 +99,9 @@ function getAuditOptionsForClient(client: any) {
                          opts.push({ value: "internal",  label: "Internal Audit" });
   if (client.stock_audit_applicable)
                          opts.push({ value: "stock",     label: "Stock Audit" });
+  // Fallback: if none of the flags are set but client appears in eligible list
+  // (e.g. via Audit classification only), offer all types
+  if (opts.length === 0) return AUDIT_TYPES;
   return opts;
 }
 
@@ -195,18 +200,22 @@ export default function AuditPipeline() {
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
   // ─── Clients with audit services enabled (for new engagement dropdown) ───
-  // Only shows clients that have at least one audit service activated —
-  // either via client_fy_audit_setup boolean flags OR via an active
-  // client_services row whose service_category has linked_module = "audit".
+  // Mirrors the same four-source logic as useAuditContext so the dialog list
+  // always matches the Audit Dashboard:
+  //   1. clients.statutory_audit_applicable / clients.tax_audit_type  (ClientDetail direct saves)
+  //   2. client_fy_audit_setup boolean flags  (wizard-based setup)
+  //   3. client_fy_classifications ilike 'audit'  (FY classification snapshot)
+  //   4. client_classification_history.new_classification = 'Audit'  (history log)
+  //   5. active client_services rows whose service_category.linked_module = 'audit'
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // 1. All active non-draft clients
+      // 1. All active non-draft clients — include direct audit columns on clients table
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type")
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
         .eq("is_draft", false)
         .is("deleted_at", null)
         .order("name", { ascending: true });
@@ -216,63 +225,82 @@ export default function AuditPipeline() {
 
       const clientIds = allFirmClients.map((c: any) => c.id as string);
 
-      // 2. Fetch audit setup flags from client_fy_audit_setup
-      const { data: auditSetupRows } = await supabase
-        .from("client_fy_audit_setup")
-        .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
-        .in("client_id", clientIds);
+      // Parallel fetches for all four eligibility sources
+      const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
+        // Source 3: FY classification snapshot
+        supabase
+          .from("client_fy_classifications")
+          .select("client_id")
+          .ilike("classification", "audit")
+          .in("client_id", clientIds),
+        // Source 4: classification history
+        (supabase as any)
+          .from("client_classification_history")
+          .select("client_id")
+          .ilike("new_classification", "audit")
+          .in("client_id", clientIds),
+        // Source 2: audit setup flags
+        supabase
+          .from("client_fy_audit_setup")
+          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
+          .in("client_id", clientIds),
+        // Source 5: active audit services
+        supabase
+          .from("client_services")
+          .select("client_id, is_active, service_categories!inner(name, linked_module)")
+          .in("client_id", clientIds)
+          .eq("is_active", true),
+      ]);
 
-      // 3. Fetch active audit services from client_services + service_categories
-      const { data: auditServiceRows } = await supabase
-        .from("client_services")
-        .select("client_id, is_active, service_categories!inner(name, linked_module)")
-        .in("client_id", clientIds)
-        .eq("is_active", true);
+      // Build Audit-classified ID set (sources 3 + 4)
+      const auditClassifiedIds = new Set<string>([
+        ...(classRes.data    ?? []).map((r: any) => r.client_id).filter(Boolean),
+        ...(classHistRes?.data ?? []).map((r: any) => r.client_id).filter(Boolean),
+      ]);
 
-      // Build per-client audit flags from setup table
+      // Build per-client flags from setup table (source 2)
       const setupMap: Record<string, any> = {};
-      for (const row of auditSetupRows ?? []) {
-        const r = row as any;
-        setupMap[r.client_id] = r;
+      for (const row of (auditSetupRes.data ?? []) as any[]) {
+        setupMap[row.client_id] = row;
       }
 
-      // Build per-client audit flags from service rows
+      // Build per-client flags from active services (source 5)
       const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
-      for (const row of (auditServiceRows ?? []) as any[]) {
+      for (const row of (auditSvcRes.data ?? []) as any[]) {
         const cat = row.service_categories;
         if (!cat || cat.linked_module !== "audit") continue;
         if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-        const nameLower = (cat.name as string).toLowerCase();
-        if (nameLower.includes("statutory"))            serviceMap[row.client_id].hasStat = true;
-        else if (nameLower.includes("tax"))             serviceMap[row.client_id].hasTax = true;
-        else if (nameLower.includes("internal"))        serviceMap[row.client_id].hasInternal = true;
-        else {
-          // Unknown audit service — count as tax audit by default
-          serviceMap[row.client_id].hasTax = true;
-        }
+        const n = (cat.name as string).toLowerCase();
+        if (n.includes("statutory"))     serviceMap[row.client_id].hasStat = true;
+        else if (n.includes("tax"))      serviceMap[row.client_id].hasTax = true;
+        else if (n.includes("internal")) serviceMap[row.client_id].hasInternal = true;
+        else                             serviceMap[row.client_id].hasTax = true;
       }
 
-      // Merge and filter to audit-eligible clients only
       return (allFirmClients as any[])
         .map(c => {
           const setup = setupMap[c.id] ?? {};
           const svc   = serviceMap[c.id] ?? {};
+          // Source 1: direct columns on clients table
+          const hasStatDirect = !!c.statutory_audit_applicable;
+          const hasTaxDirect  = !!c.tax_audit_type; // "3CA", "3CB", etc. → tax audit applicable
           return {
             id:          c.id as string,
             name:        (c.name as string) ?? "",
             entity_type: (c.entity_type as string) ?? "",
-            // audit setup flags (from client_fy_audit_setup)
-            statutory_audit_applicable:  !!setup.statutory_audit_applicable,
-            tax_audit_applicable:        !!setup.tax_audit_applicable,
-            internal_audit_applicable:   !!setup.internal_audit_applicable,
+            tax_audit_type:              (c.tax_audit_type as string) ?? null,
+            // merge all sources
+            statutory_audit_applicable:  hasStatDirect || !!setup.statutory_audit_applicable || !!svc.hasStat,
+            tax_audit_applicable:        hasTaxDirect  || !!setup.tax_audit_applicable        || !!svc.hasTax,
+            internal_audit_applicable:   !!setup.internal_audit_applicable || !!svc.hasInternal,
             stock_audit_applicable:      !!setup.stock_audit_applicable,
-            // derived flags from active services
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
           };
         })
         .filter(c =>
+          auditClassifiedIds.has(c.id) ||
           c.statutory_audit_applicable || c.tax_audit_applicable ||
           c.internal_audit_applicable  || c.stock_audit_applicable ||
           c.has_statutory_service      || c.has_tax_audit_service  ||
@@ -705,7 +733,10 @@ export default function AuditPipeline() {
                       <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                       <SelectContent>
                         {(eligibleClients || []).length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Please add clients first from the Clients section.</div>
+                          <div className="px-3 py-2 space-y-1">
+                            <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
+                            <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit via Client → Audit Setup.</p>
+                          </div>
                         ) : (
                           (eligibleClients || []).map(c => (
                             <SelectItem key={c.id} value={c.id}>
@@ -1156,7 +1187,10 @@ export default function AuditPipeline() {
                 <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
                 <SelectContent>
                   {(eligibleClients || []).length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">No clients found. Please add clients first from the Clients section.</div>
+                    <div className="px-3 py-2 space-y-1">
+                      <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
+                      <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit for a client via Client → Audit Setup, or set their classification to "Audit" in Client → Classification.</p>
+                    </div>
                   ) : (
                     (eligibleClients || []).map(c => (
                       <SelectItem key={c.id} value={c.id}>
