@@ -113,6 +113,7 @@ export default function TallySyncPage() {
   const [ledgers, setLedgers]       = useState<TallyLedger[]>([]);
   const [tbRows, setTbRows]         = useState<TallyTB[]>([]);
   const [rowCounts, setRowCounts]   = useState<RowCounts>({ groups: 0, ledgers: 0, trial_balance: 0, vouchers: 0 });
+  const [tallyEngId, setTallyEngId] = useState<string | null>(null);
   const [loading, setLoading]       = useState(true);
   const [syncing, setSyncing]       = useState(false);
   const [pendingRequest, setPendingRequest] = useState(false);
@@ -123,18 +124,46 @@ export default function TallySyncPage() {
 
   // ── Load all data ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
-    if (!selectedEngagementId) return;
+    if (!selectedEngagementId || !selectedEngagement) return;
     setLoading(true);
 
+    // Resolve the engagements.id that tally sync writes data under.
+    // audit_engagements.id ≠ engagements.id — we match via client_id + financial_year.
+    const clientId = (selectedEngagement as any).client_id;
+    const fy       = (selectedEngagement as any).financial_year;
+    let engId: string | null = null;
+    if (clientId && fy) {
+      const { data: engRow } = await supabase
+        .from("engagements" as any)
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("financial_year", fy)
+        .maybeSingle();
+      engId = (engRow as any)?.id ?? null;
+    }
+    setTallyEngId(engId);
+
+    if (!engId) {
+      // No engagements row for this client/FY — clear everything and stop
+      setBatches([]);
+      setGroups([]);
+      setLedgers([]);
+      setTbRows([]);
+      setRowCounts({ groups: 0, ledgers: 0, trial_balance: 0, vouchers: 0 });
+      setPendingRequest(false);
+      setLoading(false);
+      return;
+    }
+
     const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData] = await Promise.all([
-      supabase.from("sync_batches" as any).select("*").eq("engagement_id", selectedEngagementId).order("started_at", { ascending: false }).limit(20),
-      supabase.from("tally_groups" as any).select("id", { count: "exact", head: true }).eq("engagement_id", selectedEngagementId),
-      supabase.from("tally_ledgers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", selectedEngagementId),
-      supabase.from("tally_trial_balance" as any).select("id", { count: "exact", head: true }).eq("engagement_id", selectedEngagementId),
-      supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", selectedEngagementId),
-      supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", selectedEngagementId).order("group_name"),
-      supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", selectedEngagementId).order("ledger_name").limit(2000),
-      supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type").eq("engagement_id", selectedEngagementId).order("parent_group,ledger_name").limit(2000),
+      supabase.from("sync_batches" as any).select("*").eq("engagement_id", engId).order("started_at", { ascending: false }).limit(20),
+      supabase.from("tally_groups" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+      supabase.from("tally_ledgers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+      supabase.from("tally_trial_balance" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+      supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+      supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
+      supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", engId).order("ledger_name").limit(2000),
+      supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
     ]);
 
     if (batchRes.data) setBatches(batchRes.data as SyncBatch[]);
@@ -165,27 +194,27 @@ export default function TallySyncPage() {
     const { data: pending } = await supabase
       .from("sync_requests" as any)
       .select("id")
-      .eq("engagement_id", selectedEngagementId)
+      .eq("engagement_id", engId)
       .eq("status", "pending")
       .limit(1);
     setPendingRequest((pending as any[])?.length > 0);
 
     setLoading(false);
-  }, [selectedEngagementId]);
+  }, [selectedEngagementId, selectedEngagement]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
   // ── Sync Now ─────────────────────────────────────────────────────────────────
   async function handleSyncNow() {
-    if (!selectedEngagementId || !selectedEngagement) {
-      toast({ title: "Select an engagement first", variant: "destructive" });
+    if (!tallyEngId) {
+      toast({ title: "No engagements record found for this client/FY", description: "Run node auto-setup.js first.", variant: "destructive" });
       return;
     }
     setSyncing(true);
     const { error } = await supabase
       .from("sync_requests" as any)
       .insert({
-        engagement_id: selectedEngagementId,
+        engagement_id: tallyEngId,
         firm_id: (selectedEngagement as any).firm_id ?? null,
         client_id: (selectedEngagement as any).client_id ?? null,
         requested_by: user?.id ?? null,
@@ -244,7 +273,7 @@ export default function TallySyncPage() {
           <Button
             size="sm"
             onClick={handleSyncNow}
-            disabled={syncing || !selectedEngagementId || pendingRequest}
+            disabled={syncing || !tallyEngId || pendingRequest}
             className="bg-sidebar-gold hover:bg-sidebar-gold/90 text-white"
           >
             <RefreshCw className={cn("h-4 w-4 mr-2", syncing && "animate-spin")} />
@@ -252,6 +281,13 @@ export default function TallySyncPage() {
           </Button>
         </div>
       </div>
+
+      {/* No engagements row warning */}
+      {selectedEngagementId && !loading && !tallyEngId && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
+          <strong>Tally sync not set up for this client / FY.</strong> Run <code className="bg-amber-100 px-1 rounded">node auto-setup.js</code> in the tally-sync folder first, then run <code className="bg-amber-100 px-1 rounded">node auto-sync.js</code>.
+        </div>
+      )}
 
       {/* Count Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -506,8 +542,8 @@ export default function TallySyncPage() {
             </CardHeader>
             <CardContent>
               <div className="grid sm:grid-cols-3 gap-4">
-                <DiagItem label="Engagement" ok={!!selectedEngagementId}
-                  detail={selectedEngagementId ? (selectedEngagement as any)?.financial_year ?? selectedEngagementId.slice(0, 8) + "…" : "None selected"}
+                <DiagItem label="Engagement" ok={!!tallyEngId}
+                  detail={tallyEngId ? `${(selectedEngagement as any)?.financial_year ?? ""} · engagements ID found` : selectedEngagementId ? "No engagements row for this client/FY — run node auto-setup.js" : "None selected"}
                   icon={Building2} />
                 <DiagItem label="Tally Data" ok={hasData}
                   detail={hasData ? `${rowCounts.ledgers.toLocaleString()} ledgers synced` : "No data synced yet"}
