@@ -3754,6 +3754,180 @@ export type Database = {
           },
         ]
       }
+      nce_capital_account: {
+        Row: {
+          id: string
+          engagement_id: string
+          financial_year: string
+          partner_no: number
+          partner_name: string | null
+          profit_share_pct: number | null
+          opening_balance_cy: number | null
+          opening_balance_py: number | null
+          introduced_cy: number | null
+          introduced_py: number | null
+          remuneration_cy: number | null
+          remuneration_py: number | null
+          interest_cy: number | null
+          interest_py: number | null
+          withdrawals_cy: number | null
+          withdrawals_py: number | null
+          profit_share_cy: number | null
+          profit_share_py: number | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          engagement_id: string
+          financial_year: string
+          partner_no: number
+          partner_name?: string | null
+          profit_share_pct?: number | null
+          opening_balance_cy?: number | null
+          opening_balance_py?: number | null
+          introduced_cy?: number | null
+          introduced_py?: number | null
+          remuneration_cy?: number | null
+          remuneration_py?: number | null
+          interest_cy?: number | null
+          interest_py?: number | null
+          withdrawals_cy?: number | null
+          withdrawals_py?: number | null
+          profit_share_cy?: number | null
+          profit_share_py?: number | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          engagement_id?: string
+          financial_year?: string
+          partner_no?: number
+          partner_name?: string | null
+          profit_share_pct?: number | null
+          opening_balance_cy?: number | null
+          opening_balance_py?: number | null
+          introduced_cy?: number | null
+          introduced_py?: number | null
+          remuneration_cy?: number | null
+          remuneration_py?: number | null
+          interest_cy?: number | null
+          interest_py?: number | null
+          withdrawals_cy?: number | null
+          withdrawals_py?: number | null
+          profit_share_cy?: number | null
+          profit_share_py?: number | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "nce_capital_account_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      nce_financial_notes: {
+        Row: {
+          id: string
+          engagement_id: string
+          financial_year: string
+          note_type: string
+          cy_data: Json
+          py_data: Json
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          engagement_id: string
+          financial_year: string
+          note_type: string
+          cy_data?: Json
+          py_data?: Json
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          engagement_id?: string
+          financial_year?: string
+          note_type?: string
+          cy_data?: Json
+          py_data?: Json
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "nce_financial_notes_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      nce_ppe_schedule: {
+        Row: {
+          id: string
+          engagement_id: string
+          financial_year: string
+          asset_category: string
+          asset_name: string
+          rate_pct: number | null
+          opening_balance: number | null
+          additions_pre: number | null
+          additions_post: number | null
+          total: number | null
+          depreciation: number | null
+          closing_balance: number | null
+          sort_order: number | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          engagement_id: string
+          financial_year: string
+          asset_category: string
+          asset_name: string
+          rate_pct?: number | null
+          opening_balance?: number | null
+          additions_pre?: number | null
+          additions_post?: number | null
+          total?: number | null
+          depreciation?: number | null
+          closing_balance?: number | null
+          sort_order?: number | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          engagement_id?: string
+          financial_year?: string
+          asset_category?: string
+          asset_name?: string
+          rate_pct?: number | null
+          opening_balance?: number | null
+          additions_pre?: number | null
+          additions_post?: number | null
+          total?: number | null
+          depreciation?: number | null
+          closing_balance?: number | null
+          sort_order?: number | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "nce_ppe_schedule_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       note_templates: {
         Row: {
           applicable_when: Json | null
