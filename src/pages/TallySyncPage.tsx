@@ -411,18 +411,22 @@ export default function TallySyncPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTB, groupInfoMap]);
 
-  // ── Sorted groups: primary first, BS before PL, sub-groups under parent ──────
+  // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
-    const primaries = filteredGroups.filter(g => isTallyPrimary(g));
-    const subs = filteredGroups.filter(g => !isTallyPrimary(g));
+    // Inline primary check: groups whose parent is "Primary" (Tally root) or null/empty
+    const isPrim = (g: TallyGroup) =>
+      g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
 
+    const primaries = filteredGroups.filter(isPrim);
+    const subs = filteredGroups.filter(g => !isPrim(g));
+
+    // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
     primaries.sort((a, b) => {
-      const aBs = a.is_revenue ? 1 : 0;
-      const bBs = b.is_revenue ? 1 : 0;
-      if (aBs !== bBs) return aBs - bBs;
+      if (a.is_revenue !== b.is_revenue) return a.is_revenue ? 1 : -1;
       return a.group_name.localeCompare(b.group_name);
     });
 
+    // Build parent → children map from sub-groups
     const childrenMap = new Map<string, TallyGroup[]>();
     for (const sub of subs) {
       const parent = sub.parent_group ?? "";
@@ -430,27 +434,26 @@ export default function TallySyncPage() {
       childrenMap.get(parent)!.push(sub);
     }
 
-    function flattenGroup(g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> {
-      const result: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
-      const children = (childrenMap.get(g.group_name) ?? []).sort((a, b) => a.group_name.localeCompare(b.group_name));
-      for (const child of children) {
-        result.push(...flattenGroup(child, depth + 1));
-      }
-      return result;
-    }
+    // Recursively flatten: primary → its sub-groups → their sub-groups
+    const flatten = (g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> => {
+      const out: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
+      const children = (childrenMap.get(g.group_name) ?? [])
+        .slice()
+        .sort((a, b) => a.group_name.localeCompare(b.group_name));
+      for (const child of children) out.push(...flatten(child, depth + 1));
+      return out;
+    };
 
     const result: Array<{ group: TallyGroup; depth: number }> = [];
-    for (const primary of primaries) {
-      result.push(...flattenGroup(primary, 0));
-    }
-    // Orphans (sub-groups whose parent isn't in the list)
-    const inResult = new Set(result.map(r => r.group.group_name));
+    for (const p of primaries) result.push(...flatten(p, 0));
+
+    // Any sub-group whose parent wasn't found (orphan)
+    const placed = new Set(result.map(r => r.group.group_name));
     for (const g of subs) {
-      if (!inResult.has(g.group_name)) result.push({ group: g, depth: 1 });
+      if (!placed.has(g.group_name)) result.push({ group: g, depth: 1 });
     }
     return result;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredGroups, groupInfoMap]);
+  }, [filteredGroups]);
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
@@ -740,13 +743,15 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {sortedGroups.map(({ group: g, depth }) => (
-                        <TableRow key={g.id} className={cn("text-xs", isTallyPrimary(g) && "bg-muted/40 font-semibold")}>
+                      {sortedGroups.map(({ group: g, depth }) => {
+                        const isPrimRow = g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+                        return (
+                        <TableRow key={g.id} className={cn("text-xs", isPrimRow && "bg-muted/40 font-semibold")}>
                           <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
-                            <span className={cn(isTallyPrimary(g) ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
+                            <span className={cn(isPrimRow ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
                               {decodeHtml(g.group_name)}
                             </span>
-                            {isTallyPrimary(g) && (
+                            {isPrimRow && (
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {g.is_revenue ? "P&L" : "B/S"}
                               </Badge>
@@ -758,10 +763,11 @@ export default function TallySyncPage() {
                             {g.is_revenue ? <Badge variant="outline" className="text-orange-600 border-orange-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                           <TableCell className="text-center">
-                            {g.is_primary ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
+                            {isPrimRow ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
