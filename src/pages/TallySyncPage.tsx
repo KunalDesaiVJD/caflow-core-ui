@@ -128,14 +128,16 @@ export default function TallySyncPage() {
     if (!selectedEngagementId || !selectedEngagement) return;
     setLoading(true);
 
-    // Resolve the engagements.id that tally sync writes data under.
-    // audit_engagements.id ≠ engagements.id — match via client_id + financial_year.
-    // If the selected FY has no engagements row, fall back to the most recent FY
-    // that does have tally data for this client.
+    // Resolve the engagements.id used by the tally sync agent.
+    // Strategy:
+    //  1. Try engagements table (client_id + financial_year match)
+    //  2. Fallback: any engagements row for this client (most recent FY)
+    //  3. Last resort: peek at tally_groups rows for this client_id directly
     const clientId = (selectedEngagement as any).client_id;
     const fy       = (selectedEngagement as any).financial_year;
     let engId: string | null = null;
     let resolvedFy: string | null = fy;
+
     if (clientId && fy) {
       const { data: exact } = await supabase
         .from("engagements" as any)
@@ -145,7 +147,7 @@ export default function TallySyncPage() {
         .maybeSingle();
       engId = (exact as any)?.id ?? null;
     }
-    // Fallback: find any engagements row for this client (most recent FY)
+
     if (!engId && clientId) {
       const { data: anyEng } = await supabase
         .from("engagements" as any)
@@ -159,6 +161,22 @@ export default function TallySyncPage() {
         resolvedFy = (anyEng as any).financial_year;
       }
     }
+
+    // Last resort: read engagement_id directly from tally_groups rows for this client
+    if (!engId && clientId) {
+      const { data: peek } = await supabase
+        .from("tally_groups" as any)
+        .select("engagement_id, financial_year")
+        .eq("client_id", clientId)
+        .order("financial_year", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (peek) {
+        engId = (peek as any).engagement_id;
+        resolvedFy = (peek as any).financial_year;
+      }
+    }
+
     setTallyEngId(engId);
     setTallyFy(resolvedFy);
 
