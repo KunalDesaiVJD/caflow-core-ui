@@ -212,11 +212,20 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
   const engagementId: string = engagement?.id || "";
 
   // ── NCE detection ─────────────────────────────────────────────────────────
-  // Checks engagement.entity_type first; falls back to client.entity_type.
+  // Check entity_type from every possible source — engagement row, nested
+  // clients join on engagement, or the separately-passed client prop.
+  // Comparison is case-insensitive so "partnership", "Partnership", "LLP" etc.
+  // all resolve correctly regardless of how the DB value was entered.
   // Corporate path (isNonCorporate === false) renders EXACTLY as before.
-  const entityType: string =
-    (engagement?.entity_type || client?.entity_type || "").trim();
-  const isNonCorporate: boolean = NON_CORPORATE_TYPES.includes(entityType);
+  const entityType: string = (
+    engagement?.entity_type ||
+    engagement?.clients?.entity_type ||
+    client?.entity_type ||
+    ""
+  ).trim();
+  const isNonCorporate: boolean = NON_CORPORATE_TYPES.some(
+    t => t.toLowerCase() === entityType.toLowerCase()
+  );
 
   // ── Shared editor body ─────────────────────────────────────────────────────
   // Extracted so it can be placed inside a TabsContent (NCE) or returned
