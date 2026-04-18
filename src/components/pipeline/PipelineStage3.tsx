@@ -156,15 +156,20 @@ interface PipelineStage3Props {
   engagement: any;
   onStageComplete: () => void;
   onSaveDraft: () => void;
+  /** When set, the specified tab opens by default.
+   *  "mapping" (default) → COA Mapping tab (Stage 3 sidebar link)
+   *  "fs"                → Financial Statements tab (Stage 10 sidebar link)
+   */
+  initialTab?: "mapping" | "fs";
 }
 
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
-export default function PipelineStage3({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage3Props) {
+export default function PipelineStage3({ engagementId, engagement, onStageComplete, onSaveDraft, initialTab = "mapping" }: PipelineStage3Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeView, setActiveView] = useState<"mapping" | "fs">("mapping");
+  const [activeView, setActiveView] = useState<"mapping" | "fs">(initialTab);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
@@ -1038,6 +1043,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
               </CardContent>
             </Card>
           </div>
+
+          {/* Cash Flow Statement — placeholder */}
+          <Card className="mb-4">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm uppercase tracking-wider">
+                Cash Flow Statement for the year ended 31st March {engagement.financial_year?.split("-")[0] ? parseInt(engagement.financial_year.split("-")[0]) + 1 : ""}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground gap-3">
+                <AlertTriangle size={28} className="opacity-40" />
+                <p className="text-sm font-medium">Cash Flow Statement — Coming Soon</p>
+                <p className="text-xs max-w-sm">
+                  The Cash Flow Statement (Indirect Method) will be auto-generated from the
+                  mapped Trial Balance data. This feature is under development.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
         </TabsContent>
       </Tabs>
 
