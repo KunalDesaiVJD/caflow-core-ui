@@ -708,7 +708,11 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => (
+                      {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => {
+                        const prim = getPrimaryGroup(groupName);
+                        const primName = prim ? decodeHtml(prim.group_name) : "";
+                        const showPrim = primName && primName !== decodeHtml(groupName);
+                        return (
                         <>
                           <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
                             <TableCell colSpan={5} className="py-1.5" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
@@ -718,6 +722,11 @@ export default function TallySyncPage() {
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {isRevenue ? "P&L" : "B/S"}
                               </Badge>
+                              {showPrim && (
+                                <span className="ml-2 text-[10px] text-muted-foreground">
+                                  under <span className={cn("font-medium", isRevenue ? "text-orange-600" : "text-blue-700")}>{primName}</span>
+                                </span>
+                              )}
                             </TableCell>
                           </TableRow>
                           {grpLedgers.map(l => (
@@ -734,7 +743,8 @@ export default function TallySyncPage() {
                             </TableRow>
                           ))}
                         </>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -791,7 +801,22 @@ export default function TallySyncPage() {
                             )}
                           </TableCell>
                           <TableCell className="text-muted-foreground">{decodeHtml(g.parent_group) || "—"}</TableCell>
-                          <TableCell className="text-muted-foreground">{decodeHtml(g.primary_group) || "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {(() => {
+                              // Resolve primary by walking parent chain (DB column
+                              // is null for non-primary groups).
+                              const prim = getPrimaryGroup(g.group_name);
+                              if (!prim) return "—";
+                              const primName = decodeHtml(prim.group_name);
+                              // Don't echo the same name back on a primary row
+                              if (primName === decodeHtml(g.group_name)) return "—";
+                              return (
+                                <span className={cn("font-medium", prim.is_revenue ? "text-orange-700" : "text-blue-800")}>
+                                  {primName}
+                                </span>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell className="text-center">
                             {g.is_revenue ? <Badge variant="outline" className="text-orange-600 border-orange-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
