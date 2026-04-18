@@ -324,7 +324,7 @@ export default function TallySyncPage() {
     decodeHtml(v.narration).toLowerCase().includes(voucherSearch.toLowerCase())
   );
 
-  // TB totals
+  // TB totals (for footer)
   const tbDrTotal = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
   const tbCrTotal = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
 
@@ -335,10 +335,12 @@ export default function TallySyncPage() {
     return map;
   }, [groups]);
 
-  // In Tally, root-level groups have parent_group = "Primary" (literal text), not null.
-  // So treat a group as primary if: is_primary=true OR parent is null/empty OR parent="Primary".
+  // Tally stores root groups with parent = "&#4; Primary" (control char + "Primary").
+  // Strip numeric HTML entities before comparing.
   function isTallyPrimary(g: TallyGroup): boolean {
-    return g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+    if (g.is_primary || !g.parent_group) return true;
+    const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
+    return clean === "primary";
   }
 
   function getPrimaryGroup(groupName: string): TallyGroup | null {
@@ -356,7 +358,7 @@ export default function TallySyncPage() {
     return getPrimaryGroup(groupName)?.is_revenue ?? false;
   }
 
-  // ── Grouped ledgers: BS first, then PL; group headers ────────────────────────
+  // ── Grouped ledgers: same hierarchy order as sortedGroups (BS-first, depth-aware)
   const groupedLedgers = useMemo(() => {
     const byGroup = new Map<string, TallyLedger[]>();
     for (const l of filteredLedgers) {
@@ -364,33 +366,85 @@ export default function TallySyncPage() {
       if (!byGroup.has(grp)) byGroup.set(grp, []);
       byGroup.get(grp)!.push(l);
     }
-    const groupNames = [...byGroup.keys()];
-    groupNames.sort((a, b) => {
-      const aRev = isRevenueGroup(a);
-      const bRev = isRevenueGroup(b);
-      if (aRev !== bRev) return aRev ? 1 : -1;
-      return a.localeCompare(b);
-    });
-    return groupNames.map(grp => ({
-      groupName: grp,
-      isRevenue: isRevenueGroup(grp),
-      ledgers: byGroup.get(grp)!.sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
-    }));
+    // Follow the same hierarchy order as sortedGroups
+    const result: Array<{ groupName: string; isRevenue: boolean; depth: number; ledgers: TallyLedger[] }> = [];
+    for (const { group: g, depth } of sortedGroups) {
+      const grpLedgers = byGroup.get(g.group_name);
+      if (grpLedgers && grpLedgers.length > 0) {
+        result.push({
+          groupName: g.group_name,
+          isRevenue: g.is_revenue,
+          depth,
+          ledgers: grpLedgers.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+        });
+      }
+    }
+    // Fallback for any ledger groups not in sortedGroups
+    const placed = new Set(result.map(r => r.groupName));
+    for (const [grp, leds] of byGroup.entries()) {
+      if (!placed.has(grp)) {
+        result.push({
+          groupName: grp,
+          isRevenue: isRevenueGroup(grp),
+          depth: 0,
+          ledgers: leds.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+        });
+      }
+    }
+    return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredLedgers, groupInfoMap]);
+  }, [filteredLedgers, sortedGroups]);
 
-  // ── Sorted groups: primary first, BS before PL, sub-groups under parent ──────
+  // ── Grouped TB: same hierarchy order as sortedGroups, group totals ───────────
+  const groupedTB = useMemo(() => {
+    const byGroup = new Map<string, TallyTB[]>();
+    for (const r of filteredTB) {
+      const grp = r.parent_group || "";
+      if (!byGroup.has(grp)) byGroup.set(grp, []);
+      byGroup.get(grp)!.push(r);
+    }
+    const result: Array<{ groupName: string; isRevenue: boolean; rows: TallyTB[]; openingTotal: number; openingTotalType: string; closingTotal: number; closingTotalType: string }> = [];
+    for (const { group: g } of sortedGroups) {
+      const rows = byGroup.get(g.group_name);
+      if (!rows || rows.length === 0) continue;
+      const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+      const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
+      result.push({ groupName: g.group_name, isRevenue: g.is_revenue, rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
+    }
+    // Fallback for TB rows whose group isn't in sortedGroups
+    const placed = new Set(result.map(r => r.groupName));
+    for (const [grp, rows] of byGroup.entries()) {
+      if (!placed.has(grp)) {
+        const sorted = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+        const netOp = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+        const netCl = sorted.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
+        result.push({ groupName: grp, isRevenue: isRevenueGroup(grp), rows: sorted, openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr", closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr" });
+      }
+    }
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredTB, sortedGroups]);
+
+  // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
-    const primaries = filteredGroups.filter(g => isTallyPrimary(g));
-    const subs = filteredGroups.filter(g => !isTallyPrimary(g));
+    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
+    const isPrim = (g: TallyGroup) => {
+      if (g.is_primary || !g.parent_group) return true;
+      const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
+      return clean === "primary";
+    };
 
+    const primaries = filteredGroups.filter(isPrim);
+    const subs = filteredGroups.filter(g => !isPrim(g));
+
+    // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
     primaries.sort((a, b) => {
-      const aBs = a.is_revenue ? 1 : 0;
-      const bBs = b.is_revenue ? 1 : 0;
-      if (aBs !== bBs) return aBs - bBs;
+      if (a.is_revenue !== b.is_revenue) return a.is_revenue ? 1 : -1;
       return a.group_name.localeCompare(b.group_name);
     });
 
+    // Build parent → children map from sub-groups
     const childrenMap = new Map<string, TallyGroup[]>();
     for (const sub of subs) {
       const parent = sub.parent_group ?? "";
@@ -398,27 +452,26 @@ export default function TallySyncPage() {
       childrenMap.get(parent)!.push(sub);
     }
 
-    function flattenGroup(g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> {
-      const result: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
-      const children = (childrenMap.get(g.group_name) ?? []).sort((a, b) => a.group_name.localeCompare(b.group_name));
-      for (const child of children) {
-        result.push(...flattenGroup(child, depth + 1));
-      }
-      return result;
-    }
+    // Recursively flatten: primary → its sub-groups → their sub-groups
+    const flatten = (g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> => {
+      const out: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
+      const children = (childrenMap.get(g.group_name) ?? [])
+        .slice()
+        .sort((a, b) => a.group_name.localeCompare(b.group_name));
+      for (const child of children) out.push(...flatten(child, depth + 1));
+      return out;
+    };
 
     const result: Array<{ group: TallyGroup; depth: number }> = [];
-    for (const primary of primaries) {
-      result.push(...flattenGroup(primary, 0));
-    }
-    // Orphans (sub-groups whose parent isn't in the list)
-    const inResult = new Set(result.map(r => r.group.group_name));
+    for (const p of primaries) result.push(...flatten(p, 0));
+
+    // Any sub-group whose parent wasn't found (orphan)
+    const placed = new Set(result.map(r => r.group.group_name));
     for (const g of subs) {
-      if (!inResult.has(g.group_name)) result.push({ group: g, depth: 1 });
+      if (!placed.has(g.group_name)) result.push({ group: g, depth: 1 });
     }
     return result;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredGroups, groupInfoMap]);
+  }, [filteredGroups]);
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
@@ -513,8 +566,8 @@ export default function TallySyncPage() {
                 <CardTitle className="text-base">Trial Balance</CardTitle>
                 <CardDescription>
                   {rowCounts.trial_balance > 0
-                    ? `${rowCounts.trial_balance} rows from tally_trial_balance`
-                    : `Derived from ${rowCounts.ledgers} ledgers (run sync again to populate tally_trial_balance)`}
+                    ? `${rowCounts.trial_balance} ledgers · group-wise view · BS first`
+                    : `Derived from ${rowCounts.ledgers} ledgers`}
                 </CardDescription>
               </div>
               <div className="relative w-64">
@@ -531,41 +584,69 @@ export default function TallySyncPage() {
                 </div>
               ) : (
                 <>
-                  <div className="overflow-auto max-h-[520px]">
+                  <div className="overflow-auto max-h-[560px]">
                     <Table>
                       <TableHeader className="sticky top-0 bg-background z-10">
                         <TableRow>
-                          <TableHead className="w-[40%]">Ledger Name</TableHead>
-                          <TableHead>Group</TableHead>
-                          <TableHead className="text-right">Opening Dr</TableHead>
-                          <TableHead className="text-right">Opening Cr</TableHead>
-                          <TableHead className="text-right font-semibold">Closing Dr</TableHead>
-                          <TableHead className="text-right font-semibold">Closing Cr</TableHead>
+                          <TableHead className="w-[55%]">Particulars</TableHead>
+                          <TableHead className="text-right w-[22%]">Opening Balance</TableHead>
+                          <TableHead className="text-right w-[23%] font-semibold">Closing Balance</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredTB.map(r => (
-                          <TableRow key={r.id} className="text-xs">
-                            <TableCell className="font-medium">{decodeHtml(r.ledger_name)}</TableCell>
-                            <TableCell className="text-muted-foreground">{decodeHtml(r.parent_group) || "—"}</TableCell>
-                            <TableCell className="text-right text-blue-700">
-                              {r.opening_type === "Dr" && r.opening_balance > 0 ? fmtAmt(r.opening_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right text-rose-600">
-                              {r.opening_type === "Cr" && r.opening_balance > 0 ? fmtAmt(r.opening_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-blue-700">
-                              {r.balance_type === "Dr" && r.closing_balance > 0 ? fmtAmt(r.closing_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-rose-600">
-                              {r.balance_type === "Cr" && r.closing_balance > 0 ? fmtAmt(r.closing_balance) : "—"}
-                            </TableCell>
-                          </TableRow>
+                        {groupedTB.map(({ groupName, isRevenue, rows, openingTotal, openingTotalType, closingTotal, closingTotalType }) => (
+                          <>
+                            {/* Group header row with totals */}
+                            <TableRow key={`tb-grp-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
+                              <TableCell className="py-2 px-4">
+                                <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                  {decodeHtml(groupName)}
+                                </span>
+                                <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                  {isRevenue ? "P&L" : "B/S"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right py-2 font-bold text-xs">
+                                {openingTotal > 0 ? (
+                                  <span className={openingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(openingTotal)} {openingTotalType}
+                                  </span>
+                                ) : "—"}
+                              </TableCell>
+                              <TableCell className="text-right py-2 font-bold text-xs">
+                                {closingTotal > 0 ? (
+                                  <span className={closingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(closingTotal)} {closingTotalType}
+                                  </span>
+                                ) : "—"}
+                              </TableCell>
+                            </TableRow>
+                            {/* Indented ledger rows */}
+                            {rows.map(r => (
+                              <TableRow key={r.id} className="text-xs hover:bg-muted/20">
+                                <TableCell className="pl-8 text-foreground">{decodeHtml(r.ledger_name)}</TableCell>
+                                <TableCell className="text-right">
+                                  {r.opening_balance > 0 ? (
+                                    <span className={r.opening_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(r.opening_balance)} {r.opening_type}
+                                    </span>
+                                  ) : "—"}
+                                </TableCell>
+                                <TableCell className="text-right font-medium">
+                                  {r.closing_balance > 0 ? (
+                                    <span className={r.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(r.closing_balance)} {r.balance_type}
+                                    </span>
+                                  ) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </>
                         ))}
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Totals row */}
+                  {/* Grand Total footer */}
                   <div className="border-t bg-muted/40 px-4 py-2 flex justify-end gap-8 text-xs font-semibold">
                     <span>Total Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
                     <span>Total Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
@@ -612,10 +693,10 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {groupedLedgers.map(({ groupName, isRevenue, ledgers: grpLedgers }) => (
+                      {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => (
                         <>
                           <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
-                            <TableCell colSpan={5} className="py-1.5 px-4">
+                            <TableCell colSpan={5} className="py-1.5" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
                               <span className={cn("text-[11px] font-semibold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
                                 {decodeHtml(groupName) || "—"}
                               </span>
@@ -626,7 +707,7 @@ export default function TallySyncPage() {
                           </TableRow>
                           {grpLedgers.map(l => (
                             <TableRow key={l.id} className="text-xs">
-                              <TableCell className="font-medium pl-6">{decodeHtml(l.ledger_name)}</TableCell>
+                              <TableCell className="font-medium" style={{ paddingLeft: `${depth * 16 + 32}px` }}>{decodeHtml(l.ledger_name)}</TableCell>
                               <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
                               <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
                                 {l.opening_type}
@@ -680,13 +761,15 @@ export default function TallySyncPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {sortedGroups.map(({ group: g, depth }) => (
-                        <TableRow key={g.id} className={cn("text-xs", isTallyPrimary(g) && "bg-muted/40 font-semibold")}>
+                      {sortedGroups.map(({ group: g, depth }) => {
+                        const isPrimRow = isTallyPrimary(g);
+                        return (
+                        <TableRow key={g.id} className={cn("text-xs", isPrimRow && "bg-muted/40 font-semibold")}>
                           <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
-                            <span className={cn(isTallyPrimary(g) ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
+                            <span className={cn(isPrimRow ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
                               {decodeHtml(g.group_name)}
                             </span>
-                            {isTallyPrimary(g) && (
+                            {isPrimRow && (
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {g.is_revenue ? "P&L" : "B/S"}
                               </Badge>
@@ -698,10 +781,11 @@ export default function TallySyncPage() {
                             {g.is_revenue ? <Badge variant="outline" className="text-orange-600 border-orange-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                           <TableCell className="text-center">
-                            {g.is_primary ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
+                            {isPrimRow ? <Badge variant="outline" className="text-blue-600 border-blue-300 text-[10px]">Yes</Badge> : <span className="text-muted-foreground text-[10px]">No</span>}
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
