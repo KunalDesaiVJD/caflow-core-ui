@@ -598,8 +598,14 @@ serve(async (req) => {
 
     const form3Data = (form3 as any)?.data ?? {};
 
-    // UDIN: form_3ca_3cb.data.udin → engagement.udin
-    const udin = form3Data?.udin || (eng as any).udin || "";
+    // UDIN: form_3ca_3cb.data.udin
+    //   → engagement.form_3ca_udin / form_3cb_udin  (new columns, saved by UI)
+    //   → engagement.udin (legacy fallback)
+    const udin = form3Data?.udin ||
+      (tab === "3ca"
+        ? ((eng as any).form_3ca_udin)
+        : ((eng as any).form_3cb_udin)) ||
+      (eng as any).udin || "";
     // Report date: form_3ca_3cb.data.audit_report_date
     //   → engagement.form_3ca_report_date (new column, saved by UI)
     //   → engagement.sign_off_date (legacy fallback)
@@ -696,6 +702,38 @@ serve(async (req) => {
 
     // ── Unzip template (xlsx = ZIP) ───────────────────────────────────────────
     const zip        = fflate.unzipSync(templateBytes);
+
+    // ── Strip external workbook links ────────────────────────────────────────
+    // Templates copied from other workbooks carry xl/externalLinks/ entries that
+    // cause Excel to show "Update external links?" on open.  Remove them entirely
+    // so the dialog never appears.  Our cell-level writes bypass formula recalc
+    // anyway, but a clean file is less surprising for users.
+    let extLinksRemoved = 0;
+    for (const key of Object.keys(zip)) {
+      if (key.startsWith("xl/externalLinks/")) {
+        delete (zip as any)[key];
+        extLinksRemoved++;
+      }
+    }
+    // Remove externalLink relationships from xl/_rels/workbook.xml.rels
+    const wbRelsKey = "xl/_rels/workbook.xml.rels";
+    if (zip[wbRelsKey]) {
+      const wbRelsXml = _dec.decode(zip[wbRelsKey]);
+      const wbRelsFixed = wbRelsXml.replace(
+        /<Relationship\b[^>]*\/officeDocument\/2006\/relationships\/externalLink[^>]*\/>/g,
+        ""
+      );
+      if (wbRelsFixed !== wbRelsXml) zip[wbRelsKey] = _enc.encode(wbRelsFixed);
+    }
+    // Remove externalLink override entries from [Content_Types].xml
+    const ctKey = "[Content_Types].xml";
+    if (zip[ctKey]) {
+      const ctXml = _dec.decode(zip[ctKey]);
+      const ctFixed = ctXml.replace(/<Override\b[^>]*externalLink[^>]*\/>/g, "");
+      if (ctFixed !== ctXml) zip[ctKey] = _enc.encode(ctFixed);
+    }
+    console.log(`[External links] Stripped ${extLinksRemoved} externalLink entries from ZIP`);
+
     const sheetPaths = resolveSheetPaths(zip);
     const wbEntry = zip["xl/workbook.xml"];
     console.log("[export_tax_audit] zip keys:", Object.keys(zip).length, "| wbXml entry:", wbEntry ? wbEntry.length + " bytes" : "NOT FOUND");
@@ -721,9 +759,13 @@ serve(async (req) => {
       // "Update external links?" dialog on open; if the user clicks "Don't Update"
       // ALL formula recalculation is suppressed and every cell stays at v=0.
       // Rewrite known external names to local 01_Control cells and strip unknowns.
-      const wbXmlFixed = fixExternalNamedRanges(wbXml);
+      let wbXmlFixed = fixExternalNamedRanges(wbXml);
+      // Also remove <externalReferences> block — belt-and-suspenders with the
+      // ZIP entry removal above so Excel truly has nothing external to fetch.
+      wbXmlFixed = wbXmlFixed.replace(/<externalReferences>[\s\S]*?<\/externalReferences>/g, "");
+      wbXmlFixed = wbXmlFixed.replace(/<externalReferences\/>/g, "");
       if (wbXmlFixed !== wbXml) {
-        console.log("[Named-range fix] Rewrote external-workbook named ranges in workbook.xml");
+        console.log("[Named-range fix] Rewrote external-workbook named ranges + stripped externalReferences in workbook.xml");
         wbXml = wbXmlFixed;
         zip["xl/workbook.xml"] = _enc.encode(wbXml);
       }
@@ -879,8 +921,10 @@ serve(async (req) => {
     addUpdate("Form_3CD", "I243", autoValues.MEMBERSHIP_NO);
 
     // 01_Control header block — always write for both form types (sign-off visibility)
-    addUpdate("01_Control", "F16", autoValues.BS_DATE);
-    addUpdate("01_Control", "F17", autoValues.BS_DATE);
+    // NOTE: F16/F17 are label cells ("31 March,") — the BS_DATE value cell is G16
+    // (named range BS_DATE_0 → 01_Control!$G$16) which is filled by the NR pass.
+    addUpdate("01_Control", "G16", autoValues.BS_DATE);
+    addUpdate("01_Control", "G17", autoValues.BS_DATE);
     addUpdate("01_Control", "F24", autoValues.UDIN);
     addUpdate("01_Control", "F25", autoValues.REPORT_DATE);
 
@@ -924,14 +968,39 @@ serve(async (req) => {
       zip[sheetPath] = _enc.encode(xml);
     }
 
-    // Apply the same boilerplate subs to sharedStrings.xml — many template paragraphs
+    // Apply boilerplate subs to sharedStrings.xml — many template paragraphs
     // live in shared strings rather than inline strings, so cell-level edits miss them.
+    // Also replace Form_3CA / 3CB body-text placeholders that the template uses.
     if (zip["xl/sharedStrings.xml"]) {
-      const ssXml = _dec.decode(zip["xl/sharedStrings.xml"]);
-      const ssXmlNew = applyBoilerplateSubs(ssXml);
-      if (ssXmlNew !== ssXml) {
-        zip["xl/sharedStrings.xml"] = _enc.encode(ssXmlNew);
+      let ssXml = _dec.decode(zip["xl/sharedStrings.xml"]);
+      ssXml = applyBoilerplateSubs(ssXml);
+
+      // Form body-text bracket placeholders ─────────────────────────────────
+      // These appear verbatim in the template's shared strings and must be
+      // replaced before the file is returned; otherwise the paragraphs in
+      // Form_3CA / Form_3CB still read "[NAME AND ADDRESS OF ASSESSEE…]".
+      if (autoValues.ENTITY_NAME) {
+        ssXml = ssXml.replace(
+          /\[NAME AND ADDRESS OF ASSESSEE WITH PAN\]/g,
+          xmlEsc(autoValues.ENTITY_NAME + (autoValues.PAN ? ` (PAN: ${autoValues.PAN})` : ""))
+        );
       }
+      if (autoValues.FIRM_NAME) {
+        ssXml = ssXml.replace(/\[NAME OF AUDIT FIRM\]/g, xmlEsc(autoValues.FIRM_NAME));
+      }
+      if (autoValues.REPORT_DATE) {
+        // "[DATE]" in "audit report dated [DATE]"
+        ssXml = ssXml.replace(/\[DATE\]/g, xmlEsc(autoValues.REPORT_DATE));
+      }
+      // [APPLICABLE ACT] — saved by Form3CA tab into form_3ca_applicable_act
+      const applicableAct = (eng as any).form_3ca_applicable_act
+        ? ((eng as any).form_3ca_act_other_text && (eng as any).form_3ca_applicable_act === "other"
+            ? (eng as any).form_3ca_act_other_text
+            : (eng as any).form_3ca_applicable_act)
+        : "Companies Act, 2013";
+      ssXml = ssXml.replace(/\[APPLICABLE ACT\]/g, xmlEsc(applicableAct));
+
+      zip["xl/sharedStrings.xml"] = _enc.encode(ssXml);
     }
 
     // ── Rezip and return (all styles / images / rels untouched) ──────────────
