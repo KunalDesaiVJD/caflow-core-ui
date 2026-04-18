@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { X, Trash2, Loader2, Clock, Pencil, Users, Building2, User, CalendarDays, BadgeCheck } from "lucide-react";
+import { Check, X, Trash2, Loader2, Clock, Users, Building2, User, CalendarDays, BadgeCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
@@ -283,26 +283,26 @@ export default function AuditStatusRow({
   onRegisterSave, onUnregisterSave,
 }: Props) {
 
-  // ── Edit state ───────────────────────────────────────────────────────────────
-  const [editing, setEditing] = useState(!!isNew);
+  // ── Edit state — rows are always editable (no pencil-click required) ─────────
+  const [editing, setEditing] = useState(true);
   const [draft,   setDraft]   = useState<RowDraft>(buildDraft(row, clients));
   const [saving,  setSaving]  = useState(false);
 
-  // Auto-start edit for new rows
+  // Auto-reset draft when a new row is first mounted
   useEffect(() => {
-    if (isNew) { setEditing(true); setDraft(buildDraft(row, clients)); }
+    if (isNew) { setDraft(buildDraft(row, clients)); }
   }, [isNew]); // eslint-disable-line
 
-  // ISSUE-19a: register this new row's save fn with the "Save All" registry immediately.
-  // Uses a ref so the closure always captures the latest draft state.
+  // Register every row (new AND existing) with the "Save All" registry using a
+  // stable wrapper that always calls the latest commitSave closure — this fixes
+  // the stale-closure bug where the registered fn captured an empty draft.
   const commitSaveRef = useRef<() => Promise<void>>();
   commitSaveRef.current = commitSave; // updated every render
   useEffect(() => {
-    if (!isNew) return;
     const stableSave = async () => { await commitSaveRef.current?.(); };
     onRegisterSave?.(row.id, stableSave);
     return () => onUnregisterSave?.(row.id);
-  }, [isNew]); // eslint-disable-line
+  }, [row.id]); // eslint-disable-line
 
   // ── Firm options ─────────────────────────────────────────────────────────────
   const firmNames = useMemo(
@@ -323,12 +323,6 @@ export default function AuditStatusRow({
   const showUdinStatutoryView = isStatutoryOrBoth(row.engagement_type) || isCorporate(viewEntityType);
 
   // ── Edit handlers ─────────────────────────────────────────────────────────────
-
-  function startEdit() {
-    setDraft(buildDraft(row, clients));
-    setEditing(true);
-    onRegisterSave?.(row.id, commitSave);
-  }
 
   function set(field: keyof RowDraft, val: string) {
     setDraft(p => ({ ...p, [field]: val }));
@@ -376,17 +370,14 @@ export default function AuditStatusRow({
       await onSave(row.id, patch);
     }
     setSaving(false);
-    if (!isNew) {
-      setEditing(false);
-      onUnregisterSave?.(row.id);
-    }
+    // For new rows the parent removes the row from the grid after onAdd resolves.
+    // For existing rows we stay in always-editable mode — no state change needed.
   }
 
   function cancelEdit() {
     if (isNew && onCancelNew) { onCancelNew(); return; }
-    setEditing(false);
+    // For non-new rows: reset draft back to last saved values
     setDraft(buildDraft(row, clients));
-    onUnregisterSave?.(row.id);
   }
 
   // ── Convenience aliases ───────────────────────────────────────────────────────
@@ -401,8 +392,8 @@ export default function AuditStatusRow({
   return (
     <tr className={cn(
       "hover:bg-muted/10 transition-colors",
-      editing && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
-      !editing && row.isPlanning && "bg-slate-50/70",
+      isNew && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
+      row.isPlanning && "bg-slate-50/70",
     )}>
 
       {/* 1 · Sr No */}
@@ -668,31 +659,30 @@ export default function AuditStatusRow({
           : <span className="text-muted-foreground line-clamp-2 text-[11px]">{row.remarks || "—"}</span>}
       </TCell>
 
-      {/* 20 · Actions — Edit / Cancel / History / Delete */}
+      {/* 20 · Actions */}
       <TCell className="w-16 text-center">
-        {editing ? (
-          /* When editing: only Cancel — Save All in toolbar commits all dirty rows */
+        {isNew ? (
+          /* New row: explicit Save + Cancel */
           <div className="flex items-center justify-center gap-1">
-            {saving && <Loader2 size={10} className="animate-spin text-emerald-500" />}
+            <Button size="sm" variant="ghost"
+              className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+              onClick={commitSave}
+              disabled={saving}
+              title="Save new row"
+            >
+              {saving ? <Loader2 size={10} className="animate-spin" /> : <Check size={11} />}
+            </Button>
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
               onClick={cancelEdit}
-              title={isNew ? "Discard new row" : "Cancel edits"}
-              disabled={saving}
+              title="Discard new row"
             >
               <X size={11} />
             </Button>
           </div>
         ) : (
-          /* Existing rows: Edit + History + Delete */
+          /* Existing rows: History + Delete (always editable, no pencil needed) */
           <div className="flex items-center justify-center gap-0.5">
-            <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-              onClick={startEdit}
-              title="Edit row"
-            >
-              <Pencil size={12} />
-            </Button>
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
               onClick={() => onHistory?.(row.id)}
@@ -757,7 +747,7 @@ function draftToPatch(d: RowDraft): StatusPatch {
     firm:                         d.firm || null,
     partner:                      d.partner || null,
     udin_tax_audit:               d.udin_tax_audit || null,
-    udin_statutory_audit:         isCorporate(d.entityType) ? (d.udin_statutory_audit || null) : null,
+    udin_statutory_audit:         d.udin_statutory_audit || null,
     udin_date:                    d.udin_date || null,
     physical_report_received_date:d.physical_report_received_date || null,
     scanned:                      d.scanned || "No",
