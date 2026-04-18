@@ -33,6 +33,13 @@ interface CBFormData {
   p4:      string;   // Point 4
   p5:      string;   // Point 5 main text
   p5_obs:  string;   // Point 5 observation line
+  // Annexure paragraphs
+  anx_assessee_1: string;
+  anx_assessee_2: string;
+  anx_assessee_3: string;
+  anx_auditor_1:  string;
+  anx_auditor_2:  string;
+  anx_auditor_3:  string;
 }
 
 const TODAY = new Date().toISOString().split("T")[0];
@@ -77,6 +84,18 @@ function buildDefaults(
       `In our opinion, and to the best of our information and according to explanations given to us, the particulars given in the said Form No. 3CD and annexure thereto are true and correct. subject to following observations/qualifications, if any:`,
     p5_obs:
       `- As per Annexure attached`,
+    anx_assessee_1:
+      `The assessee is responsible for the preparation of the aforesaid financial statements that give a true and fair view of the financial position and financial performance in accordance with the applicable Accounting Standards issued by the Institute of Chartered Accountants of India. This responsibility includes the design, implementation and maintenance of internal control relevant to the preparation and presentation of the financial statements that give a true and fair view and are free from material misstatement, whether due to fraud or error.`,
+    anx_assessee_2:
+      `The assessee is also responsible for the preparation of the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962 that give true and correct particulars as per the provisions of the Income-tax Act, 1961 read with Rules, Notifications, circulars, etc that are to be included in the Statement.`,
+    anx_assessee_3:
+      `Assessee are also responsible for overseeing the entity's financial reporting process.`,
+    anx_auditor_1:
+      `Our objectives are to obtain reasonable assurance about whether the financial statements as a whole are free from material misstatement, whether due to fraud or error, and to issue an auditor's report that includes our opinion. Reasonable assurance is a high level of assurance, but is not a guarantee that an audit conducted in accordance with SAs will always detect a material misstatement when it exists. Misstatements can arise from fraud or error and are considered material if, individually or in the aggregate, they could reasonably be expected to influence the economic decisions of users taken on the basis of these financial statements.`,
+    anx_auditor_2:
+      `We believe that the audit evidence we have obtained is sufficient and appropriate to provide a basis for our audit opinion`,
+    anx_auditor_3:
+      `We are also responsible for verifying the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962. We have conducted our verification of the statement in accordance with Guidance Note on Tax Audit under section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered Accountants of India.`,
   };
 }
 
@@ -377,6 +396,78 @@ export default function Form3CBTab({ engagementId }: Props) {
 
         {/* ─── SIGNATURE BLOCK ─── */}
         <div className="flex justify-end">
+          <div className="text-sm space-y-1 text-right min-w-[280px]">
+            <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
+            <p>Chartered Accountants</p>
+            <p>FRN: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
+
+            <p className="mt-3">Place: <AutoVal v={firmCity} placeholder="[City]" /></p>
+
+            <p className="flex items-center justify-end gap-2">
+              <span>Date:</span>
+              <span className="print:hidden">
+                <Input type="date" value={formData.signature_date}
+                  onChange={e => patch("signature_date", e.target.value)}
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-36" />
+              </span>
+              <span className="hidden print:inline">{fmtDate(formData.signature_date)}</span>
+            </p>
+
+            <p className="flex items-center justify-end gap-2">
+              <span>UDIN:</span>
+              <span className="print:hidden">
+                <Input value={formData.udin} onChange={e => patch("udin", e.target.value)}
+                  placeholder="Enter UDIN"
+                  className="h-6 text-xs border-0 border-b border-gray-400 rounded-none bg-transparent focus:ring-0 px-1 w-48" />
+              </span>
+              <span className="hidden print:inline font-mono">{formData.udin || "___________________"}</span>
+            </p>
+
+            <p className="mt-4 font-semibold"><AutoVal v={partnerName} placeholder="[Partner Name]" /></p>
+            <p>Partner</p>
+            <p>Membership No.: <AutoVal v={membershipNo} placeholder="[Membership No]" /></p>
+          </div>
+        </div>
+
+        {/* ═══════════════════════ ANNEXURE ═══════════════════════ */}
+        <hr className="border-gray-400 border-t-2 my-10" />
+
+        {/* ─── Annexure Header ─── */}
+        <div className="text-center mb-6 space-y-1">
+          <p className="text-lg font-bold uppercase tracking-widest">
+            ANNEXURE TO FORM NO. 3CB [See rule 6G (1) (b)] OF
+          </p>
+          <p className="text-sm font-bold uppercase">
+            <AutoVal v={clientName} placeholder="[CLIENT NAME]" />
+          </p>
+        </div>
+
+        <hr className="border-gray-300 mb-6" />
+
+        {/* ─── Section 1: Assessee Responsibilities ─── */}
+        <p className="text-sm font-bold mb-3">
+          Responsibilities of Assessee (include Assessee's Management) and those charged with Governance for the Financial Statements
+        </p>
+
+        {(["anx_assessee_1", "anx_assessee_2", "anx_assessee_3"] as const).map(key => (
+          <div key={key} className="mb-4">
+            <EditablePara value={formData[key]} onChange={v => patch(key, v)} />
+          </div>
+        ))}
+
+        {/* ─── Section 2: Auditor's Responsibilities ─── */}
+        <p className="text-sm font-bold mb-3 mt-6">
+          Auditor's Responsibility for the Audit of the Financial Statements
+        </p>
+
+        {(["anx_auditor_1", "anx_auditor_2", "anx_auditor_3"] as const).map(key => (
+          <div key={key} className="mb-4">
+            <EditablePara value={formData[key]} onChange={v => patch(key, v)} />
+          </div>
+        ))}
+
+        {/* ─── Annexure Signature Block ─── */}
+        <div className="flex justify-end mt-8">
           <div className="text-sm space-y-1 text-right min-w-[280px]">
             <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
             <p>Chartered Accountants</p>
