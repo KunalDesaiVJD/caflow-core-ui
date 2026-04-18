@@ -165,7 +165,7 @@ export default function Form3CBTab({ engagementId }: Props) {
   const [client,      setClient]      = useState<any>(null);
   const [auditFirm,   setAuditFirm]   = useState<any>(null);
   const [caFirm,      setCaFirm]      = useState<any>(null);
-  const [partnerUser, setPartnerUser] = useState<any>(null);
+  const [partner,     setPartner]     = useState<any>(null);
 
   const { start: initYS, end: initYE } = fyYears("");
   const [formData, setFormData] = useState<CBFormData>({
@@ -182,9 +182,11 @@ export default function Form3CBTab({ engagementId }: Props) {
 
   async function load() {
     setLoading(true);
+
+    // Single fetch — joins clients, firms (CA firm) and partner (users FK)
     const { data: eng } = await supabase
       .from("audit_engagements")
-      .select("*, clients(*), firms(*)")
+      .select("*, clients(*), firms(*), partner:users!partner_id(name, membership_number)")
       .eq("id", engagementId)
       .single();
 
@@ -193,16 +195,14 @@ export default function Form3CBTab({ engagementId }: Props) {
     const cl = (eng as any).clients || null;
     setClient(cl);
     setCaFirm((eng as any).firms || null);
+    setPartner((eng as any).partner || null);
 
+    // audit_firms holds engagement-specific scalar columns (city,
+    // partner_name, FRN) not present on the parent firms record.
     if ((eng as any).audit_firm_id) {
       const { data: af } = await supabase
         .from("audit_firms").select("*").eq("id", (eng as any).audit_firm_id).single();
       setAuditFirm(af || null);
-    }
-    if ((eng as any).partner_id) {
-      const { data: pu } = await supabase
-        .from("users").select("name, membership_number").eq("id", (eng as any).partner_id).single();
-      setPartnerUser(pu || null);
     }
 
     const fy = (eng as any).financial_year || "";
@@ -266,8 +266,8 @@ export default function Form3CBTab({ engagementId }: Props) {
   const firmName     = auditFirm?.name           || caFirm?.name             || "";
   const firmFRN      = auditFirm?.icai_reg_no    || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
   const firmCity     = auditFirm?.city           || (caFirm?.address as any)?.city || "";
-  const partnerName  = auditFirm?.partner_name   || partnerUser?.name         || "";
-  const membershipNo = auditFirm?.partner_icai_no || partnerUser?.membership_number || "";
+  const partnerName  = auditFirm?.partner_name   || partner?.name             || "";
+  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number || "";
 
   if (loading) return (
     <div className="flex items-center justify-center h-48">
