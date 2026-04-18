@@ -258,29 +258,39 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     // created before the auto-create feature, show a placeholder row so the
     // client always appears in the grid.
     if (selectedFY) {
-      // Convert "YYYY-YY" → date range  (e.g. "2026-27" → 2026-04-01 … 2027-03-31)
+      // Convert "YYYY-YY" → date range  (e.g. "2025-26" → 2025-04-01 … 2026-03-31)
       const [fyStartYearStr] = selectedFY.split("-");
       const fyStartYear = Number(fyStartYearStr);
       const fyDateStart = `${fyStartYear}-04-01`;
       const fyDateEnd   = `${fyStartYear + 1}-03-31`;
 
-      let planQ = (supabase as any)
+      // Two separate queries:
+      // (A) Broad query — ALL planning entries for the firm, no date filter.
+      //     Used ONLY for employee-name backfill so staff names always appear
+      //     even if planned_from is slightly outside the FY boundary.
+      // (B) FY-scoped query — date-filtered entries used for creating virtual rows.
+      let planAllQ = (supabase as any)
         .from("audit_planning")
-        .select("id, client_id, client_name, planned_from, planned_to, employee_names")
-        .gte("planned_from", fyDateStart)
-        .lte("planned_from", fyDateEnd);
-      if (!isSuperadmin) planQ = planQ.eq("firm_id", firmId);
-      const { data: planData } = await planQ;
+        .select("id, client_id, client_name, planned_from, planned_to, employee_names");
+      if (!isSuperadmin) planAllQ = planAllQ.eq("firm_id", firmId);
+      const { data: planAllData } = await planAllQ;
 
-      // Build lookup: client_id → aggregated unique employee names across ALL
-      // planning entries (a client may have multiple visits with different staff).
-      // Also keep the first planning entry for date/metadata on virtual rows.
+      // FY-scoped subset (for virtual row creation)
+      const planData = ((planAllData as any[]) || []).filter((p: any) => {
+        if (!p.planned_from) return false;
+        return p.planned_from >= fyDateStart && p.planned_from <= fyDateEnd;
+      });
+
+      // Build lookup: client_id → aggregated unique employee names.
+      // Uses ALL planning entries (planAllData, no date filter) so staff names
+      // are always found even when planned_from is slightly outside the FY boundary.
+      // Also keep the first FY-scoped entry per client for date metadata on virtual rows.
       const empByClient  = new Map<string, string>();  // client_id → "Jay, Umang, Yatin"
-      const planByClient = new Map<string, any>();     // client_id → first plan entry
-      for (const plan of ((planData as any[]) || [])) {
+      const planByClient = new Map<string, any>();     // client_id → first FY-scoped plan entry
+
+      // Pass 1 — aggregate employee names from ALL planning entries (broad)
+      for (const plan of ((planAllData as any[]) || [])) {
         if (!plan.client_id) continue;
-        if (!planByClient.has(plan.client_id)) planByClient.set(plan.client_id, plan);
-        // Accumulate employee names across all entries
         const names: string[] = Array.isArray(plan.employee_names)
           ? (plan.employee_names as string[]).filter(Boolean)
           : [];
@@ -290,9 +300,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
           empByClient.set(plan.client_id, merged);
         }
       }
+      // Pass 2 — keep first FY-scoped entry per client for virtual-row metadata
+      for (const plan of (planData || [])) {
+        if (!plan.client_id) continue;
+        if (!planByClient.has(plan.client_id)) planByClient.set(plan.client_id, plan);
+      }
       // Deduplicate employee names per client (same person may appear in multiple visits)
       for (const [cid, raw] of empByClient) {
-        const unique = [...new Set(raw.split(", ").map(n => n.trim()).filter(Boolean))].join(", ");
+        const unique = [...new Set(raw.split(", ").map((n: string) => n.trim()).filter(Boolean))].join(", ");
         empByClient.set(cid, unique);
       }
 
