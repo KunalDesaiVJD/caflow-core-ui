@@ -335,10 +335,16 @@ export default function TallySyncPage() {
     return map;
   }, [groups]);
 
+  // In Tally, root-level groups have parent_group = "Primary" (literal text), not null.
+  // So treat a group as primary if: is_primary=true OR parent is null/empty OR parent="Primary".
+  function isTallyPrimary(g: TallyGroup): boolean {
+    return g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+  }
+
   function getPrimaryGroup(groupName: string): TallyGroup | null {
     let g = groupInfoMap.get(groupName);
     const visited = new Set<string>();
-    while (g && !g.is_primary && !visited.has(g.group_name)) {
+    while (g && !isTallyPrimary(g) && !visited.has(g.group_name)) {
       visited.add(g.group_name);
       if (!g.parent_group) break;
       g = groupInfoMap.get(g.parent_group);
@@ -375,8 +381,8 @@ export default function TallySyncPage() {
 
   // ── Sorted groups: primary first, BS before PL, sub-groups under parent ──────
   const sortedGroups = useMemo(() => {
-    const primaries = filteredGroups.filter(g => g.is_primary);
-    const subs = filteredGroups.filter(g => !g.is_primary);
+    const primaries = filteredGroups.filter(g => isTallyPrimary(g));
+    const subs = filteredGroups.filter(g => !isTallyPrimary(g));
 
     primaries.sort((a, b) => {
       const aBs = a.is_revenue ? 1 : 0;
@@ -675,12 +681,12 @@ export default function TallySyncPage() {
                     </TableHeader>
                     <TableBody>
                       {sortedGroups.map(({ group: g, depth }) => (
-                        <TableRow key={g.id} className={cn("text-xs", g.is_primary && "bg-muted/40 font-semibold")}>
+                        <TableRow key={g.id} className={cn("text-xs", isTallyPrimary(g) && "bg-muted/40 font-semibold")}>
                           <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
-                            <span className={cn(g.is_primary ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
+                            <span className={cn(isTallyPrimary(g) ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
                               {decodeHtml(g.group_name)}
                             </span>
-                            {g.is_primary && (
+                            {isTallyPrimary(g) && (
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {g.is_revenue ? "P&L" : "B/S"}
                               </Badge>
