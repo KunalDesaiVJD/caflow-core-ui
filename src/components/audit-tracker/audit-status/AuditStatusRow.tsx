@@ -18,8 +18,9 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { X, Trash2, Loader2, Clock, Pencil } from "lucide-react";
+import { X, Trash2, Loader2, Clock, Pencil, Users, Building2, User, CalendarDays, BadgeCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
 import type { UserOption }               from "../hooks/useUsers";
@@ -419,35 +420,127 @@ export default function AuditStatusRow({
             placeholder="Search party…"
           />
         ) : (
-          <div className="relative group/partyname inline-block max-w-full">
-            <span className="font-medium text-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 truncate block">
-              {row.party_name || "—"}
-            </span>
-            {/* Hover card — positioned below the cell, z-50 so it floats above table */}
-            <div className={cn(
-              "absolute left-0 top-full mt-1 z-50 hidden group-hover/partyname:block",
-              "w-60 rounded-md border border-border bg-popover shadow-lg p-2.5 space-y-1.5",
-            )}>
-              <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Audit Employees</p>
-                <p className="text-xs text-foreground">
-                  {row.audit_employees || <span className="italic text-muted-foreground">Not yet planned</span>}
+          <HoverCard openDelay={200} closeDelay={100}>
+            <HoverCardTrigger asChild>
+              <span className="font-medium text-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 truncate block max-w-[200px]">
+                {row.party_name || "—"}
+              </span>
+            </HoverCardTrigger>
+            <HoverCardContent
+              side="right"
+              align="start"
+              sideOffset={8}
+              className="w-72 p-0 overflow-hidden"
+            >
+              {/* Header */}
+              <div className="bg-indigo-600 px-3 py-2">
+                <p className="text-[11px] font-semibold text-white truncate">
+                  {row.party_name || "—"}
+                </p>
+                <p className="text-[10px] text-indigo-200 mt-0.5">
+                  {row.financial_year ? `FY ${row.financial_year}` : ""}
+                  {row.financial_year && row.engagement_type ? " · " : ""}
+                  {row.engagement_type
+                    ? row.engagement_type === "tax_audit" ? "Tax Audit"
+                      : row.engagement_type === "statutory" ? "Statutory Audit"
+                      : row.engagement_type === "both" ? "Statutory + Tax"
+                      : row.engagement_type
+                    : ""}
                 </p>
               </div>
-              <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Audit Firm</p>
-                <p className="text-xs text-foreground">
-                  {row.firm || <span className="italic text-muted-foreground">Not assigned</span>}
-                </p>
+
+              {/* Body */}
+              <div className="px-3 py-2.5 space-y-2.5">
+
+                {/* Audit Employees */}
+                <div className="flex items-start gap-2">
+                  <Users size={13} className="text-indigo-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+                      Audit Team
+                    </p>
+                    <p className="text-xs text-foreground leading-relaxed">
+                      {row.audit_employees
+                        ? row.audit_employees.split(", ").map((emp, i) => (
+                            <span key={i} className="inline-flex items-center gap-0.5 mr-1 mb-0.5 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-medium">
+                              {emp}
+                            </span>
+                          ))
+                        : <span className="italic text-muted-foreground text-[11px]">Not yet assigned in Planning Calendar</span>
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-t border-border/60" />
+
+                {/* Audit Firm */}
+                <div className="flex items-start gap-2">
+                  <Building2 size={13} className="text-slate-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+                      Audit Firm
+                    </p>
+                    <p className="text-xs text-foreground">
+                      {row.firm || <span className="italic text-muted-foreground text-[11px]">Not assigned</span>}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Partner */}
+                <div className="flex items-start gap-2">
+                  <User size={13} className="text-slate-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+                      Engagement Partner
+                    </p>
+                    <p className="text-xs text-foreground font-medium">
+                      {row.partner || <span className="italic text-muted-foreground font-normal text-[11px]">Not assigned</span>}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Planned Dates — only when available */}
+                {(row.planned_from || row.planned_to) && (
+                  <>
+                    <div className="border-t border-border/60" />
+                    <div className="flex items-start gap-2">
+                      <CalendarDays size={13} className="text-emerald-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+                          Planned Period
+                        </p>
+                        <p className="text-xs text-foreground">
+                          {row.planned_from || "?"} → {row.planned_to || "?"}
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Audit Status — only when set */}
+                {row.audit_status && (
+                  <>
+                    <div className="border-t border-border/60" />
+                    <div className="flex items-start gap-2">
+                      <BadgeCheck size={13} className="text-amber-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+                          Current Status
+                        </p>
+                        <p className="text-xs text-foreground">
+                          {row.audit_status}
+                          {row.audit_status === "OTHERS (SPECIFY)" && row.audit_status_other
+                            ? `: ${row.audit_status_other}`
+                            : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-              <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Partner</p>
-                <p className="text-xs text-foreground">
-                  {row.partner || <span className="italic text-muted-foreground">Not assigned</span>}
-                </p>
-              </div>
-            </div>
-          </div>
+            </HoverCardContent>
+          </HoverCard>
         )}
       </TCell>
 
