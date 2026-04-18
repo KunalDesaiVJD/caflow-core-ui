@@ -30,3 +30,13 @@ CREATE POLICY IF NOT EXISTS "sb_select" ON sync_batches FOR SELECT USING (true);
 CREATE POLICY IF NOT EXISTS "sb_insert" ON sync_batches FOR INSERT WITH CHECK (true);
 CREATE POLICY IF NOT EXISTS "sb_update" ON sync_batches FOR UPDATE USING (true);
 CREATE POLICY IF NOT EXISTS "sb_delete" ON sync_batches FOR DELETE USING (true);
+
+-- Ensure anon + authenticated roles have table-level access.
+-- Tables created via migrations may not get the default Supabase Studio
+-- grants automatically, so RLS policies alone are not enough.
+GRANT SELECT, INSERT, UPDATE, DELETE ON tally_groups        TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tally_ledgers       TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tally_trial_balance TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tally_vouchers      TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON sync_batches        TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON sync_requests       TO anon, authenticated;
