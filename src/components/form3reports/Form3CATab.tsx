@@ -254,7 +254,7 @@ export default function Form3CATab({ engagementId }: Props) {
       act_other_text:    (eng as any).form_3ca_act_other_text  || "",
       audit_report_date: rDate,
       signature_date:    (eng as any).form_3ca_signature_date  || TODAY,
-      udin:              (eng as any).udin                     || "",
+      udin:              (eng as any).form_3ca_udin || (eng as any).udin || "",
       ...defaults,
       ...savedParas,
     });
@@ -283,7 +283,7 @@ export default function Form3CATab({ engagementId }: Props) {
         form_3ca_act_other_text: act_other_text,
         form_3ca_report_date:    audit_report_date,
         form_3ca_signature_date: signature_date,
-        udin,
+        form_3ca_udin:           udin,
         form_3ca_paragraphs:     paragraphs,
       } as any)
       .eq("id", engagementId);

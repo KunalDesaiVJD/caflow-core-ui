@@ -192,7 +192,7 @@ export default function Form3CBTab({ engagementId }: Props) {
     const saved = ((eng as any).form_3cb_paragraphs as Record<string, string>) || {};
     setFormData({
       signature_date: (eng as any).form_3cb_signature_date || TODAY,
-      udin:           (eng as any).udin || "",
+      udin:           (eng as any).form_3cb_udin || (eng as any).udin || "",
       ...defaults,
       ...saved,  // saved keys override defaults
     });
@@ -219,7 +219,7 @@ export default function Form3CBTab({ engagementId }: Props) {
       .from("audit_engagements")
       .update({
         form_3cb_signature_date: signature_date,
-        udin,
+        form_3cb_udin: udin,
         form_3cb_paragraphs: paragraphs,
       } as any)
       .eq("id", engagementId);
