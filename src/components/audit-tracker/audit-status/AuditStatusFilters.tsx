@@ -6,7 +6,7 @@
 import { Input }  from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, RefreshCw, Plus } from "lucide-react";
+import { Search, RefreshCw, Save, X } from "lucide-react";
 
 // ─── Exported constant ────────────────────────────────────────────────────────
 
@@ -25,12 +25,16 @@ export const AUDIT_STATUS_OPTIONS = [
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  search:        string;
-  onSearch:      (v: string) => void;
-  statusFilter:  string;
-  onStatus:      (v: string) => void;
-  onRefresh:     () => void;
-  onAddRow:      () => void;
+  search:         string;
+  onSearch:       (v: string) => void;
+  statusFilter:   string;
+  onStatus:       (v: string) => void;
+  onRefresh:      () => void;
+  onSaveAll:      () => void;
+  saveAllBusy:    boolean;
+  /** When true, shows 'Clear Column Filters' button */
+  hasColFilters?: boolean;
+  onClearFilters?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -38,7 +42,9 @@ interface Props {
 export default function AuditStatusFilters({
   search, onSearch,
   statusFilter, onStatus,
-  onRefresh, onAddRow,
+  onRefresh,
+  onSaveAll, saveAllBusy,
+  hasColFilters, onClearFilters,
 }: Props) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -72,14 +78,27 @@ export default function AuditStatusFilters({
         <RefreshCw size={13} />
       </Button>
 
-      {/* Add row — pushed right */}
+      {/* Clear column filters — only when active */}
+      {hasColFilters && (
+        <Button
+          size="sm" variant="outline"
+          className="h-8 text-xs gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
+          onClick={onClearFilters}
+        >
+          <X size={12} /> Clear Filters
+        </Button>
+      )}
+
+      {/* Save All Changes — pushed right */}
       <div className="ml-auto">
         <Button
           size="sm"
-          className="gap-1.5 h-8 text-xs bg-indigo-600 hover:bg-indigo-700"
-          onClick={onAddRow}
+          className="gap-1.5 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
+          onClick={onSaveAll}
+          disabled={saveAllBusy}
         >
-          <Plus size={13} /> Add New Audit
+          <Save size={13} />
+          {saveAllBusy ? "Saving…" : "Save All Changes"}
         </Button>
       </div>
     </div>

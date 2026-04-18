@@ -18,7 +18,7 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2, Clock, Pencil } from "lucide-react";
+import { X, Trash2, Loader2, Clock, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
@@ -400,7 +400,7 @@ export default function AuditStatusRow({
   return (
     <tr className={cn(
       "hover:bg-muted/10 transition-colors",
-      editing && "bg-indigo-50/40",
+      editing && "bg-amber-50 ring-1 ring-amber-200 ring-inset",
       !editing && row.isPlanning && "bg-slate-50/70",
     )}>
 
@@ -558,31 +558,23 @@ export default function AuditStatusRow({
           : <span className="text-muted-foreground line-clamp-2 text-[11px]">{row.remarks || "—"}</span>}
       </TCell>
 
-      {/* 20 · Actions — always-visible Edit / Save / Cancel / History / Delete */}
-      <TCell className="w-20 text-center">
+      {/* 20 · Actions — Edit / Cancel / History / Delete */}
+      <TCell className="w-16 text-center">
         {editing ? (
-          /* Save + Cancel when editing (works for new AND existing rows) */
+          /* When editing: only Cancel — Save All in toolbar commits all dirty rows */
           <div className="flex items-center justify-center gap-1">
-            <Button size="sm" variant="ghost"
-              className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
-              onClick={commitSave}
-              disabled={saving}
-              title={isNew ? "Save new row" : "Save changes"}
-            >
-              {saving
-                ? <Loader2 size={10} className="animate-spin" />
-                : <Check size={11} />}
-            </Button>
+            {saving && <Loader2 size={10} className="animate-spin text-emerald-500" />}
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 hover:bg-red-50"
               onClick={cancelEdit}
               title={isNew ? "Discard new row" : "Cancel edits"}
+              disabled={saving}
             >
               <X size={11} />
             </Button>
           </div>
         ) : (
-          /* Existing rows: Edit (always visible) + History + Delete */
+          /* Existing rows: Edit + History + Delete */
           <div className="flex items-center justify-center gap-0.5">
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
@@ -594,7 +586,7 @@ export default function AuditStatusRow({
             <Button size="sm" variant="ghost"
               className="h-6 w-6 p-0 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50"
               onClick={() => onHistory?.(row.id)}
-              title="View snapshot history"
+              title="View change history"
             >
               <Clock size={12} />
             </Button>

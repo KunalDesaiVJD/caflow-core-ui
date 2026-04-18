@@ -15,7 +15,7 @@ import { Badge }    from "@/components/ui/badge";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Save, Filter, X } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -267,38 +267,16 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
   return (
     <div className="space-y-3 w-full min-w-0">
 
-      {/* Filter toolbar */}
+      {/* Filter toolbar (search + status filter + refresh + clear filters + Save All) */}
       <AuditStatusFilters
-        search={searchRaw}         onSearch={v => { setSearchRaw(v); setPage(1); }}
+        search={searchRaw}          onSearch={v => { setSearchRaw(v); setPage(1); }}
         statusFilter={statusFilter} onStatus={v => { setStatusFilter(v); setPage(1); }}
         onRefresh={reload}
-        onAddRow={() => { setAddingNew(true); setPage(1); }}
+        onSaveAll={handleSaveAll}
+        saveAllBusy={saveAllBusy}
+        hasColFilters={hasColFilters}
+        onClearFilters={clearColFilters}
       />
-
-      {/* Save All + Clear Column Filters row */}
-      <div className="flex items-center justify-between gap-2">
-        {/* Clear column filters — only shown when at least one is active */}
-        {hasColFilters ? (
-          <Button
-            size="sm" variant="outline"
-            className="h-8 text-xs gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
-            onClick={clearColFilters}
-          >
-            <X size={12} /> Clear Column Filters
-          </Button>
-        ) : <div />}
-
-        {/* Save All — commits all rows currently in edit mode */}
-        <Button
-          size="sm"
-          className="gap-1.5 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
-          onClick={handleSaveAll}
-          disabled={saveAllBusy}
-        >
-          <Save size={13} />
-          {saveAllBusy ? "Saving…" : "Save All"}
-        </Button>
-      </div>
 
       {/* Table */}
       <div className="border rounded-lg overflow-hidden w-full">
@@ -433,26 +411,6 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
             </thead>
 
             <tbody>
-              {/* New row (always at top when addingNew) */}
-              {addingNew && (
-                <AuditStatusRow
-                  key="__new__"
-                  row={makeBlankRow(selectedFY)}
-                  srNo={0}
-                  clients={clients}
-                  users={users}
-                  auditFirms={auditFirms}
-                  planEntries={planEntries}
-                  onSave={async () => {}}
-                  onDelete={async () => {}}
-                  isNew
-                  onAdd={handleAddNew}
-                  onCancelNew={() => setAddingNew(false)}
-                  onRegisterSave={registerSave}
-                  onUnregisterSave={unregisterSave}
-                />
-              )}
-
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i}>
@@ -461,7 +419,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                     </td>
                   </tr>
                 ))
-              ) : safePageRows.length === 0 && !addingNew ? (
+              ) : safePageRows.length === 0 ? (
                 <tr>
                   <td colSpan={COLS.length} className="py-16 text-center text-muted-foreground">
                     {rows.length === 0
