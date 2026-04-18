@@ -299,8 +299,17 @@ export default function TallySyncPage() {
             Tally Sync
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Sync Tally data into CAFlow · {(selectedEngagement as any)?.financial_year ?? "—"} · {(groups[0] as any)?.tally_company ?? ""}
+            Sync Tally data into CAFlow · {(selectedEngagement as any)?.financial_year ?? "—"} · {(selectedEngagement as any)?.client_name ?? (selectedEngagement as any)?.clients?.name ?? ""}
           </p>
+          {selectedEngagement && (
+            <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-muted-foreground font-mono">
+              <span>Client: <span className="text-foreground">{(selectedEngagement as any)?.client_name ?? (selectedEngagement as any)?.clients?.name ?? "—"}</span></span>
+              <span>Client ID: <span className="text-foreground">{(selectedEngagement as any)?.client_id?.slice(0,8) ?? "—"}…</span></span>
+              <span>Audit Eng: <span className="text-foreground">{selectedEngagementId?.slice(0,8) ?? "—"}…</span></span>
+              {tallyEngId && <span>Tally Eng: <span className="text-emerald-600">{tallyEngId.slice(0,8)}… ({tallyFy})</span></span>}
+              {!tallyEngId && <span className="text-amber-600">Tally Eng: not found</span>}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>

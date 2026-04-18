@@ -16,10 +16,14 @@ interface AuditContextType {
 
 const AuditContext = createContext<AuditContextType | null>(null);
 
+const ENGAGEMENT_STORAGE_KEY = "caflow_selected_engagement_id";
+
 export function AuditContextProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [selectedClientId, setSelectedClientId] = useState<string>("all");
-  const [selectedEngagementId, setSelectedEngagementId] = useState<string>("");
+  const [selectedEngagementId, setSelectedEngagementId] = useState<string>(
+    () => localStorage.getItem(ENGAGEMENT_STORAGE_KEY) || ""
+  );
   const [clients, setClients] = useState<{ id: string; name: string | null; entity_type: string | null; statutory_audit_applicable?: boolean | null; tax_audit_applicable?: boolean | null; internal_audit_applicable?: boolean | null; stock_audit_applicable?: boolean | null; has_statutory_service?: boolean; has_tax_audit_service?: boolean; has_internal_audit_service?: boolean }[]>([]);
   const [engagements, setEngagements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -167,8 +171,14 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     });
     setEngagements(mapped);
 
-    if (mapped.length > 0 && !selectedEngagementId) {
-      setSelectedEngagementId(mapped[0].id);
+    if (mapped.length > 0) {
+      const stored = localStorage.getItem(ENGAGEMENT_STORAGE_KEY);
+      const storedExists = stored && mapped.find((e: any) => e.id === stored);
+      if (!selectedEngagementId || !mapped.find((e: any) => e.id === selectedEngagementId)) {
+        const pick = storedExists ? stored! : mapped[0].id;
+        setSelectedEngagementId(pick);
+        localStorage.setItem(ENGAGEMENT_STORAGE_KEY, pick);
+      }
     }
     setLoading(false);
   };
@@ -182,7 +192,10 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
       selectedClientId,
       selectedEngagementId,
       setSelectedClientId: (id: string) => { setSelectedClientId(id); setSelectedEngagementId(""); },
-      setSelectedEngagementId,
+      setSelectedEngagementId: (id: string) => {
+        setSelectedEngagementId(id);
+        localStorage.setItem(ENGAGEMENT_STORAGE_KEY, id);
+      },
       clients,
       engagements,
       selectedEngagement,
