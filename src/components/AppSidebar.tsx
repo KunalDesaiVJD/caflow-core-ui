@@ -42,9 +42,9 @@ const auditStages = [
   // ── Analysis pipeline (reordered) ────────────────────────────────────────
   { title: "Scrutiny Engine",            path: "/audit/pipeline",       icon: Eye,          stage: 4        },
   { title: "Trial Balance Import",       path: "/audit/pipeline",       icon: Upload,       stage: 2        },
+  { title: "Notes to Accounts & CARO",   path: "/audit/pipeline",       icon: BookMarked,   stage: 7        },
   { title: "COA Mapping",                path: "/audit/pipeline",       icon: Calculator,   stage: 3        },
   { title: "Financial Statements",       path: "/audit/pipeline",       icon: FileOutput,   stage: 10       },
-  { title: "Notes to Accounts & CARO",   path: "/audit/pipeline",       icon: BookMarked,   stage: 7        },
 ];
 
 const auditUtilities = [
