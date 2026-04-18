@@ -358,6 +358,53 @@ export default function TallySyncPage() {
     return getPrimaryGroup(groupName)?.is_revenue ?? false;
   }
 
+  // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
+  const sortedGroups = useMemo(() => {
+    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
+    const isPrim = (g: TallyGroup) => {
+      if (g.is_primary || !g.parent_group) return true;
+      const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
+      return clean === "primary";
+    };
+
+    const primaries = filteredGroups.filter(isPrim);
+    const subs = filteredGroups.filter(g => !isPrim(g));
+
+    // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
+    primaries.sort((a, b) => {
+      if (a.is_revenue !== b.is_revenue) return a.is_revenue ? 1 : -1;
+      return a.group_name.localeCompare(b.group_name);
+    });
+
+    // Build parent → children map from sub-groups
+    const childrenMap = new Map<string, TallyGroup[]>();
+    for (const sub of subs) {
+      const parent = sub.parent_group ?? "";
+      if (!childrenMap.has(parent)) childrenMap.set(parent, []);
+      childrenMap.get(parent)!.push(sub);
+    }
+
+    // Recursively flatten: primary → its sub-groups → their sub-groups
+    const flatten = (g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> => {
+      const out: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
+      const children = (childrenMap.get(g.group_name) ?? [])
+        .slice()
+        .sort((a, b) => a.group_name.localeCompare(b.group_name));
+      for (const child of children) out.push(...flatten(child, depth + 1));
+      return out;
+    };
+
+    const result: Array<{ group: TallyGroup; depth: number }> = [];
+    for (const p of primaries) result.push(...flatten(p, 0));
+
+    // Any sub-group whose parent wasn't found (orphan)
+    const placed = new Set(result.map(r => r.group.group_name));
+    for (const g of subs) {
+      if (!placed.has(g.group_name)) result.push({ group: g, depth: 1 });
+    }
+    return result;
+  }, [filteredGroups]);
+
   // ── Grouped ledgers: same hierarchy order as sortedGroups (BS-first, depth-aware)
   const groupedLedgers = useMemo(() => {
     const byGroup = new Map<string, TallyLedger[]>();
@@ -425,53 +472,6 @@ export default function TallySyncPage() {
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTB, sortedGroups]);
-
-  // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
-  const sortedGroups = useMemo(() => {
-    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
-    const isPrim = (g: TallyGroup) => {
-      if (g.is_primary || !g.parent_group) return true;
-      const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
-      return clean === "primary";
-    };
-
-    const primaries = filteredGroups.filter(isPrim);
-    const subs = filteredGroups.filter(g => !isPrim(g));
-
-    // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
-    primaries.sort((a, b) => {
-      if (a.is_revenue !== b.is_revenue) return a.is_revenue ? 1 : -1;
-      return a.group_name.localeCompare(b.group_name);
-    });
-
-    // Build parent → children map from sub-groups
-    const childrenMap = new Map<string, TallyGroup[]>();
-    for (const sub of subs) {
-      const parent = sub.parent_group ?? "";
-      if (!childrenMap.has(parent)) childrenMap.set(parent, []);
-      childrenMap.get(parent)!.push(sub);
-    }
-
-    // Recursively flatten: primary → its sub-groups → their sub-groups
-    const flatten = (g: TallyGroup, depth: number): Array<{ group: TallyGroup; depth: number }> => {
-      const out: Array<{ group: TallyGroup; depth: number }> = [{ group: g, depth }];
-      const children = (childrenMap.get(g.group_name) ?? [])
-        .slice()
-        .sort((a, b) => a.group_name.localeCompare(b.group_name));
-      for (const child of children) out.push(...flatten(child, depth + 1));
-      return out;
-    };
-
-    const result: Array<{ group: TallyGroup; depth: number }> = [];
-    for (const p of primaries) result.push(...flatten(p, 0));
-
-    // Any sub-group whose parent wasn't found (orphan)
-    const placed = new Set(result.map(r => r.group.group_name));
-    for (const g of subs) {
-      if (!placed.has(g.group_name)) result.push({ group: g, depth: 1 });
-    }
-    return result;
-  }, [filteredGroups]);
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
