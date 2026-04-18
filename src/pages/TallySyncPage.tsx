@@ -335,10 +335,12 @@ export default function TallySyncPage() {
     return map;
   }, [groups]);
 
-  // In Tally, root-level groups have parent_group = "Primary" (literal text), not null.
-  // So treat a group as primary if: is_primary=true OR parent is null/empty OR parent="Primary".
+  // Tally stores root groups with parent = "&#4; Primary" (control char + "Primary").
+  // Strip numeric HTML entities before comparing.
   function isTallyPrimary(g: TallyGroup): boolean {
-    return g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+    if (g.is_primary || !g.parent_group) return true;
+    const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
+    return clean === "primary";
   }
 
   function getPrimaryGroup(groupName: string): TallyGroup | null {
@@ -413,9 +415,12 @@ export default function TallySyncPage() {
 
   // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
-    // Inline primary check: groups whose parent is "Primary" (Tally root) or null/empty
-    const isPrim = (g: TallyGroup) =>
-      g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
+    const isPrim = (g: TallyGroup) => {
+      if (g.is_primary || !g.parent_group) return true;
+      const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
+      return clean === "primary";
+    };
 
     const primaries = filteredGroups.filter(isPrim);
     const subs = filteredGroups.filter(g => !isPrim(g));
@@ -744,7 +749,7 @@ export default function TallySyncPage() {
                     </TableHeader>
                     <TableBody>
                       {sortedGroups.map(({ group: g, depth }) => {
-                        const isPrimRow = g.is_primary || !g.parent_group || g.parent_group.toLowerCase() === "primary";
+                        const isPrimRow = isTallyPrimary(g);
                         return (
                         <TableRow key={g.id} className={cn("text-xs", isPrimRow && "bg-muted/40 font-semibold")}>
                           <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
