@@ -1779,7 +1779,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
       pipeline_stage: 3,
     } as any).eq("id", engagementId);
     onStageComplete();
-    toast.success("Stage 2 complete — moving to COA & Financial Statements");
+    toast.success("Stage 5 complete — moving to COA Mapping");
   };
 
   // Guard: engagement may be undefined while loading (must be after all hooks)
@@ -1795,12 +1795,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
     <div className="max-w-5xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 2 — Data Import</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 5 — Trial Balance Import</h1>
           <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={handleCompleteStage2} disabled={!canComplete} className="gap-1">
-            Complete Stage 2 <ArrowRight size={14} />
+            Complete Stage 5 <ArrowRight size={14} />
           </Button>
         </div>
       </div>

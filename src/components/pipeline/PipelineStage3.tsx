@@ -585,7 +585,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       stage_statuses: newStatuses,
       pipeline_stage: Math.max(engagement.pipeline_stage || 3, 4),
     } as any).eq("id", engagementId);
-    toast.success("Stage 3 completed");
+    toast.success("Stage 6 completed");
     onStageComplete();
   };
 
@@ -621,7 +621,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 3 — COA Mapping</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 6 — COA Mapping</h1>
           <p className="text-sm text-muted-foreground">
             {engagement.clients?.name} — FY {engagement.financial_year} •
             {engagement.schedule_iii_division === "div_ii" ? " Ind AS (Div II)" : " Schedule III (Div I)"}
@@ -630,7 +630,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={saveMapping} disabled={saving}>Save Mapping</Button>
           <Button size="sm" onClick={handleCompleteStage3} disabled={!allMapped || saving} className="gap-1">
-            Complete Stage 3 <ArrowRight size={14} />
+            Complete Stage 6 <ArrowRight size={14} />
           </Button>
         </div>
       </div>

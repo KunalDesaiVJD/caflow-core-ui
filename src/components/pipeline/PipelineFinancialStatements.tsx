@@ -484,7 +484,7 @@ export default function PipelineFinancialStatements({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 4 — Financial Statements</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 7 — Financial Statements</h1>
           <p className="text-sm text-muted-foreground">
             {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
             {engagement.schedule_iii_division === "div_ii" ? "Ind AS (Div II)" : "Schedule III (Div I)"}
@@ -499,7 +499,7 @@ export default function PipelineFinancialStatements({
             Save
           </Button>
           <Button size="sm" onClick={handleComplete} disabled={saving} className="gap-1">
-            Complete Stage 4 <ArrowRight size={14} />
+            Complete Stage 7 <ArrowRight size={14} />
           </Button>
         </div>
       </div>
