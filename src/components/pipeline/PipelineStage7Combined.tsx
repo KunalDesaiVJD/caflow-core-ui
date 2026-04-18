@@ -44,7 +44,7 @@ export default function PipelineStage7Combined({
       .eq('id', engagementId);
     setSaving(false);
     if (error) { toast.error(error.message); return; }
-    toast.success('Stage 7 completed — proceeding to 3CD Reports');
+    toast.success('Stage 8 completed — proceeding to 3CD Reports');
     onStageComplete();
   };
 
@@ -68,7 +68,7 @@ export default function PipelineStage7Combined({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            {isCorporate ? 'Stage 7 — Notes, CARO & MRL' : 'Stage 7 — Notes to Accounts'}
+            {isCorporate ? 'Stage 8 — Notes, CARO & MRL' : 'Stage 8 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isCorporate
@@ -81,7 +81,7 @@ export default function PipelineStage7Combined({
             {saving && <Loader2 className="w-4 h-4 animate-spin mr-1" />} Save Draft
           </Button>
           <Button onClick={markComplete} disabled={saving} className="gap-1">
-            Complete Stage 7 <ArrowRight size={14} />
+            Complete Stage 8 <ArrowRight size={14} />
           </Button>
         </div>
       </div>

@@ -1099,7 +1099,7 @@ export default function AuditPipeline() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                    <h1 className="text-xl font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
                     <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
@@ -1118,7 +1118,7 @@ export default function AuditPipeline() {
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-xl font-bold text-foreground">Sign-off & UDIN</h1>
+            <h1 className="text-xl font-bold text-foreground">Stage 10 — Sign-off & UDIN</h1>
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
         ) : activeStage === 10 ? (

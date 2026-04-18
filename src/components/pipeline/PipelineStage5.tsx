@@ -226,7 +226,7 @@ export default function PipelineStage5({ engagementId, engagement, onStageComple
       stage_statuses: { ...statuses, "5": "complete", "6": "in_progress" },
       pipeline_stage: 6,
     } as any).eq("id", engagementId);
-    toast.success("Stage 5 complete — proceed to next stage");
+    toast.success("Stage 6 complete — proceed to next stage");
     onStageComplete();
   }, [engagement, engagementId]);
 
@@ -235,7 +235,7 @@ export default function PipelineStage5({ engagementId, engagement, onStageComple
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 5 — Audit Query Tracker</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 6 — Audit Query Tracker</h1>
           <p className="text-sm text-muted-foreground">Manage all queries — auto-generated from scrutiny + manual entries</p>
         </div>
         <div className="flex gap-2">
@@ -249,7 +249,7 @@ export default function PipelineStage5({ engagementId, engagement, onStageComple
             <Plus size={14} /> Add Query
           </Button>
           <Button size="sm" onClick={completeStage} disabled={!canComplete} className="gap-1">
-            Complete Stage 5 <ArrowRight size={14} />
+            Complete Stage 6 <ArrowRight size={14} />
           </Button>
         </div>
       </div>
