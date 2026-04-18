@@ -413,18 +413,33 @@ export default function TallySyncPage() {
       if (!byGroup.has(grp)) byGroup.set(grp, []);
       byGroup.get(grp)!.push(l);
     }
-    // Follow the same hierarchy order as sortedGroups
+
+    // Build set of groups that have ledgers directly OR are ancestors of such groups.
+    // This ensures parent headers (e.g. "Current Assets") are shown even when all
+    // ledgers sit in sub-groups (e.g. "Bank Accounts", "Cash-in-hand").
+    const activeGroups = new Set<string>();
+    for (const grpName of byGroup.keys()) {
+      activeGroups.add(grpName);
+      let g = groupInfoMap.get(grpName);
+      const visited = new Set<string>();
+      while (g && !visited.has(g.group_name)) {
+        visited.add(g.group_name);
+        activeGroups.add(g.group_name);
+        if (!g.parent_group) break;
+        g = groupInfoMap.get(g.parent_group);
+      }
+    }
+
     const result: Array<{ groupName: string; isRevenue: boolean; depth: number; ledgers: TallyLedger[] }> = [];
     for (const { group: g, depth } of sortedGroups) {
-      const grpLedgers = byGroup.get(g.group_name);
-      if (grpLedgers && grpLedgers.length > 0) {
-        result.push({
-          groupName: g.group_name,
-          isRevenue: g.is_revenue,
-          depth,
-          ledgers: grpLedgers.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
-        });
-      }
+      if (!activeGroups.has(g.group_name)) continue;
+      const grpLedgers = byGroup.get(g.group_name) ?? [];
+      result.push({
+        groupName: g.group_name,
+        isRevenue: g.is_revenue,
+        depth,
+        ledgers: grpLedgers.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name)),
+      });
     }
     // Fallback for any ledger groups not in sortedGroups
     const placed = new Set(result.map(r => r.groupName));
@@ -440,7 +455,7 @@ export default function TallySyncPage() {
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredLedgers, sortedGroups]);
+  }, [filteredLedgers, sortedGroups, groupInfoMap]);
 
   // ── Grouped TB: same hierarchy order as sortedGroups, group totals ───────────
   const groupedTB = useMemo(() => {
