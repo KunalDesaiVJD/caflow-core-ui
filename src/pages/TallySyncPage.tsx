@@ -324,7 +324,7 @@ export default function TallySyncPage() {
     decodeHtml(v.narration).toLowerCase().includes(voucherSearch.toLowerCase())
   );
 
-  // TB totals
+  // TB totals (for footer)
   const tbDrTotal = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
   const tbCrTotal = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
 
@@ -378,6 +378,38 @@ export default function TallySyncPage() {
     }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredLedgers, groupInfoMap]);
+
+  // ── Grouped TB: BS-first, group headers with totals, indented ledgers ────────
+  const groupedTB = useMemo(() => {
+    const byGroup = new Map<string, TallyTB[]>();
+    for (const r of filteredTB) {
+      const grp = r.parent_group || "Primary";
+      if (!byGroup.has(grp)) byGroup.set(grp, []);
+      byGroup.get(grp)!.push(r);
+    }
+    const groupNames = [...byGroup.keys()];
+    groupNames.sort((a, b) => {
+      const aRev = isRevenueGroup(a);
+      const bRev = isRevenueGroup(b);
+      if (aRev !== bRev) return aRev ? 1 : -1;
+      return a.localeCompare(b);
+    });
+    return groupNames.map(grp => {
+      const rows = byGroup.get(grp)!.sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
+      const netOp = rows.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl = rows.reduce((s, r) => s + (r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance), 0);
+      return {
+        groupName: grp,
+        isRevenue: isRevenueGroup(grp),
+        rows,
+        openingTotal: Math.abs(netOp),
+        openingTotalType: netOp >= 0 ? "Dr" : "Cr",
+        closingTotal: Math.abs(netCl),
+        closingTotalType: netCl >= 0 ? "Dr" : "Cr",
+      };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredTB, groupInfoMap]);
 
   // ── Sorted groups: primary first, BS before PL, sub-groups under parent ──────
   const sortedGroups = useMemo(() => {
@@ -513,8 +545,8 @@ export default function TallySyncPage() {
                 <CardTitle className="text-base">Trial Balance</CardTitle>
                 <CardDescription>
                   {rowCounts.trial_balance > 0
-                    ? `${rowCounts.trial_balance} rows from tally_trial_balance`
-                    : `Derived from ${rowCounts.ledgers} ledgers (run sync again to populate tally_trial_balance)`}
+                    ? `${rowCounts.trial_balance} ledgers · group-wise view · BS first`
+                    : `Derived from ${rowCounts.ledgers} ledgers`}
                 </CardDescription>
               </div>
               <div className="relative w-64">
@@ -531,41 +563,69 @@ export default function TallySyncPage() {
                 </div>
               ) : (
                 <>
-                  <div className="overflow-auto max-h-[520px]">
+                  <div className="overflow-auto max-h-[560px]">
                     <Table>
                       <TableHeader className="sticky top-0 bg-background z-10">
                         <TableRow>
-                          <TableHead className="w-[40%]">Ledger Name</TableHead>
-                          <TableHead>Group</TableHead>
-                          <TableHead className="text-right">Opening Dr</TableHead>
-                          <TableHead className="text-right">Opening Cr</TableHead>
-                          <TableHead className="text-right font-semibold">Closing Dr</TableHead>
-                          <TableHead className="text-right font-semibold">Closing Cr</TableHead>
+                          <TableHead className="w-[55%]">Particulars</TableHead>
+                          <TableHead className="text-right w-[22%]">Opening Balance</TableHead>
+                          <TableHead className="text-right w-[23%] font-semibold">Closing Balance</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredTB.map(r => (
-                          <TableRow key={r.id} className="text-xs">
-                            <TableCell className="font-medium">{decodeHtml(r.ledger_name)}</TableCell>
-                            <TableCell className="text-muted-foreground">{decodeHtml(r.parent_group) || "—"}</TableCell>
-                            <TableCell className="text-right text-blue-700">
-                              {r.opening_type === "Dr" && r.opening_balance > 0 ? fmtAmt(r.opening_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right text-rose-600">
-                              {r.opening_type === "Cr" && r.opening_balance > 0 ? fmtAmt(r.opening_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-blue-700">
-                              {r.balance_type === "Dr" && r.closing_balance > 0 ? fmtAmt(r.closing_balance) : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold text-rose-600">
-                              {r.balance_type === "Cr" && r.closing_balance > 0 ? fmtAmt(r.closing_balance) : "—"}
-                            </TableCell>
-                          </TableRow>
+                        {groupedTB.map(({ groupName, isRevenue, rows, openingTotal, openingTotalType, closingTotal, closingTotalType }) => (
+                          <>
+                            {/* Group header row with totals */}
+                            <TableRow key={`tb-grp-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
+                              <TableCell className="py-2 px-4">
+                                <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                  {decodeHtml(groupName)}
+                                </span>
+                                <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                  {isRevenue ? "P&L" : "B/S"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right py-2 font-bold text-xs">
+                                {openingTotal > 0 ? (
+                                  <span className={openingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(openingTotal)} {openingTotalType}
+                                  </span>
+                                ) : "—"}
+                              </TableCell>
+                              <TableCell className="text-right py-2 font-bold text-xs">
+                                {closingTotal > 0 ? (
+                                  <span className={closingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(closingTotal)} {closingTotalType}
+                                  </span>
+                                ) : "—"}
+                              </TableCell>
+                            </TableRow>
+                            {/* Indented ledger rows */}
+                            {rows.map(r => (
+                              <TableRow key={r.id} className="text-xs hover:bg-muted/20">
+                                <TableCell className="pl-8 text-foreground">{decodeHtml(r.ledger_name)}</TableCell>
+                                <TableCell className="text-right">
+                                  {r.opening_balance > 0 ? (
+                                    <span className={r.opening_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(r.opening_balance)} {r.opening_type}
+                                    </span>
+                                  ) : "—"}
+                                </TableCell>
+                                <TableCell className="text-right font-medium">
+                                  {r.closing_balance > 0 ? (
+                                    <span className={r.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                      {fmtAmt(r.closing_balance)} {r.balance_type}
+                                    </span>
+                                  ) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </>
                         ))}
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Totals row */}
+                  {/* Grand Total footer */}
                   <div className="border-t bg-muted/40 px-4 py-2 flex justify-end gap-8 text-xs font-semibold">
                     <span>Total Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
                     <span>Total Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
