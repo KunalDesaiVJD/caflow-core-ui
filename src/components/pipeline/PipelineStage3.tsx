@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -19,7 +18,6 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import * as XLSX from "xlsx";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2
@@ -164,12 +162,8 @@ interface PipelineStage3Props {
 export default function PipelineStage3({ engagementId, engagement, onStageComplete, onSaveDraft }: PipelineStage3Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeView, setActiveView] = useState<"mapping" | "fs">("mapping");
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
-  const [overrideDialog, setOverrideDialog] = useState<{ code: string; name: string } | null>(null);
-  const [overrideReason, setOverrideReason] = useState("");
-  const [overrideAmount, setOverrideAmount] = useState("");
 
   // ─── Ledger Reclassify state ───
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
@@ -571,9 +565,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         coa_mapping: coaMapping,
       } as any).eq("id", engagementId);
 
-      toast.success("Financial Statements generated");
+      toast.success("Financial Statements generated — view in Stage 5 Financial Statements");
       queryClient.invalidateQueries({ queryKey: ["fs-rows"] });
-      setActiveView("fs");
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -594,32 +587,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     } as any).eq("id", engagementId);
     toast.success("Stage 3 completed");
     onStageComplete();
-  };
-
-  // ═══════ EXPORT ═══════
-  const exportToExcel = () => {
-    const wsData: any[][] = [
-      ["", "Particulars", "Note No.", "Amount (CY) ₹", "Amount (PY) ₹"],
-    ];
-
-    for (const item of FLAT_ITEMS) {
-      const indent = "  ".repeat(item.depth);
-      const isHeader = item.children && item.children.length > 0;
-      wsData.push([
-        item.code,
-        indent + item.name,
-        item.noteRef || "",
-        Math.round((computedAmounts[item.code] || 0) * 100) / 100,
-        pyAmounts[item.code] || "",
-      ]);
-    }
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws["!cols"] = [{ wch: 12 }, { wch: 45 }, { wch: 10 }, { wch: 18 }, { wch: 18 }];
-    XLSX.utils.book_append_sheet(wb, ws, "Financial Statements");
-    XLSX.writeFile(wb, `FS_${engagement.clients?.name || "Client"}_${engagement.financial_year}.xlsx`);
-    toast.success("Exported to Excel");
   };
 
   // ═══════ RENDER ═══════
@@ -654,7 +621,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 3 — COA Mapping & Financial Statements</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 3 — COA Mapping</h1>
           <p className="text-sm text-muted-foreground">
             {engagement.clients?.name} — FY {engagement.financial_year} •
             {engagement.schedule_iii_division === "div_ii" ? " Ind AS (Div II)" : " Schedule III (Div I)"}
@@ -669,7 +636,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <Card><CardContent className="p-3 text-center">
           <p className="text-2xl font-bold text-foreground">{tbAccounts.length}</p>
           <p className="text-[10px] text-muted-foreground uppercase">TB Accounts</p>
@@ -682,17 +649,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           <p className={cn("text-2xl font-bold", unmappedCount > 0 ? "text-destructive" : "text-foreground")}>{unmappedCount}</p>
           <p className="text-[10px] text-muted-foreground uppercase">Unmapped</p>
         </CardContent></Card>
-        <Card><CardContent className="p-3 text-center">
-          <p className="text-2xl font-bold text-foreground">{Object.keys(manualOverrides).length}</p>
-          <p className="text-[10px] text-muted-foreground uppercase">Manual Overrides</p>
-        </CardContent></Card>
       </div>
 
-      {/* View Tabs */}
-      <Tabs value={activeView} onValueChange={(v: any) => setActiveView(v)}>
+      {/* COA Mapping (Financial Statements moved to Stage 5) */}
+      <Tabs defaultValue="mapping">
         <TabsList>
           <TabsTrigger value="mapping" className="gap-1.5"><Link2 size={14} /> COA Mapping</TabsTrigger>
-          <TabsTrigger value="fs" className="gap-1.5"><Eye size={14} /> Financial Statements</TabsTrigger>
         </TabsList>
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
@@ -861,184 +823,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </Button>
           </div>
         </TabsContent>
-
-        {/* ═══════ FINANCIAL STATEMENTS TAB ═══════ */}
-        <TabsContent value="fs" className="mt-4">
-          <div className="flex justify-between mb-3">
-            <div className="flex gap-2">
-              <Badge variant="outline" className="text-[10px]">
-                <span className="inline-block w-2 h-2 bg-primary/50 rounded mr-1" /> TB = Auto-mapped from Trial Balance
-              </Badge>
-              <Badge variant="outline" className="text-[10px]">
-                <span className="inline-block w-2 h-2 bg-accent rounded mr-1" /> M = Manual entry
-              </Badge>
-            </div>
-            <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
-              <Download size={14} /> Export to Excel
-            </Button>
-          </div>
-
-          {/* Balance Sheet */}
-          <Card className="mb-4">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm uppercase tracking-wider">Balance Sheet as at 31st March {engagement.financial_year?.split("-")[0] ? parseInt(engagement.financial_year.split("-")[0]) + 1 : ""}</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">Note</TableHead>
-                    <TableHead>Particulars</TableHead>
-                    <TableHead className="text-right w-32">Amount (CY) ₹</TableHead>
-                    <TableHead className="text-right w-32">Amount (PY) ₹</TableHead>
-                    <TableHead className="w-12" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {FLAT_ITEMS.filter(i => i.section.startsWith("BS_")).map(item => {
-                    const isHeader = item.children && item.children.length > 0;
-                    const amount = computedAmounts[item.code] || 0;
-                    const py = pyAmounts[item.code] || 0;
-                    const isManual = !!manualOverrides[item.code];
-
-                    return (
-                      <TableRow key={item.code} className={cn(isHeader && "bg-muted/30 font-semibold")}>
-                        <TableCell className="text-[10px] text-muted-foreground">{item.noteRef || ""}</TableCell>
-                        <TableCell className="text-xs" style={{ paddingLeft: `${item.depth * 16 + 16}px` }}>
-                          <span className={cn(isHeader && "uppercase text-[11px]")}>{item.name}</span>
-                          {isManual && <Badge className="ml-1 text-[8px] px-1 bg-accent text-accent-foreground">M</Badge>}
-                          {!isManual && !isHeader && amount !== 0 && <Badge variant="outline" className="ml-1 text-[8px] px-1">TB</Badge>}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono">
-                          {amount !== 0 ? `${amount < 0 ? "(" : ""}${Math.abs(Math.round(amount)).toLocaleString("en-IN")}${amount < 0 ? ")" : ""}` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono text-muted-foreground">
-                          {py !== 0 ? `${Math.abs(Math.round(py)).toLocaleString("en-IN")}` : "—"}
-                        </TableCell>
-                        <TableCell>
-                          {!isHeader && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0"
-                              onClick={() => {
-                                setOverrideDialog({ code: item.code, name: item.name });
-                                setOverrideAmount(String(manualOverrides[item.code]?.amount || computedAmounts[item.code] || 0));
-                                setOverrideReason(manualOverrides[item.code]?.reason || "");
-                              }}
-                            >
-                              <Pencil size={10} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Profit & Loss */}
-          <Card className="mb-4">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm uppercase tracking-wider">Statement of Profit and Loss for the year ended 31st March {engagement.financial_year?.split("-")[0] ? parseInt(engagement.financial_year.split("-")[0]) + 1 : ""}</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">Note</TableHead>
-                    <TableHead>Particulars</TableHead>
-                    <TableHead className="text-right w-32">Amount (CY) ₹</TableHead>
-                    <TableHead className="text-right w-32">Amount (PY) ₹</TableHead>
-                    <TableHead className="w-12" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {FLAT_ITEMS.filter(i => i.section.startsWith("PL_")).map(item => {
-                    const isHeader = item.children && item.children.length > 0;
-                    const amount = computedAmounts[item.code] || 0;
-                    const py = pyAmounts[item.code] || 0;
-                    const isManual = !!manualOverrides[item.code];
-
-                    return (
-                      <TableRow key={item.code} className={cn(isHeader && "bg-muted/30 font-semibold")}>
-                        <TableCell className="text-[10px] text-muted-foreground">{item.noteRef || ""}</TableCell>
-                        <TableCell className="text-xs" style={{ paddingLeft: `${item.depth * 16 + 16}px` }}>
-                          <span className={cn(isHeader && "uppercase text-[11px]")}>{item.name}</span>
-                          {isManual && <Badge className="ml-1 text-[8px] px-1 bg-accent text-accent-foreground">M</Badge>}
-                          {!isManual && !isHeader && amount !== 0 && <Badge variant="outline" className="ml-1 text-[8px] px-1">TB</Badge>}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono">
-                          {amount !== 0 ? `${amount < 0 ? "(" : ""}${Math.abs(Math.round(amount)).toLocaleString("en-IN")}${amount < 0 ? ")" : ""}` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right text-xs font-mono text-muted-foreground">
-                          {py !== 0 ? `${Math.abs(Math.round(py)).toLocaleString("en-IN")}` : "—"}
-                        </TableCell>
-                        <TableCell>
-                          {!isHeader && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0"
-                              onClick={() => {
-                                setOverrideDialog({ code: item.code, name: item.name });
-                                setOverrideAmount(String(manualOverrides[item.code]?.amount || computedAmounts[item.code] || 0));
-                                setOverrideReason(manualOverrides[item.code]?.reason || "");
-                              }}
-                            >
-                              <Pencil size={10} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Totals Summary */}
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-xs font-semibold text-muted-foreground mb-2">BALANCE SHEET CHECK</p>
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between"><span>Total Assets</span><span className="font-mono">₹{Math.abs(Math.round((computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0))).toLocaleString("en-IN")}</span></div>
-                  <div className="flex justify-between"><span>Total Equity & Liabilities</span><span className="font-mono">₹{Math.abs(Math.round((computedAmounts["BS_EQ"] || 0) + (computedAmounts["BS_NCL"] || 0) + (computedAmounts["BS_CL"] || 0))).toLocaleString("en-IN")}</span></div>
-                  <Separator />
-                  {(() => {
-                    const assets = Math.round((computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0));
-                    const liab = Math.round((computedAmounts["BS_EQ"] || 0) + (computedAmounts["BS_NCL"] || 0) + (computedAmounts["BS_CL"] || 0));
-                    const diff = Math.abs(assets - liab);
-                    return (
-                      <div className={cn("flex justify-between font-semibold", diff <= 1 ? "text-primary" : "text-destructive")}>
-                        <span>Difference</span>
-                        <span className="font-mono">₹{diff.toLocaleString("en-IN")} {diff <= 1 ? "✓" : "✗"}</span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-xs font-semibold text-muted-foreground mb-2">P&L SUMMARY</p>
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between"><span>Total Revenue</span><span className="font-mono">₹{Math.abs(Math.round(computedAmounts["PL_REV"] || 0)).toLocaleString("en-IN")}</span></div>
-                  <div className="flex justify-between"><span>Total Expenses</span><span className="font-mono">₹{Math.abs(Math.round(computedAmounts["PL_EXP"] || 0)).toLocaleString("en-IN")}</span></div>
-                  <Separator />
-                  <div className="flex justify-between font-semibold">
-                    <span>PAT</span>
-                    <span className="font-mono">₹{Math.abs(Math.round(computedAmounts["PL_PAT"] || 0)).toLocaleString("en-IN")}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
       </Tabs>
 
       {/* Reclassify Ledger Dialog */}
@@ -1134,68 +918,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         </DialogContent>
       </Dialog>
 
-      {/* Manual Override Dialog */}
-      <Dialog open={!!overrideDialog} onOpenChange={() => setOverrideDialog(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Manual Override — {overrideDialog?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs">Amount (₹)</Label>
-              <Input
-                type="number"
-                value={overrideAmount}
-                onChange={e => setOverrideAmount(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Reason (mandatory) *</Label>
-              <Textarea
-                value={overrideReason}
-                onChange={e => setOverrideReason(e.target.value)}
-                placeholder="Why is this being manually overridden?"
-                rows={2}
-              />
-            </div>
-          </div>
-          <DialogFooter className="gap-2">
-            {manualOverrides[overrideDialog?.code || ""] && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  const code = overrideDialog!.code;
-                  setManualOverrides(prev => {
-                    const next = { ...prev };
-                    delete next[code];
-                    return next;
-                  });
-                  setOverrideDialog(null);
-                  toast.success("Override removed — reverting to TB value");
-                }}
-              >
-                Remove Override
-              </Button>
-            )}
-            <Button
-              size="sm"
-              disabled={!overrideReason.trim()}
-              onClick={() => {
-                const code = overrideDialog!.code;
-                setManualOverrides(prev => ({
-                  ...prev,
-                  [code]: { amount: parseFloat(overrideAmount) || 0, reason: overrideReason },
-                }));
-                setOverrideDialog(null);
-                toast.success("Manual override applied");
-              }}
-            >
-              Apply Override
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
