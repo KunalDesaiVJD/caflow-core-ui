@@ -862,11 +862,15 @@ serve(async (req) => {
       "ENTITY_NAME":        "ENTITY_NAME",
       "ENTITY_ADDRESS":     "ENTITY_ADDRESS",
       "ENTITY_PAN":         "PAN",
+      "ENTITY_ PAN":        "PAN",   // template has a space: "ENTITY_ PAN"
       "ENTITY_GSTIN":       "GSTIN",
       "ENTITY_TYPE":        "ENTITY_TYPE",
       "PY_START_TO_PY_END": "PREVIOUS_YEAR",
       "AY_START_TO_AY_END": "ASSESSMENT_YEAR",
       "BUSINESS_NATURE":    "BUSINESS_NATURE",
+      // Firm sign-off variants with single leading underscore
+      "_AUDIT FIRM_NAME":   "FIRM_NAME",
+      "_FRN":               "FRN",
     };
     let bareFilled = 0;
     for (const [sheetName, sheetPath] of sheetPaths) {
@@ -1166,6 +1170,7 @@ serve(async (req) => {
       // "[NAME OF CLIENT]" — ANX_Form3CA annexure header uses this placeholder
       if (autoValues.ENTITY_NAME) {
         ssXml = ssXml.replace(/\[NAME OF CLIENT\]/g, xmlEsc(autoValues.ENTITY_NAME));
+        ssXml = ssXml.replace(/\[ENTITY_NAME\]/g, xmlEsc(autoValues.ENTITY_NAME)); // sign-off bracket variant
         // "ENTITY_NAME" bare literal — 3CB ANNEX row 3 header uses this exact text
         // as a shared-string value (no AUTO marker, no brackets).  Replace only when
         // it appears as the sole content of a <t> tag so we don't clobber unrelated text.
@@ -1182,7 +1187,8 @@ serve(async (req) => {
       }
       if (autoValues.PAN) {
         ssXml = ssXml.replace(/<t>ENTITY_PAN<\/t>/g, `<t>${xmlEsc(autoValues.PAN)}</t>`);
-        ssXml = ssXml.replace(/\bENTITY_PAN\b/g, xmlEsc(autoValues.PAN));
+        ssXml = ssXml.replace(/<t>ENTITY_ PAN<\/t>/g, `<t>${xmlEsc(autoValues.PAN)}</t>`); // space variant
+        ssXml = ssXml.replace(/ENTITY_\s*PAN/g, xmlEsc(autoValues.PAN)); // catches both with and without space
       }
       if (autoValues.GSTIN) {
         ssXml = ssXml.replace(/<t>ENTITY_GSTIN<\/t>/g, `<t>${xmlEsc(autoValues.GSTIN)}</t>`);
@@ -1229,15 +1235,17 @@ serve(async (req) => {
         ssXml = ssXml.replace(/\[Membership No[^\]]*\]/g,      xmlEsc(autoValues.MEMBERSHIP_NO));
       }
       if (autoValues.FIRM_NAME) {
-        // "___AUDIT FIRM_NAME" / "__AUDIT FIRM_NAME" — leading underscores then literal key
-        ssXml = ssXml.replace(/_{2,}AUDIT FIRM_NAME/g, xmlEsc(autoValues.FIRM_NAME));
+        // "_+AUDIT FIRM_NAME" — 1 or more leading underscores (template uses 1–3 variants)
+        ssXml = ssXml.replace(/_+AUDIT FIRM_NAME/g, xmlEsc(autoValues.FIRM_NAME));
+        // "AUDIT FIRM_NAME" with no leading underscore (bare variant)
+        ssXml = ssXml.replace(/\bAUDIT FIRM_NAME\b/g, xmlEsc(autoValues.FIRM_NAME));
         // "[AUDIT FIRM NAME]" bracket variant
         ssXml = ssXml.replace(/\[AUDIT FIRM[_ ]?NAME\]/gi, xmlEsc(autoValues.FIRM_NAME));
       }
       if (autoValues.FRN) {
-        // "FRN: ______" — replace the entire "FRN: ___" pattern (no capture group to
-        // avoid $1<digits> ambiguity in JS replacement strings when FRN starts with digits)
-        ssXml = ssXml.replace(/FRN:\s*_{3,}/g, "FRN: " + xmlEsc(autoValues.FRN));
+        // "FRN: _+" — 1 or more underscores (template uses 1–11 underscore variants)
+        // No capture group to avoid $1<digits> ambiguity when FRN starts with digits
+        ssXml = ssXml.replace(/FRN:\s*_+/g, "FRN: " + xmlEsc(autoValues.FRN));
         // Also bare "[FRN]" bracket variant
         ssXml = ssXml.replace(/\[FRN\]/gi, xmlEsc(autoValues.FRN));
       }
