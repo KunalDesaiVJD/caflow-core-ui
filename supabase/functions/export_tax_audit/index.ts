@@ -11,8 +11,8 @@
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import * as fflate from "https://esm.sh/fflate@0.8.2";
+import { createClient } from "npm:@supabase/supabase-js@2.49.1";
+import * as fflate from "npm:fflate@0.8.2";
 import { buildClauseValues } from "./clause_mapper.ts";
 
 const corsHeaders = {
