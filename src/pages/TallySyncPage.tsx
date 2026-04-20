@@ -37,6 +37,11 @@ interface SyncBatch {
   started_at: string;
   completed_at: string | null;
   warnings: unknown[] | null;
+  sync_type?: string | null;
+  current_phase?: string | null;
+  phase_status?: Record<string, "pending" | "running" | "completed" | "failed" | "skipped"> | null;
+  phase_errors?: Record<string, string> | null;
+  phase_timings?: Record<string, number> | null;
 }
 
 interface TallyGroup {
@@ -161,6 +166,7 @@ export default function TallySyncPage() {
   const [loading, setLoading]       = useState(true);
   const [syncing, setSyncing]       = useState(false);
   const [pendingRequest, setPendingRequest] = useState(false);
+  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
 
   const [ledgerSearch, setLedgerSearch]   = useState("");
   const [groupSearch, setGroupSearch]     = useState("");
@@ -1446,7 +1452,9 @@ export default function TallySyncPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-8" />
                       <TableHead>Status</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Company</TableHead>
                       <TableHead>FY</TableHead>
                       <TableHead className="text-right">Groups</TableHead>
@@ -1459,19 +1467,44 @@ export default function TallySyncPage() {
                   <TableBody>
                     {batches.map(b => {
                       const warns = (b.warnings as any[]) ?? [];
+                      const phaseStatus = (b.phase_status ?? {}) as Record<string, string>;
+                      const phaseErrors = (b.phase_errors ?? {}) as Record<string, string>;
+                      const phaseTimings = (b.phase_timings ?? {}) as Record<string, number>;
+                      const phases = Object.keys(phaseStatus);
                       const isFailed = b.status === "failed";
-                      const hasNotes = warns.length > 0 || isFailed;
+                      const isRunning = b.status === "running";
+                      const expanded = expandedBatch === b.id;
+                      const hasDetail = phases.length > 0 || warns.length > 0 || isFailed;
+                      const summaryError = phases
+                        .filter(p => phaseStatus[p] === "failed")
+                        .map(p => `${p}: ${phaseErrors[p] || "failed"}`)[0];
+
                       return (
                         <>
-                          <TableRow key={b.id}>
+                          <TableRow
+                            key={b.id}
+                            className={cn(hasDetail && "cursor-pointer hover:bg-muted/40")}
+                            onClick={() => hasDetail && setExpandedBatch(expanded ? null : b.id)}
+                          >
+                            <TableCell className="w-8 pr-0">
+                              {hasDetail && (
+                                expanded
+                                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1.5">
                                 <StatusIcon status={b.status} />
                                 <span className={cn("text-xs capitalize", statusColor(b.status))}>
                                   {b.status.replace(/_/g, " ")}
                                 </span>
+                                {isRunning && b.current_phase && (
+                                  <span className="text-xs text-blue-600 font-medium">· {b.current_phase}</span>
+                                )}
                               </div>
                             </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{b.sync_type ?? "full"}</TableCell>
                             <TableCell className="text-xs max-w-[140px] truncate">{b.tally_company ?? "—"}</TableCell>
                             <TableCell className="text-xs">{b.financial_year ?? "—"}</TableCell>
                             <TableCell className="text-right text-xs">{b.groups_fetched ?? 0}</TableCell>
@@ -1480,23 +1513,74 @@ export default function TallySyncPage() {
                             <TableCell className="text-right text-xs">{b.vouchers_fetched ?? 0}</TableCell>
                             <TableCell className="text-xs text-muted-foreground">{fmtDate(b.started_at)}</TableCell>
                           </TableRow>
-                          {hasNotes && (
-                            <TableRow key={`${b.id}-notes`} className={cn("text-xs", isFailed ? "bg-red-50" : "bg-amber-50")}>
-                              <TableCell colSpan={8} className="py-1.5 px-4">
-                                <div className={cn("flex items-start gap-2", isFailed ? "text-red-700" : "text-amber-700")}>
-                                  {isFailed ? <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
-                                  <div className="flex-1">
-                                    {warns.length > 0 ? (
-                                      warns.map((w: any, i: number) => (
-                                        <div key={i} className="leading-snug">
-                                          • {typeof w === "string" ? w : (w?.message ?? w?.error ?? JSON.stringify(w))}
-                                        </div>
-                                      ))
-                                    ) : (
-                                      <div>Sync failed — check Tally is reachable and no dialog is open on the company screen.</div>
-                                    )}
-                                  </div>
+
+                          {/* One-line failure summary always shown (collapsed view) */}
+                          {(isFailed && (summaryError || warns.length > 0) && !expanded) && (
+                            <TableRow key={`${b.id}-sum`} className="bg-red-50 text-xs">
+                              <TableCell colSpan={10} className="py-1.5 px-4 text-red-700">
+                                <div className="flex items-start gap-2">
+                                  <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                  <span className="leading-snug">
+                                    {summaryError || (typeof warns[0] === "string" ? warns[0] : (warns[0] as any)?.message || "Sync failed")}
+                                    <span className="ml-2 text-red-500/70">(click row for phase breakdown)</span>
+                                  </span>
                                 </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+
+                          {/* Expanded phase breakdown */}
+                          {expanded && hasDetail && (
+                            <TableRow key={`${b.id}-detail`} className="bg-slate-50">
+                              <TableCell colSpan={10} className="py-3 px-4">
+                                {phases.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    <div className="text-xs font-semibold text-slate-700 mb-2">Phase breakdown</div>
+                                    {phases.map(p => {
+                                      const s = phaseStatus[p];
+                                      const err = phaseErrors[p];
+                                      const ms = phaseTimings[p];
+                                      const col =
+                                        s === "completed" ? "text-green-700" :
+                                        s === "failed"    ? "text-red-700"   :
+                                        s === "running"   ? "text-blue-700"  :
+                                                            "text-slate-500";
+                                      const icon =
+                                        s === "completed" ? <CheckCircle2 className="h-3.5 w-3.5" /> :
+                                        s === "failed"    ? <XCircle className="h-3.5 w-3.5" /> :
+                                        s === "running"   ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> :
+                                                            <Clock className="h-3.5 w-3.5" />;
+                                      return (
+                                        <div key={p} className="flex items-start gap-2 text-xs">
+                                          <span className={cn("flex items-center gap-1.5 min-w-[160px]", col)}>
+                                            {icon}
+                                            <span className="font-mono">{p}</span>
+                                          </span>
+                                          <span className={col}>{s}</span>
+                                          {ms != null && (
+                                            <span className="text-slate-500">· {(ms / 1000).toFixed(1)}s</span>
+                                          )}
+                                          {err && (
+                                            <span className="text-red-600 flex-1 break-all">— {err}</span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-red-700 flex items-start gap-2">
+                                    <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                    <div>
+                                      {warns.length > 0 ? (
+                                        warns.map((w: any, i: number) => (
+                                          <div key={i}>• {typeof w === "string" ? w : (w?.message ?? w?.error ?? JSON.stringify(w))}</div>
+                                        ))
+                                      ) : (
+                                        <div>Sync failed — check Tally is reachable and no dialog is open.</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
                               </TableCell>
                             </TableRow>
                           )}
@@ -1513,15 +1597,36 @@ export default function TallySyncPage() {
           <Card className="border-dashed">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold">Run Sync Agent Locally</CardTitle>
+              <CardDescription className="text-xs">
+                All commands run where Tally Prime is open. See <code className="text-[11px]">tally-sync/README.md</code> for full guide.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground mb-2">
-                The sync agent runs on your local machine where Tally is open:
-              </p>
-              <pre className="bg-muted text-xs rounded p-3 overflow-x-auto">
+            <CardContent className="space-y-3">
+              <div>
+                <div className="text-xs font-semibold mb-1">Full sync (with automatic chunking)</div>
+                <pre className="bg-muted text-xs rounded p-3 overflow-x-auto">
 {`cd "C:\\Users\\kvdes\\Desktop\\CA FLOW\\tally-sync"
-node auto-sync.js`}
-              </pre>
+node sync-step.js all`}
+                </pre>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-1">Run one phase at a time (when Tally is slow)</div>
+                <pre className="bg-muted text-xs rounded p-3 overflow-x-auto">
+{`node sync-step.js groups     # fast
+node sync-step.js ledgers    # medium
+node sync-step.js tb         # heavy (COMPUTE query)
+node sync-step.js vouchers   # chunked monthly — safest`}
+                </pre>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-1">Resume after a failure</div>
+                <pre className="bg-muted text-xs rounded p-3 overflow-x-auto">
+{`node sync-step.js resume    # skips phases already marked 'completed'`}
+                </pre>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                <strong>Tip:</strong> click any failed batch row above to see exactly which phase failed and the full error. Vouchers run as one phase per calendar month — a hang on one month doesn't lose earlier months.
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
