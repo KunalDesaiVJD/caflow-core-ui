@@ -5,8 +5,9 @@ import { useAuditContext } from "@/hooks/useAuditContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronRight, ChevronDown, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,20 @@ interface LedgerVoucher {
   thisAmount: number;
   thisDrCr: string;
   contraLedgers: string;
+}
+
+interface Reconciliation {
+  opening_balance: number;
+  opening_type: string;
+  debit_total: number;
+  credit_total: number;
+  derived_closing: number;
+  derived_closing_type: string;
+  tally_closing: number;
+  tally_closing_type: string;
+  variance: number;
+  reconciled: boolean;
+  voucher_count: number;
 }
 
 interface TBRow {
@@ -71,6 +86,7 @@ export default function LedgerVouchersView() {
 
   const [vouchers,     setVouchers]     = useState<LedgerVoucher[]>([]);
   const [tbRow,        setTbRow]        = useState<TBRow | null>(null);
+  const [recon,        setRecon]        = useState<Reconciliation | null>(null);
   const [loading,      setLoading]      = useState(true);
   const [engId,        setEngId]        = useState<string | null>(null);
   const [expandedRow,  setExpandedRow]  = useState<string | null>(null);
@@ -123,7 +139,9 @@ export default function LedgerVouchersView() {
         : null;
       setTbRow(flippedTb);
 
-      // Fetch vouchers via RPC (returns vouchers whose line_items contain this ledger)
+      // Fetch vouchers via RPC — the new RPC returns `this_amount` / `this_dr_cr`
+      // already aggregated server-side (sums ALL line_items matching the ledger,
+      // and falls back to voucher-level amount when line_items are empty).
       const { data: vchData, error } = await (supabase as any).rpc("get_ledger_vouchers", {
         p_engagement_id: engId,
         p_ledger_name:   ledgerName,
@@ -134,26 +152,34 @@ export default function LedgerVouchersView() {
           const rawItems: LineItem[] = Array.isArray(v.line_items) ? v.line_items : [];
           let items: LineItem[] = rawItems.map(i => ({ ...i, dr_cr: flipDrCr(i.dr_cr) }));
 
-          // Fallback: no line_items but voucher has top-level party_ledger/amount/dr_cr.
-          // Synthesise a two-leg entry so the drill-down still shows something.
+          // Fallback legs for display when line_items was empty
           if (items.length === 0 && v.amount != null && v.party_ledger) {
             const thisIsParty = v.party_ledger === ledgerName;
-            const thisSide: LineItem = {
+            const side: LineItem = {
               ledger_name: ledgerName,
               amount: Number(v.amount) || 0,
               dr_cr: thisIsParty ? flipDrCr(v.dr_cr) : v.dr_cr === "Dr" ? "Cr" : "Dr",
             };
-            const contraSide: LineItem = {
+            const contra: LineItem = {
               ledger_name: thisIsParty ? decodeHtml(v.voucher_type) || "(contra)" : v.party_ledger,
               amount: Number(v.amount) || 0,
-              dr_cr: thisSide.dr_cr === "Dr" ? "Cr" : "Dr",
+              dr_cr: side.dr_cr === "Dr" ? "Cr" : "Dr",
             };
-            items = [thisSide, contraSide];
+            items = [side, contra];
           }
 
-          const thisEntry = items.find(i => i.ledger_name === ledgerName);
-          const thisAmount = thisEntry?.amount ?? 0;
-          const thisDrCr   = thisEntry?.dr_cr   ?? "Dr";
+          // Prefer server-computed this_amount / this_dr_cr, fall back to
+          // aggregating all matching legs client-side.
+          let thisAmount = Number(v.this_amount ?? 0);
+          let thisDrCr: string = String(v.this_dr_cr ?? "Dr");
+          if (!thisAmount) {
+            const matched = items.filter(i => i.ledger_name === ledgerName);
+            const dr = matched.filter(i => i.dr_cr === "Dr").reduce((s, i) => s + i.amount, 0);
+            const cr = matched.filter(i => i.dr_cr === "Cr").reduce((s, i) => s + i.amount, 0);
+            thisAmount = Math.max(dr, cr);
+            thisDrCr   = dr >= cr ? "Dr" : "Cr";
+          }
+
           const contras = items.filter(i => i.ledger_name !== ledgerName).map(i => decodeHtml(i.ledger_name));
           const contraLedgers = contras.length > 0
             ? contras[0] + (contras.length > 1 ? ` (+${contras.length - 1} more)` : "")
@@ -162,6 +188,14 @@ export default function LedgerVouchersView() {
         });
         setVouchers(processed);
       }
+
+      // Pull authoritative reconciliation from the server
+      const { data: rec } = await (supabase as any).rpc("get_ledger_reconciliation", {
+        p_engagement_id: engId,
+        p_ledger_name:   ledgerName,
+      });
+      if (Array.isArray(rec) && rec.length > 0) setRecon(rec[0] as Reconciliation);
+
       setLoading(false);
     }
     load();
@@ -307,36 +341,70 @@ export default function LedgerVouchersView() {
                 </Table>
               </div>
 
-              {/* Summary footer */}
+              {/* Reconciliation banner — only shows when Tally ≠ computed */}
+              {recon && !recon.reconciled && (
+                <div className="px-6 pt-4">
+                  <Alert variant="destructive" className="border-amber-300 bg-amber-50 text-amber-900">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Variance of {fmtAmt(Math.abs(recon.variance))} between computed and Tally closing</AlertTitle>
+                    <AlertDescription className="text-xs leading-relaxed">
+                      The sync captured {recon.voucher_count} vouchers touching this ledger, summing to Dr {fmtAmt(recon.debit_total)} / Cr {fmtAmt(recon.credit_total)}.
+                      Tally's own closing balance ({fmtAmt(recon.tally_closing)} {recon.tally_closing_type}) is the authoritative figure.
+                      The gap usually means some Tally legs weren't captured — most commonly <b>contra / journal entries whose party is the bank or another ledger</b> (so the sync agent's "party_ledger" filter misses the customer's leg) or <b>line_items JSONB was not populated for this voucher type</b>.
+                      Re-run a <b>full Tally sync</b> (not incremental) after confirming the sync agent exports complete <code>line_items</code>; this page will reconcile automatically once every voucher leg is captured.
+                    </AlertDescription>
+                  </Alert>
+                </div>
+              )}
+
+              {/* Summary footer — prefers the server-side reconciliation totals */}
               <div className="border-t bg-muted/40 px-6 py-3 space-y-1 text-xs">
-                {tbRow && (
+                {(recon || tbRow) && (
                   <div className="flex justify-between text-muted-foreground">
                     <span>Opening Balance</span>
-                    <span className={cn("font-semibold", tbRow.opening_type === "Dr" ? "text-blue-700" : "text-rose-600")}>
-                      {fmtAmt(tbRow.opening_balance)} {tbRow.opening_type}
+                    <span className={cn("font-semibold",
+                      (recon?.opening_type ?? tbRow?.opening_type) === "Dr" ? "text-blue-700" : "text-rose-600")}>
+                      {fmtAmt(recon?.opening_balance ?? tbRow?.opening_balance ?? 0)} {recon?.opening_type ?? tbRow?.opening_type}
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between text-muted-foreground">
                   <span>Total Debit Transactions</span>
-                  <span className="font-semibold text-blue-700">{fmtAmt(totalDr)}</span>
+                  <span className="font-semibold text-blue-700">{fmtAmt(recon?.debit_total ?? totalDr)}</span>
                 </div>
                 <div className="flex justify-between text-muted-foreground">
                   <span>Total Credit Transactions</span>
-                  <span className="font-semibold text-rose-600">{fmtAmt(totalCr)}</span>
-                </div>
-                <div className="flex justify-between font-semibold border-t pt-1 mt-1">
-                  <span>Closing Balance (Computed)</span>
-                  <span className={closingType === "Dr" ? "text-blue-700" : "text-rose-600"}>
-                    {fmtAmt(closingAbs)} {closingType}
-                  </span>
+                  <span className="font-semibold text-rose-600">{fmtAmt(recon?.credit_total ?? totalCr)}</span>
                 </div>
                 {tbRow && (
-                  <div className="flex justify-between text-muted-foreground border-t pt-1">
-                    <span>Closing Balance (from Tally)</span>
-                    <span className={cn("font-semibold", tbRow.balance_type === "Dr" ? "text-blue-700" : "text-rose-600")}>
+                  <div className="flex justify-between font-semibold border-t pt-1 mt-1">
+                    <span>Closing Balance (from Tally — authoritative)</span>
+                    <span className={tbRow.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
                       {fmtAmt(tbRow.closing_balance)} {tbRow.balance_type}
                     </span>
+                  </div>
+                )}
+                {recon && (
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Closing Balance (derived from vouchers)</span>
+                    <span className={cn("font-semibold",
+                      recon.derived_closing_type === "Dr" ? "text-blue-700" : "text-rose-600",
+                      !recon.reconciled && "line-through opacity-70"
+                    )}>
+                      {fmtAmt(recon.derived_closing)} {recon.derived_closing_type}
+                    </span>
+                  </div>
+                )}
+                {recon && !recon.reconciled && (
+                  <div className="flex justify-between border-t pt-1 font-semibold text-amber-700">
+                    <span>Variance (derived − Tally)</span>
+                    <span>{recon.variance >= 0 ? "+" : ""}{fmtAmt(recon.variance)}</span>
+                  </div>
+                )}
+                {recon && recon.reconciled && (
+                  <div className="flex justify-between border-t pt-1 font-semibold text-emerald-700">
+                    <span>✓ Reconciled with Tally</span>
+                    <span>Match</span>
                   </div>
                 )}
               </div>
