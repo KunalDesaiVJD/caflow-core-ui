@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { buildTbPresentationModel, type TbPresentationModel, type TbSectionType } from "@/lib/tb-hierarchy";
 import coaMasterDataJson from "@/data/coa-master-data.json";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 
 // ─── Types ───
 interface PipelineStage2Props {
@@ -1792,11 +1793,12 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={5} stageLabel="Trial Balance Import" />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 5 — Trial Balance Import</h1>
-          <p className="text-sm text-muted-foreground">Import Trial Balance and Ledger data for {engagement.clients?.name || engagement.client_name || "—"} — FY {engagement.financial_year}</p>
+          <h1 className="text-lg font-bold text-foreground">Stage 5 — Trial Balance Import</h1>
+          <p className="text-xs text-muted-foreground">Import Trial Balance and Ledger data for the current financial year</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={handleCompleteStage2} disabled={!canComplete} className="gap-1">

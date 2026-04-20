@@ -11,6 +11,7 @@ import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNot
 import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
+import EngagementHeader from '@/components/pipeline/EngagementHeader';
 
 interface Props {
   engagementId: string;
@@ -64,10 +65,11 @@ export default function PipelineStage7Combined({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={8} stageLabel={isCorporate ? 'Notes, CARO & MRL' : 'Notes to Accounts'} />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">
+          <h1 className="text-lg font-bold text-foreground">
             {isCorporate ? 'Stage 8 — Notes, CARO & MRL' : 'Stage 8 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">

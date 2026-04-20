@@ -18,6 +18,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2
@@ -1070,18 +1071,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={6} stageLabel="COA Mapping" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 6 — COA Mapping</h1>
-          <p className="text-sm text-muted-foreground">
-            {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
-            {isNonCorporate
-              ? entityType                                                          // e.g. "Partnership"
-              : engagement.schedule_iii_division === "div_ii"
-                ? "Ind AS (Div II)"
-                : "Schedule III (Div I)"}
-          </p>
+          <h1 className="text-lg font-bold text-foreground">Stage 6 — COA Mapping</h1>
+          <p className="text-xs text-muted-foreground">Map every ledger to its financial-statement line item</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={saveMapping} disabled={saving}>Save Mapping</Button>

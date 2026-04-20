@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   FileText, ArrowRight, Loader2, Save, Sparkles, Check, Plus, Download,
   Eye, ChevronRight, BookOpen, Edit3, X, AlertTriangle
@@ -321,10 +322,11 @@ export default function PipelineStage7({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Notes to Accounts" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 7 — Notes to Accounts</h1>
+          <h1 className="text-lg font-bold text-foreground">Stage 7 — Notes to Accounts</h1>
           <p className="text-sm text-muted-foreground">{selectedCount} notes selected out of {notes.length}</p>
         </div>
         <div className="flex gap-2">
