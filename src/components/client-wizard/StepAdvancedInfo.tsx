@@ -253,7 +253,7 @@ export const StepAdvancedInfo = ({
         .from("client_classification_history")
         .select("id")
         .eq("client_id", clientId)
-        .eq("effective_from_fy", effectiveFromFY);
+        .or(`effective_from_fy.eq.${effectiveFromFY},financial_year.eq.${effectiveFromFY}`);
       if (conflictErr) throw conflictErr;
       if (conflict && conflict.length > 0) {
         toast({
@@ -273,12 +273,13 @@ export const StepAdvancedInfo = ({
         .from("client_classification_history")
         .insert({
           client_id: clientId,
+          financial_year: effectiveFromFY,
+          classification: pendingClassification,
           old_classification: savedClassification || null,
           new_classification: pendingClassification,
           effective_from_fy: effectiveFromFY,
           responsible_person_id: pendingResponsiblePersonId || null,
           changed_by: currentUserId,
-          changed_at: new Date().toISOString(),
           notes: changeNotes.trim() || null,
         });
       if (historyError) throw historyError;
