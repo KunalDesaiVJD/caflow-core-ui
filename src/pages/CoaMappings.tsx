@@ -109,6 +109,7 @@ export default function CoaMappings() {
 
   const [engagements, setEngagements] = useState<Engagement[]>([]);
   const [selectedEng, setSelectedEng] = useState<string>("");
+  const [tallyEngId, setTallyEngId] = useState<string | null>(null);
   const [entityType, setEntityType] = useState<"corporate" | "llp" | "nce">("corporate");
 
   const [ledgers, setLedgers] = useState<LedgerRow[]>([]);
@@ -149,6 +150,31 @@ export default function CoaMappings() {
     setEntityType(et ?? "corporate");
   }, [selectedEng, engagements]);
 
+  // ── Resolve tally engagement id (separate table from audit_engagements) ───
+  useEffect(() => {
+    (async () => {
+      setTallyEngId(null);
+      const eng = engagements.find((e) => e.id === selectedEng);
+      if (!eng?.client_id) return;
+      if (eng.financial_year) {
+        const { data } = await supabase
+          .from("engagements")
+          .select("id")
+          .eq("client_id", eng.client_id)
+          .eq("financial_year", eng.financial_year)
+          .maybeSingle();
+        if ((data as any)?.id) { setTallyEngId((data as any).id); return; }
+      }
+      const { data: tg } = await supabase
+        .from("tally_groups")
+        .select("engagement_id")
+        .eq("client_id", eng.client_id)
+        .limit(1)
+        .maybeSingle();
+      if ((tg as any)?.engagement_id) setTallyEngId((tg as any).engagement_id);
+    })();
+  }, [selectedEng, engagements]);
+
   // ── Load COA heads for entity type ────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -165,11 +191,14 @@ export default function CoaMappings() {
   const loadEngagementData = useCallback(async () => {
     if (!selectedEng) return;
     setLoading(true);
+    const ledgerQuery = tallyEngId
+      ? supabase
+          .from("tally_ledgers")
+          .select("id, ledger_name, closing_balance, parent_group")
+          .eq("engagement_id", tallyEngId)
+      : Promise.resolve({ data: [] as any[] });
     const [ledRes, mapRes] = await Promise.all([
-      supabase
-        .from("tally_ledgers")
-        .select("id, ledger_name, closing_balance, parent_group")
-        .eq("engagement_id", selectedEng),
+      ledgerQuery,
       supabase
         .from("coa_mappings")
         .select("*")
@@ -183,7 +212,7 @@ export default function CoaMappings() {
     })));
     setMappings((mapRes.data || []) as Mapping[]);
     setLoading(false);
-  }, [selectedEng]);
+  }, [selectedEng, tallyEngId]);
 
   useEffect(() => { loadEngagementData(); }, [loadEngagementData]);
 
