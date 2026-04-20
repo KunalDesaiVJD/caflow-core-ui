@@ -8,7 +8,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { BrainCircuit, Check, X, Download, Eye, Power, Sparkles } from "lucide-react";
+import { BrainCircuit, Check, X, Download, Eye, Power, Sparkles, Zap, Search, Pencil, Trash2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const MIN_PATTERN_THRESHOLD = 3;
 
@@ -151,16 +154,23 @@ export default function AdminAiSkills() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground flex items-center gap-2">
-            <BrainCircuit className="h-6 w-6 text-primary" /> AI Skill Candidates
+            <BrainCircuit className="h-6 w-6 text-primary" /> AI Skills &amp; Intelligence
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {patterns.length} patterns detected from human behaviour across {new Set(patterns.flatMap(() => [])).size || "multiple"} firms
+            Pattern-detected skills from human overrides &amp; cross-client COA mapping knowledge base.
           </p>
         </div>
         <Button onClick={exportSkills} variant="outline" className="gap-2" disabled={activeSkills.length === 0}>
           <Download size={16} /> Export All Skills
         </Button>
       </div>
+
+      <Tabs defaultValue="skills">
+        <TabsList>
+          <TabsTrigger value="skills" className="gap-2"><Sparkles size={14} /> Skill Candidates</TabsTrigger>
+          <TabsTrigger value="coa" className="gap-2"><Zap size={14} /> COA Mapping Intelligence</TabsTrigger>
+        </TabsList>
+        <TabsContent value="skills" className="space-y-6 pt-4">
 
       {/* Candidate Patterns */}
       {candidatePatterns.length > 0 && (
@@ -288,6 +298,12 @@ export default function AdminAiSkills() {
         </CardContent>
       </Card>
 
+        </TabsContent>
+        <TabsContent value="coa" className="pt-4">
+          <CoaIntelligencePanel />
+        </TabsContent>
+      </Tabs>
+
       {/* Preview Sheet */}
       <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
@@ -332,5 +348,197 @@ export default function AdminAiSkills() {
         </SheetContent>
       </Sheet>
     </div>
+  );
+}
+
+// ─── COA Mapping Intelligence Panel ──────────────────────────────────────────
+type IntelRow = {
+  id: string;
+  normalized_name: string;
+  entity_type: string;
+  account_head: string;
+  bs_pl: string | null;
+  account_group: string | null;
+  confidence_score: number;
+  times_confirmed: number;
+  times_overridden: number;
+  alternatives: { account_head: string; count: number }[] | null;
+  firms_affected: number;
+  last_used_at: string | null;
+};
+
+type CoaHead = { account_head: string; bs_pl: string | null; group_name: string | null; entity_type: string };
+
+function CoaIntelligencePanel() {
+  const [rows, setRows] = useState<IntelRow[]>([]);
+  const [heads, setHeads] = useState<CoaHead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [entity, setEntity] = useState<"all" | "corporate" | "llp" | "nce">("all");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("coa_mapping_intelligence" as any)
+      .select("*")
+      .order("last_used_at", { ascending: false })
+      .limit(1000);
+    setRows((data as IntelRow[]) ?? []);
+    const { data: hd } = await supabase
+      .from("coa_master")
+      .select("account_head, bs_pl, group_name, entity_type")
+      .limit(5000);
+    setHeads((hd as CoaHead[]) ?? []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = rows.filter((r) => {
+    if (entity !== "all" && r.entity_type !== entity) return false;
+    if (!q.trim()) return true;
+    const qq = q.toLowerCase();
+    return (
+      r.normalized_name.toLowerCase().includes(qq) ||
+      r.account_head.toLowerCase().includes(qq) ||
+      (r.account_group ?? "").toLowerCase().includes(qq)
+    );
+  });
+
+  const remap = async (r: IntelRow, h: CoaHead) => {
+    const { error } = await supabase
+      .from("coa_mapping_intelligence" as any)
+      .update({
+        account_head:     h.account_head,
+        bs_pl:            h.bs_pl,
+        account_group:    h.group_name,
+        confidence_score: 99,
+        times_confirmed:  r.times_confirmed + 1,
+      })
+      .eq("id", r.id);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`Re-mapped: ${r.normalized_name} → ${h.account_head}`);
+    load();
+  };
+
+  const remove = async (r: IntelRow) => {
+    if (!confirm(`Remove intelligence for "${r.normalized_name}"? Future mappings won't use this learned pattern.`)) return;
+    const { error } = await supabase.from("coa_mapping_intelligence" as any).delete().eq("id", r.id);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Entry removed");
+    load();
+  };
+
+  if (loading) return <Skeleton className="h-64" />;
+
+  return (
+    <Card>
+      <CardHeader className="space-y-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Zap size={14} className="text-violet-600" />
+          Cross-Client COA Mapping Intelligence
+          <Badge variant="outline">{rows.length} learned patterns</Badge>
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Every time a user confirms or overrides a COA mapping, it is recorded here and reused across all future engagements — for every firm, every client. Remap an entry to override the learned suggestion.
+        </p>
+        <div className="flex gap-2 pt-2">
+          <div className="relative flex-1 max-w-md">
+            <Search size={14} className="absolute left-3 top-3 text-muted-foreground" />
+            <Input className="pl-9" placeholder="Search ledger name or account head…" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <select value={entity} onChange={(e) => setEntity(e.target.value as any)} className="border rounded-md px-3 text-sm bg-background">
+            <option value="all">All entities</option>
+            <option value="corporate">Corporate</option>
+            <option value="llp">LLP</option>
+            <option value="nce">NCE</option>
+          </select>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        {filtered.length === 0 ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">
+            No learned patterns yet. Once users confirm or override COA mappings, they will accumulate here.
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Ledger pattern</TableHead>
+                <TableHead>Entity</TableHead>
+                <TableHead>Current mapping</TableHead>
+                <TableHead>BS/PL</TableHead>
+                <TableHead className="text-right">Confidence</TableHead>
+                <TableHead className="text-right">Confirms / Overrides</TableHead>
+                <TableHead className="text-right">Firms</TableHead>
+                <TableHead className="w-[170px]"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.slice(0, 500).map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="font-mono text-xs">{r.normalized_name}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{r.entity_type.toUpperCase()}</Badge></TableCell>
+                  <TableCell>
+                    <div className="font-medium text-sm">{r.account_head}</div>
+                    {r.account_group && <div className="text-xs text-muted-foreground">{r.account_group}</div>}
+                  </TableCell>
+                  <TableCell>{r.bs_pl ? <Badge variant="outline">{r.bs_pl}</Badge> : "-"}</TableCell>
+                  <TableCell className="text-right">
+                    <Badge className={r.confidence_score >= 85 ? "bg-green-600 text-white" : r.confidence_score >= 65 ? "bg-amber-500 text-white" : "bg-muted text-foreground"}>
+                      {Math.round(r.confidence_score)}%
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    <span className="text-green-700">{r.times_confirmed}</span>
+                    <span className="text-muted-foreground"> / </span>
+                    <span className="text-rose-700">{r.times_overridden}</span>
+                  </TableCell>
+                  <TableCell className="text-right">{r.firms_affected}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-1 justify-end">
+                      <IntelRemapPopover r={r} heads={heads.filter((h) => h.entity_type === r.entity_type)} onPick={remap} />
+                      <Button size="sm" variant="ghost" onClick={() => remove(r)} className="text-destructive"><Trash2 size={14} /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function IntelRemapPopover({ r, heads, onPick }: {
+  r: IntelRow; heads: CoaHead[]; onPick: (r: IntelRow, h: CoaHead) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = heads.filter((h) => h.account_head.toLowerCase().includes(q.toLowerCase())).slice(0, 40);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" className="gap-1"><Pencil size={14} /> Remap</Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[360px] p-0" align="end">
+        <div className="p-2 border-b">
+          <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search account head…" />
+        </div>
+        <div className="max-h-[280px] overflow-y-auto">
+          {filtered.map((h) => (
+            <button
+              key={h.account_head}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-accent border-b last:border-b-0"
+              onClick={() => { onPick(r, h); setOpen(false); setQ(""); }}
+            >
+              <div className="font-medium">{h.account_head}</div>
+              <div className="text-xs text-muted-foreground">{h.group_name ?? ""}</div>
+            </button>
+          ))}
+          {filtered.length === 0 && <div className="p-4 text-sm text-muted-foreground">No matches.</div>}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
