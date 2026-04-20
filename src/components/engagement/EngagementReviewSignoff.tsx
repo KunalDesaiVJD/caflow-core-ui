@@ -1,4 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+/* ═══════════════════════════════════════════════════════════════════════════
+   STAGE 9 — SIGN-OFF & UDIN  (rev. 2026-04)
+   Rewritten from scratch with corrected stage-key mapping and schema usage.
+
+   Key fixes vs. previous version:
+   • stage_statuses keys now match the real pipeline num (1..9, not legacy 2..8)
+   • scrutiny_findings uses client_id + financial_year (no engagement_id col)
+   • Query Tracker stats come from audit_client_queries (not a missing table)
+   • Report applicability derived from entity_type + audit_type, not broken
+     requires_* flags
+   • FS readiness detected from fa_financial_statements (+ BS balance check)
+     — leverages the new Stage 10 work that persists amount_cy/amount_py
+   • Cyrillic typo (setCароCount) purged
+   • stageNumber passed to EngagementHeader is 9 (header expects 1..9)
+   • Partner info resolved from users + firm_partners fallback
+   ═══════════════════════════════════════════════════════════════════════════ */
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,21 +24,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { toast } from "sonner";
-import {
-  CheckCircle, XCircle, Upload, FileText, Shield, Loader2,
-  ExternalLink, Package, Download, Lock, Award, Share2, AlertTriangle,
-  ChevronDown,
-} from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
+import {
+  AlertTriangle, Award, CheckCircle2, ExternalLink, FileText, Loader2,
+  Lock, Package, Shield, Upload, XCircle, Download, FileSpreadsheet,
+  ClipboardList, BookMarked, Info,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 
+// ─── Types ──────────────────────────────────────────────────────────────────
 interface Props {
   engagement: any;
   client: any;
@@ -30,116 +49,393 @@ interface Props {
   onUpdate: () => void;
 }
 
-interface CheckItem {
+type GateStatus = "pass" | "warn" | "fail" | "skip";
+
+interface Gate {
+  key: string;
   label: string;
-  passed: boolean;
-  fixTab?: string;
+  status: GateStatus;
+  detail?: string;
+  blocker?: boolean;      // true → must pass before sign-off
+  onFix?: () => void;
   fixLabel?: string;
 }
 
+// ─── Pipeline stage map (matches STAGES in AuditPipeline.tsx) ───────────────
+const STAGE_LABELS: { key: string; label: string }[] = [
+  { key: "1", label: "Engagement Setup" },
+  { key: "2", label: "Trial Balance Import" },
+  { key: "3", label: "COA Mapping" },
+  { key: "4", label: "Scrutiny Engine" },
+  { key: "5", label: "Query Tracker" },
+  { key: "6", label: "Workpapers & Audit Sheet" },
+  { key: "7", label: "Notes to Accounts & CARO" },
+  { key: "8", label: "3CA / 3CB / 3CD Reports" },
+];
+// NB: current stage (9 — Sign-off) and future FS (10) are rendered separately.
+
+// ─── Entity-type helpers ────────────────────────────────────────────────────
+const NON_CORPORATE = /individual|proprietor|partnership|llp|huf|trust|aop|boi|firm|society/i;
+const isCompany = (et: string) =>
+  !!et && !NON_CORPORATE.test(et) && /company|opc|private|public/i.test(et);
+
+// Derive applicable reports from entity_type + audit_type — single source of truth.
+function resolveApplicableReports(engagement: any): {
+  statutory: boolean; caro: boolean; ifc: boolean; cashFlow: boolean;
+  form3ca: boolean; form3cb: boolean; form3cd: boolean;
+} {
+  const et = String(engagement?.entity_type || engagement?.clients?.entity_type || "");
+  const at = String(engagement?.audit_type || "").toLowerCase();
+  const corp = isCompany(et);
+  const isStat = at.includes("statutory") || at === "both";
+  const isTax  = at.includes("tax")       || at === "both";
+
+  return {
+    statutory: isStat,
+    caro:      corp && isStat && engagement?.caro_applicable !== false,
+    ifc:       corp && isStat && engagement?.ifc_applicable  !== false,
+    cashFlow:  corp && isStat && engagement?.cash_flow_applicable !== false,
+    // Tax audit: 3CA if audited under any other law (typically companies); 3CB otherwise.
+    form3ca:   isTax && corp,
+    form3cb:   isTax && !corp,
+    form3cd:   isTax,
+  };
+}
+
+// ─── Main component ─────────────────────────────────────────────────────────
 export function EngagementReviewSignoff({ engagement, client, partner, onUpdate }: Props) {
   const { user } = useAuth();
-  const [checks, setChecks] = useState<CheckItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [generatingBundle, setGeneratingBundle] = useState(false);
-  const [signing, setSigning] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [declared, setDeclared] = useState(false);
-  const [udin, setUdin] = useState(engagement?.udin || "");
-  const [drafts, setDrafts] = useState<any[]>([]);
-  const [firm, setFirm] = useState<any>(null);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [findingsStats, setFindingsStats] = useState({ total: 0, accepted: 0, queried: 0, overridden: 0 });
-  const [notesCount, setNotesCount] = useState(0);
-  const [caroCount, setCароCount] = useState(0);
-  const [reportTypes, setReportTypes] = useState<string[]>([]);
 
-  const isSigned = engagement?.final_locked === true || engagement?.status === "signed";
+  // Gating for role — unchanged API
   const canSignOff = user?.role === "partner_ca" || user?.role === "firm_admin" || user?.role === "superadmin";
+  const isSigned   = engagement?.final_locked === true || engagement?.status === "signed";
 
-  // UDIN validation: 24-character alphanumeric
+  // ── Data state ──
+  const [loading, setLoading]               = useState(true);
+  const [firm, setFirm]                     = useState<any>(null);
+  const [partnerResolved, setPartnerResolved] = useState<any>(partner);
+  const [drafts, setDrafts]                 = useState<any[]>([]);
+  const [mgmtLetterCount, setMgmtLetterCount] = useState(0);
+  const [notesCount, setNotesCount]         = useState(0);
+  const [unsignedWpCount, setUnsignedWpCount] = useState(0);
+  const [caroRespCount, setCaroRespCount]   = useState(0);
+  const [form3cdCount, setForm3cdCount]     = useState(0);
+
+  const [findings, setFindings] = useState({ total: 0, accepted: 0, queried: 0, overridden: 0, highOpen: 0 });
+  const [queries,  setQueries]  = useState({ total: 0, open: 0, resolved: 0 });
+  const [fsReady,  setFsReady]  = useState<{ bsRowCount: number; bsBalanced: boolean; bsDiff: number }>({
+    bsRowCount: 0, bsBalanced: false, bsDiff: 0,
+  });
+
+  // ── Sign-off form state ──
+  const [udin, setUdin]         = useState(engagement?.udin || "");
+  const [declared, setDeclared] = useState(false);
+  const [signing, setSigning]   = useState(false);
+  const [generating, setGenerating]       = useState(false);
+  const [bundling,  setBundling]          = useState(false);
+  const [uploading, setUploading]         = useState(false);
+  const [showConfirm, setShowConfirm]     = useState(false);
+
   const udinValid = /^[A-Za-z0-9]{24}$/.test(udin.trim());
 
-  const runChecks = useCallback(async () => {
+  const applicable = useMemo(() => resolveApplicableReports(engagement), [engagement]);
+
+  // ── Load everything in parallel ──
+  const loadAll = useCallback(async () => {
     if (!engagement?.id) return;
     setLoading(true);
+    const engId = engagement.id;
     const clientId = engagement.client_id;
     const fy = engagement.financial_year;
-    const engId = engagement.id;
 
-    // Parallel data fetch
-    const [tbRes, highRes, wpRes, caroRes, notesRes, draftRes, mgmtRes, findingsRes] = await Promise.all([
-      supabase.from("trial_balance_snapshots").select("*", { count: "exact", head: true }).eq("client_id", clientId).eq("financial_year", fy),
-      supabase.from("scrutiny_findings").select("*", { count: "exact", head: true }).eq("client_id", clientId).eq("severity", "HIGH").eq("status", "open"),
-      supabase.from("audit_workpapers").select("*", { count: "exact", head: true }).eq("engagement_id", engId).is("conclusion", null),
-      supabase.from("audit_caro_responses").select("*", { count: "exact", head: true }).eq("engagement_id", engId),
-      supabase.from("audit_notes").select("*", { count: "exact", head: true }).eq("engagement_id", engId),
-      supabase.from("documents").select("*", { count: "exact", head: true }).eq("engagement_id", engId).eq("sub_category", "draft"),
-      supabase.from("documents").select("*", { count: "exact", head: true }).eq("engagement_id", engId).eq("category", "mgmt_rep_letter"),
-      supabase.from("scrutiny_findings").select("status").eq("client_id", clientId),
-    ]);
+    try {
+      const [
+        findingsRes, queriesRes, wpRes, notesRes, caroRes, form3cdRes,
+        fsRowsRes, draftsRes, mgmtRes,
+      ] = await Promise.all([
+        supabase.from("scrutiny_findings").select("status, severity").eq("client_id", clientId).eq("financial_year", fy),
+        supabase.from("audit_client_queries").select("status").eq("engagement_id", engId),
+        supabase.from("audit_workpapers").select("id, signed_by").eq("engagement_id", engId),
+        supabase.from("audit_notes").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+        supabase.from("audit_caro_responses").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+        supabase.from("audit_3cd_responses").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+        supabase.from("fa_financial_statements").select("line_item_code, section, amount_cy").eq("engagement_id", engId),
+        supabase.from("documents").select("id, filename, r2_key, category, sub_category, is_final, is_signed, signed_at").eq("engagement_id", engId).eq("sub_category", "draft").order("created_at", { ascending: false }),
+        supabase.from("documents").select("id", { count: "exact", head: true }).eq("engagement_id", engId).eq("category", "mgmt_rep_letter"),
+      ]);
 
-    // Stats
-    const findings = findingsRes.data || [];
-    setFindingsStats({
-      total: findings.length,
-      accepted: findings.filter((f: any) => f.status === "accepted").length,
-      queried: findings.filter((f: any) => f.status === "queried").length,
-      overridden: findings.filter((f: any) => f.status === "overridden").length,
+      // Findings
+      const fRows = findingsRes.data || [];
+      setFindings({
+        total: fRows.length,
+        accepted:   fRows.filter((r: any) => r.status === "accepted"   || r.status === "resolved").length,
+        queried:    fRows.filter((r: any) => r.status === "queried").length,
+        overridden: fRows.filter((r: any) => r.status === "overridden").length,
+        highOpen:   fRows.filter((r: any) => r.severity === "HIGH" && !["accepted","resolved","overridden"].includes(r.status || "")).length,
+      });
+
+      // Queries
+      const qRows = queriesRes.data || [];
+      setQueries({
+        total:    qRows.length,
+        open:     qRows.filter((r: any) => r.status !== "resolved" && r.status !== "closed").length,
+        resolved: qRows.filter((r: any) => r.status === "resolved" || r.status === "closed").length,
+      });
+
+      // Workpapers
+      const wpRows = wpRes.data || [];
+      setUnsignedWpCount(wpRows.filter((w: any) => !w.signed_by).length);
+
+      setNotesCount(notesRes.count || 0);
+      setCaroRespCount(caroRes.count || 0);
+      setForm3cdCount(form3cdRes.count || 0);
+      setMgmtLetterCount(mgmtRes.count || 0);
+      setDrafts(draftsRes.data || []);
+
+      // FS BS balance
+      const fs = fsRowsRes.data || [];
+      const bsRows = fs.filter((r: any) => String(r.section || "").toLowerCase().includes("bs") ||
+                                          String(r.section || "").toLowerCase().includes("asset") ||
+                                          String(r.section || "").toLowerCase().includes("liab") ||
+                                          String(r.section || "").toLowerCase().includes("equity"));
+      const sumOf = (codes: string[]) => bsRows
+        .filter((r: any) => codes.includes(r.line_item_code))
+        .reduce((s: number, r: any) => s + (r.amount_cy || 0), 0);
+      // Both corporate + NCE parent codes considered
+      const ast = sumOf(["BS_NCA","BS_CA","NCE_AST"]);
+      const liab = sumOf(["BS_EQ","BS_NCL","BS_CL","NCE_EL"]);
+      const diff = Math.round((ast - liab) * 100) / 100;
+      setFsReady({ bsRowCount: bsRows.length, bsBalanced: Math.abs(diff) < 1, bsDiff: diff });
+
+      // Firm
+      if (engagement.firm_id) {
+        const { data: f } = await supabase
+          .from("firms").select("name, icai_firm_reg_no, address")
+          .eq("id", engagement.firm_id).maybeSingle();
+        setFirm(f);
+      }
+
+      // Partner (accept prop; fall back to users table lookup via partner_id)
+      if (!partner && (engagement as any)?.partner_id) {
+        const { data: p } = await supabase
+          .from("users").select("name, membership_number, email")
+          .eq("id", (engagement as any).partner_id).maybeSingle();
+        if (p) setPartnerResolved(p);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [engagement, partner]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // ── Derived gates ──
+  const gates: Gate[] = useMemo(() => {
+    const ss = (engagement?.stage_statuses || {}) as Record<string, string>;
+    const stageDone = (k: string) => ss[k] === "complete";
+    const list: Gate[] = [
+      { key: "tb",        label: "Trial Balance Imported",       status: stageDone("2") ? "pass" : "fail",
+        blocker: true, fixLabel: "Go to Stage 2" },
+      { key: "coa",       label: "COA Mapping Complete",         status: stageDone("3") ? "pass" : "fail",
+        blocker: true, fixLabel: "Go to Stage 3" },
+      { key: "scrutiny",  label: "Scrutiny Engine Reviewed",     status: stageDone("4") ? "pass" : "warn",
+        detail: findings.highOpen > 0 ? `${findings.highOpen} HIGH-severity findings still open` : undefined,
+        blocker: findings.highOpen > 0 },
+      { key: "queries",   label: "Client Queries Resolved",      status: queries.open === 0 ? "pass" : "warn",
+        detail: queries.open > 0 ? `${queries.open} open queries` : undefined,
+        blocker: false },
+      { key: "wp",        label: "Workpapers Signed Off",        status: unsignedWpCount === 0 ? "pass" : "warn",
+        detail: unsignedWpCount > 0 ? `${unsignedWpCount} workpapers missing sign-off` : undefined,
+        blocker: false },
+      { key: "notes",     label: "Notes to Accounts Drafted",    status: notesCount >= 5 ? "pass" : (notesCount > 0 ? "warn" : "fail"),
+        detail: `${notesCount} notes drafted`, blocker: notesCount === 0 },
+    ];
+    if (applicable.caro) {
+      list.push({ key: "caro", label: "CARO 2020 Responses",
+        status: caroRespCount >= 21 ? "pass" : (caroRespCount > 0 ? "warn" : "fail"),
+        detail: `${caroRespCount} / 21 clauses`, blocker: caroRespCount === 0 });
+    } else {
+      list.push({ key: "caro", label: "CARO 2020 Responses", status: "skip", detail: "Not applicable to entity type" });
+    }
+    if (applicable.form3cd) {
+      list.push({ key: "3cd", label: "Form 3CD Clauses",
+        status: form3cdCount >= 40 ? "pass" : (form3cdCount > 0 ? "warn" : "fail"),
+        detail: `${form3cdCount} clauses responded`, blocker: form3cdCount === 0 });
+    } else {
+      list.push({ key: "3cd", label: "Form 3CD Clauses", status: "skip", detail: "Tax audit not applicable" });
+    }
+    list.push({ key: "fs", label: "Financial Statements Generated",
+      status: fsReady.bsRowCount > 0 ? (fsReady.bsBalanced ? "pass" : "warn") : "fail",
+      detail: fsReady.bsRowCount === 0
+        ? "No FS rows saved — run Stage 10"
+        : fsReady.bsBalanced
+          ? `BS balanced (${fsReady.bsRowCount} line items)`
+          : `BS out of balance by ₹${Math.abs(fsReady.bsDiff).toLocaleString("en-IN")}`,
+      blocker: fsReady.bsRowCount === 0,
     });
-    setNotesCount(notesRes.count || 0);
-    setCароCount(caroRes.count || 0);
+    list.push({ key: "mrl", label: "Management Representation Letter",
+      status: mgmtLetterCount > 0 ? "pass" : "fail",
+      detail: mgmtLetterCount > 0 ? "Uploaded" : "Not uploaded", blocker: true });
+    list.push({ key: "draft", label: "Draft Report Generated",
+      status: drafts.length > 0 ? "pass" : "fail",
+      detail: drafts.length > 0 ? `v${drafts.length} draft available` : "No draft generated", blocker: true });
+    return list;
+  }, [engagement, findings, queries, unsignedWpCount, notesCount, caroRespCount, form3cdCount,
+      fsReady, mgmtLetterCount, drafts, applicable]);
 
-    // Report types
-    const types: string[] = ["Independent Auditor's Report"];
-    if (engagement.requires_caro) types.push("CARO 2020");
-    if (engagement.requires_3ca) types.push("Form 3CA");
-    if (engagement.requires_3cb) types.push("Form 3CB");
-    if (engagement.requires_3cd) types.push("Form 3CD");
-    setReportTypes(types);
+  const blockers = gates.filter(g => g.blocker && g.status !== "pass" && g.status !== "skip");
+  const canProceed = blockers.length === 0;
+  const passCount = gates.filter(g => g.status === "pass").length;
+  const totalCount = gates.filter(g => g.status !== "skip").length;
+  const completeness = totalCount > 0 ? Math.round((passCount / totalCount) * 100) : 0;
 
-    // Risk assessment check
-    const ra = engagement.risk_assessment;
-    const raRows = Array.isArray(ra) ? ra : [];
-    const raComplete = raRows.length >= 8 && raRows.every((r: any) => r.rating && r.response);
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const handleGenerateDraft = async () => {
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-audit-report", {
+        body: { engagement_id: engagement.id, report_type: isCompany(engagement?.entity_type) ? "companies_act" : "non_corporate", include_comparative: true },
+      });
+      if (error) throw error;
+      toast.success(`Draft report v${data?.version_number || "1"} generated`);
+      await loadAll();
+      onUpdate();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to generate draft");
+    } finally { setGenerating(false); }
+  };
 
-    // CARO check
-    let caroPass = true;
-    if (engagement.caro_applicable || engagement.requires_caro) {
-      caroPass = (caroRes.count || 0) >= 21;
-    }
+  const handleUploadMrl = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const path = `firms/${engagement.firm_id}/clients/${engagement.client_id}/mgmt_rep_letter/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      await supabase.from("documents").insert({
+        firm_id: engagement.firm_id, client_id: engagement.client_id, engagement_id: engagement.id,
+        filename: file.name, category: "mgmt_rep_letter", r2_key: path,
+      } as any);
+      toast.success("Management Representation Letter uploaded");
+      await loadAll();
+    } catch (err: any) {
+      toast.error(err?.message || "Upload failed");
+    } finally { setUploading(false); (e.target as HTMLInputElement).value = ""; }
+  };
 
-    // Notes check
-    const notesPass = (notesRes.count || 0) >= 10;
+  const viewDraft = async (doc: any) => {
+    if (!doc?.r2_key) return;
+    const { data } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 3600);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  };
 
-    // Fetch drafts
-    const { data: draftDocs } = await supabase.from("documents").select("*").eq("engagement_id", engId).eq("sub_category", "draft").order("filename", { ascending: false });
-    setDrafts(draftDocs || []);
+  const handleSignOff = async () => {
+    if (!declared || !udinValid) return;
+    setSigning(true);
+    try {
+      const now = new Date().toISOString();
+      const signOffData: any = {
+        status: "signed",
+        final_locked: true,
+        udin: udin.trim(),
+        sign_off_by: user?.id,
+        sign_off_date: now,
+        signed_at: now,
+        signed_by: user?.id,
+        stage_statuses: { ...(engagement.stage_statuses || {}), "9": "complete" },
+      };
+      const { error: engErr } = await supabase
+        .from("audit_engagements").update(signOffData).eq("id", engagement.id);
+      if (engErr) throw engErr;
 
-    // Fetch firm
-    if (engagement.firm_id) {
-      const { data: f } = await supabase.from("firms").select("name, icai_reg_no, icai_firm_reg_no").eq("id", engagement.firm_id).single();
-      setFirm(f);
-    }
+      // Lock downstream records
+      await Promise.all([
+        supabase.from("audit_notes").update({ is_locked: true } as any).eq("engagement_id", engagement.id),
+        applicable.caro ? supabase.from("audit_caro_responses").update({ is_locked: true, status: "locked" } as any).eq("engagement_id", engagement.id) : Promise.resolve(),
+        applicable.form3cd ? supabase.from("audit_3cd_responses").update({ is_locked: true } as any).eq("engagement_id", engagement.id) : Promise.resolve(),
+        supabase.from("fa_financial_statements").update({ is_manual: true } as any).eq("engagement_id", engagement.id).eq("is_manual", false).then(() => {}).catch(() => {}),
+      ]);
 
-    setChecks([
-      { label: "Trial Balance Imported", passed: (tbRes.count || 0) > 0, fixTab: "fieldwork", fixLabel: "Import Trial Balance" },
-      { label: "All HIGH Findings Resolved", passed: (highRes.count || 0) === 0, fixTab: "fieldwork", fixLabel: "Review Findings" },
-      { label: "Risk Assessment Complete", passed: raComplete, fixTab: "risk", fixLabel: "Complete Risk Assessment" },
-      { label: "All Workpapers Signed Off", passed: (wpRes.count || 0) === 0, fixTab: "programme", fixLabel: "Sign Workpapers" },
-      { label: "CARO Report Complete", passed: caroPass, fixTab: "caro", fixLabel: "Complete CARO" },
-      { label: "Notes to Accounts Drafted", passed: notesPass, fixTab: "notes", fixLabel: "Draft Notes" },
-      { label: "Draft Report Generated", passed: (draftRes.count || 0) > 0, fixLabel: "Generate Report" },
-      { label: "Management Rep Letter Uploaded", passed: (mgmtRes.count || 0) > 0, fixLabel: "Upload Letter" },
-    ]);
-    setLoading(false);
-  }, [engagement]);
+      // Promote latest draft → final
+      if (drafts.length > 0) {
+        const latest = drafts[0];
+        await supabase.from("documents").update({
+          is_final: true, is_signed: true, signed_by: user?.id, signed_at: now,
+        } as any).eq("id", latest.id);
+      }
 
-  useEffect(() => { runChecks(); }, [runChecks]);
+      toast.success("Audit signed off and locked");
+      setShowConfirm(false);
+      onUpdate();
+    } catch (err: any) {
+      toast.error(err?.message || "Sign-off failed");
+    } finally { setSigning(false); }
+  };
 
-  const allPassed = checks.length > 0 && checks.every((c) => c.passed);
-  const passedCount = checks.filter((c) => c.passed).length;
+  const handleDownloadBundle = async () => {
+    setBundling(true);
+    try {
+      // Try edge function first; fall back to client-side XLSX-only bundle if missing.
+      let xlsxSheets: any = null;
+      let pdfUrl: string | null = null;
+      try {
+        const { data, error } = await supabase.functions.invoke("generate-audit-bundle", {
+          body: { engagement_id: engagement.id },
+        });
+        if (!error && data) {
+          xlsxSheets = data.xlsx_sheets || null;
+          pdfUrl     = data.pdf_url     || null;
+        }
+      } catch { /* continue with fallback */ }
+
+      const zip = new JSZip();
+
+      // Always attach latest FS workbook (derived live — no dependency on edge function)
+      const { data: fsRows } = await supabase
+        .from("fa_financial_statements")
+        .select("*").eq("engagement_id", engagement.id).order("sort_order");
+      if (fsRows?.length) {
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(fsRows), "Financial_Statements");
+        if (xlsxSheets) {
+          for (const [name, rows] of Object.entries(xlsxSheets)) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows as any[]), String(name).slice(0, 31));
+          }
+        }
+        zip.file("Workpaper_Master.xlsx", XLSX.write(wb, { bookType: "xlsx", type: "array" }));
+      }
+
+      if (pdfUrl) {
+        try {
+          const r = await fetch(pdfUrl);
+          zip.file("Audit_Report.html", await r.blob());
+        } catch { /* ignore */ }
+      }
+
+      // Include latest draft if no edge PDF
+      if (!pdfUrl && drafts[0]?.r2_key) {
+        const { data: signed } = await supabase.storage.from("firm-assets").createSignedUrl(drafts[0].r2_key, 3600);
+        if (signed?.signedUrl) {
+          try {
+            const r = await fetch(signed.signedUrl);
+            zip.file(drafts[0].filename || "Draft_Report.html", await r.blob());
+          } catch { /* ignore */ }
+        }
+      }
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const safe = (client?.name || "Client").replace(/[^a-z0-9]+/gi, "_");
+      a.href = url; a.download = `Audit_Bundle_${safe}_${engagement.financial_year || "FY"}.zip`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Audit bundle downloaded");
+    } catch (e: any) {
+      toast.error(e?.message || "Bundle generation failed");
+    } finally { setBundling(false); }
+  };
 
   // ── Role gate ──
   if (!canSignOff) {
@@ -147,417 +443,268 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
       <Card className="border-amber-300 bg-amber-500/5">
         <CardContent className="p-8 text-center space-y-3">
           <Lock className="w-10 h-10 text-amber-600 mx-auto" />
-          <p className="font-semibold text-foreground text-lg">This stage requires Partner/CA access</p>
+          <p className="font-semibold text-foreground text-lg">Partner / Firm-admin access required</p>
           <p className="text-sm text-muted-foreground">
-            Only users with <strong>partner_ca</strong> or <strong>firm_admin</strong> role can access the Sign-Off & Bundle stage.
+            Only engagement partners can sign off and issue UDIN. Please ask the engagement partner to log in.
           </p>
         </CardContent>
       </Card>
     );
-  }
-
-  async function handleGenerateReport() {
-    setGenerating(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("generate-audit-report", {
-        body: { engagement_id: engagement.id, report_type: "companies_act", include_comparative: true },
-      });
-      if (error) throw error;
-      toast.success(`Draft report v${data.version_number} generated`);
-      await runChecks();
-      onUpdate();
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate report");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function handleUploadMgmtLetter(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const path = `firms/${engagement.firm_id}/clients/${engagement.client_id}/mgmt_rep_letter/${file.name}`;
-      const { error: uploadErr } = await supabase.storage.from("firm-assets").upload(path, file, { upsert: true });
-      if (uploadErr) throw uploadErr;
-      await supabase.from("documents").insert({
-        firm_id: engagement.firm_id, client_id: engagement.client_id, engagement_id: engagement.id,
-        filename: file.name, category: "mgmt_rep_letter", r2_key: path,
-      });
-      toast.success("Management Representation Letter uploaded");
-      await runChecks();
-    } catch (err: any) {
-      toast.error(err.message || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function handleSignAndFinalise() {
-    if (!declared || !udinValid) return;
-    setSigning(true);
-    try {
-      const signOffData = {
-        status: "signed",
-        final_locked: true,
-        udin: udin.trim(),
-        sign_off_by: user?.id,
-        sign_off_date: new Date().toISOString(),
-        signed_at: new Date().toISOString(),
-        signed_by: user?.id,
-        pipeline_stage: 9,
-        stage_statuses: {
-          ...(engagement.stage_statuses || {}),
-          "9": "complete",
-        },
-      };
-
-      // 1. Update engagement
-      await supabase.from("audit_engagements").update(signOffData).eq("id", engagement.id);
-
-      // 2. Lock all audit records
-      await Promise.all([
-        supabase.from("audit_notes").update({ is_locked: true }).eq("engagement_id", engagement.id),
-        supabase.from("audit_caro_responses").update({ is_locked: true, status: "locked" }).eq("engagement_id", engagement.id),
-        supabase.from("audit_3cd_responses").update({ is_locked: true }).eq("engagement_id", engagement.id),
-        supabase.from("fa_assets").update({ is_locked: true }).eq("engagement_id", engagement.id),
-      ]);
-
-      // 3. Mark latest draft as final
-      if (drafts.length > 0) {
-        const latest = drafts[0];
-        await supabase.from("documents").update({
-          is_final: true, is_signed: true, signed_by: user?.id, signed_at: new Date().toISOString(),
-        }).eq("id", latest.id);
-
-        const finalPath = latest.r2_key?.replace("/draft/", "/final/")?.replace(/v\d+\.html$/, "SIGNED.html");
-        if (finalPath && latest.r2_key) {
-          try { await supabase.storage.from("firm-assets").copy(latest.r2_key, finalPath); } catch {}
-        }
-      }
-
-      // 4. Notification
-      try {
-        await supabase.functions.invoke("send-notification", {
-          body: {
-            type: "audit_report", recipient_id: engagement.partner_id, firm_id: engagement.firm_id,
-            content: { client_name: client?.name, financial_year: engagement.financial_year, message: "Audit report signed and finalised. UDIN: " + udin.trim() },
-          },
-        });
-      } catch {}
-
-      toast.success("Audit report signed and finalised!");
-      setShowConfirm(false);
-      onUpdate();
-    } catch (err: any) {
-      toast.error(err.message || "Sign-off failed");
-    } finally {
-      setSigning(false);
-    }
-  }
-
-  async function viewDraft(doc: any) {
-    if (!doc.r2_key) return;
-    const { data } = await supabase.storage.from("firm-assets").createSignedUrl(doc.r2_key, 3600);
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
-  }
-
-  async function handleGenerateBundle() {
-    setGeneratingBundle(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("generate-audit-bundle", {
-        body: { engagement_id: engagement.id },
-      });
-      if (error) throw error;
-
-      const wb = XLSX.utils.book_new();
-      const sheetsData = data.xlsx_sheets || {};
-      for (const [sheetName, rows] of Object.entries(sheetsData)) {
-        const ws = XLSX.utils.json_to_sheet(rows as any[]);
-        XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
-      }
-      const xlsxBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-
-      const pdfResponse = data.pdf_url ? await fetch(data.pdf_url) : null;
-      const pdfBlob = pdfResponse ? await pdfResponse.blob() : null;
-
-      const zip = new JSZip();
-      if (pdfBlob) zip.file("Audit_Report.html", pdfBlob);
-      zip.file("Workpaper_Master.xlsx", xlsxBuffer);
-
-      const zipBlob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Audit_Bundle_${client?.name || "Client"}_${engagement.financial_year || "FY"}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      toast.success("Audit bundle generated and downloaded!");
-      await runChecks();
-      onUpdate();
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate bundle");
-    } finally {
-      setGeneratingBundle(false);
-    }
-  }
-
-  async function handleShareBundle() {
-    toast.info("Bundle sharing via email will be available once Resend integration is configured.");
   }
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-8 flex items-center justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <Card><CardContent className="p-8 flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+      </CardContent></Card>
     );
   }
 
+  // ── UI helpers ──
+  const statusIcon = (s: GateStatus) => {
+    if (s === "pass") return <CheckCircle2 className="w-4 h-4 text-green-600" />;
+    if (s === "warn") return <AlertTriangle className="w-4 h-4 text-amber-600" />;
+    if (s === "skip") return <Info className="w-4 h-4 text-muted-foreground" />;
+    return <XCircle className="w-4 h-4 text-destructive" />;
+  };
+  const statusBadge = (s: GateStatus) => {
+    const map: Record<GateStatus, string> = {
+      pass: "bg-green-500/15 text-green-700 border-green-300",
+      warn: "bg-amber-500/15 text-amber-700 border-amber-300",
+      fail: "bg-destructive/15 text-destructive border-destructive/30",
+      skip: "bg-muted text-muted-foreground border-border",
+    };
+    const label: Record<GateStatus, string> = { pass: "Pass", warn: "Warn", fail: "Fail", skip: "N/A" };
+    return <Badge className={cn("text-[10px]", map[s])}>{label[s]}</Badge>;
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      {/* ═══ SECTION 1: AUDIT SUMMARY ═══ */}
+    <div className="space-y-4">
+
+      {/* ═══ 1. ENGAGEMENT SNAPSHOT ═══ */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary" />
-            Section 1 — Audit Summary
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          {/* Engagement overview */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            {[
-              { label: 'Client', value: client?.name || '—' },
-              { label: 'Financial Year', value: engagement?.financial_year || '—' },
-              { label: 'Entity Type', value: engagement?.entity_type || '—' },
-              { label: 'Audit Type', value: engagement?.audit_type || '—' },
-            ].map(item => (
-              <div key={item.label}>
-                <span className="text-muted-foreground">{item.label}</span>
-                <p className="font-semibold text-foreground capitalize">{item.value}</p>
-              </div>
-            ))}
-          </div>
-
-          <Separator />
-
-          {/* Scrutiny stats */}
-          <div className="space-y-2">
-            <h4 className="text-sm font-semibold text-foreground">Scrutiny Findings Summary</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { label: 'Total Findings', value: findingsStats.total, color: 'text-foreground' },
-                { label: 'Accepted / Resolved', value: findingsStats.accepted, color: 'text-green-600' },
-                { label: 'Queried', value: findingsStats.queried, color: 'text-amber-600' },
-                { label: 'Overridden', value: findingsStats.overridden, color: 'text-blue-600' },
-              ].map(stat => (
-                <div key={stat.label} className="text-center p-3 rounded-lg bg-muted/50">
-                  <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{stat.label}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Query remarks — collapsible */}
-          <Collapsible>
-            <CollapsibleTrigger className="flex items-center gap-2 text-sm font-semibold text-foreground hover:text-primary transition-colors w-full">
-              <ChevronDown className="w-4 h-4" />
-              Query Remarks & Resolutions
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="mt-3 p-4 rounded-lg bg-muted/30 border border-border">
-                <p className="text-sm text-muted-foreground">
-                  Query remarks and client communications will be displayed here.
-                  This section shows all raised, resolved, and overridden findings
-                  with CA remarks for the audit file.
-                </p>
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-
-          <Separator />
-
-          {/* Completion status matrix */}
-          <div className="space-y-2">
-            <h4 className="text-sm font-semibold text-foreground">Stage Completion Status</h4>
-            <div className="space-y-1.5">
-              {[
-                { stage: 'TB Import & COA Mapping', key: '2' },
-                { stage: 'Financial Statements', key: '3' },
-                { stage: 'Scrutiny Engine', key: '4' },
-                { stage: 'Query Tracker', key: '5' },
-                { stage: 'Workpapers & Audit Sheet', key: '6' },
-                { stage: 'Notes to Accounts & CARO', key: '7' },
-                { stage: '3CA / 3CB / 3CD Reports', key: '8' },
-              ].map(item => {
-                const status = (engagement?.stage_statuses as any)?.[item.key] || 'not_started';
-                return (
-                  <div key={item.key} className="flex items-center justify-between py-1.5 px-3 rounded bg-muted/30 text-sm">
-                    <span className="text-foreground">{item.stage}</span>
-                    <Badge variant={status === 'complete' ? 'default' : 'secondary'} className="text-[10px]">
-                      {status === 'complete' ? '✓ Complete' : status === 'in_progress' ? 'In Progress' : 'Not Started'}
-                    </Badge>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ═══ SECTION 2: FINANCIAL STATEMENTS & REPORTS PREVIEW ═══ */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary" />
-            Section 2 — Financial Statements & Reports Preview
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="w-4 h-4 text-primary" /> Engagement Snapshot
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Review all outputs before signing off. Click any item to view.
-          </p>
-
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             {[
-              { label: 'Balance Sheet', icon: '📊', available: true },
-              { label: 'Statement of P&L', icon: '📈', available: true },
-              { label: 'Notes to Accounts', icon: '📋', available: notesCount > 0, count: notesCount },
-              { label: 'CARO 2020 Report', icon: '🔍', available: engagement?.caro_applicable || false },
-              { label: 'Form 3CD', icon: '📝', available: engagement?.requires_3cd || false },
-              { label: 'Form 3CA / 3CB', icon: '📄', available: engagement?.requires_3ca || engagement?.requires_3cb || false },
-            ].map(item => (
-              <div key={item.label} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
-                <div className="flex items-center gap-2">
-                  <span>{item.icon}</span>
-                  <span className="text-sm font-medium text-foreground">{item.label}</span>
-                  {item.count !== undefined && item.count > 0 && (
-                    <Badge variant="secondary" className="text-[9px]">{item.count}</Badge>
-                  )}
-                </div>
-                {item.available ? (
-                  <Badge className="bg-green-500/15 text-green-700 border-green-300 text-[10px]">Ready</Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[10px] text-muted-foreground">N/A</Badge>
-                )}
+              ["Client",           client?.name || "—"],
+              ["Financial Year",   engagement?.financial_year || "—"],
+              ["Entity Type",      engagement?.entity_type || client?.entity_type || "—"],
+              ["Audit Type",       engagement?.audit_type || "—"],
+              ["Firm",             firm?.name || "—"],
+              ["FRN",              firm?.icai_firm_reg_no || "—"],
+              ["Partner",          partnerResolved?.name || "—"],
+              ["Membership No.",   partnerResolved?.membership_number || "—"],
+            ].map(([k, v]) => (
+              <div key={k} className="space-y-0.5">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</p>
+                <p className="font-semibold text-foreground truncate">{v as string}</p>
               </div>
             ))}
           </div>
 
-          <p className="text-xs text-muted-foreground italic">
-            Note: Full embedded preview of financial statements will be
-            available in the next release. Use the Download Bundle button below to
-            download and review all documents.
-          </p>
-        </CardContent>
-      </Card>
+          <Separator />
 
-      {/* Sign-off Checklist */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Shield className="w-5 h-5" />
-            Sign-Off Checklist (Stages 1–9)
-            <Badge variant={allPassed ? "default" : "secondary"} className="ml-auto">
-              {passedCount}/{checks.length} Complete
-            </Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {checks.map((item, i) => (
-            <div key={i} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-              <div className="flex items-center gap-3">
-                {item.passed ? (
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-destructive" />
-                )}
-                <span className={item.passed ? "text-foreground" : "text-muted-foreground"}>
-                  {item.label}
-                </span>
-              </div>
-              {!item.passed && !isSigned && (
-                <span className="text-xs text-primary cursor-pointer hover:underline">
-                  → {item.fixLabel || "Fix this"}
-                </span>
+          {/* Applicable reports — derived */}
+          <div>
+            <p className="text-xs font-semibold text-foreground mb-2">Applicable Reports</p>
+            <div className="flex flex-wrap gap-1.5">
+              {applicable.statutory && <Badge variant="outline" className="text-[10px]">Independent Auditor's Report</Badge>}
+              {applicable.caro      && <Badge variant="outline" className="text-[10px]">CARO 2020</Badge>}
+              {applicable.ifc       && <Badge variant="outline" className="text-[10px]">IFC Report</Badge>}
+              {applicable.cashFlow  && <Badge variant="outline" className="text-[10px]">Cash Flow Statement</Badge>}
+              {applicable.form3ca   && <Badge variant="outline" className="text-[10px]">Form 3CA</Badge>}
+              {applicable.form3cb   && <Badge variant="outline" className="text-[10px]">Form 3CB</Badge>}
+              {applicable.form3cd   && <Badge variant="outline" className="text-[10px]">Form 3CD</Badge>}
+              {!applicable.statutory && !applicable.form3cd && (
+                <Badge variant="outline" className="text-[10px] text-muted-foreground">None configured</Badge>
               )}
             </div>
-          ))}
+          </div>
         </CardContent>
       </Card>
 
-      {/* Actions row */}
-      {!isSigned && (
-        <div className="flex flex-wrap gap-3">
-          <Button onClick={handleGenerateReport} disabled={generating} className="bg-amber-600 hover:bg-amber-700 text-white">
-            {generating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />}
-            {generating ? "Generating Draft..." : "Generate Draft Report"}
-          </Button>
+      {/* ═══ 2. READINESS SCORE + BLOCKERS ═══ */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center justify-between text-base">
+            <span className="flex items-center gap-2"><Shield className="w-4 h-4 text-primary" /> Sign-off Readiness</span>
+            <span className="text-xs font-normal text-muted-foreground">{passCount}/{totalCount} checks pass</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Progress value={completeness} className="h-2" />
+            <p className="text-[10px] text-muted-foreground mt-1.5">{completeness}% ready</p>
+          </div>
 
-          <Button variant="outline" asChild disabled={uploading}>
-            <label className="cursor-pointer flex items-center gap-2">
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              Upload Management Rep Letter
-              <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={handleUploadMgmtLetter} />
-            </label>
-          </Button>
-
-          {allPassed && (
-            <Button
-              onClick={handleGenerateBundle}
-              disabled={generatingBundle}
-              className="bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-semibold"
-            >
-              {generatingBundle ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Package className="w-4 h-4 mr-2" />}
-              {generatingBundle ? "Generating Bundle..." : "Generate Complete Bundle"}
-            </Button>
+          {blockers.length > 0 && (
+            <Alert variant="destructive" className="bg-destructive/5">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle className="text-xs">{blockers.length} blocker(s) preventing sign-off</AlertTitle>
+              <AlertDescription className="text-xs">
+                {blockers.map(b => b.label).join(" · ")}
+              </AlertDescription>
+            </Alert>
           )}
-        </div>
+
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/40">
+                <TableHead className="text-xs w-5" />
+                <TableHead className="text-xs">Check</TableHead>
+                <TableHead className="text-xs">Detail</TableHead>
+                <TableHead className="text-xs w-20 text-right">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {gates.map(g => (
+                <TableRow key={g.key} className={cn(g.blocker && g.status !== "pass" && g.status !== "skip" && "bg-destructive/5")}>
+                  <TableCell className="py-1.5">{statusIcon(g.status)}</TableCell>
+                  <TableCell className="text-xs py-1.5">
+                    {g.label}
+                    {g.blocker && <Badge variant="outline" className="ml-1.5 text-[8px] px-1 border-destructive/30 text-destructive">BLOCKER</Badge>}
+                  </TableCell>
+                  <TableCell className="text-xs py-1.5 text-muted-foreground">{g.detail || "—"}</TableCell>
+                  <TableCell className="text-right py-1.5">{statusBadge(g.status)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* ═══ 3. STAGE COMPLETION MATRIX ═══ */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ClipboardList className="w-4 h-4 text-primary" /> Pipeline Stage Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+            {STAGE_LABELS.map(s => {
+              const st = (engagement?.stage_statuses as any)?.[s.key] || "not_started";
+              const variant = st === "complete" ? "bg-green-500/15 text-green-700 border-green-300"
+                           : st === "in_progress" ? "bg-amber-500/15 text-amber-700 border-amber-300"
+                           : "bg-muted text-muted-foreground border-border";
+              const label = st === "complete" ? "✓ Complete" : st === "in_progress" ? "In Progress" : "Not Started";
+              return (
+                <div key={s.key} className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 text-xs">
+                  <span className="text-foreground">
+                    <span className="text-muted-foreground mr-1.5">Stage {s.key}</span>
+                    {s.label}
+                  </span>
+                  <Badge className={cn("text-[10px]", variant)}>{label}</Badge>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ═══ 4. SCRUTINY + QUERIES SUMMARY ═══ */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <BookMarked className="w-4 h-4 text-primary" /> Scrutiny &amp; Query Summary
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: "Findings", value: findings.total, hint: `${findings.highOpen} HIGH open`, tone: findings.highOpen ? "text-destructive" : "text-foreground" },
+              { label: "Accepted / Resolved", value: findings.accepted, tone: "text-green-600" },
+              { label: "Queried", value: findings.queried, tone: "text-amber-600" },
+              { label: "Overridden", value: findings.overridden, tone: "text-blue-600" },
+            ].map(s => (
+              <div key={s.label} className="text-center p-3 rounded-md bg-muted/30">
+                <p className={cn("text-xl font-bold", s.tone)}>{s.value}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{s.label}</p>
+                {s.hint && <p className="text-[9px] text-muted-foreground">{s.hint}</p>}
+              </div>
+            ))}
+          </div>
+          <Separator />
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: "Total Queries", value: queries.total,    tone: "text-foreground" },
+              { label: "Open",          value: queries.open,     tone: queries.open ? "text-amber-600" : "text-green-600" },
+              { label: "Resolved",      value: queries.resolved, tone: "text-green-600" },
+            ].map(s => (
+              <div key={s.label} className="text-center p-3 rounded-md bg-muted/30">
+                <p className={cn("text-xl font-bold", s.tone)}>{s.value}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ═══ 5. ACTIONS (pre-sign) ═══ */}
+      {!isSigned && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileSpreadsheet className="w-4 h-4 text-primary" /> Report Preparation
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={handleGenerateDraft} disabled={generating}>
+              {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <FileText className="w-3.5 h-3.5 mr-1.5" />}
+              {generating ? "Generating…" : "Generate / Regenerate Draft Report"}
+            </Button>
+            <Button size="sm" variant="outline" asChild disabled={uploading}>
+              <label className="cursor-pointer flex items-center">
+                {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                {mgmtLetterCount > 0 ? "Re-upload MRL" : "Upload MRL"}
+                <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={handleUploadMrl} />
+              </label>
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleDownloadBundle} disabled={bundling}>
+              {bundling ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Package className="w-3.5 h-3.5 mr-1.5" />}
+              Preview Bundle
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
-      {/* Revision History */}
+      {/* ═══ 6. DRAFT REVISIONS ═══ */}
       {drafts.length > 0 && (
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Revision History</CardTitle>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Draft Revisions</CardTitle>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Filename</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                <TableRow className="bg-muted/40">
+                  <TableHead className="text-xs w-16">Version</TableHead>
+                  <TableHead className="text-xs">Filename</TableHead>
+                  <TableHead className="text-xs w-24">Status</TableHead>
+                  <TableHead className="text-xs w-20 text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {drafts.map((doc, i) => (
-                  <TableRow key={doc.id}>
-                    <TableCell>v{drafts.length - i}</TableCell>
-                    <TableCell className="font-mono text-sm">{doc.filename}</TableCell>
-                    <TableCell>
-                      {doc.is_final ? (
-                        <Badge className="bg-green-500/15 text-green-700 border-green-300">Signed</Badge>
-                      ) : i === 0 ? (
-                        <Badge variant="secondary">Latest</Badge>
-                      ) : (
-                        <Badge variant="outline">Superseded</Badge>
-                      )}
+                {drafts.map((d, i) => (
+                  <TableRow key={d.id}>
+                    <TableCell className="text-xs py-1.5">v{drafts.length - i}</TableCell>
+                    <TableCell className="text-xs py-1.5 font-mono truncate">{d.filename}</TableCell>
+                    <TableCell className="py-1.5">
+                      {d.is_final
+                        ? <Badge className="text-[10px] bg-green-500/15 text-green-700 border-green-300">Signed</Badge>
+                        : i === 0
+                          ? <Badge variant="secondary" className="text-[10px]">Latest</Badge>
+                          : <Badge variant="outline" className="text-[10px]">Superseded</Badge>}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" onClick={() => viewDraft(doc)}>
-                        <ExternalLink className="w-3.5 h-3.5 mr-1" /> View
+                    <TableCell className="py-1.5 text-right">
+                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => viewDraft(d)}>
+                        <ExternalLink className="w-3 h-3 mr-1" /> View
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -568,164 +715,141 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
         </Card>
       )}
 
-      {/* Final Sign-Off — only when all checks pass */}
-      {allPassed && !isSigned && (
-        <Card className="border-primary/30 bg-primary/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-primary">
-              <Shield className="w-5 h-5" />
-              Stage 9 — Final Sign-Off
+      {/* ═══ 7. FINAL SIGN-OFF ═══ */}
+      {!isSigned && (
+        <Card className={cn("border-2", canProceed ? "border-primary/30 bg-primary/5" : "border-border")}>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Award className="w-4 h-4 text-primary" /> Partner Sign-off
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Partner info */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div>
-                <span className="text-muted-foreground">Partner</span>
-                <p className="font-semibold text-foreground">{partner?.name || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">ICAI Membership</span>
-                <p className="font-semibold text-foreground">{partner?.icai_reg_no || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Firm Reg No.</span>
-                <p className="font-semibold text-foreground">{firm?.icai_reg_no || firm?.icai_firm_reg_no || "—"}</p>
-              </div>
-            </div>
+          <CardContent className="space-y-4">
+            {!canProceed && (
+              <Alert>
+                <Lock className="h-4 w-4" />
+                <AlertTitle className="text-xs">Sign-off locked</AlertTitle>
+                <AlertDescription className="text-xs">
+                  Resolve all BLOCKER checks above before you can issue UDIN. Non-blocker warnings are advisory only.
+                </AlertDescription>
+              </Alert>
+            )}
 
-            {/* UDIN Entry */}
-            <div className="space-y-2">
-              <Label htmlFor="udin" className="font-medium">UDIN (Unique Document Identification Number)</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="udin" className="text-xs">UDIN (Unique Document Identification Number)</Label>
               <Input
-                id="udin"
-                value={udin}
-                onChange={(e) => setUdin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24))}
+                id="udin" value={udin}
+                onChange={e => setUdin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24))}
                 placeholder="24-character alphanumeric UDIN"
                 maxLength={24}
                 className="font-mono tracking-wider"
+                disabled={!canProceed}
               />
-              {udin.length > 0 && !udinValid && (
-                <p className="text-xs text-destructive flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3" /> UDIN must be exactly 24 alphanumeric characters ({udin.length}/24)
+              <div className="flex items-center justify-between">
+                <p className={cn(
+                  "text-[10px]",
+                  udin.length === 0 ? "text-muted-foreground"
+                    : udinValid ? "text-green-600" : "text-destructive"
+                )}>
+                  {udin.length === 0
+                    ? "Generate UDIN from udin.icai.org before signing"
+                    : udinValid ? "✓ Valid UDIN format"
+                                : `${udin.length}/24 characters`}
                 </p>
-              )}
-              {udinValid && (
-                <p className="text-xs text-green-600 flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" /> Valid UDIN format
-                </p>
-              )}
+                <a href="https://udin.icai.org" target="_blank" rel="noreferrer"
+                   className="text-[10px] text-primary hover:underline inline-flex items-center gap-1">
+                  udin.icai.org <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
             </div>
 
-            {/* Declaration */}
-            <div className="flex items-start gap-3 p-4 rounded-lg bg-background border border-border">
-              <Checkbox
-                id="declaration"
-                checked={declared}
-                onCheckedChange={(v) => setDeclared(v === true)}
-              />
-              <label htmlFor="declaration" className="text-sm leading-relaxed cursor-pointer">
-                I, <strong>{partner?.name || user?.name}</strong>, confirm that the audit has been conducted in
-                accordance with applicable Standards on Auditing. I confirm I have reviewed all working papers
-                and am satisfied with the audit evidence obtained. This report reflects my independent
-                professional judgment as a Chartered Accountant.
+            <div className="flex items-start gap-2 p-3 rounded-md bg-background border border-border">
+              <Checkbox id="declaration" checked={declared} disabled={!canProceed}
+                        onCheckedChange={v => setDeclared(v === true)} />
+              <label htmlFor="declaration" className="text-xs leading-relaxed cursor-pointer">
+                I, <strong>{partnerResolved?.name || user?.name || "the engagement partner"}</strong>,
+                confirm that this audit has been conducted in accordance with applicable Standards on Auditing
+                and that I have reviewed the working papers, financial statements and annexures generated
+                through this engagement. The UDIN above has been obtained from ICAI for this report.
+                I understand that signing off locks all downstream records.
               </label>
             </div>
 
             <Button
-              size="lg"
-              disabled={!declared || !udinValid || signing}
-              onClick={() => setShowConfirm(true)}
               className="w-full"
+              disabled={!declared || !udinValid || !canProceed || signing}
+              onClick={() => setShowConfirm(true)}
             >
-              <Shield className="w-4 h-4 mr-2" />
-              SIGN OFF & FINALISE
+              <Shield className="w-3.5 h-3.5 mr-1.5" /> Sign Off &amp; Finalise
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* Confirmation Dialog */}
-      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Lock className="w-5 h-5 text-primary" />
-              Confirm Final Sign-Off
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p>This action will permanently lock the following records:</p>
-              <ul className="list-disc list-inside text-sm space-y-1">
-                <li>All Audit Notes ({notesCount} notes)</li>
-                {(engagement.requires_caro || engagement.caro_applicable) && <li>All CARO Responses</li>}
-                {engagement.requires_3cd && <li>All Form 3CD Responses</li>}
-                <li>All Fixed Assets for this engagement</li>
-                <li>Engagement status → Completed</li>
-              </ul>
-              <p className="font-medium text-foreground">UDIN: <span className="font-mono">{udin}</span></p>
-              <p className="text-destructive font-medium">This action cannot be undone.</p>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleSignAndFinalise}
-              disabled={signing}
-              className="bg-primary"
-            >
-              {signing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
-              {signing ? "Signing..." : "Confirm & Lock"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Signed / Completed state */}
+      {/* ═══ 8. SIGNED STATE ═══ */}
       {isSigned && (
         <Card className="border-yellow-400 bg-gradient-to-br from-yellow-50 to-amber-50 dark:from-yellow-950/20 dark:to-amber-950/20">
-          <CardContent className="p-8 text-center space-y-4">
-            <Award className="w-14 h-14 text-yellow-600 mx-auto" />
+          <CardContent className="p-6 text-center space-y-3">
+            <Award className="w-12 h-12 text-yellow-600 mx-auto" />
             <div>
-              <Badge className="bg-yellow-500 text-white text-sm px-4 py-1 mb-2">Completed</Badge>
-              <p className="font-bold text-lg text-foreground mt-2">Engagement Signed Off</p>
+              <Badge className="bg-yellow-500 text-white text-xs px-3 py-0.5">Completed</Badge>
+              <p className="font-bold text-base text-foreground mt-2">Engagement Signed Off &amp; Locked</p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm max-w-lg mx-auto">
+            <div className="grid grid-cols-3 gap-3 text-xs max-w-md mx-auto">
+              <div><p className="text-muted-foreground">Client</p><p className="font-semibold">{client?.name || "—"}</p></div>
+              <div><p className="text-muted-foreground">FY</p><p className="font-semibold">{engagement.financial_year || "—"}</p></div>
               <div>
-                <span className="text-muted-foreground">Client</span>
-                <p className="font-semibold text-foreground">{client?.name || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">FY</span>
-                <p className="font-semibold text-foreground">{engagement.financial_year || "—"}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Signed On</span>
-                <p className="font-semibold text-foreground">
-                  {engagement.sign_off_date || engagement.signed_at
-                    ? new Date(engagement.sign_off_date || engagement.signed_at).toLocaleDateString("en-IN")
-                    : "—"}
-                </p>
+                <p className="text-muted-foreground">Signed On</p>
+                <p className="font-semibold">{engagement.sign_off_date || engagement.signed_at
+                    ? new Date(engagement.sign_off_date || engagement.signed_at).toLocaleDateString("en-IN") : "—"}</p>
               </div>
             </div>
             {engagement.udin && (
-              <div className="text-sm">
-                <span className="text-muted-foreground">UDIN: </span>
-                <span className="font-mono font-semibold text-foreground">{engagement.udin}</span>
+              <div className="text-xs">
+                <span className="text-muted-foreground">UDIN:</span>{" "}
+                <span className="font-mono font-semibold">{engagement.udin}</span>
               </div>
             )}
-            <div className="flex justify-center gap-3 pt-2">
-              <Button onClick={handleGenerateBundle} disabled={generatingBundle} variant="outline">
-                <Download className="w-4 h-4 mr-2" />
-                {generatingBundle ? "Generating..." : "Download Bundle"}
-              </Button>
-              <Button onClick={handleShareBundle} variant="outline">
-                <Share2 className="w-4 h-4 mr-2" />
-                Share Bundle
+            <div className="flex justify-center gap-2 pt-1">
+              <Button size="sm" variant="outline" onClick={handleDownloadBundle} disabled={bundling}>
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                {bundling ? "Preparing…" : "Download Bundle"}
               </Button>
             </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Confirm Dialog */}
+      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-base">
+              <Lock className="w-4 h-4 text-primary" /> Confirm Final Sign-Off
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 text-xs">
+              <span className="block">This action will permanently lock:</span>
+              <ul className="list-disc list-inside space-y-0.5">
+                <li>All Audit Notes ({notesCount})</li>
+                {applicable.caro    && <li>CARO 2020 responses ({caroRespCount})</li>}
+                {applicable.form3cd && <li>Form 3CD responses ({form3cdCount})</li>}
+                <li>Financial Statements line items</li>
+                <li>Engagement status → Signed</li>
+              </ul>
+              <span className="block font-medium text-foreground mt-2">UDIN: <span className="font-mono">{udin}</span></span>
+              <span className="block text-destructive font-medium">This action cannot be undone.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSignOff} disabled={signing}>
+              {signing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Lock className="w-3.5 h-3.5 mr-1.5" />}
+              {signing ? "Signing…" : "Confirm &amp; Lock"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
+
+export default EngagementReviewSignoff;

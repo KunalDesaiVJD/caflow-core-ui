@@ -1182,11 +1182,11 @@ export default function AuditPipeline() {
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-4">
-            <EngagementHeader engagement={engagement} stageNumber={10} stageLabel="Sign-off & UDIN" />
+            <EngagementHeader engagement={engagement} stageNumber={9} stageLabel="Sign-off & UDIN" />
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-lg font-bold text-foreground">Stage 10 — Sign-off & UDIN</h1>
+            <h1 className="text-lg font-bold text-foreground">Stage 9 — Sign-off & UDIN</h1>
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
         ) : activeStage === 10 ? (
