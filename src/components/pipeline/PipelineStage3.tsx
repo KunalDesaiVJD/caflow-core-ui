@@ -152,6 +152,89 @@ function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: num
 const FLAT_ITEMS = flattenTree(SCHEDULE_III_DIV_I);
 const LEAF_ITEMS = FLAT_ITEMS.filter(i => !i.children || i.children.length === 0);
 
+// ═══════════════════════════════════════
+// Parent-group → FS code map
+// Tally's native group taxonomy carries almost all the classification signal
+// we need. A ledger inside "Sundry Debtors" is a trade receivable 99% of the
+// time — regardless of what the ledger itself is called. This mapping runs
+// BEFORE keyword rules and is given a higher confidence weight.
+// Normalised to lower-case; match by full-string OR contains.
+// ═══════════════════════════════════════
+const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
+  { match: ["sundry debtors", "trade receivable", "debtors", "accounts receivable"], code: "BS_CA_TR",       confidence: "high" },
+  { match: ["sundry creditors", "trade payable", "creditors for goods", "creditors for expenses", "accounts payable"], code: "BS_CL_TP", confidence: "high" },
+  { match: ["bank accounts", "bank od", "cash-in-hand", "cash in hand"], code: "BS_CA_CCE",                  confidence: "high" },
+  { match: ["stock-in-hand", "stock in hand", "stock in trade", "inventory"], code: "BS_CA_INV",             confidence: "high" },
+  { match: ["fixed assets"],                                                  code: "BS_NCA_FA_TAN",        confidence: "medium" },
+  { match: ["investments"],                                                   code: "BS_NCA_INV",           confidence: "medium" },
+  { match: ["loans & advances (asset)", "loans and advances (asset)", "loans (asset)"], code: "BS_CA_SLA",  confidence: "medium" },
+  { match: ["deposits (asset)"],                                              code: "BS_NCA_LLA",           confidence: "medium" },
+  { match: ["misc. expenses (asset)", "miscellaneous expenses (asset)"],     code: "BS_NCA_ONA",           confidence: "low" },
+  { match: ["current assets"],                                                code: "BS_CA_OCA",            confidence: "low" },
+  { match: ["current liabilities"],                                           code: "BS_CL_OCL",            confidence: "low" },
+  { match: ["duties & taxes", "duties and taxes"],                            code: "BS_CL_OCL",            confidence: "high" },
+  { match: ["provisions"],                                                    code: "BS_CL_STP",            confidence: "medium" },
+  { match: ["secured loans"],                                                 code: "BS_NCL_LTB",           confidence: "high" },
+  { match: ["unsecured loans"],                                               code: "BS_CL_STB",            confidence: "high" },
+  { match: ["bank od a/c", "bank occ a/c"],                                   code: "BS_CL_STB",            confidence: "high" },
+  { match: ["loans (liability)"],                                             code: "BS_NCL_LTB",           confidence: "medium" },
+  { match: ["capital account"],                                               code: "BS_EQ_RS",             confidence: "medium" },
+  { match: ["reserves & surplus", "reserves and surplus"],                   code: "BS_EQ_RS",             confidence: "high" },
+  { match: ["share capital", "capital"],                                      code: "BS_EQ_SC",             confidence: "high" },
+  { match: ["branch / divisions"],                                            code: "BS_CA_OCA",            confidence: "low" },
+  { match: ["suspense a/c"],                                                  code: "BS_CA_OCA",            confidence: "low" },
+  // P&L
+  { match: ["sales accounts", "direct incomes"],                              code: "PL_REV_OPS",           confidence: "high" },
+  { match: ["indirect incomes"],                                              code: "PL_REV_OI",            confidence: "high" },
+  { match: ["purchase accounts"],                                             code: "PL_EXP_MAT",           confidence: "high" },
+  { match: ["direct expenses"],                                               code: "PL_EXP_MAT",           confidence: "medium" },
+  { match: ["indirect expenses"],                                             code: "PL_EXP_OTH",           confidence: "medium" },
+];
+
+const PARENT_GROUP_MAP_NCE: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
+  { match: ["sundry debtors", "trade receivable", "debtors", "accounts receivable"], code: "NCE_TR",         confidence: "high" },
+  { match: ["sundry creditors", "trade payable", "creditors for goods", "creditors for expenses", "accounts payable"], code: "NCE_TP", confidence: "high" },
+  { match: ["bank accounts", "cash-in-hand", "cash in hand"],                 code: "NCE_CASH",             confidence: "high" },
+  { match: ["stock-in-hand", "stock in hand", "stock in trade", "inventory"], code: "NCE_STCK",             confidence: "high" },
+  { match: ["fixed assets"],                                                  code: "NCE_PPE",              confidence: "medium" },
+  { match: ["investments"],                                                   code: "NCE_NCINV",            confidence: "medium" },
+  { match: ["loans & advances (asset)", "loans and advances (asset)", "loans (asset)"], code: "NCE_STLA",   confidence: "medium" },
+  { match: ["deposits (asset)"],                                              code: "NCE_LTLA",             confidence: "medium" },
+  { match: ["misc. expenses (asset)", "miscellaneous expenses (asset)"],      code: "NCE_ONCA",             confidence: "low" },
+  { match: ["current assets"],                                                code: "NCE_OCA",              confidence: "low" },
+  { match: ["current liabilities"],                                           code: "NCE_OCL",              confidence: "low" },
+  { match: ["duties & taxes", "duties and taxes"],                            code: "NCE_OCL",              confidence: "high" },
+  { match: ["provisions"],                                                    code: "NCE_STP",              confidence: "medium" },
+  { match: ["secured loans"],                                                 code: "NCE_LTB",              confidence: "high" },
+  { match: ["unsecured loans"],                                               code: "NCE_STB",              confidence: "high" },
+  { match: ["bank od a/c", "bank occ a/c"],                                   code: "NCE_STB",              confidence: "high" },
+  { match: ["loans (liability)"],                                             code: "NCE_LTB",              confidence: "medium" },
+  { match: ["capital account"],                                               code: "NCE_CAP",              confidence: "high" },
+  { match: ["reserves & surplus", "reserves and surplus"],                    code: "NCE_CAP",              confidence: "high" },
+  { match: ["branch / divisions"],                                            code: "NCE_OCA",              confidence: "low" },
+  { match: ["suspense a/c"],                                                  code: "NCE_OCA",              confidence: "low" },
+  // P&L
+  { match: ["sales accounts", "direct incomes"],                              code: "NCE_REV_OPS",          confidence: "high" },
+  { match: ["indirect incomes"],                                              code: "NCE_REV_OTH",          confidence: "high" },
+  { match: ["purchase accounts"],                                             code: "NCE_COGS",             confidence: "high" },
+  { match: ["direct expenses"],                                               code: "NCE_COGS",             confidence: "medium" },
+  { match: ["indirect expenses"],                                             code: "NCE_OTH_EXP",          confidence: "medium" },
+];
+
+function matchParentGroup(
+  parentGroup: string,
+  table: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[],
+) {
+  const g = (parentGroup || "").toLowerCase().trim();
+  if (!g) return null;
+  for (const row of table) {
+    for (const token of row.match) {
+      if (g === token || g.includes(token)) return { code: row.code, confidence: row.confidence };
+    }
+  }
+  return null;
+}
+
 // NCE variants — computed once at module level from the shared config
 const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
 const NCE_LEAF_ITEMS = NCE_FLAT_ITEMS.filter(i => !i.children || i.children.length === 0);
@@ -235,6 +318,47 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagementId,
   });
 
+  // ─── Fallback: fetch Tally Trial Balance directly if TB import hasn't populated ───
+  // `tally_trial_balance` holds the real closing balances (with balance_type
+  // Dr/Cr) and is keyed to the separate `engagements` table (Tally sync), not
+  // `audit_engagements`. Resolve the tally engagement id via client_id +
+  // financial_year, with tally_groups as a fallback.
+  //
+  // NOTE: `tally_ledgers` has all zero closing_balance values — do not use it
+  // as a balance source. It is only a ledger name / group registry.
+  const { data: tallyTb, isLoading: tallyTbLoading } = useQuery({
+    queryKey: ["tally-tb-stage3", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      let tallyEngId: string | null = null;
+      if (engagement.financial_year) {
+        const { data: tEng } = await supabase
+          .from("engagements")
+          .select("id")
+          .eq("client_id", engagement.client_id)
+          .eq("financial_year", engagement.financial_year)
+          .maybeSingle();
+        tallyEngId = (tEng as any)?.id ?? null;
+      }
+      if (!tallyEngId) {
+        const { data: tg } = await supabase
+          .from("tally_groups")
+          .select("engagement_id")
+          .eq("client_id", engagement.client_id)
+          .limit(1)
+          .maybeSingle();
+        tallyEngId = (tg as any)?.engagement_id ?? null;
+      }
+      if (!tallyEngId) return [];
+      const { data } = await supabase
+        .from("tally_trial_balance")
+        .select("ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount")
+        .eq("engagement_id", tallyEngId);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+
   // ─── Fetch existing FS rows ───
   const { data: existingFs } = useQuery({
     queryKey: ["fs-rows", engagementId],
@@ -274,7 +398,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   });
 
   // TB accounts — primary: tbSnapshot normalised_data; fallback: tb_hierarchy_nodes leaf nodes
-  const tbAccounts: { account_name: string; account_group: string; debit: number; credit: number; balance: number }[] = useMemo(() => {
+  const tbAccounts: {
+    account_name: string; account_group: string;
+    debit: number; credit: number; balance: number;
+    opening_balance?: number; tally_debit?: number; tally_credit?: number;
+  }[] = useMemo(() => {
     // Primary path: legacy snapshot with normalised_data
     if (tbSnapshot?.normalised_data) {
       return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
@@ -295,8 +423,27 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         balance: (n.txn_debit || 0) - (n.txn_credit || 0),
       })).filter(a => a.account_name);
     }
+    // Last-resort fallback: Tally Trial Balance (live sync, no TB import required).
+    // closing_balance is unsigned; balance_type tells us Dr or Cr.
+    if (tallyTb?.length) {
+      return tallyTb.map((l: any) => {
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        return {
+          account_name:  String(l.ledger_name || "").trim(),
+          account_group: l.parent_group || "",
+          debit:  isDr ? cb : 0,
+          credit: isDr ? 0  : cb,
+          balance: isDr ? cb : -cb,
+          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+          tally_debit:  Number(l.debit_amount  ?? 0),
+          tally_credit: Number(l.credit_amount ?? 0),
+        };
+      }).filter((a: any) => a.account_name);
+    }
     return [];
-  }, [tbSnapshot, tbLeafNodes]);
+  }, [tbSnapshot, tbLeafNodes, tallyTb]);
 
   // Load existing mapping from engagement
   useEffect(() => {
@@ -333,33 +480,103 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [existingFs]);
 
   // ═══════ AUTO-MAPPING ═══════
+  //   Layered pipeline, per ledger:
+  //     1. parent_group match  (Tally's native taxonomy — strongest signal)
+  //     2. keyword rules       (ledger name substring match)
+  //     3. unmatched           (stays in "Unmapped" bucket)
+  //
+  //   Whichever stage fires first wins. The winner's confidence is kept; if a
+  //   later stage would promote confidence (rare), we take the higher rank.
+  //   Existing manual overrides ("manual" confidence) are preserved.
   const runAutoMapping = useCallback(() => {
+    const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;
     const newMapping: typeof coaMapping = {};
-    for (const acct of tbAccounts) {
-      const name = acct.account_name.toLowerCase();
-      let bestMatch: { code: string; confidence: string } | null = null;
+    let viaGroup = 0, viaKeyword = 0;
 
+    for (const acct of tbAccounts) {
+      // Preserve manual overrides
+      const existing = coaMapping[acct.account_name];
+      if (existing?.confidence === "manual") {
+        newMapping[acct.account_name] = existing;
+        continue;
+      }
+
+      let best: { code: string; confidence: string; source: "group" | "keyword" } | null = null;
+
+      // 1. parent_group
+      const g = matchParentGroup(acct.account_group, groupTable);
+      if (g) best = { code: g.code, confidence: g.confidence, source: "group" };
+
+      // 2. keyword rules
+      const name = acct.account_name.toLowerCase();
       for (const rule of activeAutoRules) {
         if (rule.keywords.some(kw => name.includes(kw))) {
-          if (!bestMatch || confidenceRank(rule.confidence) > confidenceRank(bestMatch.confidence)) {
-            bestMatch = { code: rule.code, confidence: rule.confidence };
+          if (!best || confidenceRank(rule.confidence) > confidenceRank(best.confidence)) {
+            best = { code: rule.code, confidence: rule.confidence, source: "keyword" };
           }
         }
       }
 
-      if (bestMatch) {
-        const lineItem = activeLeafItems.find(i => i.code === bestMatch!.code);
+      if (best) {
+        if (best.source === "group") viaGroup++; else viaKeyword++;
+        const lineItem = activeLeafItems.find(i => i.code === best!.code);
         newMapping[acct.account_name] = {
-          code: bestMatch.code,
+          code: best.code,
           noteRef: lineItem?.noteRef || null,
           scheduleRef: lineItem?.scheduleRef || "",
-          confidence: bestMatch.confidence,
+          confidence: best.confidence,
         };
       }
     }
+
     setCoaMapping(newMapping);
-    toast.success(`Auto-mapped ${Object.keys(newMapping).length} of ${tbAccounts.length} accounts`);
-  }, [tbAccounts, activeAutoRules, activeLeafItems]);
+    const total = Object.keys(newMapping).length;
+    toast.success(
+      `Auto-mapped ${total} of ${tbAccounts.length} accounts`,
+      { description: `${viaGroup} via Tally group · ${viaKeyword} via name keywords` },
+    );
+  }, [tbAccounts, activeAutoRules, activeLeafItems, isNonCorporate, coaMapping]);
+
+  // ═══════ UNMAP ACTIONS ═══════
+  const unmapAccount = useCallback(async (accountName: string) => {
+    const updated = { ...coaMapping };
+    delete updated[accountName];
+    setCoaMapping(updated);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId);
+      toast.success(`Unmapped "${accountName}"`);
+    } catch (e: any) {
+      toast.error("Unmap saved locally, failed to persist: " + e.message);
+    }
+  }, [coaMapping, engagementId]);
+
+  const clearAllMappings = useCallback(async () => {
+    if (Object.keys(coaMapping).length === 0) { toast.info("Nothing to clear"); return; }
+    if (!window.confirm(`Clear all ${Object.keys(coaMapping).length} mappings? This cannot be undone.`)) return;
+    setCoaMapping({});
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
+      toast.success("All mappings cleared");
+    } catch (e: any) {
+      toast.error("Clear saved locally, failed to persist: " + e.message);
+    }
+  }, [coaMapping, engagementId]);
+
+  const unmapByConfidence = useCallback(async (level: "low" | "medium") => {
+    const updated = { ...coaMapping };
+    let n = 0;
+    for (const [k, v] of Object.entries(coaMapping)) {
+      if (v.confidence === level) { delete updated[k]; n++; }
+    }
+    if (n === 0) { toast.info(`No ${level}-confidence mappings to clear`); return; }
+    setCoaMapping(updated);
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId);
+      toast.success(`Unmapped ${n} ${level}-confidence accounts`);
+    } catch (e: any) {
+      toast.error("Unmap saved locally, failed to persist: " + e.message);
+    }
+  }, [coaMapping, engagementId]);
 
   // ═══════ IMPORT PRIOR YEAR MAPPING ═══════
   const importPriorMapping = async () => {
@@ -624,12 +841,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     );
   }
 
-  // Stage gate: TB data available via either path OR Stage 2 explicitly completed
-  const tbDataAvailable = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0;
+  // Stage gate: TB data available via any path (snapshot / tb_hierarchy / tally_trial_balance) OR Stage 2 explicitly completed
+  const tbDataAvailable = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0 || (tallyTb?.length ?? 0) > 0;
   const stage2Complete = (engagement?.pipeline_stage ?? 0) >= 3 ||
     (engagement?.stage_statuses as any)?.["2"] === "complete";
 
-  if (!tbSnapshotLoading && !tbLeafLoading && !tbDataAvailable && !stage2Complete) {
+  if (!tbSnapshotLoading && !tbLeafLoading && !tallyTbLoading && !tbDataAvailable && !stage2Complete) {
     return (
       <div className="max-w-4xl">
         <Alert>
@@ -688,7 +905,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
         <TabsContent value="mapping" className="mt-4">
-          <div className="flex gap-2 mb-3">
+          <div className="flex gap-2 mb-3 flex-wrap">
             <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
               <RefreshCw size={12} /> Auto-Map All
             </Button>
@@ -700,6 +917,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 <Link2 size={12} /> Map Similar
               </Button>
             )}
+            {selectedAccount && coaMapping[selectedAccount] && (
+              <Button variant="outline" size="sm" onClick={() => unmapAccount(selectedAccount)} className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10">
+                Unmap Selected
+              </Button>
+            )}
+            <div className="ml-auto flex gap-2">
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")} className="gap-1 text-amber-700">
+                Unmap Low-Confidence
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="gap-1 text-amber-700">
+                Unmap Medium
+              </Button>
+              <Button variant="ghost" size="sm" onClick={clearAllMappings} className="gap-1 text-destructive">
+                Clear All
+              </Button>
+            </div>
           </div>
 
           <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
@@ -737,15 +970,39 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         <div className="flex items-center justify-between">
                           <div className="flex-1 min-w-0">
                             <p className="font-medium truncate">{acct.account_name}</p>
-                            <p className="text-[10px] text-muted-foreground">{acct.account_group}</p>
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              {acct.account_group || "— no group —"}
+                              {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (
+                                <span className="ml-2">
+                                  · Opening: ₹{Math.abs(acct.opening_balance).toLocaleString("en-IN")}
+                                  <span className="ml-0.5 text-[9px]">{acct.opening_balance >= 0 ? "Dr" : "Cr"}</span>
+                                </span>
+                              )}
+                            </p>
                           </div>
                           <div className="flex items-center gap-1 shrink-0 ml-2">
                             <div className="text-right">
                               <p className={cn("font-mono text-[11px]", acct.balance >= 0 ? "text-foreground" : "text-destructive")}>
                                 ₹{Math.abs(acct.balance).toLocaleString("en-IN")}
+                                <span className={cn("ml-0.5 text-[9px]", acct.balance >= 0 ? "text-muted-foreground" : "text-destructive")}>
+                                  {acct.balance >= 0 ? "Dr" : "Cr"}
+                                </span>
                               </p>
-                              {acct.balance < 0 && <span className="text-[9px] text-destructive">Cr</span>}
+                              {(acct.tally_debit || acct.tally_credit) ? (
+                                <p className="text-[9px] text-muted-foreground font-mono">
+                                  Dr ₹{Math.round(acct.tally_debit || 0).toLocaleString("en-IN")} · Cr ₹{Math.round(acct.tally_credit || 0).toLocaleString("en-IN")}
+                                </p>
+                              ) : null}
                             </div>
+                            {mapping && (
+                              <button
+                                title="Unmap this ledger"
+                                onClick={e => { e.stopPropagation(); unmapAccount(acct.account_name); }}
+                                className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive ml-1"
+                              >
+                                ✕
+                              </button>
+                            )}
                             <button
                               title="Reclassify ledger"
                               onClick={e => {
