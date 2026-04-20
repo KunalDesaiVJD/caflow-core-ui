@@ -352,16 +352,19 @@ const ClientDetail = () => {
       .limit(1);
     const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
 
-    // ── 3. Check at least one active service row ──
+    // ── 3. Check at least one active service/package OR Audit classification ──
+    // Audit-classified clients are served through engagements, not service rows,
+    // so classification = 'Audit' also satisfies the service requirement.
     const { data: svcRows } = await supabase
       .from("client_services")
       .select("id")
       .eq("client_id", clientId)
       .eq("is_active", true)
       .limit(1);
-    const svcOk = (svcRows?.length ?? 0) > 0;
+    const isAuditClassified = fyRows?.[0]?.classification?.toLowerCase().includes("audit") ?? false;
+    const svcOk = (svcRows?.length ?? 0) > 0 || isAuditClassified;
 
-    console.log("[ClientDetail] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
+    console.log("[ClientDetail] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk, isAuditClassified });
 
     if (!nameOk || !panOk || !typeOk || !fyOk || !svcOk) return; // Still incomplete
 
