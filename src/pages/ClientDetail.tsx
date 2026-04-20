@@ -236,8 +236,9 @@ const ClientDetail = () => {
         supabase.from("users").select("id, name").order("name"),
         supabase.from("client_service_packages").select("*").eq("client_id", clientId!).eq("is_active", true),
         // Source 2: wizard saves audit flags here, not to clients.* direct columns
+        // NOTE: no audit_turnover column in this table — only the 5 boolean flags exist
         supabase.from("client_fy_audit_setup")
-          .select("statutory_audit_applicable, tax_audit_applicable, caro_applicable, internal_audit_applicable, stock_audit_applicable, audit_turnover")
+          .select("statutory_audit_applicable, tax_audit_applicable, caro_applicable, internal_audit_applicable, stock_audit_applicable")
           .eq("client_id", clientId!)
           .order("financial_year", { ascending: false })
           .limit(1)
@@ -301,9 +302,7 @@ const ClientDetail = () => {
           caro_applicable: c.caro_applicable || fySetup?.caro_applicable || false,
           internal_audit_applicable: c.internal_audit_applicable || fySetup?.internal_audit_applicable || false,
           stock_audit_applicable: c.stock_audit_applicable || fySetup?.stock_audit_applicable || false,
-          audit_turnover: (c as any).audit_turnover
-            ? String((c as any).audit_turnover)
-            : fySetup?.audit_turnover ? String(fySetup.audit_turnover) : "",
+          audit_turnover: (c as any).audit_turnover ? String((c as any).audit_turnover) : "",
         });
       }
     } catch (e: any) {
