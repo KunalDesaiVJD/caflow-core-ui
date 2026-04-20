@@ -122,28 +122,32 @@ function xmlEsc(s: string): string {
 //
 // Named range → autoValues key mapping (handles _0 suffix variants):
 const NR_TO_FIELD: Record<string, string> = {
-  ENTITY_NAME:    "ENTITY_NAME",
-  ENTITY_ADDRESS: "ENTITY_ADDRESS",
-  PAN:            "PAN",
-  TAN:            "TAN",
-  GSTIN:          "GSTIN",
-  ENTITY_TYPE:    "ENTITY_TYPE",
-  BUSINESS_NATURE:"BUSINESS_NATURE",
-  PREVIOUS_YEAR:  "PREVIOUS_YEAR",
-  ASSESSMENT_YEAR:"ASSESSMENT_YEAR",
-  FIRM_NAME:      "FIRM_NAME",
-  PARTNER_NAME:   "PARTNER_NAME",
-  FRN:            "FRN",
-  MEMBERSHIP_NO:  "MEMBERSHIP_NO",
-  UDIN:           "UDIN",
-  SIGN_DATE:      "SIGN_DATE",
-  PLACE_0:        "PLACE",
-  REPORT_DATE_0:  "REPORT_DATE",
-  BS_DATE_0:      "BS_DATE",
-  COMP_YEAR_END:  "COMP_YEAR_END",
-  BS_DATE:        "BS_DATE",
-  PLACE:          "PLACE",
-  REPORT_DATE:    "REPORT_DATE",
+  ENTITY_NAME:       "ENTITY_NAME",
+  ENTITY_ADDRESS:    "ENTITY_ADDRESS",
+  PAN:               "PAN",
+  ENTITY_PAN:        "PAN",        // Form 3CD uses ENTITY_PAN as the named-range key
+  TAN:               "TAN",
+  GSTIN:             "GSTIN",
+  ENTITY_GSTIN:      "GSTIN",      // Form 3CD uses ENTITY_GSTIN as the named-range key
+  ENTITY_TYPE:       "ENTITY_TYPE",
+  BUSINESS_NATURE:   "BUSINESS_NATURE",
+  PREVIOUS_YEAR:     "PREVIOUS_YEAR",
+  PY_START_TO_PY_END:"PREVIOUS_YEAR", // Form 3CD template placeholder for previous year
+  ASSESSMENT_YEAR:   "ASSESSMENT_YEAR",
+  AY_START_TO_AY_END:"ASSESSMENT_YEAR", // Form 3CD template placeholder for assessment year
+  FIRM_NAME:         "FIRM_NAME",
+  PARTNER_NAME:      "PARTNER_NAME",
+  FRN:               "FRN",
+  MEMBERSHIP_NO:     "MEMBERSHIP_NO",
+  UDIN:              "UDIN",
+  SIGN_DATE:         "SIGN_DATE",
+  PLACE_0:           "PLACE",
+  REPORT_DATE_0:     "REPORT_DATE",
+  BS_DATE_0:         "BS_DATE",
+  COMP_YEAR_END:     "COMP_YEAR_END",
+  BS_DATE:           "BS_DATE",
+  PLACE:             "PLACE",
+  REPORT_DATE:       "REPORT_DATE",
 };
 
 /**
@@ -1129,6 +1133,35 @@ serve(async (req) => {
         // as a shared-string value (no AUTO marker, no brackets).  Replace only when
         // it appears as the sole content of a <t> tag so we don't clobber unrelated text.
         ssXml = ssXml.replace(/<t>ENTITY_NAME<\/t>/g, `<t>${xmlEsc(autoValues.ENTITY_NAME)}</t>`);
+      }
+
+      // ── Form 3CD bare-literal placeholder safety net ──────────────────────────
+      // Form 3CD cells hold these strings as their display value rather than using
+      // AUTO markers or bracket-style placeholders.  Replace each when present so
+      // exports never show raw placeholder text.
+      if (autoValues.ENTITY_ADDRESS) {
+        ssXml = ssXml.replace(/<t>ENTITY_ADDRESS<\/t>/g, `<t>${xmlEsc(autoValues.ENTITY_ADDRESS)}</t>`);
+        ssXml = ssXml.replace(/\bENTITY_ADDRESS\b/g, xmlEsc(autoValues.ENTITY_ADDRESS));
+      }
+      if (autoValues.PAN) {
+        ssXml = ssXml.replace(/<t>ENTITY_PAN<\/t>/g, `<t>${xmlEsc(autoValues.PAN)}</t>`);
+        ssXml = ssXml.replace(/\bENTITY_PAN\b/g, xmlEsc(autoValues.PAN));
+      }
+      if (autoValues.GSTIN) {
+        ssXml = ssXml.replace(/<t>ENTITY_GSTIN<\/t>/g, `<t>${xmlEsc(autoValues.GSTIN)}</t>`);
+        ssXml = ssXml.replace(/\bENTITY_GSTIN\b/g, xmlEsc(autoValues.GSTIN));
+      }
+      if (autoValues.ENTITY_TYPE) {
+        ssXml = ssXml.replace(/<t>ENTITY_TYPE<\/t>/g, `<t>${xmlEsc(autoValues.ENTITY_TYPE)}</t>`);
+        ssXml = ssXml.replace(/\bENTITY_TYPE\b/g, xmlEsc(autoValues.ENTITY_TYPE));
+      }
+      if (autoValues.PREVIOUS_YEAR) {
+        ssXml = ssXml.replace(/<t>PY_START_TO_PY_END<\/t>/g, `<t>${xmlEsc(autoValues.PREVIOUS_YEAR)}</t>`);
+        ssXml = ssXml.replace(/\bPY_START_TO_PY_END\b/g, xmlEsc(autoValues.PREVIOUS_YEAR));
+      }
+      if (autoValues.ASSESSMENT_YEAR) {
+        ssXml = ssXml.replace(/<t>AY_START_TO_AY_END<\/t>/g, `<t>${xmlEsc(autoValues.ASSESSMENT_YEAR)}</t>`);
+        ssXml = ssXml.replace(/\bAY_START_TO_AY_END\b/g, xmlEsc(autoValues.ASSESSMENT_YEAR));
       }
 
       // ── Form 3CB / 3CA sign-off bracket & underscore placeholders ─────────────
