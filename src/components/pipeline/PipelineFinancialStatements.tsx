@@ -233,6 +233,41 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId,
   });
 
+  // ─── Fetch Tally Trial Balance (for opening_balance = PY closing) ───
+  // Same pattern as Stage 6 (PipelineStage3.tsx) — single source for CY close + PY open
+  const { data: tallyTb, isLoading: tallyTbLoading } = useQuery({
+    queryKey: ["tally-tb-fs", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      let tallyEngId: string | null = null;
+      if (engagement.financial_year) {
+        const { data: tEng } = await supabase
+          .from("engagements")
+          .select("id")
+          .eq("client_id", engagement.client_id)
+          .eq("financial_year", engagement.financial_year)
+          .maybeSingle();
+        tallyEngId = (tEng as any)?.id ?? null;
+      }
+      if (!tallyEngId) {
+        const { data: tg } = await supabase
+          .from("tally_groups")
+          .select("engagement_id")
+          .eq("client_id", engagement.client_id)
+          .limit(1)
+          .maybeSingle();
+        tallyEngId = (tg as any)?.engagement_id ?? null;
+      }
+      if (!tallyEngId) return [];
+      const { data } = await supabase
+        .from("tally_trial_balance")
+        .select("ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount")
+        .eq("engagement_id", tallyEngId);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+
   // ─── Fetch existing FS rows ───
   const { data: existingFs, isLoading: fsLoading } = useQuery({
     queryKey: ["fs-rows", engagementId],
@@ -299,21 +334,44 @@ export default function PipelineFinancialStatements({
   });
 
   // ─── TB accounts ───
-  const tbAccounts: { account_name: string; balance: number }[] = useMemo(() => {
+  // Includes opening_balance (signed; Cr → negative) so Stage 7 can derive PY
+  // from the same coa_mapping as Stage 6. Opening = PY closing for BS items.
+  const tbAccounts: {
+    account_name: string; account_group: string;
+    balance: number; opening_balance: number;
+  }[] = useMemo(() => {
     if (tbSnapshot?.normalised_data) {
       return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
         account_name: r.account_name || r.ledger_name || "",
+        account_group: r.account_group || r.parent_group || "",
         balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
+        opening_balance: Number(r.opening_balance ?? 0) *
+                         (String(r.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
       })).filter(a => a.account_name);
     }
     if (tbLeafNodes?.length) {
       return tbLeafNodes.map((n: any) => ({
         account_name: n.name || "",
+        account_group: n.primary_group || n.group_name || "",
         balance: (n.txn_debit || 0) - (n.txn_credit || 0),
+        opening_balance: Number(n.opening_balance ?? 0),
       })).filter(a => a.account_name);
     }
+    if (tallyTb?.length) {
+      return tallyTb.map((l: any) => {
+        const cb   = Math.abs(Number(l.closing_balance ?? 0));
+        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+        return {
+          account_name:  String(l.ledger_name || "").trim(),
+          account_group: l.parent_group || "",
+          balance: isDr ? cb : -cb,
+          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+        };
+      }).filter((a: any) => a.account_name);
+    }
     return [];
-  }, [tbSnapshot, tbLeafNodes]);
+  }, [tbSnapshot, tbLeafNodes, tallyTb]);
 
   // ─── COA mapping from engagement prop ───
   const coaMapping: Record<string, { code: string }> = useMemo(() => {
@@ -396,6 +454,42 @@ export default function PipelineFinancialStatements({
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
+  // ═══════ COMPARATIVE (PY) AMOUNTS ═══════
+  // Prior-year BS from opening_balance on CY trial balance. Same coa_mapping
+  // → re-mapping a ledger re-groups both periods. P&L opens at 0 so PY P&L
+  // always comes from prior engagement's fa_financial_statements.
+  const computedAmountsPY: Record<string, number> = useMemo(() => {
+    const amounts: Record<string, number> = {};
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      const opening = acct.opening_balance ?? 0;
+      if (!opening) continue;
+      amounts[mapping.code] = (amounts[mapping.code] || 0) + opening;
+    }
+    const computeTotal = (item: FSLineItem): number => {
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((sum, child) => sum + computeTotal(child), 0);
+      amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeTotal(item);
+    return amounts;
+  }, [tbAccounts, coaMapping, activeTree]);
+
+  // ─── Merged PY: BS uses computedAmountsPY (from opening); P&L uses pyAmounts (prior engagement) ───
+  const mergedPY: Record<string, number> = useMemo(() => {
+    const merged: Record<string, number> = { ...pyAmounts };
+    for (const [code, val] of Object.entries(computedAmountsPY)) {
+      // Section lookup via flat items
+      const item = activeFlatItems.find(i => i.code === code);
+      const sec  = String(item?.section || "").toLowerCase();
+      const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
+      if (isBS && Math.abs(val) > 0.005) merged[code] = val;
+    }
+    return merged;
+  }, [computedAmountsPY, pyAmounts, activeFlatItems]);
+
   // ─── Corporate BS check + P&L summary (unchanged) ───
   const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
   const totalLiabilities =
@@ -463,7 +557,7 @@ export default function PipelineFinancialStatements({
           note_ref: item.noteRef,
           schedule_ref: item.scheduleRef || null,
           amount_cy: Math.round((computedAmounts[item.code] || 0) * 100) / 100,
-          amount_py: pyAmounts[item.code] || null,
+          amount_py: mergedPY[item.code] || null,
           is_manual: isManual,
           override_reason: isManual ? manualOverrides[item.code].reason : null,
           source: isManual ? "manual" : "tb_mapped",
@@ -487,30 +581,143 @@ export default function PipelineFinancialStatements({
     }
   };
 
-  // ─── Export to Excel ───
+  // ─── Export to Excel (full annexures) ───
+  // Emits: Cover · Balance Sheet · P&L · Notes Index · Note-wise ledger annexures
+  //        · PY Reconciliation · Signature block. One self-contained workbook.
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
-
-    // Use activeFlatItems + appropriate section prefix for NCE vs corporate
     const bsPrefix = isNonCorporate ? "NCE_BS_" : "BS_";
     const plPrefix = isNonCorporate ? "NCE_PL_" : "PL_";
     const bsItems = activeFlatItems.filter(i => i.section.startsWith(bsPrefix));
     const plItems = activeFlatItems.filter(i => i.section.startsWith(plPrefix));
 
+    const fmt = (n: number) => Math.round((n || 0) * 100) / 100;
+
+    // ── Cover sheet ──
+    const clientName = engagement?.clients?.name || "—";
+    const pan = engagement?.clients?.pan || engagement?.pan || "—";
+    const fy  = engagement?.financial_year || "—";
+    const ay  = (() => {
+      const parts = fy.split("-");
+      if (parts.length !== 2) return "—";
+      const s = parseInt(parts[0]) + 1;
+      const e = parseInt(parts[0]) + 2;
+      return `${s}-${String(e).slice(-2)}`;
+    })();
+    const coverRows = [
+      ["FINANCIAL STATEMENTS"],
+      [],
+      ["Client",           clientName],
+      ["Entity Type",      entityType || "—"],
+      ["PAN",              pan],
+      ["Financial Year",   fy],
+      ["Assessment Year",  ay],
+      ["Framework",        isNonCorporate ? "Non-Corporate Entity (NCE)" : "Schedule III Div I"],
+      ["CY",               `As at 31 March ${cyYear}`],
+      ["PY",               `As at 31 March ${pyYear}`],
+      ["Generated on",     new Date().toISOString().split("T")[0]],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coverRows), "Cover");
+
+    // ── BS / P&L primary statements ──
     const toRows = (items: typeof bsItems) =>
       items.map(i => ({
         "Code": i.code,
         "Line Item": "  ".repeat(i.depth) + i.name,
         "Note Ref": i.noteRef ? `N${i.noteRef}` : "",
-        "CY Amount (₹)": computedAmounts[i.code] || 0,
-        "PY Amount (₹)": pyAmounts[i.code] || 0,
+        [`CY ${cyYear} (₹)`]: fmt(computedAmounts[i.code] || 0),
+        [`PY ${pyYear} (₹)`]: fmt(mergedPY[i.code] || 0),
+        "Variance (₹)": fmt((computedAmounts[i.code] || 0) - (mergedPY[i.code] || 0)),
         "Override": manualOverrides[i.code] ? "Yes" : "",
         "Override Reason": manualOverrides[i.code]?.reason || "",
       }));
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(toRows(bsItems)), "Balance Sheet");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(toRows(plItems)), "P&L Statement");
-    XLSX.writeFile(wb, `FinancialStatements_${engagement?.financial_year || "FY"}.xlsx`);
+
+    // ── Notes Index ──
+    const notedItems = activeFlatItems.filter(i => i.noteRef);
+    const noteIndex = notedItems.map(i => ({
+      "Note": `N${i.noteRef}`,
+      "Line Item": i.name,
+      "Code": i.code,
+      [`CY ${cyYear} (₹)`]: fmt(computedAmounts[i.code] || 0),
+      [`PY ${pyYear} (₹)`]: fmt(mergedPY[i.code] || 0),
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteIndex), "Notes Index");
+
+    // ── Note-wise ledger annexures ──
+    // For each note, list the mapped ledgers with CY (closing) + PY (opening).
+    // Ledgers come from tbAccounts; mapping from coaMapping.
+    for (const item of notedItems) {
+      const ledgers = tbAccounts
+        .filter(a => coaMapping[a.account_name]?.code === item.code)
+        .map(a => ({
+          "Ledger": a.account_name,
+          "Group":  a.account_group || "",
+          [`CY ${cyYear} (₹)`]: fmt(a.balance),
+          [`PY ${pyYear} (₹)`]: fmt(a.opening_balance || 0),
+          "Variance (₹)": fmt(a.balance - (a.opening_balance || 0)),
+          "Status": (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
+            ? "NEW"
+            : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
+              ? "CLOSED" : "",
+        }));
+      if (ledgers.length === 0) continue;
+      // Append total row
+      const totalCY = ledgers.reduce((s, l) => s + (l[`CY ${cyYear} (₹)`] as number), 0);
+      const totalPY = ledgers.reduce((s, l) => s + (l[`PY ${pyYear} (₹)`] as number), 0);
+      ledgers.push({
+        "Ledger": "TOTAL",
+        "Group":  "",
+        [`CY ${cyYear} (₹)`]: fmt(totalCY),
+        [`PY ${pyYear} (₹)`]: fmt(totalPY),
+        "Variance (₹)": fmt(totalCY - totalPY),
+        "Status": "",
+      } as any);
+      const sheetName = `N${item.noteRef} ${item.name}`.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ledgers), sheetName);
+    }
+
+    // ── PY Reconciliation (computed-from-opening vs prior-engagement audited) ──
+    const reconRows = bsItems
+      .filter(i => !i.children || i.children.length === 0)
+      .map(i => {
+        const fromOpening = computedAmountsPY[i.code] || 0;
+        const fromAudited = pyAmounts[i.code]         || 0;
+        return {
+          "Code": i.code,
+          "Line Item": i.name,
+          "PY (from CY Opening Balance) (₹)": fmt(fromOpening),
+          "PY (from Prior Audited FS) (₹)": fmt(fromAudited),
+          "Difference (₹)": fmt(fromOpening - fromAudited),
+          "Tallied": Math.abs(fromOpening - fromAudited) < 1 ? "✓" : "✗",
+        };
+      });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reconRows), "PY Reconciliation");
+
+    // ── Signature block (NCE only) ──
+    if (isNonCorporate) {
+      const sigRows = [
+        ["SIGNATURE BLOCK"], [],
+        ["For,",             sigFirmName || ""],
+        ["",                 "Chartered Accountants"],
+        ["FRN",              sigFirmFRN  || ""],
+        [],
+        ["Partner",          sigPartnerName  || ""],
+        ["Membership No.",   sigMembershipNo || ""],
+        [],
+        ["For Client,",      sigClientName || ""],
+        ["Auth. Signatory",  sigSignatoryName || ""],
+        ["Place",            sigPlace || ""],
+        ["Date",             sigDate  || ""],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sigRows), "Signature");
+    }
+
+    const safeClient = String(clientName).replace(/[^a-z0-9]+/gi, "_").slice(0, 30);
+    XLSX.writeFile(wb, `FS_${safeClient}_${fy || "FY"}.xlsx`);
+    toast.success("Financial Statements exported with all annexures");
   };
 
   // ─── Complete Stage 10 ───
@@ -533,12 +740,12 @@ export default function PipelineFinancialStatements({
     );
   }
 
-  const hasTbData = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0;
+  const hasTbData = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0 || (tallyTb?.length ?? 0) > 0;
   const stage3Complete =
     (engagement?.stage_statuses as any)?.["3"] === "complete" ||
     (engagement?.pipeline_stage ?? 0) >= 4;
 
-  if (!tbSnapshotLoading && !tbLeafLoading && !hasTbData && !stage3Complete) {
+  if (!tbSnapshotLoading && !tbLeafLoading && !tallyTbLoading && !hasTbData && !stage3Complete) {
     return (
       <div className="max-w-4xl">
         <Alert>
@@ -552,14 +759,14 @@ export default function PipelineFinancialStatements({
     );
   }
 
-  const isLoading = tbSnapshotLoading || tbLeafLoading || fsLoading;
+  const isLoading = tbSnapshotLoading || tbLeafLoading || tallyTbLoading || fsLoading;
 
   // ─── FS row renderer ───
   const renderFSRows = (items: (FSLineItem & { depth: number })[]) =>
     items.map(item => {
       const isHeader = !!(item.children && item.children.length > 0);
       const amount = computedAmounts[item.code] || 0;
-      const py = pyAmounts[item.code] || 0;
+      const py = mergedPY[item.code] || 0;
       const hasOverride = !!manualOverrides[item.code];
 
       return (
@@ -737,6 +944,9 @@ export default function PipelineFinancialStatements({
             <TabsTrigger value="pl" className="gap-1.5">
               <FileSpreadsheet size={14} /> P&L Statement
             </TabsTrigger>
+            <TabsTrigger value="recon" className="gap-1.5">
+              <AlertTriangle size={14} /> PY Reconciliation
+            </TabsTrigger>
             {!isNonCorporate && (
               <TabsTrigger value="cf" className="gap-1.5">
                 <Droplets size={14} /> Cash Flow
@@ -812,6 +1022,72 @@ export default function PipelineFinancialStatements({
               </Table>
             </div>
             {nceSignatureBlock}
+          </TabsContent>
+
+          {/* ── PY Reconciliation ── */}
+          {/* Tally PY computed from CY opening balances against prior audited FS */}
+          <TabsContent value="recon" className="mt-3">
+            <Alert className="mb-3">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle className="text-xs">Match PY with Last Year's Audit Report</AlertTitle>
+              <AlertDescription className="text-xs">
+                Column A: PY derived from opening balances on CY trial balance (via COA mapping).
+                Column B: PY from prior engagement's audited fa_financial_statements.
+                Differences indicate either a new/changed mapping in CY or a prior-period adjustment.
+              </AlertDescription>
+            </Alert>
+            <div className="rounded-lg border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead className="text-xs">Line Item</TableHead>
+                    <TableHead className="text-xs text-right">PY (from Opening) (₹)</TableHead>
+                    <TableHead className="text-xs text-right">PY (from Audited FS) (₹)</TableHead>
+                    <TableHead className="text-xs text-right">Δ (₹)</TableHead>
+                    <TableHead className="text-xs text-center w-16">Tallied</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {activeFlatItems
+                    .filter(i => i.section.startsWith(isNonCorporate ? "NCE_BS_" : "BS_"))
+                    .filter(i => !i.children || i.children.length === 0)
+                    .map(i => {
+                      const fromOpening = computedAmountsPY[i.code] || 0;
+                      const fromAudited = pyAmounts[i.code]         || 0;
+                      const diff  = fromOpening - fromAudited;
+                      const match = Math.abs(diff) < 1;
+                      if (Math.abs(fromOpening) < 0.005 && Math.abs(fromAudited) < 0.005) return null;
+                      return (
+                        <TableRow key={i.code} className={cn(!match && "bg-amber-50/60")}>
+                          <TableCell className="text-xs" style={{ paddingLeft: `${i.depth * 16 + 8}px` }}>
+                            {i.name}
+                            {i.noteRef && <Badge variant="outline" className="ml-1.5 text-[8px] px-1">N{i.noteRef}</Badge>}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-mono tabular-nums">
+                            {fromOpening !== 0 ? `₹${Math.abs(fromOpening).toLocaleString("en-IN")}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
+                            {fromAudited !== 0 ? `₹${Math.abs(fromAudited).toLocaleString("en-IN")}` : "—"}
+                          </TableCell>
+                          <TableCell className={cn(
+                            "text-right text-xs font-mono tabular-nums",
+                            match ? "text-muted-foreground" : "text-destructive font-semibold"
+                          )}>
+                            {Math.abs(diff) < 0.005 ? "—" : `₹${Math.abs(diff).toLocaleString("en-IN")}`}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {match ? (
+                              <span className="text-primary text-sm">✓</span>
+                            ) : (
+                              <span className="text-destructive text-sm">✗</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                </TableBody>
+              </Table>
+            </div>
           </TabsContent>
 
           {/* ── Cash Flow (corporate only) ── */}
