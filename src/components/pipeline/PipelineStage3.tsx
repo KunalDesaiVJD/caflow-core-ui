@@ -290,10 +290,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
 
   // ─── View/UI state ───
-  const [hideZero, setHideZero]               = useState(true);   // hide closing_balance = 0 ledgers
+  const [hideZero, setHideZero]               = useState(true);   // hide opening=0 AND closing=0 ledgers
   const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
   const [aiRunning, setAiRunning]             = useState(false);
+  // PY-first workflow mode for the left panel.
+  //   "all"    — all unmapped ledgers
+  //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
+  //   "cy"     — new ledgers this year: opening = 0, closing ≠ 0
+  //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
+  const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
 
   // ─── Fetch TB data (legacy snapshot path) ───
   const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
@@ -905,30 +911,84 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
+  // ═══════ COMPARATIVE (PY) AMOUNTS ═══════
+  // Prior-year amounts derived from opening_balance on the CY trial balance.
+  // Valid for Balance Sheet items (asset/equity/liability). For P&L items,
+  // opening is always 0 — so PY P&L must come from prior engagement's
+  // fa_financial_statements (handled in Stage 7). The same coa_mapping
+  // serves both CY and PY — re-mapping a ledger re-groups both periods.
+  const computedAmountsPY: Record<string, number> = useMemo(() => {
+    const amounts: Record<string, number> = {};
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      const opening = acct.opening_balance ?? 0;
+      if (!opening) continue;
+      amounts[mapping.code] = (amounts[mapping.code] || 0) + opening;
+    }
+    const computeTotal = (item: FSLineItem): number => {
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((sum, child) => sum + computeTotal(child), 0);
+      amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeTotal(item);
+    return amounts;
+  }, [tbAccounts, coaMapping, isNonCorporate]);
+
   // ═══════ STATS ═══════
   const mappedCount = tbAccounts.filter(a => coaMapping[a.account_name]).length;
   const unmappedCount = tbAccounts.length - mappedCount;
   const allMapped = unmappedCount === 0 && tbAccounts.length > 0;
 
-  // Filtered accounts — respect hideZero + search
+  // Filtered accounts — respect hideZero + search + workMode (PY/CY/Closed)
   const filteredAccounts = useMemo(() => {
     const s = search.toLowerCase();
     return tbAccounts.filter(a => {
-      if (hideZero && Math.abs(a.balance) < 0.005 && Math.abs(a.opening_balance ?? 0) < 0.005) return false;
+      const opening = a.opening_balance ?? 0;
+      const closing = a.balance;
+      const hasOpen  = Math.abs(opening) >= 0.005;
+      const hasClose = Math.abs(closing) >= 0.005;
+      if (hideZero && !hasOpen && !hasClose) return false;
+
+      // Workflow-mode narrowing
+      if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
+      if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
+      if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
+
       if (!s) return true;
       return (
         a.account_name.toLowerCase().includes(s) ||
         a.account_group.toLowerCase().includes(s)
       );
     });
-  }, [tbAccounts, search, hideZero]);
+  }, [tbAccounts, search, hideZero, workMode]);
 
   // Left panel = exclusively UNMAPPED ledgers. Mapped ledgers live in the right
   // panel (grouped under their FS code) with ✕ unmap affordances.
+  // "Closed" mode is an exception — it shows all matching ledgers (mapped + unmapped)
+  // so the auditor can review PY-only impact. Other modes hide already-mapped.
   const unmappedAccounts = useMemo(
-    () => filteredAccounts.filter(a => !coaMapping[a.account_name]),
-    [filteredAccounts, coaMapping],
+    () => workMode === "closed"
+      ? filteredAccounts
+      : filteredAccounts.filter(a => !coaMapping[a.account_name]),
+    [filteredAccounts, coaMapping, workMode],
   );
+
+  // Counts per mode (shown on the segmented control)
+  const modeCounts = useMemo(() => {
+    let py = 0, cy = 0, closed = 0, all = 0;
+    for (const a of tbAccounts) {
+      const hasOpen  = Math.abs(a.opening_balance ?? 0) >= 0.005;
+      const hasClose = Math.abs(a.balance) >= 0.005;
+      if (!hasOpen && !hasClose) continue;               // dormant both years
+      if (!coaMapping[a.account_name]) all++;
+      if (hasOpen  && !coaMapping[a.account_name]) py++;
+      if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
+      if (hasOpen  && !hasClose) closed++;               // review regardless of mapped state
+    }
+    return { py, cy, closed, all };
+  }, [tbAccounts, coaMapping]);
 
   // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts.
   // Computed against UNMAPPED accounts so empty groups (fully mapped) drop out of
@@ -987,6 +1047,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
       const addItem = (item: FSLineItem & { depth: number }) => {
         const isManual = !!manualOverrides[item.code];
+        // PY source-of-truth:
+        //   BS items → sum of opening_balance on CY's own TB (computedAmountsPY)
+        //   P&L items → fall back to prior engagement's fa_financial_statements (pyAmounts)
+        const isBS = String(item.section || "").toLowerCase().includes("bs") ||
+                     String(item.section || "").toLowerCase().includes("asset") ||
+                     String(item.section || "").toLowerCase().includes("liab") ||
+                     String(item.section || "").toLowerCase().includes("equity");
+        const pyFromOpening = computedAmountsPY[item.code] || 0;
+        const pyFromPrior   = pyAmounts[item.code]         || 0;
+        const amount_py     = isBS
+          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || null))
+          : (pyFromPrior || null);
+
         rows.push({
           engagement_id: engagementId,
           section: item.section,
@@ -995,7 +1068,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           note_ref: item.noteRef,
           schedule_ref: item.scheduleRef || null,
           amount_cy: Math.round((computedAmounts[item.code] || 0) * 100) / 100,
-          amount_py: pyAmounts[item.code] || null,
+          amount_py: amount_py !== null ? Math.round((amount_py as number) * 100) / 100 : null,
           is_manual: isManual,
           override_reason: isManual ? manualOverrides[item.code].reason : null,
           source: isManual ? "manual" : "tb_mapped",
@@ -1110,6 +1183,52 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
         <TabsContent value="mapping" className="mt-4">
+          {/* PY-first workflow segmented control */}
+          <div className="flex items-stretch gap-0 mb-3 border rounded-md overflow-hidden">
+            {([
+              { key: "py",     label: "Prior Year",         hint: "opening ≠ 0",           count: modeCounts.py,     color: "bg-amber-100 text-amber-800 border-amber-300" },
+              { key: "cy",     label: "Current Year (new)", hint: "opening = 0, closing ≠ 0", count: modeCounts.cy, color: "bg-primary/10 text-primary" },
+              { key: "closed", label: "Closed Accounts",    hint: "opening ≠ 0, closing = 0", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
+              { key: "all",    label: "All Unmapped",       hint: "every unmapped ledger", count: modeCounts.all,   color: "bg-violet-100 text-violet-800 dark:bg-violet-950/30 dark:text-violet-200" },
+            ] as const).map((m, i) => (
+              <button
+                key={m.key}
+                onClick={() => setWorkMode(m.key)}
+                className={cn(
+                  "flex-1 px-3 py-2 text-xs text-left transition-colors",
+                  i > 0 && "border-l",
+                  workMode === m.key ? m.color + " font-semibold" : "hover:bg-muted/50 text-muted-foreground"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span>{m.label}</span>
+                  <Badge variant="outline" className={cn("text-[9px] px-1 ml-2", workMode === m.key && "border-current")}>{m.count}</Badge>
+                </div>
+                <p className={cn("text-[10px] mt-0.5", workMode === m.key ? "opacity-80" : "opacity-60")}>{m.hint}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Workflow-mode guidance banner */}
+          {workMode === "py" && (
+            <Alert className="mb-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertTitle className="text-xs">Prior-Year Mapping Mode</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                You're mapping ledgers with non-zero opening balances. Each mapping serves both PY and CY — once these are done, only new CY ledgers remain.
+              </AlertDescription>
+            </Alert>
+          )}
+          {workMode === "closed" && (
+            <Alert className="mb-3 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-700">
+              <AlertTriangle className="h-4 w-4 text-slate-600" />
+              <AlertTitle className="text-xs">Closed Accounts Review</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                These ledgers had balances last year but are now zero. They only affect the PY comparative column. Verify mapping — they may be ledgers that were renamed or reclassified mid-year.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="flex gap-2 mb-3 flex-wrap items-center">
             <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
               <RefreshCw size={12} /> Auto-Map All
@@ -1399,10 +1518,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-1">
+                  {/* Column header: CY | PY | Δ */}
+                  <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-1 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                    <span>FS Line Item</span>
+                    <span className="text-right">Current Yr</span>
+                    <span className="text-right">Prior Yr</span>
+                    <span className="text-right">Δ %</span>
+                  </div>
                   {activeFlatItems.map(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
-                    const amount = computedAmounts[item.code] || 0;
+                    const amountCY = computedAmounts[item.code]   || 0;
+                    const amountPY = computedAmountsPY[item.code] || 0;
+                    const delta    = amountCY - amountPY;
+                    const pct      = Math.abs(amountPY) > 0.005
+                      ? Math.round((delta / Math.abs(amountPY)) * 100)
+                      : (Math.abs(amountCY) > 0.005 ? 100 : 0);
+                    const hasAny   = Math.abs(amountCY) > 0.005 || Math.abs(amountPY) > 0.005;
                     const isExpanded = expandedGroups[`fs:${item.code}`] ?? (mappedAccounts.length > 0 && mappedAccounts.length <= 5);
 
                     return (
@@ -1417,33 +1549,41 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             }
                           }}
                           className={cn(
-                            "px-2 py-1.5 text-xs rounded-sm transition-colors",
-                            isHeader ? "font-bold text-foreground mt-2" : "hover:bg-primary/10 cursor-pointer",
+                            "px-2 py-1.5 text-xs rounded-sm transition-colors grid grid-cols-[1fr_90px_90px_60px] gap-1 items-center",
+                            isHeader ? "font-bold text-foreground mt-2 bg-muted/30" : "hover:bg-primary/10 cursor-pointer",
                             !isHeader && selectedAccount && "ring-1 ring-transparent hover:ring-primary/40",
                           )}
                           style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              {isHeader && <ChevronDown size={12} />}
-                              {!isHeader && mappedAccounts.length > 0 && (
-                                isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
-                              )}
-                              <span className={cn("truncate", isHeader && "uppercase text-[11px]")}>{item.name}</span>
-                              {item.noteRef && <Badge variant="outline" className="text-[8px] px-1 shrink-0">N{item.noteRef}</Badge>}
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {mappedAccounts.length > 0 && !isHeader && (
-                                <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length} acct</Badge>
-                              )}
-                              {amount !== 0 && (
-                                <span className={cn("font-mono text-[10px]", amount >= 0 ? "text-foreground" : "text-destructive")}>
-                                  ₹{Math.abs(amount).toLocaleString("en-IN")}
-                                  <span className="ml-0.5 text-[9px] opacity-70">{amount >= 0 ? "Dr" : "Cr"}</span>
-                                </span>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {isHeader && <ChevronDown size={12} />}
+                            {!isHeader && mappedAccounts.length > 0 && (
+                              isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
+                            )}
+                            <span className={cn("truncate", isHeader && "uppercase text-[11px]")}>{item.name}</span>
+                            {item.noteRef && <Badge variant="outline" className="text-[8px] px-1 shrink-0">N{item.noteRef}</Badge>}
+                            {mappedAccounts.length > 0 && !isHeader && (
+                              <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length}</Badge>
+                            )}
                           </div>
+                          <span className={cn("font-mono text-[10px] text-right", amountCY >= 0 ? "text-foreground" : "text-destructive")}>
+                            {Math.abs(amountCY) > 0.005 ? (
+                              <>₹{Math.abs(amountCY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountCY >= 0 ? "Dr" : "Cr"}</span></>
+                            ) : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span className={cn("font-mono text-[10px] text-right", amountPY >= 0 ? "text-foreground" : "text-destructive", "opacity-80")}>
+                            {Math.abs(amountPY) > 0.005 ? (
+                              <>₹{Math.abs(amountPY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountPY >= 0 ? "Dr" : "Cr"}</span></>
+                            ) : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span className={cn("text-[10px] text-right font-mono",
+                            !hasAny ? "text-muted-foreground/40" :
+                            Math.abs(pct) < 5  ? "text-muted-foreground" :
+                            Math.abs(pct) < 50 ? "text-amber-600" :
+                                                 "text-destructive"
+                          )}>
+                            {hasAny ? `${pct > 0 ? "+" : ""}${pct}%` : "—"}
+                          </span>
                         </div>
                         {!isHeader && isExpanded && mappedAccounts.length > 0 && (
                           <div className="bg-muted/20 border-l-2 border-primary/30 ml-2">
@@ -1454,26 +1594,34 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 m?.confidence === "high" ? "bg-primary/10 text-primary border-primary/30" :
                                 m?.confidence === "medium" ? "bg-muted text-muted-foreground border-muted-foreground/30" :
                                 "bg-destructive/10 text-destructive border-destructive/30";
+                              const opening = a.opening_balance ?? 0;
+                              const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
+                              const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
                               return (
                                 <div
                                   key={a.account_name}
-                                  className="flex items-center justify-between px-3 py-1 text-[11px] hover:bg-background"
+                                  className="grid grid-cols-[1fr_90px_90px_28px] gap-1 items-center px-3 py-1 text-[11px] hover:bg-background"
                                   style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
                                 >
                                   <div className="flex items-center gap-1.5 min-w-0">
                                     <span className="truncate">{a.account_name}</span>
-                                    {a.account_group && (
-                                      <span className="text-[9px] text-muted-foreground truncate">({a.account_group})</span>
-                                    )}
                                     <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
                                       {m?.confidence === "manual" ? "✎" : m?.confidence}
                                     </Badge>
+                                    {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
+                                    {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
                                   </div>
-                                  <div className="flex items-center gap-1 shrink-0 ml-2">
-                                    <span className={cn("font-mono text-[10px]", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
-                                      ₹{Math.abs(a.balance).toLocaleString("en-IN")}
-                                      <span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span>
-                                    </span>
+                                  <span className={cn("font-mono text-[10px] text-right", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                    {Math.abs(a.balance) > 0.005 ? (
+                                      <>₹{Math.abs(a.balance).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span></>
+                                    ) : <span className="text-muted-foreground/40">—</span>}
+                                  </span>
+                                  <span className={cn("font-mono text-[10px] text-right opacity-80", opening >= 0 ? "text-foreground" : "text-destructive")}>
+                                    {Math.abs(opening) > 0.005 ? (
+                                      <>₹{Math.abs(opening).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{opening >= 0 ? "Dr" : "Cr"}</span></>
+                                    ) : <span className="text-muted-foreground/40">—</span>}
+                                  </span>
+                                  <div className="flex items-center gap-0.5 justify-end">
                                     <button
                                       title={`Unmap "${a.account_name}"`}
                                       onClick={(e) => { e.stopPropagation(); unmapAccount(a.account_name); }}
