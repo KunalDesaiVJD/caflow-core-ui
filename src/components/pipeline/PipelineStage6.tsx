@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { ArrowRight, History, Loader2 } from "lucide-react";
 import { useWorksheetHistory } from "@/components/audit-worksheet/hooks/useWorksheetHistory";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 
 interface PipelineStage6Props {
   engagementId: string;
@@ -41,10 +42,11 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={2} stageLabel="Workpapers & Audit Sheet" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 2 — Workpapers & Audit Sheet</h1>
+          <h1 className="text-lg font-bold text-foreground">Stage 2 — Workpapers & Audit Sheet</h1>
           <p className="text-sm text-muted-foreground">Audit working papers and engagement documentation</p>
         </div>
         <div className="flex gap-2">

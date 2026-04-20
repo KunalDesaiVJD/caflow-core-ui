@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import * as XLSX from "xlsx";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
@@ -670,18 +671,12 @@ export default function PipelineFinancialStatements({
 
   return (
     <div className="max-w-6xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={5} stageLabel="Financial Statements" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 7 — Financial Statements</h1>
-          <p className="text-sm text-muted-foreground">
-            {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
-            {isNonCorporate
-              ? entityType                                                             // e.g. "Partnership"
-              : engagement.schedule_iii_division === "div_ii"
-                ? "Ind AS (Div II)"
-                : "Schedule III (Div I)"}
-          </p>
+          <h1 className="text-lg font-bold text-foreground">Stage 5 — Financial Statements</h1>
+          <p className="text-xs text-muted-foreground">Generated from mapped trial balance</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">

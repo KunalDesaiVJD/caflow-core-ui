@@ -36,6 +36,7 @@ import {
   Eye, BookMarked, Shield, Award,
 } from "lucide-react";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
 import PipelineFinancialStatements from "@/components/pipeline/PipelineFinancialStatements";
@@ -394,7 +395,7 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const { data } = await supabase
         .from("audit_engagements")
-        .select("*, clients(name, entity_type, caro_applicable, tax_audit_type, pan, gstin)")
+        .select("*, clients(name, entity_type, caro_applicable, tax_audit_type, pan, gstin, cin, registered_state, date_of_incorporation, tan_number)")
         .eq("id", selectedEngId)
         .single();
       return data as any;
@@ -724,14 +725,15 @@ export default function AuditPipeline() {
           </div>
         ) : activeStage === 1 ? (
           /* STAGE 1 */
-          <div className="max-w-4xl space-y-6">
-            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+          <div className="max-w-4xl space-y-4">
+            {engagement && <EngagementHeader engagement={engagement} stageNumber={1} stageLabel="Engagement Setup & Planning" />}
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
               <ChevronRight size={14} className="rotate-180" /> Audit Dashboard
             </Button>
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-xl font-bold text-foreground">Engagement Setup & Audit Planning</h1>
-                <p className="text-sm text-muted-foreground">Complete the preliminary questionnaire and review the planning calendar.</p>
+                <h1 className="text-lg font-bold text-foreground">Engagement Setup & Audit Planning</h1>
+                <p className="text-xs text-muted-foreground">Complete the preliminary questionnaire and review the planning calendar.</p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => saveStage1(false)} disabled={saving}>Save Draft</Button>
@@ -1161,10 +1163,11 @@ export default function AuditPipeline() {
 
             return (
               <div className="space-y-4">
+                <EngagementHeader engagement={engagement} stageNumber={9} stageLabel="3CA / 3CB / 3CD Reports" />
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-xl font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
-                    <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
+                    <h1 className="text-lg font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
+                    <p className="text-xs text-muted-foreground">Tax audit report forms and annexures</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
                     <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
@@ -1178,11 +1181,12 @@ export default function AuditPipeline() {
           })()
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
-          <div className="max-w-5xl space-y-6">
-            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
+          <div className="max-w-5xl space-y-4">
+            <EngagementHeader engagement={engagement} stageNumber={10} stageLabel="Sign-off & UDIN" />
+            <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-xl font-bold text-foreground">Stage 10 — Sign-off & UDIN</h1>
+            <h1 className="text-lg font-bold text-foreground">Stage 10 — Sign-off & UDIN</h1>
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
         ) : activeStage === 10 ? (
