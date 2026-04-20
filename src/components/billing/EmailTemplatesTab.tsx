@@ -43,7 +43,7 @@ const TEMPLATE_TYPES = [
 type TemplateType = (typeof TEMPLATE_TYPES)[number];
 
 const DEFAULT_SUBJECTS: Record<TemplateType, string> = {
-  invoice_generated: "Invoice from V J Desai & Co.",
+  invoice_generated: "Invoice from {{firm_name}}",
   quotation_sent: "Quotation for Your Review",
   proforma_sent: "Proforma Invoice",
   credit_note_issued: "Credit Note Issued",
@@ -52,7 +52,7 @@ const DEFAULT_SUBJECTS: Record<TemplateType, string> = {
   tds_due_7_days: "TDS Due in 7 Days — Please Act",
   tds_due_1_day: "URGENT: TDS Due Tomorrow",
   audit_report_ready: "Audit Report Ready for Review",
-  new_user_welcome: "Welcome to CAFlow — V J Desai & Co.",
+  new_user_welcome: "Welcome to CAFlow — {{firm_name}}",
 };
 
 const TEMPLATE_LABELS: Record<TemplateType, string> = {

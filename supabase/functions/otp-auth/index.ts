@@ -130,7 +130,7 @@ function buildOtpEmailHtml(userName: string, otp: string, purposeLabel: string):
                   <td style="background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 6px 6px 0;padding:12px 16px;">
                     <p style="margin:0;color:#92400e;font-size:13px;">
                       <strong>⚠️ Security Notice:</strong> Never share this OTP with anyone.
-                      V J Desai &amp; Co. staff will never ask for your OTP.
+                      V J Desai &amp; Co. LLP staff will never ask for your OTP.
                       This code expires in 10 minutes.
                     </p>
                   </td>
@@ -148,7 +148,7 @@ function buildOtpEmailHtml(userName: string, otp: string, purposeLabel: string):
           <tr>
             <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;text-align:center;">
-                V J Desai &amp; Co., Chartered Accountants<br>
+                V J Desai &amp; Co. LLP, Chartered Accountants<br>
                 This is an automated message from CAFlow. Please do not reply to this email.<br>
                 © ${new Date().getFullYear()} CAFlow Practice Management
               </p>

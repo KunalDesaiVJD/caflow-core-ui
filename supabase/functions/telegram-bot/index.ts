@@ -33,7 +33,7 @@ const GRAPH_TENANT_ID     = Deno.env.get("GRAPH_TENANT_ID");
 const GRAPH_CLIENT_ID     = Deno.env.get("GRAPH_CLIENT_ID");
 const GRAPH_CLIENT_SECRET = Deno.env.get("GRAPH_CLIENT_SECRET");
 const EMAIL_FROM          = "accounts@vjdesai.com";
-const FIRM_DISPLAY_NAME   = "V J Desai & Co.";
+const FIRM_DISPLAY_NAME   = "V J Desai & Co. LLP";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
