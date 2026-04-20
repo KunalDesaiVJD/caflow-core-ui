@@ -132,7 +132,25 @@ export default function LedgerVouchersView() {
       if (!error && vchData) {
         const processed: LedgerVoucher[] = (vchData as any[]).map(v => {
           const rawItems: LineItem[] = Array.isArray(v.line_items) ? v.line_items : [];
-          const items: LineItem[] = rawItems.map(i => ({ ...i, dr_cr: flipDrCr(i.dr_cr) }));
+          let items: LineItem[] = rawItems.map(i => ({ ...i, dr_cr: flipDrCr(i.dr_cr) }));
+
+          // Fallback: no line_items but voucher has top-level party_ledger/amount/dr_cr.
+          // Synthesise a two-leg entry so the drill-down still shows something.
+          if (items.length === 0 && v.amount != null && v.party_ledger) {
+            const thisIsParty = v.party_ledger === ledgerName;
+            const thisSide: LineItem = {
+              ledger_name: ledgerName,
+              amount: Number(v.amount) || 0,
+              dr_cr: thisIsParty ? flipDrCr(v.dr_cr) : v.dr_cr === "Dr" ? "Cr" : "Dr",
+            };
+            const contraSide: LineItem = {
+              ledger_name: thisIsParty ? decodeHtml(v.voucher_type) || "(contra)" : v.party_ledger,
+              amount: Number(v.amount) || 0,
+              dr_cr: thisSide.dr_cr === "Dr" ? "Cr" : "Dr",
+            };
+            items = [thisSide, contraSide];
+          }
+
           const thisEntry = items.find(i => i.ledger_name === ledgerName);
           const thisAmount = thisEntry?.amount ?? 0;
           const thisDrCr   = thisEntry?.dr_cr   ?? "Dr";
