@@ -38,6 +38,11 @@ interface TBRow {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Tally's sync agent currently emits inverted Dr/Cr — flip at read time.
+function flipDrCr(t: string | null | undefined): string {
+  return t === "Dr" ? "Cr" : "Dr";
+}
+
 function decodeHtml(str: string | null | undefined): string {
   if (!str) return "";
   return str
@@ -113,7 +118,10 @@ export default function LedgerVouchersView() {
         .eq("engagement_id", engId!)
         .eq("ledger_name", ledgerName)
         .maybeSingle();
-      setTbRow(tb as TBRow | null);
+      const flippedTb = tb
+        ? { ...(tb as TBRow), opening_type: flipDrCr((tb as TBRow).opening_type), balance_type: flipDrCr((tb as TBRow).balance_type) }
+        : null;
+      setTbRow(flippedTb);
 
       // Fetch vouchers via RPC (returns vouchers whose line_items contain this ledger)
       const { data: vchData, error } = await (supabase as any).rpc("get_ledger_vouchers", {
@@ -123,17 +131,16 @@ export default function LedgerVouchersView() {
 
       if (!error && vchData) {
         const processed: LedgerVoucher[] = (vchData as any[]).map(v => {
-          const items: LineItem[] = Array.isArray(v.line_items) ? v.line_items : [];
-          // Find this ledger's entry
+          const rawItems: LineItem[] = Array.isArray(v.line_items) ? v.line_items : [];
+          const items: LineItem[] = rawItems.map(i => ({ ...i, dr_cr: flipDrCr(i.dr_cr) }));
           const thisEntry = items.find(i => i.ledger_name === ledgerName);
           const thisAmount = thisEntry?.amount ?? 0;
           const thisDrCr   = thisEntry?.dr_cr   ?? "Dr";
-          // Contra ledgers = all others
           const contras = items.filter(i => i.ledger_name !== ledgerName).map(i => decodeHtml(i.ledger_name));
           const contraLedgers = contras.length > 0
             ? contras[0] + (contras.length > 1 ? ` (+${contras.length - 1} more)` : "")
             : decodeHtml(v.voucher_type);
-          return { ...v, thisAmount, thisDrCr, contraLedgers };
+          return { ...v, line_items: items, thisAmount, thisDrCr, contraLedgers };
         });
         setVouchers(processed);
       }

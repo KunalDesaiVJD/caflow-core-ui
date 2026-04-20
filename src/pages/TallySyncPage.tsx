@@ -91,6 +91,11 @@ interface RowCounts {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Tally's sync agent currently emits inverted Dr/Cr — flip at read time.
+function flipDrCr(t: string | null | undefined): string {
+  return t === "Dr" ? "Cr" : "Dr";
+}
+
 function decodeHtml(str: string | null | undefined): string {
   if (!str) return "";
   return str
@@ -258,31 +263,80 @@ export default function TallySyncPage() {
       trial_balance: (tbRes as any).count ?? 0,
       vouchers: (vchRes as any).count ?? 0,
     });
-    if (grpData.data) setGroups(grpData.data as TallyGroup[]);
+    // Dedupe groups by group_name
+    if (grpData.data) {
+      const seen = new Map<string, TallyGroup>();
+      for (const g of grpData.data as TallyGroup[]) {
+        if (!seen.has(g.group_name)) seen.set(g.group_name, g);
+      }
+      setGroups(Array.from(seen.values()));
+    }
 
-    // Filter out zero-balance ledgers
+    // Filter zeros, dedupe, flip Dr/Cr on ledgers
     if (ledData.data) {
-      setLedgers((ledData.data as TallyLedger[]).filter(l => l.closing_balance > 0 || l.opening_balance > 0));
+      const seen = new Map<string, TallyLedger>();
+      for (const l of ledData.data as TallyLedger[]) {
+        if (l.closing_balance <= 0 && l.opening_balance <= 0) continue;
+        if (seen.has(l.ledger_name)) continue;
+        seen.set(l.ledger_name, {
+          ...l,
+          opening_type: flipDrCr(l.opening_type),
+          closing_type: flipDrCr(l.closing_type),
+        });
+      }
+      setLedgers(Array.from(seen.values()));
     }
 
-    // TB: prefer tally_trial_balance; fall back to tally_ledgers. Filter zeros.
-    if (tbData.data && tbData.data.length > 0) {
-      setTbRows((tbData.data as TallyTB[]).filter(r => r.closing_balance > 0 || r.opening_balance > 0));
-    } else if (ledData.data && ledData.data.length > 0) {
-      setTbRows((ledData.data as TallyLedger[])
-        .filter(l => l.closing_balance > 0 || l.opening_balance > 0)
-        .map(l => ({
-          id: l.id,
-          ledger_name: l.ledger_name,
-          parent_group: l.parent_group,
-          opening_balance: l.opening_balance,
-          opening_type: l.opening_type,
-          closing_balance: l.closing_balance,
-          balance_type: l.closing_type,
-        })));
+    // Build TB source (fallback to ledgers) then dedupe + flip Dr/Cr
+    const tbSource: TallyTB[] = (tbData.data && tbData.data.length > 0)
+      ? (tbData.data as TallyTB[])
+      : (ledData.data
+          ? (ledData.data as TallyLedger[]).map(l => ({
+              id: l.id,
+              ledger_name: l.ledger_name,
+              parent_group: l.parent_group,
+              opening_balance: l.opening_balance,
+              opening_type: l.opening_type,
+              closing_balance: l.closing_balance,
+              balance_type: l.closing_type,
+            } as TallyTB))
+          : []);
+
+    // Flip Dr/Cr on vouchers and aggregate period Debit/Credit per ledger
+    const flippedVouchers: TallyVoucher[] = vchData.data
+      ? (vchData.data as TallyVoucher[]).map(v => ({
+          ...v,
+          dr_cr: flipDrCr(v.dr_cr),
+          line_items: (v.line_items ?? []).map((li: any) => ({ ...li, dr_cr: flipDrCr(li.dr_cr) })),
+        }))
+      : [];
+    setVouchers(flippedVouchers);
+
+    const periodTotals = new Map<string, { debit: number; credit: number }>();
+    for (const v of flippedVouchers) {
+      for (const li of v.line_items ?? []) {
+        const key = li.ledger_name;
+        if (!periodTotals.has(key)) periodTotals.set(key, { debit: 0, credit: 0 });
+        const bucket = periodTotals.get(key)!;
+        if (li.dr_cr === "Dr") bucket.debit += li.amount;
+        else bucket.credit += li.amount;
+      }
     }
 
-    if (vchData.data) setVouchers(vchData.data as TallyVoucher[]);
+    const tbSeen = new Map<string, TallyTB>();
+    for (const r of tbSource) {
+      if (r.closing_balance <= 0 && r.opening_balance <= 0) continue;
+      if (tbSeen.has(r.ledger_name)) continue;
+      const computed = periodTotals.get(r.ledger_name);
+      tbSeen.set(r.ledger_name, {
+        ...r,
+        opening_type: flipDrCr(r.opening_type),
+        balance_type: flipDrCr(r.balance_type),
+        debit_amount: computed?.debit ?? r.debit_amount ?? 0,
+        credit_amount: computed?.credit ?? r.credit_amount ?? 0,
+      });
+    }
+    setTbRows(Array.from(tbSeen.values()));
 
     const { data: pending } = await supabase
       .from("sync_requests" as any)
@@ -354,7 +408,6 @@ export default function TallySyncPage() {
   const tbCrTotal     = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
   const tbDebitTotal  = filteredTB.reduce((s, r) => s + (r.debit_amount  ?? 0), 0);
   const tbCreditTotal = filteredTB.reduce((s, r) => s + (r.credit_amount ?? 0), 0);
-  const hasDebitCredit = filteredTB.some(r => (r.debit_amount ?? 0) > 0 || (r.credit_amount ?? 0) > 0);
 
   // ── Group map for BS/PL classification ───────────────────────────────────────
   const groupInfoMap = useMemo(() => {
@@ -657,8 +710,8 @@ export default function TallySyncPage() {
                         <TableRow>
                           <TableHead className="w-[36%]">Particulars</TableHead>
                           <TableHead className="text-right w-[16%]">Opening Balance</TableHead>
-                          {hasDebitCredit && <TableHead className="text-right w-[13%]">Debit</TableHead>}
-                          {hasDebitCredit && <TableHead className="text-right w-[13%]">Credit</TableHead>}
+                          <TableHead className="text-right w-[13%]">Debit</TableHead>
+                          <TableHead className="text-right w-[13%]">Credit</TableHead>
                           <TableHead className="text-right font-semibold w-[16%]">Closing Balance</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -693,16 +746,12 @@ export default function TallySyncPage() {
                                     </span>
                                   ) : "—"}
                                 </TableCell>
-                                {hasDebitCredit && (
-                                  <TableCell className="text-right py-2 font-bold text-xs text-blue-700">
-                                    {debitTotal > 0 ? fmtAmt(debitTotal) : "—"}
-                                  </TableCell>
-                                )}
-                                {hasDebitCredit && (
-                                  <TableCell className="text-right py-2 font-bold text-xs text-rose-600">
-                                    {creditTotal > 0 ? fmtAmt(creditTotal) : "—"}
-                                  </TableCell>
-                                )}
+                                <TableCell className="text-right py-2 font-bold text-xs text-blue-700">
+                                  {debitTotal > 0 ? fmtAmt(debitTotal) : "—"}
+                                </TableCell>
+                                <TableCell className="text-right py-2 font-bold text-xs text-rose-600">
+                                  {creditTotal > 0 ? fmtAmt(creditTotal) : "—"}
+                                </TableCell>
                                 <TableCell className="text-right py-2 font-bold text-xs">
                                   {closingTotal > 0 ? (
                                     <span className={closingTotalType === "Dr" ? "text-blue-700" : "text-rose-600"}>
@@ -729,16 +778,12 @@ export default function TallySyncPage() {
                                       </span>
                                     ) : "—"}
                                   </TableCell>
-                                  {hasDebitCredit && (
-                                    <TableCell className="text-right text-blue-700">
-                                      {(r.debit_amount ?? 0) > 0 ? fmtAmt(r.debit_amount!) : "—"}
-                                    </TableCell>
-                                  )}
-                                  {hasDebitCredit && (
-                                    <TableCell className="text-right text-rose-600">
-                                      {(r.credit_amount ?? 0) > 0 ? fmtAmt(r.credit_amount!) : "—"}
-                                    </TableCell>
-                                  )}
+                                  <TableCell className="text-right text-blue-700">
+                                    {(r.debit_amount ?? 0) > 0 ? fmtAmt(r.debit_amount!) : "—"}
+                                  </TableCell>
+                                  <TableCell className="text-right text-rose-600">
+                                    {(r.credit_amount ?? 0) > 0 ? fmtAmt(r.credit_amount!) : "—"}
+                                  </TableCell>
                                   <TableCell className="text-right font-medium">
                                     {r.closing_balance > 0 ? (
                                       <span className={r.balance_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
@@ -758,13 +803,11 @@ export default function TallySyncPage() {
                   <div className="border-t bg-muted/40 px-4 py-2 flex flex-wrap justify-end gap-6 text-xs font-semibold">
                     <span>Closing Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
                     <span>Closing Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
-                    {hasDebitCredit && <span>Total Debit: <span className="text-blue-700 font-bold">{fmtAmt(tbDebitTotal)}</span></span>}
-                    {hasDebitCredit && <span>Total Credit: <span className="text-rose-600 font-bold">{fmtAmt(tbCreditTotal)}</span></span>}
-                    {hasDebitCredit && (
-                      <span className={cn("font-bold", Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                        {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Balanced" : `⚠ Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
-                      </span>
-                    )}
+                    <span>Total Debit: <span className="text-blue-700 font-bold">{fmtAmt(tbDebitTotal)}</span></span>
+                    <span>Total Credit: <span className="text-rose-600 font-bold">{fmtAmt(tbCreditTotal)}</span></span>
+                    <span className={cn("font-bold", Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                      {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Balanced" : `⚠ Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
+                    </span>
                   </div>
                 </>
               )}
