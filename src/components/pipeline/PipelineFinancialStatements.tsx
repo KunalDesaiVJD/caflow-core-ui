@@ -199,6 +199,10 @@ export default function PipelineFinancialStatements({
   // ─── Manual overrides & PY amounts ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
+  // ─── Manual PY P&L entry (used only when no prior engagement exists) ────
+  const [pyManualAmounts, setPyManualAmounts] = useState<Record<string, number>>({});
+  const [pyManualDirty,   setPyManualDirty]   = useState(false);
+  const [pyManualSaving,  setPyManualSaving]  = useState(false);
 
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
@@ -392,6 +396,25 @@ export default function PipelineFinancialStatements({
     }
   }, [priorEngagement]);
 
+  // ─── Load manual PY P&L amounts from engagement.py_manual_amounts ──────
+  useEffect(() => {
+    const raw = (engagement as any)?.py_manual_amounts;
+    if (raw && typeof raw === "object") {
+      const parsed: Record<string, number> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const n = Number(v);
+        if (Number.isFinite(n)) parsed[k] = n;
+      }
+      setPyManualAmounts(parsed);
+      setPyManualDirty(false);
+    }
+  }, [(engagement as any)?.py_manual_amounts]);
+
+  // When no prior engagement returns rows, PY P&L is sourced from py_manual_amounts.
+  const noPriorEngagement: boolean =
+    priorEngagement === null ||
+    (Array.isArray(priorEngagement) && priorEngagement.length === 0);
+
   // ─── Load manual overrides from existing FS ───
   useEffect(() => {
     if (existingFs && existingFs.length > 0) {
@@ -478,8 +501,17 @@ export default function PipelineFinancialStatements({
   }, [tbAccounts, coaMapping, activeTree]);
 
   // ─── Merged PY: BS uses computedAmountsPY (from opening); P&L uses pyAmounts (prior engagement) ───
+  // When there is no prior engagement, PY P&L is sourced from engagement.py_manual_amounts.
   const mergedPY: Record<string, number> = useMemo(() => {
     const merged: Record<string, number> = { ...pyAmounts };
+    // Fold in manual PY P&L for items that have no prior-engagement value.
+    // Leaf-only: parents are recomputed below.
+    if (noPriorEngagement) {
+      for (const [code, val] of Object.entries(pyManualAmounts)) {
+        if (!Number.isFinite(val)) continue;
+        if (merged[code] === undefined || merged[code] === null) merged[code] = val;
+      }
+    }
     for (const [code, val] of Object.entries(computedAmountsPY)) {
       // Section lookup via flat items
       const item = activeFlatItems.find(i => i.code === code);
@@ -487,8 +519,19 @@ export default function PipelineFinancialStatements({
       const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
       if (isBS && Math.abs(val) > 0.005) merged[code] = val;
     }
+    // Recompute P&L parent totals from leaves so manual leaf entries flow up.
+    const computePL = (item: FSLineItem): number => {
+      const sec = String(item.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (!isPL) return 0;
+      if (!item.children || item.children.length === 0) return merged[item.code] || 0;
+      const total = item.children.reduce((sum, child) => sum + computePL(child), 0);
+      merged[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computePL(item);
     return merged;
-  }, [computedAmountsPY, pyAmounts, activeFlatItems]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree]);
 
   // ─── Corporate BS check + P&L summary (unchanged) ───
   const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
@@ -536,6 +579,30 @@ export default function PipelineFinancialStatements({
     const existing = manualOverrides[code];
     setOverrideAmount(existing ? String(existing.amount) : "");
     setOverrideReason(existing?.reason || "");
+  };
+
+  // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
+  const savePyManual = async () => {
+    setPyManualSaving(true);
+    try {
+      // Strip zero/empty so JSONB stays tidy
+      const payload: Record<string, number> = {};
+      for (const [k, v] of Object.entries(pyManualAmounts)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && Math.abs(n) > 0.005) payload[k] = Math.round(n * 100) / 100;
+      }
+      const { error } = await (supabase.from as any)("audit_engagements")
+        .update({ py_manual_amounts: payload })
+        .eq("id", engagementId);
+      if (error) throw error;
+      toast.success("PY P&L manual amounts saved");
+      setPyManualDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save PY manual amounts");
+    } finally {
+      setPyManualSaving(false);
+    }
   };
 
   // ─── Save FS rows to DB ───
@@ -988,6 +1055,64 @@ export default function PipelineFinancialStatements({
 
           {/* ── P&L Statement ── */}
           <TabsContent value="pl" className="mt-3">
+            {/* ── Manual PY P&L entry (only when no prior engagement exists) ── */}
+            {noPriorEngagement && (
+              <Alert className="mb-3">
+                <Pencil className="h-4 w-4" />
+                <AlertTitle className="text-xs flex items-center justify-between">
+                  <span>Enter PY P&L Amounts ({pyYear})</span>
+                  <Button
+                    size="sm"
+                    variant={pyManualDirty ? "default" : "outline"}
+                    disabled={pyManualSaving || !pyManualDirty}
+                    onClick={savePyManual}
+                    className="h-7 text-xs"
+                  >
+                    {pyManualSaving ? (
+                      <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving…</>
+                    ) : pyManualDirty ? "Save PY P&L" : "Saved"}
+                  </Button>
+                </AlertTitle>
+                <AlertDescription className="text-xs">
+                  No prior-year engagement found. Enter last year's P&L figures below — they feed the PY column and flow into next year automatically.
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 max-h-80 overflow-y-auto pr-2">
+                    {activeFlatItems
+                      .filter(i => {
+                        const sec = String(i.section || "").toLowerCase();
+                        const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+                        const isLeaf = !i.children || i.children.length === 0;
+                        return isPL && isLeaf;
+                      })
+                      .map(i => (
+                        <div key={i.code} className="flex items-center gap-2 py-0.5">
+                          <Label className="text-[11px] flex-1 truncate" title={i.name}>{i.name}</Label>
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            value={pyManualAmounts[i.code] ?? ""}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setPyManualAmounts(prev => {
+                                const next = { ...prev };
+                                if (v === "" || v === "-") {
+                                  delete next[i.code];
+                                } else {
+                                  const n = Number(v);
+                                  if (Number.isFinite(n)) next[i.code] = n;
+                                }
+                                return next;
+                              });
+                              setPyManualDirty(true);
+                            }}
+                            className="h-7 w-32 text-xs text-right font-mono tabular-nums"
+                          />
+                        </div>
+                      ))}
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
