@@ -970,49 +970,48 @@ serve(async (req) => {
 
     if (form_type === "3CB-3CD") {
       // ── Form_3CB assessee info + sign-off block ──────────────────────────────
-      // Verified from K:\SOFTWARE\AUDIT\AUDIT REPORT\FORMAT AR_NCE & LLP\3CB-3CD.xlsx
-      //   D10="ENTITY_NAME"          → ENTITY_NAME
-      //   D12="ENTITY_ADDRESS"       → ENTITY_ADDRESS
-      //   D15="ENTITY_PAN"           → PAN
-      //   G38="For,"  I38="___AUDIT FIRM_NAME"  → FIRM_NAME
-      //   I39="Chartered Accountants"
-      //   I40="FRN: _______"         → FRN (whole cell replaced with FRN value)
+      // Verified from actual template K:\SOFTWARE\AUDIT\AUDIT REPORT\FORMAT AR_NCE & LLP\LOCKED\3CB-3CD.xlsx
+      //   D10="ENTITY_NAME"           → ENTITY_NAME
+      //   D12="ENTITY_ADDRESS"        → ENTITY_ADDRESS
+      //   D15="ENTITY_PAN"            → PAN
+      //   B38="For,"  H38="___AUDIT FIRM_NAME"  → FIRM_NAME  (H38, NOT I38)
+      //   B39="Chartered Accountants"
+      //   B40="FRN: _______"          → FRN via ssXml shared-string replacement (B40, NOT I40)
       //   B41="Place: "  C41="[PLACE]"  → PLACE
       //   B42="Date: "   C42="[REPORT DATE]"  → SIGN_DATE
       //   B43="UDIN:"    C43="[UDIN]"  → UDIN
-      //   I44="[Signing partner Name]"  → PARTNER_NAME
-      //   I45="Partner"
-      //   G46="Membership No.: "  I46="_____[Membership No]"  → MEMBERSHIP_NO
+      //   B44="[Signing partner Name]" → PARTNER_NAME via ssXml (B44, NOT I44)
+      //   B45="Partner"
+      //   B46="Membership No.: "  H46="_____[Membership No]"  → MEMBERSHIP_NO  (H46, NOT I46)
       addUpdate("Form_3CB", "D10", autoValues.ENTITY_NAME);
       addUpdate("Form_3CB", "D12", autoValues.ENTITY_ADDRESS);
       addUpdate("Form_3CB", "D15", autoValues.PAN);
-      addUpdate("Form_3CB", "I38", autoValues.FIRM_NAME);
-      addUpdate("Form_3CB", "I40", autoValues.FRN);
+      addUpdate("Form_3CB", "H38", autoValues.FIRM_NAME);   // ← corrected from I38
+      // B40 FRN and B44 partner name are shared-string placeholders — handled by ssXml
+      // replacements below; no direct addUpdate needed (writing would lose "FRN: " prefix)
       addUpdate("Form_3CB", "C41", autoValues.PLACE);
       addUpdate("Form_3CB", "C42", autoValues.SIGN_DATE);
       addUpdate("Form_3CB", "C43", autoValues.UDIN);
-      addUpdate("Form_3CB", "I44", autoValues.PARTNER_NAME);
-      addUpdate("Form_3CB", "I46", autoValues.MEMBERSHIP_NO);
+      addUpdate("Form_3CB", "H46", autoValues.MEMBERSHIP_NO); // ← corrected from I46
 
       // ── Form_3CB ANNEX sign-off block ─────────────────────────────────────────
-      // Verified from correct template (sheet name: "Form_3CB ANNEX"):
-      //   D3="ENTITY_NAME" (literal shared-string placeholder — no AUTO marker)
-      //   F22="For,"  G22="AUDIT FIRM_NAME"  → FIRM_NAME
+      // Verified from actual template (sheet name: "Form_3CB ANNEX"):
+      //   B3="ENTITY_NAME" (literal shared-string placeholder — no AUTO marker)  (B3, NOT D3)
+      //   A22="For,"  G22="AUDIT FIRM_NAME"  → FIRM_NAME
       //   G23="Chartered Accountants"
-      //   G24="FRN: ___________"  → FRN
-      //   B25="Place: "  C25="[PLACE]"  → PLACE
-      //   B26="Date: "   C26="[REPORT DATE]"  → SIGN_DATE
-      //   B27="UDIN:"    C27="[UDIN]"  → UDIN
-      //   G28="[Signing partner Name]"  → PARTNER_NAME
-      //   G29="Partner"
-      //   F30="Membership No.: "  G30="[Membership No]"  → MEMBERSHIP_NO
-      addUpdate("Form_3CB ANNEX", "D3",  autoValues.ENTITY_NAME);
+      //   A24="FRN: ___________"  → FRN via ssXml shared-string replacement  (A24, not addressable directly)
+      //   A25="Place: "  C25="[PLACE]"  → PLACE
+      //   A26="Date: "   C26="[REPORT DATE]"  → SIGN_DATE
+      //   A27="UDIN:"    C27="[UDIN]"  → UDIN
+      //   A28="[Signing partner Name]"  → PARTNER_NAME via ssXml  (A28, NOT G28)
+      //   A30="Membership No.: "  G30="[Membership No]"  → MEMBERSHIP_NO
+      addUpdate("Form_3CB ANNEX", "B3",  autoValues.ENTITY_NAME);  // ← corrected from D3
       addUpdate("Form_3CB ANNEX", "G22", autoValues.FIRM_NAME);
-      addUpdate("Form_3CB ANNEX", "G24", autoValues.FRN);
+      // A24 FRN is a shared-string placeholder — handled by ssXml replacement below
       addUpdate("Form_3CB ANNEX", "C25", autoValues.PLACE);
       addUpdate("Form_3CB ANNEX", "C26", autoValues.SIGN_DATE);
       addUpdate("Form_3CB ANNEX", "C27", autoValues.UDIN);
-      addUpdate("Form_3CB ANNEX", "G28", autoValues.PARTNER_NAME);
+      // A28 partner name is a shared-string placeholder — handled by ssXml replacement below
       addUpdate("Form_3CB ANNEX", "G30", autoValues.MEMBERSHIP_NO);
     }
 
@@ -1161,8 +1160,9 @@ serve(async (req) => {
         ssXml = ssXml.replace(/\[AUDIT FIRM[_ ]?NAME\]/gi, xmlEsc(autoValues.FIRM_NAME));
       }
       if (autoValues.FRN) {
-        // "FRN: ______" — replace underscores following "FRN: " label
-        ssXml = ssXml.replace(/(FRN:\s*)_{3,}/g, `$1${xmlEsc(autoValues.FRN)}`);
+        // "FRN: ______" — replace the entire "FRN: ___" pattern (no capture group to
+        // avoid $1<digits> ambiguity in JS replacement strings when FRN starts with digits)
+        ssXml = ssXml.replace(/FRN:\s*_{3,}/g, "FRN: " + xmlEsc(autoValues.FRN));
         // Also bare "[FRN]" bracket variant
         ssXml = ssXml.replace(/\[FRN\]/gi, xmlEsc(autoValues.FRN));
       }
