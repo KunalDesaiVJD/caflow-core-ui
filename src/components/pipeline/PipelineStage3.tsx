@@ -235,6 +235,43 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagementId,
   });
 
+  // ─── Fallback: fetch Tally ledgers directly if TB import hasn't populated ───
+  // tally_ledgers are keyed to the separate `engagements` table (Tally sync),
+  // not `audit_engagements`. Resolve the tally engagement id via client_id +
+  // financial_year, with tally_groups as a fallback.
+  const { data: tallyLedgers, isLoading: tallyLedgersLoading } = useQuery({
+    queryKey: ["tally-ledgers-stage3", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      let tallyEngId: string | null = null;
+      if (engagement.financial_year) {
+        const { data: tEng } = await supabase
+          .from("engagements")
+          .select("id")
+          .eq("client_id", engagement.client_id)
+          .eq("financial_year", engagement.financial_year)
+          .maybeSingle();
+        tallyEngId = (tEng as any)?.id ?? null;
+      }
+      if (!tallyEngId) {
+        const { data: tg } = await supabase
+          .from("tally_groups")
+          .select("engagement_id")
+          .eq("client_id", engagement.client_id)
+          .limit(1)
+          .maybeSingle();
+        tallyEngId = (tg as any)?.engagement_id ?? null;
+      }
+      if (!tallyEngId) return [];
+      const { data } = await supabase
+        .from("tally_ledgers")
+        .select("ledger_name, parent_group, opening_balance, closing_balance")
+        .eq("engagement_id", tallyEngId);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+
   // ─── Fetch existing FS rows ───
   const { data: existingFs } = useQuery({
     queryKey: ["fs-rows", engagementId],
@@ -295,8 +332,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         balance: (n.txn_debit || 0) - (n.txn_credit || 0),
       })).filter(a => a.account_name);
     }
+    // Last-resort fallback: Tally-synced ledgers (no TB import required).
+    // closing_balance is signed: positive = Dr, negative = Cr.
+    if (tallyLedgers?.length) {
+      return tallyLedgers.map((l: any) => {
+        const cb = Number(l.closing_balance ?? 0);
+        return {
+          account_name: String(l.ledger_name || "").trim(),
+          account_group: l.parent_group || "",
+          debit:  cb > 0 ?  cb : 0,
+          credit: cb < 0 ? -cb : 0,
+          balance: cb,
+        };
+      }).filter((a: any) => a.account_name);
+    }
     return [];
-  }, [tbSnapshot, tbLeafNodes]);
+  }, [tbSnapshot, tbLeafNodes, tallyLedgers]);
 
   // Load existing mapping from engagement
   useEffect(() => {
