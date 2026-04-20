@@ -797,11 +797,9 @@ export default function TallySyncPage() {
                   <Table>
                     <TableHeader className="sticky top-0 bg-background z-10">
                       <TableRow>
-                        <TableHead className="w-[40%]">Ledger Name</TableHead>
-                        <TableHead className="text-right">Opening</TableHead>
-                        <TableHead className="text-right">Dr/Cr</TableHead>
-                        <TableHead className="text-right font-semibold">Closing</TableHead>
-                        <TableHead className="text-right font-semibold">Dr/Cr</TableHead>
+                        <TableHead className="w-[55%]">Particulars</TableHead>
+                        <TableHead className="text-right w-[22%]">Opening Balance</TableHead>
+                        <TableHead className="text-right w-[23%] font-semibold">Closing Balance</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -812,8 +810,8 @@ export default function TallySyncPage() {
                         return (
                         <>
                           <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
-                            <TableCell colSpan={5} className="py-1.5" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
-                              <span className={cn("text-[11px] font-semibold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                            <TableCell colSpan={3} className="py-2 px-4" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
+                              <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
                                 {decodeHtml(groupName) || "—"}
                               </span>
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
@@ -827,8 +825,8 @@ export default function TallySyncPage() {
                             </TableCell>
                           </TableRow>
                           {grpLedgers.map(l => (
-                            <TableRow key={l.id} className="text-xs">
-                              <TableCell className="font-medium" style={{ paddingLeft: `${depth * 16 + 32}px` }}>
+                            <TableRow key={l.id} className="text-xs hover:bg-muted/20">
+                              <TableCell className="text-foreground" style={{ paddingLeft: `${depth * 16 + 32}px` }}>
                                 <button
                                   className="text-left hover:underline hover:text-blue-700 transition-colors"
                                   onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(l.ledger_name)}`)}
@@ -836,13 +834,19 @@ export default function TallySyncPage() {
                                   {decodeHtml(l.ledger_name)}
                                 </button>
                               </TableCell>
-                              <TableCell className="text-right">{fmtAmt(l.opening_balance)}</TableCell>
-                              <TableCell className={cn("text-right text-xs", l.opening_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
-                                {l.opening_type}
+                              <TableCell className="text-right">
+                                {l.opening_balance > 0 ? (
+                                  <span className={l.opening_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(l.opening_balance)} {l.opening_type}
+                                  </span>
+                                ) : "—"}
                               </TableCell>
-                              <TableCell className="text-right font-semibold">{fmtAmt(l.closing_balance)}</TableCell>
-                              <TableCell className={cn("text-right text-xs font-semibold", l.closing_type === "Cr" ? "text-rose-600" : "text-blue-700")}>
-                                {l.closing_type}
+                              <TableCell className="text-right font-medium">
+                                {l.closing_balance > 0 ? (
+                                  <span className={l.closing_type === "Dr" ? "text-blue-700" : "text-rose-600"}>
+                                    {fmtAmt(l.closing_balance)} {l.closing_type}
+                                  </span>
+                                ) : "—"}
                               </TableCell>
                             </TableRow>
                           ))}
