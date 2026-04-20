@@ -253,7 +253,7 @@ export const StepAdvancedInfo = ({
         .from("client_classification_history")
         .select("id")
         .eq("client_id", clientId)
-        .or(`effective_from_fy.eq.${effectiveFromFY},financial_year.eq.${effectiveFromFY}`);
+        .eq("effective_from_fy", effectiveFromFY);
       if (conflictErr) throw conflictErr;
       if (conflict && conflict.length > 0) {
         toast({
@@ -269,14 +269,18 @@ export const StepAdvancedInfo = ({
       const currentUserId = authData?.user?.id ?? null;
 
       // ── STEP 1: Insert history row ─────────────────────────────────────
+      // NOTE on column names: production schema uses new_classification +
+      // effective_from_fy (both NOT NULL).  previous_classification is a
+      // legacy nullable column; old_classification was added later.
+      // responsible_person is legacy text/uuid; responsible_person_id is the
+      // current FK column.  We populate both pairs for maximum compatibility.
       const { error: historyError } = await (supabase as any)
         .from("client_classification_history")
         .insert({
           client_id: clientId,
-          financial_year: effectiveFromFY,
-          classification: pendingClassification,
-          old_classification: savedClassification || null,
           new_classification: pendingClassification,
+          previous_classification: savedClassification || null,
+          old_classification: savedClassification || null,
           effective_from_fy: effectiveFromFY,
           responsible_person_id: pendingResponsiblePersonId || null,
           changed_by: currentUserId,

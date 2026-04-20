@@ -710,13 +710,12 @@ const NewClientWizard = () => {
       // Append-only history row — preserves every old→new transition with actor + timestamp.
       try {
         await (supabase as any).from("client_classification_history").insert({
-          client_id:            targetClientId,
-          financial_year:       advancedInfo.financial_year,
-          classification:       advancedInfo.classification,
-          old_classification:   oldClassification,
-          new_classification:   advancedInfo.classification,
-          effective_from_fy:    effectiveFromFY,
-          changed_by:           authUserId ?? null,
+          client_id:              targetClientId,
+          new_classification:     advancedInfo.classification,
+          previous_classification: oldClassification,
+          old_classification:     oldClassification,
+          effective_from_fy:      effectiveFromFY,
+          changed_by:             authUserId ?? null,
         });
       } catch (histErr) {
         // History is non-fatal — log but do not abort the save.
