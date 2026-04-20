@@ -6,9 +6,16 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Eye, FileText } from "lucide-react";
+import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties, Award, ClipboardList } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
+import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
+import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
+import { NCEPPESchedule } from "@/components/stage8/NCEPPESchedule";
+import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
+import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
+import { NCENotesToAccounts } from "@/components/stage7/NotesToAccounts";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -32,6 +39,26 @@ const STANDARD_NOTES = [
   { num: 43, title: "Details of Benami Property",           autoKey: "benami",       corporateOnly: false },
   { num: 44, title: "Events After Reporting Period",        autoKey: "subsequent",   corporateOnly: false },
   { num: 45, title: "Previous Year Figures",                autoKey: "previous_year",corporateOnly: false },
+];
+
+// Exact entity_type values stored in audit_engagements that indicate non-corporate.
+// isCompanyEntity() in entityUtils.ts is the canonical test for the corporate side;
+// this list covers the NCE side explicitly so the Stage 8 tab structure can be
+// activated without importing a utility that doesn't cover all NCE variants.
+const NON_CORPORATE_TYPES: string[] = [
+  "Partnership",
+  "LLP",
+  "Proprietorship",
+  "Sole Proprietorship",
+  "HUF",
+  "Trust",
+  "AOP",
+  "BOI",
+  "Individual",
+  "Hindu Undivided Family",
+  "Limited Liability Partnership",
+  "Association of Persons",
+  "Body of Individuals",
 ];
 
 interface NoteData {
@@ -185,8 +212,33 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
   };
 
   const current = notes[selectedNote];
+  const engagementId: string = engagement?.id || "";
 
-  return (
+  // ── NCE detection ─────────────────────────────────────────────────────────
+  // Two-source truth: trust the isCorporate prop from EngagementDetail (already
+  // correctly computed there) OR fall back to the entity_type string check.
+  //
+  // Why both? engagement.entity_type can be NULL for older engagements that
+  // were created before the field was populated — the string check alone fails
+  // in that case. The isCorporate prop is always reliable because EngagementDetail
+  // computes it from both engagement.entity_type AND client.entity_type.
+  //
+  // Rule: NCE tabs show when the caller says NOT corporate, OR the entity_type
+  // string is in the NCE list.  Corporate path is EXACTLY as before.
+  const entityType: string = (
+    engagement?.entity_type ||
+    engagement?.clients?.entity_type ||
+    client?.entity_type ||
+    ""
+  ).trim();
+  const isNonCorporate: boolean =
+    !isCorporate ||
+    NON_CORPORATE_TYPES.some(t => t.toLowerCase() === entityType.toLowerCase());
+
+  // ── Shared editor body ─────────────────────────────────────────────────────
+  // Extracted so it can be placed inside a TabsContent (NCE) or returned
+  // directly (corporate) without duplicating JSX.
+  const noteEditorBody = (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -298,5 +350,75 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         )}
       </div>
     </div>
-  );
+  ); // end noteEditorBody
+
+  // ── NCE: wrap in 6-tab structure ──────────────────────────────────────────
+  if (isNonCorporate) {
+    return (
+      <Tabs defaultValue="notes" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="notes" className="gap-1.5">
+            <FileText size={13} /> Note 1
+          </TabsTrigger>
+          <TabsTrigger value="capital" className="gap-1.5">
+            <LayoutList size={13} /> Capital Account
+          </TabsTrigger>
+          <TabsTrigger value="detailed-notes" className="gap-1.5">
+            <Eye size={13} /> Notes to Accounts
+          </TabsTrigger>
+          <TabsTrigger value="ppe" className="gap-1.5">
+            <TableProperties size={13} /> PPE Schedule
+          </TabsTrigger>
+          <TabsTrigger value="client-certificate" className="gap-1.5">
+            <Award size={13} /> Client Certificate
+          </TabsTrigger>
+          <TabsTrigger value="management-letter" className="gap-1.5">
+            <ClipboardList size={13} /> Management Letter
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Tab 1 — NCE notes (Balance Confirmation, Rearrangement of Figures, etc.) */}
+        <TabsContent value="notes">
+          <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
+        </TabsContent>
+
+        {/* Tab 2 — Capital Account */}
+        <TabsContent value="capital">
+          <NCECapitalAccount engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 3 — Detailed Notes to Accounts */}
+        <TabsContent value="detailed-notes">
+          <NCEDetailedNotes engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 4 — PPE Schedule */}
+        <TabsContent value="ppe">
+          <NCEPPESchedule engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 5 — Client Certificate */}
+        <TabsContent value="client-certificate">
+          <NCEClientCertificate engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 6 — Management Letter */}
+        <TabsContent value="management-letter">
+          <NCEManagementLetter engagementId={engagementId} />
+        </TabsContent>
+      </Tabs>
+    );
+  }
+
+  // ── Corporate: return existing content directly — ZERO change ────────────
+  return noteEditorBody;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NCE Tab implementations
+// NCECapitalAccount     — @/components/stage8/NCECapitalAccount
+// NCEDetailedNotes      — @/components/stage8/NCEDetailedNotes
+// NCEPPESchedule        — @/components/stage8/NCEPPESchedule
+// NCEClientCertificate  — @/components/stage8/NCEClientCertificate
+// NCEManagementLetter   — @/components/stage8/NCEManagementLetter
+// ═══════════════════════════════════════════════════════════════════════════

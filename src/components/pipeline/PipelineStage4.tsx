@@ -19,8 +19,9 @@ import { cn } from "@/lib/utils";
 import {
   AlertTriangle, CheckCircle2, Shield, ShieldAlert, Eye, Search,
   Play, ChevronDown, ChevronRight, ArrowRight, Loader2, Filter,
-  MessageSquare, FileText, BarChart3, X
+  MessageSquare, FileText, BarChart3, X, Table2
 } from "lucide-react";
+import LedgerImportTab from "@/components/pipeline/LedgerImportTab";
 
 // ─── Types ───
 interface PipelineStage4Props {
@@ -403,6 +404,7 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
         <TabsList>
           <TabsTrigger value="findings" className="gap-1"><Shield size={14} /> Findings ({stats.total})</TabsTrigger>
           <TabsTrigger value="comparative" className="gap-1"><BarChart3 size={14} /> Comparative</TabsTrigger>
+          <TabsTrigger value="ledger" className="gap-1"><Table2 size={14} /> Ledger Import</TabsTrigger>
         </TabsList>
 
         <TabsContent value="findings" className="space-y-4">
@@ -544,6 +546,12 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* ═══════ LEDGER IMPORT TAB ═══════ */}
+        <TabsContent value="ledger">
+          <LedgerImportTab engagementId={engagementId} />
+        </TabsContent>
+
       </Tabs>
 
       {/* Override dialog */}

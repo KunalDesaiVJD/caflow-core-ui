@@ -35,7 +35,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
       .eq('id', engagementId);
     setSaving(false);
     if (error) { toast.error(error.message); return; }
-    toast.success(complete ? 'Stage 6 completed' : 'Progress saved');
+    toast.success(complete ? 'Stage 2 completed' : 'Progress saved');
     if (complete) onStageComplete(); else onSaveDraft();
   };
 
@@ -44,7 +44,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 6 — Workpapers & Audit Sheet</h1>
+          <h1 className="text-xl font-bold text-foreground">Stage 2 — Workpapers & Audit Sheet</h1>
           <p className="text-sm text-muted-foreground">Audit working papers and engagement documentation</p>
         </div>
         <div className="flex gap-2">
@@ -60,7 +60,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
             {saving && <Loader2 className="w-3 h-3 animate-spin mr-1" />} Save Draft
           </Button>
           <Button size="sm" onClick={() => saveAll(true)} disabled={saving} className="gap-1">
-            Complete Stage 6 <ArrowRight size={14} />
+            Complete Stage 2 <ArrowRight size={14} />
           </Button>
         </div>
       </div>

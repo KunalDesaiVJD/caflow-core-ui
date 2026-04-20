@@ -17,6 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { ChevronsUpDown, Check } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -35,6 +38,7 @@ import {
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
 import PipelineStage3 from "@/components/pipeline/PipelineStage3";
+import PipelineFinancialStatements from "@/components/pipeline/PipelineFinancialStatements";
 import PipelineStage4 from "@/components/pipeline/PipelineStage4";
 import PipelineStage5 from "@/components/pipeline/PipelineStage5";
 import PipelineStage6 from "@/components/pipeline/PipelineStage6";
@@ -44,15 +48,16 @@ import Form3CD from "@/pages/Form3CD";
 
 // ─── Constants ───
 const STAGES = [
-  { num: 1, label: 'Engagement Setup', icon: Building2 },
-  { num: 2, label: 'Trial Balance Import', icon: FileText },
-  { num: 3, label: 'COA & Financial Statements', icon: Calculator },
-  { num: 4, label: 'Scrutiny Engine', icon: Eye },
-  { num: 5, label: 'Query Tracker', icon: ClipboardCheck },
-  { num: 6, label: 'Workpapers & Audit Sheet', icon: Shield },
-  { num: 7, label: 'Notes to Accounts & CARO', icon: BookMarked },
-  { num: 8, label: '3CA / 3CB / 3CD Reports', icon: FileText },
-  { num: 9, label: 'Sign-off & UDIN', icon: Award },
+  { num: 1,  label: 'Engagement Setup',           icon: Building2   },
+  { num: 2,  label: 'Trial Balance Import',        icon: FileText    },
+  { num: 3,  label: 'COA Mapping',                 icon: Calculator  },
+  { num: 4,  label: 'Scrutiny Engine',             icon: Eye         },
+  { num: 5,  label: 'Query Tracker',               icon: ClipboardCheck },
+  { num: 6,  label: 'Workpapers & Audit Sheet',    icon: Shield      },
+  { num: 7,  label: 'Notes to Accounts & CARO',   icon: BookMarked  },
+  { num: 8,  label: '3CA / 3CB / 3CD Reports',    icon: FileText    },
+  { num: 9,  label: 'Sign-off & UDIN',             icon: Award       },
+  { num: 10, label: 'Financial Statements',        icon: Calculator  },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
@@ -199,6 +204,10 @@ export default function AuditPipeline() {
   // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
+  // Client combobox (searchable dropdown in Create Engagement dialog)
+  const [clientComboOpen, setClientComboOpen] = useState(false);
+  const [clientSearch, setClientSearch] = useState("");
+
   // ─── Clients with audit services enabled (for new engagement dropdown) ───
   // Mirrors the same four-source logic as useAuditContext so the dialog list
   // always matches the Audit Dashboard:
@@ -212,11 +221,12 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // 1. All active non-draft clients — include direct audit columns on clients table
+      // 1. All non-deleted clients — include is_draft so we can let audit-classified
+      //    draft clients through (wizard-created clients that haven't completed all
+      //    wizard steps but already have Audit classification + audit setup saved).
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
-        .eq("is_draft", false)
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
@@ -227,23 +237,23 @@ export default function AuditPipeline() {
 
       // Parallel fetches for all four eligibility sources
       const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
-        // Source 3: FY classification snapshot
+        // Source 3: FY classification snapshot — partial match so "Audit" / "Audit Client" etc. all work
         supabase
           .from("client_fy_classifications")
           .select("client_id")
-          .ilike("classification", "audit")
+          .ilike("classification", "%audit%")
           .in("client_id", clientIds),
         // Source 4: classification history
         (supabase as any)
           .from("client_classification_history")
           .select("client_id")
-          .ilike("new_classification", "audit")
+          .ilike("new_classification", "%audit%")
           .in("client_id", clientIds),
-        // Source 2: audit setup flags
+        // Source 2: audit setup flags — no IN clause; RLS already scopes to the firm.
+        // Avoids large URL for firms with many clients and ensures every FY row is included.
         supabase
           .from("client_fy_audit_setup")
-          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
-          .in("client_id", clientIds),
+          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable"),
         // Source 5: active audit services
         supabase
           .from("client_services")
@@ -258,10 +268,20 @@ export default function AuditPipeline() {
         ...(classHistRes?.data ?? []).map((r: any) => r.client_id).filter(Boolean),
       ]);
 
-      // Build per-client flags from setup table (source 2)
-      const setupMap: Record<string, any> = {};
+      // Build per-client flags from setup table (source 2).
+      // OR-aggregate across all FY rows — if ANY financial year has a flag set,
+      // treat the client as eligible.  A plain overwrite would lose flags when
+      // an older FY row (all-false) happens to appear last in the result set.
+      const setupMap: Record<string, { statutory_audit_applicable: boolean; tax_audit_applicable: boolean; internal_audit_applicable: boolean; stock_audit_applicable: boolean }> = {};
       for (const row of (auditSetupRes.data ?? []) as any[]) {
-        setupMap[row.client_id] = row;
+        if (!row.client_id) continue;
+        const ex = setupMap[row.client_id];
+        setupMap[row.client_id] = {
+          statutory_audit_applicable: !!(ex?.statutory_audit_applicable) || !!row.statutory_audit_applicable,
+          tax_audit_applicable:       !!(ex?.tax_audit_applicable)       || !!row.tax_audit_applicable,
+          internal_audit_applicable:  !!(ex?.internal_audit_applicable)  || !!row.internal_audit_applicable,
+          stock_audit_applicable:     !!(ex?.stock_audit_applicable)     || !!row.stock_audit_applicable,
+        };
       }
 
       // Build per-client flags from active services (source 5)
@@ -288,6 +308,7 @@ export default function AuditPipeline() {
             id:          c.id as string,
             name:        (c.name as string) ?? "",
             entity_type: (c.entity_type as string) ?? "",
+            is_draft:    !!c.is_draft,
             tax_audit_type:              (c.tax_audit_type as string) ?? null,
             // merge all sources
             statutory_audit_applicable:  hasStatDirect || !!setup.statutory_audit_applicable || !!svc.hasStat,
@@ -299,13 +320,19 @@ export default function AuditPipeline() {
             has_internal_audit_service:  !!svc.hasInternal,
           };
         })
-        .filter(c =>
-          auditClassifiedIds.has(c.id) ||
-          c.statutory_audit_applicable || c.tax_audit_applicable ||
-          c.internal_audit_applicable  || c.stock_audit_applicable ||
-          c.has_statutory_service      || c.has_tax_audit_service  ||
-          c.has_internal_audit_service
-        );
+        .filter(c => {
+          const hasAuditFlag =
+            auditClassifiedIds.has(c.id) ||
+            c.statutory_audit_applicable || c.tax_audit_applicable ||
+            c.internal_audit_applicable  || c.stock_audit_applicable ||
+            c.has_statutory_service      || c.has_tax_audit_service  ||
+            c.has_internal_audit_service;
+          if (!hasAuditFlag) return false;
+          // Draft clients: only show if they have Audit classification and a name
+          // (wizard-created clients that saved audit setup but haven't fully activated yet)
+          if (c.is_draft) return auditClassifiedIds.has(c.id) && Boolean(c.name?.trim());
+          return true;
+        });
     },
     enabled: !!user?.id,
   });
@@ -395,7 +422,7 @@ export default function AuditPipeline() {
     const sp = searchParams.get("stage");
     if (sp) {
       const stageNum = parseInt(sp, 10);
-      if (stageNum >= 1 && stageNum <= 9) {
+      if (stageNum >= 1 && stageNum <= 10) {
         setActiveStage(stageNum);
         return;
       }
@@ -729,23 +756,59 @@ export default function AuditPipeline() {
                       {(eligibleClients || []).find(c => c.id === form1A.client_id)?.name || engagement?.clients?.name || form1A.client_id}
                     </div>
                   ) : (
-                    <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
-                      <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                      <SelectContent>
-                        {(eligibleClients || []).length === 0 ? (
-                          <div className="px-3 py-2 space-y-1">
-                            <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
-                            <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit via Client → Audit Setup.</p>
-                          </div>
-                        ) : (
-                          (eligibleClients || []).map(c => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
+                    <Popover open={clientComboOpen} onOpenChange={setClientComboOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={clientComboOpen}
+                          className="w-full justify-between font-normal"
+                        >
+                          <span className="truncate">
+                            {form1A.client_id
+                              ? ((eligibleClients || []).find(c => c.id === form1A.client_id)?.name ?? "Select client")
+                              : "Select client"}
+                          </span>
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[340px] p-0" align="start">
+                        <Command shouldFilter={false}>
+                          <CommandInput
+                            placeholder="Search client..."
+                            value={clientSearch}
+                            onValueChange={setClientSearch}
+                          />
+                          <CommandList>
+                            <CommandEmpty>No client found.</CommandEmpty>
+                            <CommandGroup>
+                              {(eligibleClients || [])
+                                .filter(c =>
+                                  !clientSearch.trim() ||
+                                  c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+                                  (c.entity_type || "").toLowerCase().includes(clientSearch.toLowerCase())
+                                )
+                                .map(c => (
+                                  <CommandItem
+                                    key={c.id}
+                                    value={c.id}
+                                    onSelect={(v) => {
+                                      setForm1A(f => ({ ...f, client_id: v }));
+                                      setClientComboOpen(false);
+                                      setClientSearch("");
+                                    }}
+                                  >
+                                    <Check className={cn("mr-2 h-4 w-4", form1A.client_id === c.id ? "opacity-100" : "opacity-0")} />
+                                    <span className="truncate">
+                                      {c.name}{c.entity_type ? ` (${c.entity_type})` : ""}
+                                    </span>
+                                  </CommandItem>
+                                ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   )}
                 </div>
                 <div>
@@ -1097,7 +1160,7 @@ export default function AuditPipeline() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-xl font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                    <h1 className="text-xl font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
                     <p className="text-sm text-muted-foreground">Tax audit report forms and annexures</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
@@ -1116,9 +1179,17 @@ export default function AuditPipeline() {
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs mb-4">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>
-            <h1 className="text-xl font-bold text-foreground">Sign-off & UDIN</h1>
+            <h1 className="text-xl font-bold text-foreground">Stage 10 — Sign-off & UDIN</h1>
             <EngagementReviewSignoff engagement={engagement} client={engagement?.clients} partner={null} onUpdate={() => refetchEng()} />
           </div>
+        ) : activeStage === 10 ? (
+          /* STAGE 10 — Financial Statements */
+          <PipelineFinancialStatements
+            engagementId={selectedEngId}
+            engagement={engagement}
+            onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
+            onSaveDraft={() => { refetchEng(); }}
+          />
         ) : null}
       </div>
 
@@ -1180,26 +1251,60 @@ export default function AuditPipeline() {
 
             <div>
               <Label>Client *</Label>
-              <Select value={form1A.client_id} onValueChange={v => {
-                const client = (eligibleClients || []).find(c => c.id === v);
-                setForm1A(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
-              }}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {(eligibleClients || []).length === 0 ? (
-                    <div className="px-3 py-2 space-y-1">
-                      <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
-                      <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit for a client via Client → Audit Setup, or set their classification to "Audit" in Client → Classification.</p>
-                    </div>
-                  ) : (
-                    (eligibleClients || []).map(c => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <Popover open={clientComboOpen} onOpenChange={setClientComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={clientComboOpen}
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate">
+                      {form1A.client_id
+                        ? ((eligibleClients || []).find(c => c.id === form1A.client_id)?.name ?? "Select client")
+                        : "Select client"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[340px] p-0" align="start">
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      placeholder="Search client..."
+                      value={clientSearch}
+                      onValueChange={setClientSearch}
+                    />
+                    <CommandList>
+                      <CommandEmpty>No client found.</CommandEmpty>
+                      <CommandGroup>
+                        {(eligibleClients || [])
+                          .filter(c =>
+                            !clientSearch.trim() ||
+                            c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+                            (c.entity_type || "").toLowerCase().includes(clientSearch.toLowerCase())
+                          )
+                          .map(c => (
+                            <CommandItem
+                              key={c.id}
+                              value={c.id}
+                              onSelect={(v) => {
+                                const client = (eligibleClients || []).find(cl => cl.id === v);
+                                setForm1A(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
+                                setClientComboOpen(false);
+                                setClientSearch("");
+                              }}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", form1A.client_id === c.id ? "opacity-100" : "opacity-0")} />
+                              <span className="truncate">
+                                {c.name}{c.entity_type ? ` (${c.entity_type})` : ""}
+                              </span>
+                            </CommandItem>
+                          ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div>
               <Label>Financial Year *</Label>

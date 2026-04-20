@@ -1,22 +1,20 @@
 /**
  * Form3CATab  — fully editable
  *
- * Every paragraph is an auto-resizing textarea so the CA firm can customise
- * any sentence for each client.  Paragraph overrides are saved in the
- * form_3ca_paragraphs JSONB column on audit_engagements.
+ * Renders FORM NO. 3CA exactly as per the statutory Excel template:
+ *   Header → 3 numbered points → Signature block
  *
- * Dedicated sign-off fields (applicable_act, audit_report_date, signature_date,
- * udin) are saved to their own audit_engagements columns and are also used by
- * the Excel export function.
+ * Paragraph overrides are saved in the form_3ca_paragraphs JSONB column
+ * on audit_engagements.  Dedicated sign-off fields (applicable_act,
+ * audit_report_date, signature_date, udin) are saved to their own columns.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Save, FileDown, CheckCircle2, RotateCcw } from "lucide-react";
+import { Loader2, Save, FileDown, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { generateAuditReport, flagsFromEngagement } from "@/lib/auditReportGenerator";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,19 +25,10 @@ interface CAFormData {
   audit_report_date: string;
   signature_date:    string;
   udin:              string;
-  // Form paragraphs (stored in form_3ca_paragraphs JSONB)
-  p1:  string;
-  p2:  string;
-  p3:  string;
-  // ── Statutory Auditor's Report (Companies Act 2013) — derived from
-  // Block C flags (caro_applicable / ifc_applicable / cash_flow_applicable)
-  // via auditReportGenerator. Editable; saved alongside the rest of the
-  // paragraphs in form_3ca_paragraphs JSONB so manual overrides survive.
-  sar_opinion_para:        string;
-  sar_opinion_conclusion:  string;
-  sar_point_d:             string;
-  sar_point_g:             string;
-  sar_caro_annexure:       string;
+  // Numbered points (stored in form_3ca_paragraphs JSONB)
+  p1: string;
+  p2: string;
+  p3: string;
   // Annexure paragraphs
   anx_assessee_1: string;
   anx_assessee_2: string;
@@ -59,7 +48,7 @@ const APPLICABLE_ACTS = [
   "Other (specify)",
 ];
 
-/** Build statutory template paragraphs interpolated with engagement data. */
+/** Build default paragraph text interpolated with engagement data. */
 function buildDefaults(
   clientName:    string,
   clientAddr:    string,
@@ -68,8 +57,6 @@ function buildDefaults(
   applicableAct: string,
   reportDate:    string,
   endYear:       string,
-  sarFlags?:     { caroApplicable: boolean; ifcApplicable: boolean; cashFlowApplicable: boolean },
-  fy?:           string,
 ): Omit<CAFormData, "applicable_act" | "act_other_text" | "audit_report_date" | "signature_date" | "udin"> {
   const panPart = clientPAN ? ` (PAN: ${clientPAN})` : "";
   const nm      = clientName || "[Client Name]";
@@ -79,37 +66,23 @@ function buildDefaults(
   const rDate   = reportDate
     ? new Date(reportDate).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })
     : "___________";
-  const yr      = endYear || "____";
-
-  // Statutory Auditor's Report fragments — derive from Block C flags via
-  // generator. Defaults to "fully applicable" when flags missing.
-  const sar = generateAuditReport({
-    caroApplicable:     sarFlags?.caroApplicable     ?? true,
-    ifcApplicable:      sarFlags?.ifcApplicable      ?? true,
-    cashFlowApplicable: sarFlags?.cashFlowApplicable ?? true,
-    clientName:         clientName,
-    financialYear:      fy,
-  });
 
   return {
-    sar_opinion_para:       sar.opinionPara,
-    sar_opinion_conclusion: sar.opinionConclusion,
-    sar_point_d:            sar.pointD,
-    sar_point_g:            sar.pointG,
-    sar_caro_annexure:      sar.caroAnnexure,
-    p1: `We report that the statutory audit of M/s. ${nm}${addr}${panPart} was conducted by ${firm} in pursuance of the provisions of the ${act}, and we annex hereto a copy of the audit report dated ${rDate} along with a copy of each of the audited Statement of Profit and Loss Account, the audited Balance Sheet and documents declared by the said Act to be part of, or annexed to, such accounts.`,
+    p1: `We report that the statutory audit of M/s. ${nm}${addr}${panPart} was conducted by ${firm} in pursuance of the provisions of the ${act}, and We annex hereto a copy of the audit report dated ${rDate} along with a copy of each of the audited Statement of Profit and Loss Account, the audited Balance Sheet and documents declared by the said Act to be part of, or annexed to, such accounts.`,
     p2: `The statement of particulars required to be furnished under section 44AB is annexed herewith in Form No. 3CD.`,
     p3: `In our opinion and to the best of our information and according to examination of books of account including other relevant documents and explanations given to us, the particulars given in the said Form No. 3CD are true and correct as per Annexure attached.`,
     anx_assessee_1:
       `The assessee is responsible for the preparation of the aforesaid financial statements that give a true and fair view of the financial position and financial performance in accordance with the applicable Accounting Standards issued by the Institute of Chartered Accountants of India. This responsibility includes the design, implementation and maintenance of internal control relevant to the preparation and presentation of the financial statements that give a true and fair view and are free from material misstatement, whether due to fraud or error.`,
     anx_assessee_2:
-      `The assessee is also responsible for the preparation of the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(a) of Income-tax Rules, 1962 that give true and correct particulars as per the provisions of the Income-tax Act, 1961 read with Rules, Notifications, circulars, etc that are to be included in the Statement.`,
-    anx_assessee_3: `Assessee are also responsible for overseeing the entity's financial reporting process.`,
+      `The assessee is also responsible for the preparation of the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962 that give true and correct particulars as per the provisions of the Income-tax Act, 1961 read with Rules, Notifications, circulars, etc that are to be included in the Statement.`,
+    anx_assessee_3:
+      `Assessee are also responsible for overseeing the entity's financial reporting process.`,
     anx_auditor_1:
       `Our objectives are to obtain reasonable assurance about whether the financial statements as a whole are free from material misstatement, whether due to fraud or error, and to issue an auditor's report that includes our opinion. Reasonable assurance is a high level of assurance, but is not a guarantee that an audit conducted in accordance with SAs will always detect a material misstatement when it exists. Misstatements can arise from fraud or error and are considered material if, individually or in the aggregate, they could reasonably be expected to influence the economic decisions of users taken on the basis of these financial statements.`,
-    anx_auditor_2: `We believe that the audit evidence we have obtained is sufficient and appropriate to provide a basis for our audit opinion.`,
+    anx_auditor_2:
+      `We believe that the audit evidence we have obtained is sufficient and appropriate to provide a basis for our audit opinion.`,
     anx_auditor_3:
-      `We are also responsible for verifying the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(a) of Income-tax Rules, 1962. We have conducted our verification of the statement in accordance with Guidance Note on Tax Audit under section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered Accountants of India.`,
+      `We are also responsible for verifying the statement of particulars required to be furnished under section 44AB of the Income-tax Act, 1961 annexed herewith in Form No. 3CD read with Rule 6G(1)(b) of Income-tax Rules, 1962. We have conducted our verification of the statement in accordance with Guidance Note on Tax Audit under section 44AB of the Income-tax Act, 1961, issued by the Institute of Chartered Accountants of India.`,
   };
 }
 
@@ -186,12 +159,13 @@ export default function Form3CATab({ engagementId }: Props) {
   const [client,      setClient]      = useState<any>(null);
   const [auditFirm,   setAuditFirm]   = useState<any>(null);
   const [caFirm,      setCaFirm]      = useState<any>(null);
-  const [partnerUser, setPartnerUser] = useState<any>(null);
+  const [partner,     setPartner]     = useState<any>(null);
   const [formData,    setFormData]    = useState<CAFormData>({
     applicable_act: "Companies Act, 2013", act_other_text: "",
     audit_report_date: TODAY, signature_date: TODAY, udin: "",
-    ...buildDefaults("", "", "", "", "Companies Act, 2013", TODAY, "",
-      { caroApplicable: true, ifcApplicable: true, cashFlowApplicable: true }, ""),
+    ...buildDefaults("", "", "", "", "Companies Act, 2013", TODAY, ""),
+    anx_assessee_1: "", anx_assessee_2: "", anx_assessee_3: "",
+    anx_auditor_1:  "", anx_auditor_2:  "", anx_auditor_3:  "",
   });
 
   const autoSaveRef = useRef<ReturnType<typeof setTimeout>>();
@@ -203,18 +177,25 @@ export default function Form3CATab({ engagementId }: Props) {
 
   async function load() {
     setLoading(true);
-    const { data: eng } = await supabase
+
+    // Engagement + client + CA firm
+    const { data: eng, error: engErr } = await supabase
       .from("audit_engagements")
       .select("*, clients(*), firms(*)")
       .eq("id", engagementId)
       .single();
 
-    if (!eng) { setLoading(false); toast.error("Engagement not found"); return; }
+    if (engErr || !eng) {
+      setLoading(false);
+      toast.error("Engagement not found" + (engErr ? `: ${engErr.message}` : ""));
+      return;
+    }
     setEngagement(eng);
     const cl = (eng as any).clients || null;
     setClient(cl);
     setCaFirm((eng as any).firms || null);
 
+    // audit_firms — engagement-specific scalar columns (city, partner, FRN)
     let af: any = null;
     if ((eng as any).audit_firm_id) {
       const { data } = await supabase
@@ -222,32 +203,28 @@ export default function Form3CATab({ engagementId }: Props) {
       af = data || null;
       setAuditFirm(af);
     }
-    let pu: any = null;
+
+    // Partner — separate fetch (multiple FKs from audit_engagements→users
+    // make PostgREST embed disambiguation unreliable)
     if ((eng as any).partner_id) {
-      const { data } = await supabase
+      const { data: pu } = await supabase
         .from("users").select("name, membership_number").eq("id", (eng as any).partner_id).single();
-      pu = data || null;
-      setPartnerUser(pu);
+      setPartner(pu || null);
     }
 
-    // Resolve firm / partner values the same way the render does
     const cf    = (eng as any).firms || {};
-    const fName = af?.name        || cf?.name            || "";
+    const fName = af?.name || cf?.name || "";
     const act   = (eng as any).form_3ca_applicable_act || "Companies Act, 2013";
-    const rDate = (eng as any).form_3ca_report_date     || TODAY;
+    const rDate = (eng as any).form_3ca_report_date    || TODAY;
+    const fy    = (eng as any).financial_year || "";
+    const endYr = fyEndYear(fy);
+    const cName = cl?.name || "";
+    const cAddr = cl?.address || cl?.registered_office || "";
+    const cPAN  = cl?.pan   || "";
 
-    const fy     = (eng as any).financial_year || "";
-    const endYr  = fyEndYear(fy);
-    const cName  = cl?.name  || "";
-    const cAddr  = cl?.address || cl?.registered_office || "";
-    const cPAN   = cl?.pan   || "";
+    const defaults = buildDefaults(cName, cAddr, cPAN, fName, act, rDate, endYr);
 
-    const defaults = buildDefaults(
-      cName, cAddr, cPAN, fName, act, rDate, endYr,
-      flagsFromEngagement(eng), fy,
-    );
-
-    // Merge saved overrides
+    // Saved paragraph overrides win over defaults
     const savedParas = ((eng as any).form_3ca_paragraphs as Record<string, string>) || {};
     setFormData({
       applicable_act:    act,
@@ -303,18 +280,13 @@ export default function Form3CATab({ engagementId }: Props) {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  const fy          = engagement?.financial_year || "";
-  const clientName  = client?.name || "";
-  const firmName    = auditFirm?.name         || caFirm?.name            || "";
-  const firmFRN     = auditFirm?.icai_reg_no  || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
-  const firmCity    = auditFirm?.city         || (caFirm?.address as any)?.city || "";
-  const partnerName = auditFirm?.partner_name || partnerUser?.name        || "";
-  const membershipNo= auditFirm?.partner_icai_no || partnerUser?.membership_number || "";
-
-  const actLabel =
-    formData.applicable_act === "Other (specify)" && formData.act_other_text
-      ? formData.act_other_text
-      : formData.applicable_act;
+  const fy           = engagement?.financial_year || "";
+  const clientName   = client?.name || "";
+  const firmName     = auditFirm?.name         || caFirm?.name             || "";
+  const firmFRN      = auditFirm?.icai_reg_no  || caFirm?.icai_firm_reg_no || caFirm?.icai_reg_no || "";
+  const firmCity     = auditFirm?.city         || (caFirm?.address as any)?.city || "";
+  const partnerName  = auditFirm?.partner_name || partner?.name             || "";
+  const membershipNo = auditFirm?.partner_icai_no || partner?.membership_number || "";
 
   if (loading) return (
     <div className="flex items-center justify-center h-48">
@@ -395,7 +367,7 @@ export default function Form3CATab({ engagementId }: Props) {
 
         <hr className="border-gray-300 mb-6" />
 
-        {/* ─── POINTS 1–3 (all editable) ─── */}
+        {/* ─── POINTS 1–3 ─── */}
         {([
           { num: "1.", key: "p1" as keyof CAFormData },
           { num: "2.", key: "p2" as keyof CAFormData },
@@ -407,92 +379,17 @@ export default function Form3CATab({ engagementId }: Props) {
           </div>
         ))}
 
-        {/* ─── STATUTORY AUDITOR'S REPORT (Companies Act 2013) ───
-             Conditional fragments — auto-derived from Stage 1 Block C
-             flags (caro_applicable / ifc_applicable / cash_flow_applicable)
-             via auditReportGenerator. Editable; Reset to re-derive from
-             current flags. */}
-        <hr className="border-gray-300 my-6 print:hidden" />
-        <div className="mb-4 print:mt-6">
-          <div className="flex items-center justify-between mb-2 print:hidden">
-            <p className="text-sm font-bold underline underline-offset-2">
-              Statutory Auditor's Report — Companies Act, 2013
-            </p>
-            <Button
-              size="sm" variant="ghost" className="h-7 gap-1 text-xs"
-              onClick={() => {
-                if (!engagement) return;
-                const fresh = generateAuditReport({
-                  ...flagsFromEngagement(engagement),
-                  clientName, financialYear: fy,
-                });
-                setFormData(prev => ({
-                  ...prev,
-                  sar_opinion_para:       fresh.opinionPara,
-                  sar_opinion_conclusion: fresh.opinionConclusion,
-                  sar_point_d:            fresh.pointD,
-                  sar_point_g:            fresh.pointG,
-                  sar_caro_annexure:      fresh.caroAnnexure,
-                }));
-                clearTimeout(autoSaveRef.current);
-                autoSaveRef.current = setTimeout(() => doSave({
-                  ...formData,
-                  sar_opinion_para:       fresh.opinionPara,
-                  sar_opinion_conclusion: fresh.opinionConclusion,
-                  sar_point_d:            fresh.pointD,
-                  sar_point_g:            fresh.pointG,
-                  sar_caro_annexure:      fresh.caroAnnexure,
-                }, true), 500);
-                toast.info("Auditor's Report fragments reset from current Block C flags");
-              }}
-              title="Re-derive from Block C flags (caro_applicable / ifc_applicable / cash_flow_applicable)"
-            >
-              <RotateCcw size={12} /> Reset from flags
-            </Button>
-          </div>
-
-          {/* Opinion (opening) */}
-          <p className="text-sm font-semibold mb-1 mt-3">Opinion</p>
-          <EditablePara value={formData.sar_opinion_para}
-            onChange={v => patch("sar_opinion_para", v)} />
-
-          {/* Opinion (closing) */}
-          <div className="mt-2">
-            <EditablePara value={formData.sar_opinion_conclusion}
-              onChange={v => patch("sar_opinion_conclusion", v)} />
-          </div>
-
-          {/* Other Legal & Regulatory — Point (d) */}
-          <p className="text-sm font-semibold mb-1 mt-4">
-            Report on Other Legal &amp; Regulatory Requirements — Point (d)
-          </p>
-          <EditablePara value={formData.sar_point_d}
-            onChange={v => patch("sar_point_d", v)} />
-
-          {/* Point (g) */}
-          <p className="text-sm font-semibold mb-1 mt-4">
-            Report on Other Legal &amp; Regulatory Requirements — Point (g)
-          </p>
-          <EditablePara value={formData.sar_point_g}
-            onChange={v => patch("sar_point_g", v)} />
-
-          {/* CARO Annexure-A reference */}
-          <p className="text-sm font-semibold mb-1 mt-4">CARO 2020 — Annexure-A reference</p>
-          <EditablePara value={formData.sar_caro_annexure}
-            onChange={v => patch("sar_caro_annexure", v)} />
-        </div>
-
         {/* ─── SIGNATURE BLOCK ─── */}
-        <div className="flex justify-end mt-6">
+        <div className="flex justify-end mt-8">
           <div className="text-sm space-y-1 text-right min-w-[280px]">
             <p>For, <AutoVal v={firmName} placeholder="[Audit Firm Name]" /></p>
             <p>Chartered Accountants</p>
             <p>Firm Regi. No.: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
 
-            <p className="mt-3">Place: <AutoVal v={firmCity} placeholder="[City]" /></p>
+            <p className="mt-3">Place : <AutoVal v={firmCity} placeholder="[City]" /></p>
 
             <p className="flex items-center justify-end gap-2">
-              <span>Date:</span>
+              <span>Date  :</span>
               <span className="print:hidden">
                 <Input type="date" value={formData.signature_date}
                   onChange={e => patch("signature_date", e.target.value)}
@@ -502,7 +399,7 @@ export default function Form3CATab({ engagementId }: Props) {
             </p>
 
             <p className="flex items-center justify-end gap-2">
-              <span>UDIN:</span>
+              <span>UDIN  :</span>
               <span className="print:hidden">
                 <Input value={formData.udin} onChange={e => patch("udin", e.target.value)}
                   placeholder="Enter UDIN"
@@ -520,10 +417,10 @@ export default function Form3CATab({ engagementId }: Props) {
         {/* ═══════════════════════ ANNEXURE ═══════════════════════ */}
         <hr className="border-gray-400 border-t-2 my-10" />
 
+        {/* ─── Annexure Header ─── */}
         <div className="text-center mb-6 space-y-1">
-          <p className="text-lg font-bold uppercase tracking-widest">ANNEXURE</p>
-          <p className="text-sm font-semibold uppercase tracking-wide">
-            TO FORM NO. 3CA [See rule 6G (1) (a)] OF
+          <p className="text-lg font-bold uppercase tracking-widest">
+            ANNEXURE TO FORM NO. 3CA [See rule 6G (1) (a)] OF
           </p>
           <p className="text-sm font-bold uppercase">
             <AutoVal v={clientName} placeholder="[CLIENT NAME]" />
@@ -532,8 +429,8 @@ export default function Form3CATab({ engagementId }: Props) {
 
         <hr className="border-gray-300 mb-6" />
 
-        {/* ─── Assessee Responsibilities ─── */}
-        <p className="text-sm font-bold underline underline-offset-2 mb-3">
+        {/* ─── Section 1: Assessee Responsibilities ─── */}
+        <p className="text-sm font-bold mb-3">
           Responsibilities of Assessee (include Assessee's Management) and those charged with Governance for the Financial Statements
         </p>
 
@@ -543,8 +440,8 @@ export default function Form3CATab({ engagementId }: Props) {
           </div>
         ))}
 
-        {/* ─── Auditor's Responsibilities ─── */}
-        <p className="text-sm font-bold underline underline-offset-2 mb-3 mt-6">
+        {/* ─── Section 2: Auditor's Responsibilities ─── */}
+        <p className="text-sm font-bold mb-3 mt-6">
           Auditor's Responsibility for the Audit of the Financial Statements
         </p>
 
@@ -561,10 +458,10 @@ export default function Form3CATab({ engagementId }: Props) {
             <p>Chartered Accountants</p>
             <p>Firm Regi. No.: <AutoVal v={firmFRN} placeholder="[Firm Reg No]" /></p>
 
-            <p className="mt-3">Place: <AutoVal v={firmCity} placeholder="[City]" /></p>
+            <p className="mt-3">Place : <AutoVal v={firmCity} placeholder="[City]" /></p>
 
             <p className="flex items-center justify-end gap-2">
-              <span>Date:</span>
+              <span>Date  :</span>
               <span className="print:hidden">
                 <Input type="date" value={formData.signature_date}
                   onChange={e => patch("signature_date", e.target.value)}
@@ -574,7 +471,7 @@ export default function Form3CATab({ engagementId }: Props) {
             </p>
 
             <p className="flex items-center justify-end gap-2">
-              <span>UDIN:</span>
+              <span>UDIN  :</span>
               <span className="print:hidden">
                 <Input value={formData.udin} onChange={e => patch("udin", e.target.value)}
                   placeholder="Enter UDIN"

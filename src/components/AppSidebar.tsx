@@ -29,18 +29,21 @@ const topNavItems = [
 ];
 
 const auditStages = [
-  { title: "Audit Dashboard",           path: "/audit",          icon: LayoutDashboard },
-  { title: "Engagement Setup",          path: "/audit/pipeline", icon: Building2,    stage: 1  },
-  { title: "Audit Tracker",             path: "/audit/tracker",       icon: ClipboardCheck  },
-  { title: "Tally Sync",               path: "/audit/tally-sync",    icon: RefreshCw       },
-  { title: "Trial Balance Import",      path: "/audit/pipeline",      icon: Upload,       stage: 2  },
-  { title: "COA & Financial Statements",path: "/audit/pipeline", icon: Calculator,   stage: 3  },
-  { title: "Scrutiny Engine",           path: "/audit/pipeline", icon: Eye,          stage: 4  },
-  { title: "Query Tracker",             path: "/audit/pipeline", icon: MessageSquare,stage: 5  },
-  { title: "Workpapers & Audit Sheet",   path: "/audit/pipeline", icon: Shield,       stage: 6  },
-  { title: "Notes to Accounts & CARO",  path: "/audit/pipeline", icon: BookMarked,   stage: 7  },
-  { title: "3CA / 3CB / 3CD Reports",   path: "/audit/pipeline", icon: FileCheck,    stage: 8  },
-  { title: "Sign-off & UDIN",           path: "/audit/pipeline", icon: Award,        stage: 9  },
+  // ── Non-pipeline links ────────────────────────────────────────────────────
+  { title: "Audit Dashboard",            path: "/audit",                icon: LayoutDashboard                },
+  { title: "Audit Tracker",              path: "/audit/tracker",        icon: ClipboardCheck                },
+  { title: "Engagement Setup",           path: "/audit/pipeline",       icon: Building2,    stage: 1        },
+  { title: "Workpapers & Audit Sheet",   path: "/audit/pipeline",       icon: Shield,       stage: 6        },
+  { title: "Query Tracker",              path: "/audit/pipeline",       icon: MessageSquare, stage: 5       },
+  { title: "Tally Sync",                 path: "/audit/tally-sync",     icon: RefreshCw                     },
+  // ── Analysis pipeline ────────────────────────────────────────────────────
+  { title: "Scrutiny Engine",            path: "/audit/pipeline",       icon: Eye,          stage: 4        },
+  { title: "Trial Balance Import",       path: "/audit/pipeline",       icon: Upload,       stage: 2        },
+  { title: "COA Mapping",                path: "/audit/pipeline",       icon: Calculator,   stage: 3        },
+  { title: "Financial Statements",       path: "/audit/pipeline",       icon: FileOutput,   stage: 10       },
+  { title: "Notes to Accounts & CARO",   path: "/audit/pipeline",       icon: BookMarked,   stage: 7        },
+  { title: "3CA / 3CB / 3CD Reports",    path: "/audit/pipeline",       icon: FileCheck,    stage: 8        },
+  { title: "Sign-off & UDIN",            path: "/audit/pipeline",       icon: Award,        stage: 9        },
 ];
 
 const auditUtilities = [

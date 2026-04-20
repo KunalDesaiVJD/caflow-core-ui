@@ -730,6 +730,7 @@ const NewClientWizard = () => {
 
   const saveAuditSetup = async (targetClientId: string) => {
     if (advancedInfo.classification !== "Audit") return;
+    // Write to client_fy_audit_setup (FY-specific flags — primary storage for wizard)
     await supabase.from("client_fy_audit_setup").upsert({
       client_id: targetClientId,
       financial_year: auditSetup.financial_year || advancedInfo.financial_year,
@@ -740,6 +741,19 @@ const NewClientWizard = () => {
       stock_audit_applicable: auditSetup.stock_audit_applicable,
       audit_billing_amount: auditSetup.audit_billing_amount ? Number(auditSetup.audit_billing_amount) : null,
     } as any, { onConflict: "client_id,financial_year" });
+    // Also mirror into clients.* direct columns so AuditPipeline Source 1 picks this up
+    // and ClientDetail card shows the correct state without needing a merge.
+    await supabase.from("clients").update({
+      statutory_audit_applicable: auditSetup.statutory_audit_applicable,
+      caro_applicable: auditSetup.caro_applicable,
+      internal_audit_applicable: auditSetup.internal_audit_applicable,
+      stock_audit_applicable: auditSetup.stock_audit_applicable,
+      // tax_audit_type: set to "3CB" if tax audit applicable, null otherwise
+      // (3CB is the standard form for non-corporate; corporate gets 3CA — wizard can refine later)
+      tax_audit_type: auditSetup.tax_audit_applicable
+        ? ((auditSetup as any).tax_audit_type || "3CB")
+        : null,
+    } as any).eq("id", targetClientId);
   };
 
   /* ───── Draft → Final promotion helper ─────────────────────────────────────
@@ -782,14 +796,17 @@ const NewClientWizard = () => {
       .limit(1);
     const fyOk = Boolean(fyRows?.[0]?.financial_year && fyRows?.[0]?.classification);
 
-    // ── 3. Check at least one active service (service_specific) OR active package (package_wise) ──
+    // ── 3. Check at least one active service/package OR Audit classification ──
+    // Audit-classified clients are served through engagements, not service rows,
+    // so having classification = 'Audit' satisfies the service requirement.
     const [svcRes, pkgRes] = await Promise.all([
       supabase.from("client_services").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
       supabase.from("client_service_packages").select("id").eq("client_id", clientId).eq("is_active", true).limit(1),
     ]);
-    const svcOk = (svcRes.data?.length ?? 0) > 0 || (pkgRes.data?.length ?? 0) > 0;
+    const isAuditClassified = fyRows?.[0]?.classification?.toLowerCase().includes("audit") ?? false;
+    const svcOk = (svcRes.data?.length ?? 0) > 0 || (pkgRes.data?.length ?? 0) > 0 || isAuditClassified;
 
-    console.log("[Wizard] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk });
+    console.log("[Wizard] Promotion check for", clientId, "→", { nameOk, panOk, typeOk, fyOk, svcOk, isAuditClassified });
 
     if (!nameOk || !panOk || !typeOk || !fyOk || !svcOk) {
       // Not yet complete — tell the user what's still missing

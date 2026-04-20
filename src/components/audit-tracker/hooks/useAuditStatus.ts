@@ -403,8 +403,14 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     }
 
     const payload: any = normalizeDates({ ...input, firm_id: firmId });
+    // Strip virtual / computed fields that are not DB columns
+    delete payload.id;
     delete payload.isVirtual;
+    delete payload.isPlanning;
     delete payload.engagement_type;
+    delete payload.planned_from;
+    delete payload.planned_to;
+    delete payload.created_at;     // let DB default to now()
     const { data, error } = await supabase.from("audit_status").insert(payload).select().single();
     if (error) { toast.error(error.message); return null; }
     toast.success("Row added");

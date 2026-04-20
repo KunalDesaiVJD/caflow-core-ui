@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
-import { NCENotesToAccounts } from '@/components/stage7/NotesToAccounts';
 import { IFCReportTab } from '@/components/stage7/IFCReportTab';
+import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNotesToAccounts';
 import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
@@ -44,7 +44,7 @@ export default function PipelineStage7Combined({
       .eq('id', engagementId);
     setSaving(false);
     if (error) { toast.error(error.message); return; }
-    toast.success('Stage 7 completed — proceeding to 3CD Reports');
+    toast.success('Stage 8 completed — proceeding to 3CD Reports');
     onStageComplete();
   };
 
@@ -68,7 +68,7 @@ export default function PipelineStage7Combined({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            {isCorporate ? 'Stage 7 — Notes, CARO & MRL' : 'Stage 7 — Notes to Accounts'}
+            {isCorporate ? 'Stage 8 — Notes, CARO & MRL' : 'Stage 8 — Notes to Accounts'}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isCorporate
@@ -81,7 +81,7 @@ export default function PipelineStage7Combined({
             {saving && <Loader2 className="w-4 h-4 animate-spin mr-1" />} Save Draft
           </Button>
           <Button onClick={markComplete} disabled={saving} className="gap-1">
-            Complete Stage 7 <ArrowRight size={14} />
+            Complete Stage 8 <ArrowRight size={14} />
           </Button>
         </div>
       </div>
@@ -94,8 +94,15 @@ export default function PipelineStage7Combined({
           setActiveTab={setActiveTab}
         />
       ) : (
-        /* Non-corporate: NCE Notes to Accounts — no CARO or MRL */
-        <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
+        /* Non-corporate: full 6-tab Stage 8 structure
+           (Note 1, Capital Account, Notes to Accounts, PPE Schedule,
+            Client Certificate, Management Letter) */
+        <EngagementNotesToAccounts
+          engagement={engagement}
+          client={engagement?.clients}
+          isCorporate={false}
+          onUpdate={onSaveDraft}
+        />
       )}
     </div>
   );
