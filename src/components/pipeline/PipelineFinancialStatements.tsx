@@ -742,9 +742,11 @@ export default function PipelineFinancialStatements({
             <TabsTrigger value="pl" className="gap-1.5">
               <FileSpreadsheet size={14} /> P&L Statement
             </TabsTrigger>
-            <TabsTrigger value="cf" className="gap-1.5">
-              <Droplets size={14} /> Cash Flow
-            </TabsTrigger>
+            {!isNonCorporate && (
+              <TabsTrigger value="cf" className="gap-1.5">
+                <Droplets size={14} /> Cash Flow
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* ── Balance Sheet ── */}
@@ -817,16 +819,16 @@ export default function PipelineFinancialStatements({
             {nceSignatureBlock}
           </TabsContent>
 
-          {/* ── Cash Flow / Receipts & Payments ── */}
-          <TabsContent value="cf" className="mt-3">
-            <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
-              <Droplets size={32} className="text-muted-foreground/40" />
-              <p className="text-sm font-medium text-muted-foreground">
-                {isNonCorporate ? "Receipts & Payments Account" : "Cash Flow Statement"}
-              </p>
-              <p className="text-xs text-muted-foreground">Coming soon — will auto-derive from Balance Sheet movements</p>
-            </div>
-          </TabsContent>
+          {/* ── Cash Flow (corporate only) ── */}
+          {!isNonCorporate && (
+            <TabsContent value="cf" className="mt-3">
+              <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
+                <Droplets size={32} className="text-muted-foreground/40" />
+                <p className="text-sm font-medium text-muted-foreground">Cash Flow Statement</p>
+                <p className="text-xs text-muted-foreground">Coming soon — will auto-derive from Balance Sheet movements</p>
+              </div>
+            </TabsContent>
+          )}
         </Tabs>
       )}
 
