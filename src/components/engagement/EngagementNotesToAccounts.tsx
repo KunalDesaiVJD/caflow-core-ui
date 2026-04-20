@@ -15,6 +15,7 @@ import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
 import { NCEPPESchedule } from "@/components/stage8/NCEPPESchedule";
 import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
 import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
+import { NCENotesToAccounts } from "@/components/stage7/NotesToAccounts";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -376,8 +377,10 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
           </TabsTrigger>
         </TabsList>
 
-        {/* Tab 1 — existing accordion content, completely unchanged */}
-        <TabsContent value="notes">{noteEditorBody}</TabsContent>
+        {/* Tab 1 — NCE notes (Balance Confirmation, Rearrangement of Figures, etc.) */}
+        <TabsContent value="notes">
+          <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
+        </TabsContent>
 
         {/* Tab 2 — Capital Account */}
         <TabsContent value="capital">

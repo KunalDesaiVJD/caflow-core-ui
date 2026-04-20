@@ -164,6 +164,7 @@ const ClientDetail = () => {
   const [auditForm, setAuditForm] = useState({
     statutory_audit_applicable: false,
     tax_audit_type: "" as string,
+    tax_audit_applicable: false,       // merged from client_fy_audit_setup
     caro_applicable: false,
     internal_audit_applicable: false,
     stock_audit_applicable: false,
@@ -227,13 +228,20 @@ const ClientDetail = () => {
   async function loadAllData() {
     setLoading(true);
     try {
-      const [clientRes, profileRes, catRes, csRes, staffRes, pkgRes] = await Promise.all([
+      const [clientRes, profileRes, catRes, csRes, staffRes, pkgRes, fySetupRes] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId!).single(),
         supabase.from("client_profiles").select("audit_questions").eq("client_id", clientId!).limit(1),
         supabase.from("service_categories").select("id, name, category_code, frequency, linked_module, is_active, firm_id").eq("is_active", true).order("name"),
         supabase.from("client_services").select("*").eq("client_id", clientId!),
         supabase.from("users").select("id, name").order("name"),
         supabase.from("client_service_packages").select("*").eq("client_id", clientId!).eq("is_active", true),
+        // Source 2: wizard saves audit flags here, not to clients.* direct columns
+        supabase.from("client_fy_audit_setup")
+          .select("statutory_audit_applicable, tax_audit_applicable, caro_applicable, internal_audit_applicable, stock_audit_applicable, audit_turnover")
+          .eq("client_id", clientId!)
+          .order("financial_year", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
 
       let findingsData: any[] = [];
@@ -280,13 +288,22 @@ const ClientDetail = () => {
       setClientItrProfile(itrData);
 
       if (c) {
+        // Merge source 1 (clients.* direct columns) with source 2 (client_fy_audit_setup).
+        // NewClientWizard saves to client_fy_audit_setup, not to clients.* direct columns,
+        // so we must check both to show the correct ON/OFF state in the Audit Setup card.
+        const fySetup = fySetupRes?.data ?? null;
         setAuditForm({
-          statutory_audit_applicable: c.statutory_audit_applicable || false,
+          statutory_audit_applicable: c.statutory_audit_applicable || fySetup?.statutory_audit_applicable || false,
           tax_audit_type: c.tax_audit_type || "",
-          caro_applicable: c.caro_applicable || false,
-          internal_audit_applicable: c.internal_audit_applicable || false,
-          stock_audit_applicable: c.stock_audit_applicable || false,
-          audit_turnover: (c as any).audit_turnover ? String((c as any).audit_turnover) : "",
+          // tax_audit_applicable covers wizard-based setup where tax_audit_type may be null
+          // but client_fy_audit_setup.tax_audit_applicable = true
+          tax_audit_applicable: !!c.tax_audit_type || !!fySetup?.tax_audit_applicable,
+          caro_applicable: c.caro_applicable || fySetup?.caro_applicable || false,
+          internal_audit_applicable: c.internal_audit_applicable || fySetup?.internal_audit_applicable || false,
+          stock_audit_applicable: c.stock_audit_applicable || fySetup?.stock_audit_applicable || false,
+          audit_turnover: (c as any).audit_turnover
+            ? String((c as any).audit_turnover)
+            : fySetup?.audit_turnover ? String(fySetup.audit_turnover) : "",
         });
       }
     } catch (e: any) {
@@ -1115,7 +1132,7 @@ const ClientDetail = () => {
                 {
                   label: "Tax Audit Applicable",
                   sub: "Section 44AB — 3CA/3CB/3CD",
-                  on: !!auditForm.tax_audit_type,
+                  on: auditForm.tax_audit_applicable || !!auditForm.tax_audit_type,
                   detail: auditForm.tax_audit_type || null,
                 },
                 {
