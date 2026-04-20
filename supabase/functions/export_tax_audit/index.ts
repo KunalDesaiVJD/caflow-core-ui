@@ -1126,6 +1126,46 @@ serve(async (req) => {
         // it appears as the sole content of a <t> tag so we don't clobber unrelated text.
         ssXml = ssXml.replace(/<t>ENTITY_NAME<\/t>/g, `<t>${xmlEsc(autoValues.ENTITY_NAME)}</t>`);
       }
+
+      // ── Form 3CB / 3CA sign-off bracket & underscore placeholders ─────────────
+      // The Form_3CB (main) sign-off block uses these literal shared-string
+      // placeholders instead of AUTO markers or named ranges.  Replace them all
+      // here so the export works regardless of whether the hardcoded cell-address
+      // writes above landed on the correct cells.
+      if (autoValues.PLACE) {
+        ssXml = ssXml.replace(/\[PLACE\]/g, xmlEsc(autoValues.PLACE));
+      }
+      if (autoValues.SIGN_DATE) {
+        ssXml = ssXml.replace(/\[REPORT DATE\]/g, xmlEsc(autoValues.SIGN_DATE));
+        ssXml = ssXml.replace(/\[SIGN DATE\]/g,   xmlEsc(autoValues.SIGN_DATE));
+      }
+      if (autoValues.UDIN) {
+        ssXml = ssXml.replace(/\[UDIN\]/g, xmlEsc(autoValues.UDIN));
+      } else {
+        // Leave a blank dash rather than the raw bracket placeholder
+        ssXml = ssXml.replace(/\[UDIN\]/g, "N/A");
+      }
+      if (autoValues.PARTNER_NAME) {
+        ssXml = ssXml.replace(/\[Signing partner Name\]/gi, xmlEsc(autoValues.PARTNER_NAME));
+        ssXml = ssXml.replace(/\[Partner Name\]/gi,        xmlEsc(autoValues.PARTNER_NAME));
+      }
+      if (autoValues.MEMBERSHIP_NO) {
+        // "_____[Membership No]" pattern — keep any "Membership No.:" label, replace the blank+bracket part
+        ssXml = ssXml.replace(/_{3,}\[Membership No[^\]]*\]/g, xmlEsc(autoValues.MEMBERSHIP_NO));
+        ssXml = ssXml.replace(/\[Membership No[^\]]*\]/g,      xmlEsc(autoValues.MEMBERSHIP_NO));
+      }
+      if (autoValues.FIRM_NAME) {
+        // "___AUDIT FIRM_NAME" / "__AUDIT FIRM_NAME" — leading underscores then literal key
+        ssXml = ssXml.replace(/_{2,}AUDIT FIRM_NAME/g, xmlEsc(autoValues.FIRM_NAME));
+        // "[AUDIT FIRM NAME]" bracket variant
+        ssXml = ssXml.replace(/\[AUDIT FIRM[_ ]?NAME\]/gi, xmlEsc(autoValues.FIRM_NAME));
+      }
+      if (autoValues.FRN) {
+        // "FRN: ______" — replace underscores following "FRN: " label
+        ssXml = ssXml.replace(/(FRN:\s*)_{3,}/g, `$1${xmlEsc(autoValues.FRN)}`);
+        // Also bare "[FRN]" bracket variant
+        ssXml = ssXml.replace(/\[FRN\]/gi, xmlEsc(autoValues.FRN));
+      }
       // [APPLICABLE ACT] — saved by Form3CA tab into form_3ca_applicable_act
       const applicableAct = (eng as any).form_3ca_applicable_act
         ? ((eng as any).form_3ca_act_other_text && (eng as any).form_3ca_applicable_act === "other"
