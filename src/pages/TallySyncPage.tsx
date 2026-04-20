@@ -368,6 +368,22 @@ export default function TallySyncPage() {
       return;
     }
     setSyncing(true);
+
+    // Auto-fail stuck batches + stale requests older than 30 min before queuing a new one
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    await supabase
+      .from("sync_batches" as any)
+      .update({ status: "failed", completed_at: new Date().toISOString(), warnings: [{ message: "Auto-failed: stuck in running state over 30 min" }] })
+      .eq("engagement_id", tallyEngId)
+      .in("status", ["running", "processing"])
+      .lt("started_at", thirtyMinAgo);
+    await supabase
+      .from("sync_requests" as any)
+      .update({ status: "failed" })
+      .eq("engagement_id", tallyEngId)
+      .eq("status", "pending")
+      .lt("requested_at", thirtyMinAgo);
+
     const { error } = await supabase
       .from("sync_requests" as any)
       .insert({
@@ -382,6 +398,7 @@ export default function TallySyncPage() {
     } else {
       toast({ title: "Sync queued", description: "Run node auto-sync.js to trigger immediately." });
       setPendingRequest(true);
+      await loadData();
     }
     setSyncing(false);
   }
@@ -1440,25 +1457,52 @@ export default function TallySyncPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {batches.map(b => (
-                      <TableRow key={b.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <StatusIcon status={b.status} />
-                            <span className={cn("text-xs capitalize", statusColor(b.status))}>
-                              {b.status.replace(/_/g, " ")}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-xs max-w-[140px] truncate">{b.tally_company ?? "—"}</TableCell>
-                        <TableCell className="text-xs">{b.financial_year ?? "—"}</TableCell>
-                        <TableCell className="text-right text-xs">{b.groups_fetched ?? 0}</TableCell>
-                        <TableCell className="text-right text-xs">{b.ledgers_fetched ?? 0}</TableCell>
-                        <TableCell className="text-right text-xs">{b.tb_rows_fetched ?? 0}</TableCell>
-                        <TableCell className="text-right text-xs">{b.vouchers_fetched ?? 0}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{fmtDate(b.started_at)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {batches.map(b => {
+                      const warns = (b.warnings as any[]) ?? [];
+                      const isFailed = b.status === "failed";
+                      const hasNotes = warns.length > 0 || isFailed;
+                      return (
+                        <>
+                          <TableRow key={b.id}>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <StatusIcon status={b.status} />
+                                <span className={cn("text-xs capitalize", statusColor(b.status))}>
+                                  {b.status.replace(/_/g, " ")}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-xs max-w-[140px] truncate">{b.tally_company ?? "—"}</TableCell>
+                            <TableCell className="text-xs">{b.financial_year ?? "—"}</TableCell>
+                            <TableCell className="text-right text-xs">{b.groups_fetched ?? 0}</TableCell>
+                            <TableCell className="text-right text-xs">{b.ledgers_fetched ?? 0}</TableCell>
+                            <TableCell className="text-right text-xs">{b.tb_rows_fetched ?? 0}</TableCell>
+                            <TableCell className="text-right text-xs">{b.vouchers_fetched ?? 0}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{fmtDate(b.started_at)}</TableCell>
+                          </TableRow>
+                          {hasNotes && (
+                            <TableRow key={`${b.id}-notes`} className={cn("text-xs", isFailed ? "bg-red-50" : "bg-amber-50")}>
+                              <TableCell colSpan={8} className="py-1.5 px-4">
+                                <div className={cn("flex items-start gap-2", isFailed ? "text-red-700" : "text-amber-700")}>
+                                  {isFailed ? <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
+                                  <div className="flex-1">
+                                    {warns.length > 0 ? (
+                                      warns.map((w: any, i: number) => (
+                                        <div key={i} className="leading-snug">
+                                          • {typeof w === "string" ? w : (w?.message ?? w?.error ?? JSON.stringify(w))}
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <div>Sync failed — check Tally is reachable and no dialog is open on the company screen.</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
