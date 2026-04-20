@@ -439,6 +439,23 @@ export default function TallySyncPage() {
     return getPrimaryGroup(groupName)?.is_revenue ?? false;
   }
 
+  // Returns "Under Sub group of Parent > Grandparent" for sub-groups, or "" for primary groups.
+  function getParentChainLabel(groupName: string): string {
+    const g = groupInfoMap.get(groupName);
+    if (!g || isTallyPrimary(g) || !g.parent_group) return "";
+    const chain: string[] = [];
+    let current = groupInfoMap.get(g.parent_group);
+    const visited = new Set<string>();
+    while (current && !visited.has(current.group_name)) {
+      visited.add(current.group_name);
+      chain.push(decodeHtml(current.group_name));
+      if (isTallyPrimary(current) || !current.parent_group) break;
+      current = groupInfoMap.get(current.parent_group);
+    }
+    if (chain.length === 0) return "";
+    return `Under Sub group of ${chain.join(" › ")}`;
+  }
+
   // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
     // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
@@ -737,6 +754,11 @@ export default function TallySyncPage() {
                                     <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                       {isRevenue ? "P&L" : "B/S"}
                                     </Badge>
+                                    {getParentChainLabel(groupName) && (
+                                      <span className="ml-2 text-[10px] font-normal italic text-muted-foreground">
+                                        {getParentChainLabel(groupName)}
+                                      </span>
+                                    )}
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-right py-2 font-bold text-xs">
@@ -847,9 +869,7 @@ export default function TallySyncPage() {
                     </TableHeader>
                     <TableBody>
                       {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => {
-                        const prim = getPrimaryGroup(groupName);
-                        const primName = prim ? decodeHtml(prim.group_name) : "";
-                        const showPrim = primName && primName !== decodeHtml(groupName);
+                        const parentChain = getParentChainLabel(groupName);
                         return (
                         <>
                           <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
@@ -860,9 +880,9 @@ export default function TallySyncPage() {
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {isRevenue ? "P&L" : "B/S"}
                               </Badge>
-                              {showPrim && (
-                                <span className="ml-2 text-[10px] text-muted-foreground">
-                                  under <span className={cn("font-medium", isRevenue ? "text-orange-600" : "text-blue-700")}>{primName}</span>
+                              {parentChain && (
+                                <span className="ml-2 text-[10px] italic text-muted-foreground">
+                                  {parentChain}
                                 </span>
                               )}
                             </TableCell>
@@ -949,6 +969,11 @@ export default function TallySyncPage() {
                               <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
                                 {g.is_revenue ? "P&L" : "B/S"}
                               </Badge>
+                            )}
+                            {!isPrimRow && getParentChainLabel(g.group_name) && (
+                              <span className="ml-2 text-[10px] italic text-muted-foreground">
+                                {getParentChainLabel(g.group_name)}
+                              </span>
                             )}
                           </TableCell>
                           <TableCell className="text-muted-foreground">{decodeHtml(g.parent_group) || "—"}</TableCell>
