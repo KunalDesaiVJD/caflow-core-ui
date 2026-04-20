@@ -13,9 +13,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   RefreshCw, CheckCircle2, XCircle, AlertTriangle, Clock,
   Database, Wifi, WifiOff, Building2, FileText, Layers, Receipt, Search,
-  ChevronRight, ChevronDown,
+  ChevronRight, ChevronDown, FileSpreadsheet, FileDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  exportTrialBalanceExcel, exportTrialBalancePDF,
+  exportLedgersExcel,      exportLedgersPDF,
+  exportGroupsExcel,       exportGroupsPDF,
+  type ExportMeta,
+} from "@/lib/tallyExport";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -161,18 +167,22 @@ export default function TallySyncPage() {
   const [tbSearch, setTbSearch]           = useState("");
   const [voucherSearch, setVoucherSearch] = useState("");
 
-  // Collapse/expand state for TB group rows and voucher line-items
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [expandedVoucher, setExpandedVoucher] = useState<string | null>(null);
+  // Collapse/expand state — separate sets per tab
+  const [collapsedGroups,        setCollapsedGroups]        = useState<Set<string>>(new Set()); // TB
+  const [collapsedLedgerGroups,  setCollapsedLedgerGroups]  = useState<Set<string>>(new Set()); // Ledgers tab
+  const [collapsedGroupMasters,  setCollapsedGroupMasters]  = useState<Set<string>>(new Set()); // Groups tab (collapses children under primary)
+  const [expandedVoucher,        setExpandedVoucher]        = useState<string | null>(null);
 
-  function toggleGroup(groupName: string) {
-    setCollapsedGroups(prev => {
+  const makeToggler = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
+    (name: string) => setter(prev => {
       const next = new Set(prev);
-      if (next.has(groupName)) next.delete(groupName);
-      else next.add(groupName);
+      if (next.has(name)) next.delete(name); else next.add(name);
       return next;
     });
-  }
+
+  const toggleGroup        = makeToggler(setCollapsedGroups);
+  const toggleLedgerGroup  = makeToggler(setCollapsedLedgerGroups);
+  const toggleGroupMaster  = makeToggler(setCollapsedGroupMasters);
 
   // ── Load all data ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -403,11 +413,47 @@ export default function TallySyncPage() {
     decodeHtml(v.narration).toLowerCase().includes(voucherSearch.toLowerCase())
   );
 
-  // TB totals (for footer)
+  // ── Current-year turnover derived from vouchers (fallback when tally_trial_balance.debit_amount/credit_amount is 0) ──
+  const ledgerTurnover = useMemo(() => {
+    const m = new Map<string, { debit: number; credit: number }>();
+    const add = (name: string | null | undefined, amount: number, drCr: string | null | undefined) => {
+      if (!name || !amount) return;
+      const key = decodeHtml(name).trim().toLowerCase();
+      if (!key) return;
+      if (!m.has(key)) m.set(key, { debit: 0, credit: 0 });
+      const rec = m.get(key)!;
+      const amt = Math.abs(amount);
+      if (drCr === "Dr") rec.debit += amt;
+      else if (drCr === "Cr") rec.credit += amt;
+    };
+    for (const v of vouchers) {
+      const items = v.line_items ?? [];
+      if (items.length > 0) {
+        for (const li of items) add(li.ledger_name, li.amount, li.dr_cr);
+      } else {
+        add(v.party_ledger, v.amount, v.dr_cr);
+      }
+    }
+    return m;
+  }, [vouchers]);
+
+  // Return effective debit/credit for a TB row: prefer DB values; fallback to voucher-derived
+  const getTurnover = useCallback((r: TallyTB): { debit: number; credit: number } => {
+    const db = r.debit_amount  ?? 0;
+    const cr = r.credit_amount ?? 0;
+    if (db > 0 || cr > 0) return { debit: db, credit: cr };
+    const t = ledgerTurnover.get(decodeHtml(r.ledger_name).trim().toLowerCase());
+    return t ?? { debit: 0, credit: 0 };
+  }, [ledgerTurnover]);
+
+  // TB totals (for footer, now using effective turnover)
   const tbDrTotal     = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
   const tbCrTotal     = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
-  const tbDebitTotal  = filteredTB.reduce((s, r) => s + (r.debit_amount  ?? 0), 0);
-  const tbCreditTotal = filteredTB.reduce((s, r) => s + (r.credit_amount ?? 0), 0);
+  const tbDrOpening   = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0);
+  const tbCrOpening   = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0);
+  const tbDebitTotal  = filteredTB.reduce((s, r) => s + getTurnover(r).debit,  0);
+  const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
+  const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
 
   // ── Group map for BS/PL classification ───────────────────────────────────────
   const groupInfoMap = useMemo(() => {
@@ -564,21 +610,29 @@ export default function TallySyncPage() {
       byGroup.get(grp)!.push(r);
     }
 
+    type EnrichedRow = TallyTB & { _debit: number; _credit: number };
+
     type TBGroup = {
-      groupName: string; isRevenue: boolean; rows: TallyTB[];
+      groupName: string; isRevenue: boolean; rows: EnrichedRow[];
       openingTotal: number; openingTotalType: string;
       debitTotal: number; creditTotal: number;
       closingTotal: number; closingTotalType: string;
     };
 
     const makeGroup = (grpName: string, isRevenue: boolean, rows: TallyTB[]): TBGroup => {
-      const sorted  = rows.slice().sort((a, b) => a.ledger_name.localeCompare(b.ledger_name));
-      const netOp   = sorted.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
-      const netCl   = sorted.reduce((s, r) => s + (r.balance_type  === "Dr" ? r.closing_balance  : -r.closing_balance), 0);
-      const debit   = sorted.reduce((s, r) => s + (r.debit_amount  ?? 0), 0);
-      const credit  = sorted.reduce((s, r) => s + (r.credit_amount ?? 0), 0);
+      const enriched: EnrichedRow[] = rows
+        .slice()
+        .sort((a, b) => a.ledger_name.localeCompare(b.ledger_name))
+        .map(r => {
+          const t = getTurnover(r);
+          return { ...r, _debit: t.debit, _credit: t.credit };
+        });
+      const netOp  = enriched.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl  = enriched.reduce((s, r) => s + (r.balance_type  === "Dr" ? r.closing_balance  : -r.closing_balance), 0);
+      const debit  = enriched.reduce((s, r) => s + r._debit,  0);
+      const credit = enriched.reduce((s, r) => s + r._credit, 0);
       return {
-        groupName: grpName, isRevenue, rows: sorted,
+        groupName: grpName, isRevenue, rows: enriched,
         openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
         debitTotal: debit, creditTotal: credit,
         closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
@@ -598,7 +652,73 @@ export default function TallySyncPage() {
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredTB, sortedGroups]);
+  }, [filteredTB, sortedGroups, getTurnover]);
+
+  // ── Export helpers ───────────────────────────────────────────────────────────
+  const exportMeta: ExportMeta = useMemo(() => ({
+    clientName: (selectedEngagement as any)?.client_name
+              ?? (selectedEngagement as any)?.clients?.name
+              ?? "Client",
+    financialYear: (selectedEngagement as any)?.financial_year ?? tallyFy ?? "—",
+    firmName: (selectedEngagement as any)?.firm_name
+            ?? (selectedEngagement as any)?.firms?.name
+            ?? "Tally Sync Export",
+  }), [selectedEngagement, tallyFy]);
+
+  const tbBlocksForExport = () => groupedTB.map(g => ({
+    groupName: decodeHtml(g.groupName),
+    isRevenue: g.isRevenue,
+    openingTotal: g.openingTotal, openingTotalType: g.openingTotalType,
+    debitTotal:   g.debitTotal,   creditTotal:      g.creditTotal,
+    closingTotal: g.closingTotal, closingTotalType: g.closingTotalType,
+    rows: g.rows.map(r => ({
+      ledger_name:     decodeHtml(r.ledger_name),
+      opening_balance: r.opening_balance,
+      opening_type:    r.opening_type,
+      debit:           (r as any)._debit  ?? 0,
+      credit:          (r as any)._credit ?? 0,
+      closing_balance: r.closing_balance,
+      balance_type:    r.balance_type,
+    })),
+  }));
+
+  const tbGrand = {
+    drOpening: tbDrOpening,  crOpening: tbCrOpening,
+    debit:     tbDebitTotal, credit:    tbCreditTotal,
+    drClosing: tbDrTotal,    crClosing: tbCrTotal,
+  };
+
+  const ledgerBlocksForExport = () => groupedLedgers.map(g => {
+    const prim = getPrimaryGroup(g.groupName);
+    const primName = prim ? decodeHtml(prim.group_name) : "";
+    return {
+      groupName:   decodeHtml(g.groupName),
+      isRevenue:   g.isRevenue,
+      depth:       g.depth,
+      primaryName: primName && primName !== decodeHtml(g.groupName) ? primName : "",
+      ledgers: g.ledgers.map(l => ({
+        ledger_name:     decodeHtml(l.ledger_name),
+        parent_group:    decodeHtml(l.parent_group),
+        opening_balance: l.opening_balance,
+        opening_type:    l.opening_type,
+        closing_balance: l.closing_balance,
+        closing_type:    l.closing_type,
+      })),
+    };
+  });
+
+  const groupRowsForExport = () => sortedGroups.map(({ group: g, depth }) => {
+    const prim = getPrimaryGroup(g.group_name);
+    const primName = prim ? decodeHtml(prim.group_name) : "";
+    return {
+      group_name:   decodeHtml(g.group_name),
+      parent_group: decodeHtml(g.parent_group || ""),
+      primary_name: primName && primName !== decodeHtml(g.group_name) ? primName : "",
+      is_revenue:   g.is_revenue,
+      is_primary:   isTallyPrimary(g),
+      depth,
+    };
+  });
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
@@ -706,6 +826,14 @@ export default function TallySyncPage() {
                   onClick={() => setCollapsedGroups(new Set())}>
                   Expand All
                 </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportTrialBalanceExcel(tbBlocksForExport(), exportMeta, tbGrand)}>
+                  <FileSpreadsheet className="h-3.5 w-3.5 mr-1 text-emerald-600" /> Excel
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportTrialBalancePDF(tbBlocksForExport(), exportMeta, tbGrand)}>
+                  <FileDown className="h-3.5 w-3.5 mr-1 text-rose-600" /> PDF
+                </Button>
                 <div className="relative w-56">
                   <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                   <Input placeholder="Search ledger / group…" className="pl-8 h-8 text-sm" value={tbSearch} onChange={e => setTbSearch(e.target.value)} />
@@ -801,10 +929,10 @@ export default function TallySyncPage() {
                                     ) : "—"}
                                   </TableCell>
                                   <TableCell className="text-right text-blue-700">
-                                    {(r.debit_amount ?? 0) > 0 ? fmtAmt(r.debit_amount!) : "—"}
+                                    {(r as any)._debit > 0 ? fmtAmt((r as any)._debit) : "—"}
                                   </TableCell>
                                   <TableCell className="text-right text-rose-600">
-                                    {(r.credit_amount ?? 0) > 0 ? fmtAmt(r.credit_amount!) : "—"}
+                                    {(r as any)._credit > 0 ? fmtAmt((r as any)._credit) : "—"}
                                   </TableCell>
                                   <TableCell className="text-right font-medium">
                                     {r.closing_balance > 0 ? (
@@ -818,18 +946,43 @@ export default function TallySyncPage() {
                             </>
                           );
                         })}
+                        {/* Grand Total row — aligned to columns */}
+                        <TableRow className="bg-muted/70 hover:bg-muted/70 border-t-2 border-blue-700/40 sticky bottom-0">
+                          <TableCell className="py-2 px-3">
+                            <span className="text-[11px] font-extrabold tracking-wide text-blue-800 uppercase">Grand Total</span>
+                          </TableCell>
+                          <TableCell className="text-right py-2 font-bold text-xs">
+                            <div><span className="text-blue-700">{fmtAmt(tbDrOpening)}</span> <span className="text-blue-700">Dr</span></div>
+                            <div><span className="text-rose-600">{fmtAmt(tbCrOpening)}</span> <span className="text-rose-600">Cr</span></div>
+                          </TableCell>
+                          {hasDebitCredit && (
+                            <TableCell className="text-right py-2 font-bold text-xs text-blue-700">
+                              {tbDebitTotal > 0 ? fmtAmt(tbDebitTotal) : "—"}
+                            </TableCell>
+                          )}
+                          {hasDebitCredit && (
+                            <TableCell className="text-right py-2 font-bold text-xs text-rose-600">
+                              {tbCreditTotal > 0 ? fmtAmt(tbCreditTotal) : "—"}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-right py-2 font-bold text-xs">
+                            <div><span className="text-blue-700">{fmtAmt(tbDrTotal)}</span> <span className="text-blue-700">Dr</span></div>
+                            <div><span className="text-rose-600">{fmtAmt(tbCrTotal)}</span> <span className="text-rose-600">Cr</span></div>
+                          </TableCell>
+                        </TableRow>
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Grand Total footer */}
-                  <div className="border-t bg-muted/40 px-4 py-2 flex flex-wrap justify-end gap-6 text-xs font-semibold">
-                    <span>Closing Dr: <span className="text-blue-700 font-bold">{fmtAmt(tbDrTotal)}</span></span>
-                    <span>Closing Cr: <span className="text-rose-600 font-bold">{fmtAmt(tbCrTotal)}</span></span>
-                    <span>Total Debit: <span className="text-blue-700 font-bold">{fmtAmt(tbDebitTotal)}</span></span>
-                    <span>Total Credit: <span className="text-rose-600 font-bold">{fmtAmt(tbCreditTotal)}</span></span>
-                    <span className={cn("font-bold", Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                      {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Balanced" : `⚠ Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
+                  {/* Balance check strip */}
+                  <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4">
+                    <span className={cn(Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                      {Math.abs(tbDrTotal - tbCrTotal) < 1 ? "✓ Closing Balanced" : `⚠ Closing Diff: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))}`}
                     </span>
+                    {hasDebitCredit && (
+                      <span className={cn(Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
+                        {Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "✓ Movement Balanced" : `⚠ Movement Diff: ${fmtAmt(Math.abs(tbDebitTotal - tbCreditTotal))}`}
+                      </span>
+                    )}
                   </div>
                 </>
               )}
@@ -843,11 +996,29 @@ export default function TallySyncPage() {
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base">Ledger Masters</CardTitle>
-                <CardDescription>{rowCounts.ledgers.toLocaleString()} ledgers from Tally</CardDescription>
+                <CardDescription>{rowCounts.ledgers.toLocaleString()} ledgers from Tally · click group to collapse</CardDescription>
               </div>
-              <div className="relative w-64">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input placeholder="Search ledger / group…" className="pl-8 h-8 text-sm" value={ledgerSearch} onChange={e => setLedgerSearch(e.target.value)} />
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedLedgerGroups(new Set(groupedLedgers.map(g => g.groupName)))}>
+                  Collapse All
+                </Button>
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedLedgerGroups(new Set())}>
+                  Expand All
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportLedgersExcel(ledgerBlocksForExport(), exportMeta)}>
+                  <FileSpreadsheet className="h-3.5 w-3.5 mr-1 text-emerald-600" /> Excel
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportLedgersPDF(ledgerBlocksForExport(), exportMeta)}>
+                  <FileDown className="h-3.5 w-3.5 mr-1 text-rose-600" /> PDF
+                </Button>
+                <div className="relative w-56">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input placeholder="Search ledger / group…" className="pl-8 h-8 text-sm" value={ledgerSearch} onChange={e => setLedgerSearch(e.target.value)} />
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -870,24 +1041,33 @@ export default function TallySyncPage() {
                     <TableBody>
                       {groupedLedgers.map(({ groupName, isRevenue, depth, ledgers: grpLedgers }) => {
                         const parentChain = getParentChainLabel(groupName);
+                        const isCollapsed = collapsedLedgerGroups.has(groupName);
                         return (
                         <>
-                          <TableRow key={`grp-hdr-${groupName}`} className="bg-muted/60 hover:bg-muted/60">
+                          <TableRow
+                            key={`grp-hdr-${groupName}`}
+                            className="bg-muted/60 hover:bg-muted/80 cursor-pointer select-none"
+                            onClick={() => toggleLedgerGroup(groupName)}
+                          >
                             <TableCell colSpan={3} className="py-2 px-4" style={{ paddingLeft: `${depth * 16 + 16}px` }}>
-                              <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
-                                {decodeHtml(groupName) || "—"}
-                              </span>
-                              <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
-                                {isRevenue ? "P&L" : "B/S"}
-                              </Badge>
-                              {parentChain && (
-                                <span className="ml-2 text-[10px] italic text-muted-foreground">
-                                  {parentChain}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {isCollapsed
+                                  ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                  : <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                                <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                  {decodeHtml(groupName) || "—"}
                                 </span>
-                              )}
+                                <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                  {isRevenue ? "P&L" : "B/S"}
+                                </Badge>
+                                <span className="ml-1 text-[10px] text-muted-foreground">({grpLedgers.length})</span>
+                                {parentChain && (
+                                  <span className="ml-2 text-[10px] italic text-muted-foreground">{parentChain}</span>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
-                          {grpLedgers.map(l => (
+                          {!isCollapsed && grpLedgers.map(l => (
                             <TableRow key={l.id} className="text-xs hover:bg-muted/20">
                               <TableCell className="text-foreground" style={{ paddingLeft: `${depth * 16 + 32}px` }}>
                                 <button
@@ -930,11 +1110,29 @@ export default function TallySyncPage() {
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base">Group Masters</CardTitle>
-                <CardDescription>{rowCounts.groups} groups from Tally</CardDescription>
+                <CardDescription>{rowCounts.groups} groups from Tally · primaries + sub-groups · click primary to collapse its children</CardDescription>
               </div>
-              <div className="relative w-64">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input placeholder="Search group…" className="pl-8 h-8 text-sm" value={groupSearch} onChange={e => setGroupSearch(e.target.value)} />
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedGroupMasters(new Set(sortedGroups.filter(x => isTallyPrimary(x.group)).map(x => x.group.group_name)))}>
+                  Collapse All
+                </Button>
+                <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-muted-foreground"
+                  onClick={() => setCollapsedGroupMasters(new Set())}>
+                  Expand All
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportGroupsExcel(groupRowsForExport(), exportMeta)}>
+                  <FileSpreadsheet className="h-3.5 w-3.5 mr-1 text-emerald-600" /> Excel
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs h-7 px-2" disabled={!hasData}
+                  onClick={() => exportGroupsPDF(groupRowsForExport(), exportMeta)}>
+                  <FileDown className="h-3.5 w-3.5 mr-1 text-rose-600" /> PDF
+                </Button>
+                <div className="relative w-56">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input placeholder="Search group…" className="pl-8 h-8 text-sm" value={groupSearch} onChange={e => setGroupSearch(e.target.value)} />
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -959,22 +1157,39 @@ export default function TallySyncPage() {
                     <TableBody>
                       {sortedGroups.map(({ group: g, depth }) => {
                         const isPrimRow = isTallyPrimary(g);
+                        // For sub-groups: hide if their primary is in the collapsed set
+                        if (!isPrimRow) {
+                          const prim = getPrimaryGroup(g.group_name);
+                          if (prim && collapsedGroupMasters.has(prim.group_name)) return null;
+                        }
+                        const isCollapsed = isPrimRow && collapsedGroupMasters.has(g.group_name);
                         return (
-                        <TableRow key={g.id} className={cn("text-xs", isPrimRow && "bg-muted/40 font-semibold")}>
+                        <TableRow
+                          key={g.id}
+                          className={cn("text-xs", isPrimRow && "bg-muted/40 font-semibold cursor-pointer hover:bg-muted/60 select-none")}
+                          onClick={isPrimRow ? () => toggleGroupMaster(g.group_name) : undefined}
+                        >
                           <TableCell style={{ paddingLeft: `${(depth * 16) + 16}px` }}>
-                            <span className={cn(isPrimRow ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
-                              {decodeHtml(g.group_name)}
-                            </span>
-                            {isPrimRow && (
-                              <Badge variant="outline" className={cn("ml-2 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
-                                {g.is_revenue ? "P&L" : "B/S"}
-                              </Badge>
-                            )}
-                            {!isPrimRow && getParentChainLabel(g.group_name) && (
-                              <span className="ml-2 text-[10px] italic text-muted-foreground">
-                                {getParentChainLabel(g.group_name)}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {isPrimRow && (
+                                isCollapsed
+                                  ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                  : <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              )}
+                              <span className={cn(isPrimRow ? (g.is_revenue ? "text-orange-700" : "text-blue-800") : "text-foreground")}>
+                                {decodeHtml(g.group_name)}
                               </span>
-                            )}
+                              {isPrimRow && (
+                                <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", g.is_revenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                  {g.is_revenue ? "P&L" : "B/S"}
+                                </Badge>
+                              )}
+                              {!isPrimRow && getParentChainLabel(g.group_name) && (
+                                <span className="ml-1 text-[10px] italic text-muted-foreground">
+                                  {getParentChainLabel(g.group_name)}
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{decodeHtml(g.parent_group) || "—"}</TableCell>
                           <TableCell className="text-muted-foreground">
