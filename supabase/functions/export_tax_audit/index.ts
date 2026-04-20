@@ -275,10 +275,23 @@ function resolveAutoMarkers(
     const rowNum = parseInt(addrM[2], 10);
 
     const text = cellTextValue(attrs, inner, ss).trim();
-    // Match "AUTO" exactly OR cells like "_____ AUTO" / "________ AUTO" used in sign-off sections
+    // Match "AUTO" exactly OR cells like "_____ AUTO" / "________ AUTO" used in sign-off sections.
+    // Also matches "[Audit firm name]_   AUTO" and "[Signing partner Name]_ AUTO" style cells.
     if (text === "AUTO" || (text.endsWith("AUTO") && text.includes("_"))) {
       if (!rowAutos.has(rowNum)) rowAutos.set(rowNum, []);
       rowAutos.get(rowNum)!.push(addr);
+      // For cells like "[Audit firm name]_   AUTO" the label is EMBEDDED in the AUTO cell text.
+      // Extract it (strip trailing underscore-run + AUTO suffix, strip [ ] brackets) and add to
+      // rowTexts so the pattern-match step can resolve it correctly without relying on a
+      // separate label cell in the same row.
+      const embeddedLabel = text
+        .replace(/\s*_+\s*AUTO\s*$/i, "")   // strip "___  AUTO" suffix
+        .replace(/^\[/, "").replace(/\]$/, "") // strip outer [ ]
+        .trim();
+      if (embeddedLabel) {
+        if (!rowTexts.has(rowNum)) rowTexts.set(rowNum, []);
+        rowTexts.get(rowNum)!.push(embeddedLabel);
+      }
     } else if (text) {
       if (!rowTexts.has(rowNum)) rowTexts.set(rowNum, []);
       rowTexts.get(rowNum)!.push(text);
@@ -899,96 +912,106 @@ serve(async (req) => {
     // We write them by hardcoded address so they always appear in the export.
 
     if (form_type === "3CA-3CD") {
-      // Form_3CA sign-off block — these cells hold previously-exported str values
-      // and must be overwritten with the current engagement's firm/partner details.
-      // Cell layout (sign-off, right-aligned block):
-      //   Row 16: "For," | F16=FIRM_NAME  G16=FIRM_NAME
-      //   Row 17: "Chartered Accountants"
-      //   Row 18: "Firm Regi. No.:" | G18=FRN
-      //   Row 19: "Place:" | C19=PLACE
-      //   Row 20: "Date:" | C20=SIGN_DATE  (empty shared-string cell)
-      //   Row 21: "UDIN:" | C21=UDIN  D21=PARTNER_NAME
-      //   Row 24: "Partner"
-      //   Row 25: "Membership No.:" | G25=MEMBERSHIP_NO
-      addUpdate("Form_3CA", "F16", autoValues.FIRM_NAME);
+      // ── Form_3CA sign-off block (correct template cell addresses) ────────────
+      // Verified from K:\SOFTWARE\AUDIT\AUDIT REPORT\FORMAT AR_NCE & LLP\3CA-3CD.xlsx
+      //   Row 16: E16="For,"  G16="[Audit firm name]_ AUTO"  → FIRM_NAME
+      //   Row 17: G17="Chartered Accountants"
+      //   Row 18: F18="Firm Regi. No.:"  G18="________ AUTO"  → FRN
+      //   Row 19: B19="Place :"  C19="________ AUTO"  → PLACE
+      //   Row 20: B20="Date  :"  C20="________ AUTO"  → SIGN_DATE
+      //   Row 21: B21="UDIN :"   C21="________ AUTO"  → UDIN
+      //   Row 22: G22="[Signing partner Name]_ AUTO"  → PARTNER_NAME
+      //   Row 23: G23="Partner"
+      //   Row 24: F24="Membership No.: "  G24="_________ AUTO"  → MEMBERSHIP_NO
+      //
+      // AUTO scan (enhanced) handles G16/G18/C19/C20/C21/G22/G24 via label matching.
+      // Writing these directly as belt-and-suspenders ensures correct output even if
+      // the AUTO scan label matching doesn't resolve a particular cell.
       addUpdate("Form_3CA", "G16", autoValues.FIRM_NAME);
       addUpdate("Form_3CA", "G18", autoValues.FRN);
       addUpdate("Form_3CA", "C19", autoValues.PLACE);
       addUpdate("Form_3CA", "C20", autoValues.SIGN_DATE);
       addUpdate("Form_3CA", "C21", autoValues.UDIN);
-      addUpdate("Form_3CA", "D21", autoValues.PARTNER_NAME);
-      addUpdate("Form_3CA", "G25", autoValues.MEMBERSHIP_NO);
+      addUpdate("Form_3CA", "G22", autoValues.PARTNER_NAME);
+      addUpdate("Form_3CA", "G24", autoValues.MEMBERSHIP_NO);
 
-      // ANX_Form3CA sign-off block
-      // Row 23: "For," | F23=FIRM_NAME  G23=formula(FIRM_NAME)
-      // Row 25: "Firm Regi. No.:" | G25=FRN
-      // Row 26: "Place:" | C26=PLACE
-      // Row 27: "Date:" | C27=SIGN_DATE
-      // Row 28: "UDIN:" | C28=UDIN  D28=PARTNER_NAME
-      // Row 29: A29=formula(PARTNER_NAME)
-      // Row 31: "Membership No.:" | G31=MEMBERSHIP_NO
-      addUpdate("ANX_Form3CA", "F23", autoValues.FIRM_NAME);
-      addUpdate("ANX_Form3CA", "G25", autoValues.FRN);
-      addUpdate("ANX_Form3CA", "C26", autoValues.PLACE);
-      addUpdate("ANX_Form3CA", "C27", autoValues.SIGN_DATE);
-      addUpdate("ANX_Form3CA", "C28", autoValues.UDIN);
-      addUpdate("ANX_Form3CA", "D28", autoValues.PARTNER_NAME);
-      addUpdate("ANX_Form3CA", "G31", autoValues.MEMBERSHIP_NO);
+      // ── Form_3CA ANNEX sign-off block ────────────────────────────────────────
+      // Verified from correct template:
+      //   B4="ENTITY_NAME" (literal shared string — no AUTO)
+      //   E24="For,"  G24="[Audit firm name]_ AUTO"  → FIRM_NAME
+      //   G25="Chartered Accountants"
+      //   F26="Firm Regi. No.:"  G26="________ AUTO"  → FRN
+      //   B27="Place: "  C27="________ AUTO"  → PLACE
+      //   B28="Date: "   C28="________ AUTO"  → SIGN_DATE
+      //   B29="UDIN:"    C29="________ AUTO"  → UDIN
+      //   G30="[Signing partner Name]_ AUTO"  → PARTNER_NAME
+      //   G31="Partner"
+      //   F32="Membership No.: "  G32="_________ AUTO"  → MEMBERSHIP_NO
+      addUpdate("Form_3CA ANNEX", "B4",  autoValues.ENTITY_NAME);
+      addUpdate("Form_3CA ANNEX", "G24", autoValues.FIRM_NAME);
+      addUpdate("Form_3CA ANNEX", "G26", autoValues.FRN);
+      addUpdate("Form_3CA ANNEX", "C27", autoValues.PLACE);
+      addUpdate("Form_3CA ANNEX", "C28", autoValues.SIGN_DATE);
+      addUpdate("Form_3CA ANNEX", "C29", autoValues.UDIN);
+      addUpdate("Form_3CA ANNEX", "G30", autoValues.PARTNER_NAME);
+      addUpdate("Form_3CA ANNEX", "G32", autoValues.MEMBERSHIP_NO);
 
-      // Form_3CA body paragraphs — read from saved form_3ca_paragraphs on the engagement;
-      // fall back to default statutory text built from current client + firm data.
-      // These shared-string cells already contain previously-exported text and will not
-      // be updated by the shared-string placeholder replacement pass, so we write them
-      // directly so every export reflects the current client data.
+      // ── Form_3CA body paragraphs ─────────────────────────────────────────────
+      // B9 (ss[431]) contains statutory text with placeholders:
+      //   [NAME AND ADDRESS OF ASSESSEE WITH PAN], [NAME OF AUDIT FIRM],
+      //   [APPLICABLE ACT], [DATE]
+      // The sharedStrings.xml replacement pass below handles these automatically.
+      // Only override B9/B11/B13 if the user has saved custom paragraph text.
       const savedParas3CA = ((eng as any).form_3ca_paragraphs as Record<string, string>) || {};
-      const act3CA = (eng as any).form_3ca_applicable_act || "Companies Act, 2013";
-      const panPart3CA = client.pan ? ` (PAN: ${client.pan})` : "";
-      const addrPart3CA = address ? `, ${address}` : "";
-      // Use report date if available; fall back to sign date or today
-      const dateForPara = autoValues.REPORT_DATE || autoValues.SIGN_DATE ||
-        new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
-
-      const p1_3CA = savedParas3CA.p1 ||
-        `1. We report that the statutory audit of M/s. ${client.name || ""}${addrPart3CA}${panPart3CA}` +
-        ` was conducted by ${firmName} in pursuance of the provisions of the ${act3CA},` +
-        ` and We annex hereto a copy of the audit report dated ${dateForPara} along with a copy of each` +
-        ` of the audited Statement of Profit and Loss Account, the audited Balance Sheet and documents` +
-        ` declared by the said Act to be part of, or annexed to, such accounts.`;
-      const p2_3CA = savedParas3CA.p2 ||
-        `2. The statement of particulars required to be furnished under section 44AB is annexed` +
-        ` herewith in Form No. 3CD.`;
-      const p3_3CA = savedParas3CA.p3 ||
-        `3. In  our opinion and to the best of our information and according to examination of` +
-        ` books of account including other relevant documents and explanations given to us, the` +
-        ` particulars given in the said Form No. 3CD are true and correct as per Annexure attached.`;
-
-      addUpdate("Form_3CA", "B9",  p1_3CA);
-      addUpdate("Form_3CA", "B11", p2_3CA);
-      addUpdate("Form_3CA", "B13", p3_3CA);
+      if (savedParas3CA.p1) addUpdate("Form_3CA", "B9",  savedParas3CA.p1);
+      if (savedParas3CA.p2) addUpdate("Form_3CA", "B11", savedParas3CA.p2);
+      if (savedParas3CA.p3) addUpdate("Form_3CA", "B13", savedParas3CA.p3);
     }
 
     if (form_type === "3CB-3CD") {
-      // Form_3CB display cells (assessee info + sign-off block)
+      // ── Form_3CB assessee info + sign-off block ──────────────────────────────
+      // Verified from K:\SOFTWARE\AUDIT\AUDIT REPORT\FORMAT AR_NCE & LLP\3CB-3CD.xlsx
+      //   D10="ENTITY_NAME"          → ENTITY_NAME
+      //   D12="ENTITY_ADDRESS"       → ENTITY_ADDRESS
+      //   D15="ENTITY_PAN"           → PAN
+      //   G38="For,"  I38="___AUDIT FIRM_NAME"  → FIRM_NAME
+      //   I39="Chartered Accountants"
+      //   I40="FRN: _______"         → FRN (whole cell replaced with FRN value)
+      //   B41="Place: "  C41="[PLACE]"  → PLACE
+      //   B42="Date: "   C42="[REPORT DATE]"  → SIGN_DATE
+      //   B43="UDIN:"    C43="[UDIN]"  → UDIN
+      //   I44="[Signing partner Name]"  → PARTNER_NAME
+      //   I45="Partner"
+      //   G46="Membership No.: "  I46="_____[Membership No]"  → MEMBERSHIP_NO
       addUpdate("Form_3CB", "D10", autoValues.ENTITY_NAME);
       addUpdate("Form_3CB", "D12", autoValues.ENTITY_ADDRESS);
       addUpdate("Form_3CB", "D15", autoValues.PAN);
-      addUpdate("Form_3CB", "F38", autoValues.FIRM_NAME);
-      addUpdate("Form_3CB", "H40", autoValues.FRN);
+      addUpdate("Form_3CB", "I38", autoValues.FIRM_NAME);
+      addUpdate("Form_3CB", "I40", autoValues.FRN);
       addUpdate("Form_3CB", "C41", autoValues.PLACE);
-      addUpdate("Form_3CB", "H46", autoValues.MEMBERSHIP_NO);
-      // Sign-off date + UDIN on Form_3CB (C42 = date row, C43 = UDIN row)
       addUpdate("Form_3CB", "C42", autoValues.SIGN_DATE);
       addUpdate("Form_3CB", "C43", autoValues.UDIN);
-      // ANX_Form3CB sign-off block (formula cells that returned 0 due to inlineStr)
-      addUpdate("ANX_Form3CB", "A21", autoValues.FIRM_NAME);
-      addUpdate("ANX_Form3CB", "A27", autoValues.PARTNER_NAME);
-      addUpdate("ANX_Form3CB", "G21", autoValues.FIRM_NAME);
-      addUpdate("ANX_Form3CB", "G23", autoValues.FRN);
-      addUpdate("ANX_Form3CB", "G27", autoValues.PARTNER_NAME);
-      addUpdate("ANX_Form3CB", "C24", autoValues.PLACE);
-      addUpdate("ANX_Form3CB", "C25", autoValues.SIGN_DATE);
-      addUpdate("ANX_Form3CB", "C26", autoValues.UDIN);
-      addUpdate("ANX_Form3CB", "F29", autoValues.MEMBERSHIP_NO);
+      addUpdate("Form_3CB", "I44", autoValues.PARTNER_NAME);
+      addUpdate("Form_3CB", "I46", autoValues.MEMBERSHIP_NO);
+
+      // ── Form_3CB ANNEX sign-off block ─────────────────────────────────────────
+      // Verified from correct template (sheet name: "Form_3CB ANNEX"):
+      //   F22="For,"  G22="AUDIT FIRM_NAME"  → FIRM_NAME
+      //   G23="Chartered Accountants"
+      //   G24="FRN: ___________"  → FRN
+      //   B25="Place: "  C25="[PLACE]"  → PLACE
+      //   B26="Date: "   C26="[REPORT DATE]"  → SIGN_DATE
+      //   B27="UDIN:"    C27="[UDIN]"  → UDIN
+      //   G28="[Signing partner Name]"  → PARTNER_NAME
+      //   G29="Partner"
+      //   F30="Membership No.: "  G30="[Membership No]"  → MEMBERSHIP_NO
+      addUpdate("Form_3CB ANNEX", "G22", autoValues.FIRM_NAME);
+      addUpdate("Form_3CB ANNEX", "G24", autoValues.FRN);
+      addUpdate("Form_3CB ANNEX", "C25", autoValues.PLACE);
+      addUpdate("Form_3CB ANNEX", "C26", autoValues.SIGN_DATE);
+      addUpdate("Form_3CB ANNEX", "C27", autoValues.UDIN);
+      addUpdate("Form_3CB ANNEX", "G28", autoValues.PARTNER_NAME);
+      addUpdate("Form_3CB ANNEX", "G30", autoValues.MEMBERSHIP_NO);
     }
 
     // Form_3CD signature block — same cells exist in both 3CA-3CD and 3CB-3CD
