@@ -8,11 +8,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties } from "lucide-react";
+import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties, Award, ClipboardList } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
 import { NCEPPESchedule } from "@/components/stage8/NCEPPESchedule";
+import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
+import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
 
 // Fix (Issue 4): Mark notes that are exclusive to corporate entities (Private/Public Ltd).
 // These are filtered out when isCorporate = false.
@@ -344,7 +346,7 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
     </div>
   ); // end noteEditorBody
 
-  // ── NCE: wrap in 4-tab structure ──────────────────────────────────────────
+  // ── NCE: wrap in 6-tab structure ──────────────────────────────────────────
   if (isNonCorporate) {
     return (
       <Tabs defaultValue="notes" className="space-y-4">
@@ -360,6 +362,12 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
           </TabsTrigger>
           <TabsTrigger value="ppe" className="gap-1.5">
             <TableProperties size={13} /> PPE Schedule
+          </TabsTrigger>
+          <TabsTrigger value="client-certificate" className="gap-1.5">
+            <Award size={13} /> Client Certificate
+          </TabsTrigger>
+          <TabsTrigger value="management-letter" className="gap-1.5">
+            <ClipboardList size={13} /> Management Letter
           </TabsTrigger>
         </TabsList>
 
@@ -380,6 +388,16 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         <TabsContent value="ppe">
           <NCEPPESchedule engagementId={engagementId} />
         </TabsContent>
+
+        {/* Tab 5 — Client Certificate */}
+        <TabsContent value="client-certificate">
+          <NCEClientCertificate engagementId={engagementId} />
+        </TabsContent>
+
+        {/* Tab 6 — Management Letter */}
+        <TabsContent value="management-letter">
+          <NCEManagementLetter engagementId={engagementId} />
+        </TabsContent>
       </Tabs>
     );
   }
@@ -389,8 +407,10 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// NCE Tab implementations (all stubs replaced — real components below)
-// NCECapitalAccount — @/components/stage8/NCECapitalAccount
-// NCEDetailedNotes  — @/components/stage8/NCEDetailedNotes
-// NCEPPESchedule    — @/components/stage8/NCEPPESchedule
+// NCE Tab implementations
+// NCECapitalAccount     — @/components/stage8/NCECapitalAccount
+// NCEDetailedNotes      — @/components/stage8/NCEDetailedNotes
+// NCEPPESchedule        — @/components/stage8/NCEPPESchedule
+// NCEClientCertificate  — @/components/stage8/NCEClientCertificate
+// NCEManagementLetter   — @/components/stage8/NCEManagementLetter
 // ═══════════════════════════════════════════════════════════════════════════
