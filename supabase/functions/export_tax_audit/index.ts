@@ -575,6 +575,7 @@ serve(async (req) => {
     let partnerUser: Record<string, any> = {};
     const partnerId = (eng as any).partner_id;
     if (partnerId) {
+      // users table has icai_reg_no; also select name for partner display
       const { data: pu } = await supabase
         .from("users")
         .select("name, icai_reg_no")
@@ -582,6 +583,8 @@ serve(async (req) => {
         .single();
       if (pu) partnerUser = pu as Record<string, any>;
     }
+    // Also try engagement.partner_name (saved directly on audit_engagements)
+    const engPartnerName = (eng as any).partner_name as string | null;
 
     const { prev, ay, bsDate } = fyToRange(fy);
 
@@ -609,26 +612,30 @@ serve(async (req) => {
     // Report date: form_3ca_3cb.data.audit_report_date
     //   → engagement.form_3ca_report_date (new column, saved by UI)
     //   → engagement.sign_off_date (legacy fallback)
+    //   → today (final fallback so the field is never blank)
     const reportDate = formatDate(
       form3Data?.audit_report_date ||
       (tab === "3ca" ? (eng as any).form_3ca_report_date : null) ||
-      (eng as any).sign_off_date || ""
+      (eng as any).sign_off_date ||
+      new Date().toISOString().split("T")[0]
     );
     // Sign date: form_3ca_3cb.data.signature_date
     //   → engagement.form_3ca_signature_date / form_3cb_signature_date (new columns)
     //   → engagement.sign_off_date (legacy fallback)
+    //   → today (final fallback so the sign-off date is never blank)
     const signDate = formatDate(
       form3Data?.signature_date ||
       (tab === "3ca"
         ? (eng as any).form_3ca_signature_date
         : (eng as any).form_3cb_signature_date) ||
-      (eng as any).sign_off_date || ""
+      (eng as any).sign_off_date ||
+      new Date().toISOString().split("T")[0]
     );
 
     // ── Resolve firm-level sign-off fields with fallbacks ─────────────────────
     // Priority: audit_firms → firms (CA practice) → partnerUser (signing user)
     const firmName    = firm.name        || caFirm.display_name || caFirm.name || "";
-    const partnerName = firm.partner_name || partnerUser.name   || "";
+    const partnerName = firm.partner_name || partnerUser.name || engPartnerName || "";
     const frn         = firm.icai_reg_no  || caFirm.icai_firm_reg_no || caFirm.icai_reg_no || "";
     const membershipNo= firm.partner_icai_no || partnerUser.icai_reg_no || "";
     // City: from audit_firms, or from firms.address JSON (may have a "city" key)
@@ -887,9 +894,78 @@ serve(async (req) => {
     }
 
     // ── Direct cell writes (belt-and-suspenders for cells with no formula/AUTO) ─
-    // These cells in the template are plain inlineStr placeholders with no formula
+    // These cells in the template are plain inlineStr/str placeholders with no formula
     // and no AUTO marker — the named-range pass and AUTO scan miss them entirely.
     // We write them by hardcoded address so they always appear in the export.
+
+    if (form_type === "3CA-3CD") {
+      // Form_3CA sign-off block — these cells hold previously-exported str values
+      // and must be overwritten with the current engagement's firm/partner details.
+      // Cell layout (sign-off, right-aligned block):
+      //   Row 16: "For," | F16=FIRM_NAME  G16=FIRM_NAME
+      //   Row 17: "Chartered Accountants"
+      //   Row 18: "Firm Regi. No.:" | G18=FRN
+      //   Row 19: "Place:" | C19=PLACE
+      //   Row 20: "Date:" | C20=SIGN_DATE  (empty shared-string cell)
+      //   Row 21: "UDIN:" | C21=UDIN  D21=PARTNER_NAME
+      //   Row 24: "Partner"
+      //   Row 25: "Membership No.:" | G25=MEMBERSHIP_NO
+      addUpdate("Form_3CA", "F16", autoValues.FIRM_NAME);
+      addUpdate("Form_3CA", "G16", autoValues.FIRM_NAME);
+      addUpdate("Form_3CA", "G18", autoValues.FRN);
+      addUpdate("Form_3CA", "C19", autoValues.PLACE);
+      addUpdate("Form_3CA", "C20", autoValues.SIGN_DATE);
+      addUpdate("Form_3CA", "C21", autoValues.UDIN);
+      addUpdate("Form_3CA", "D21", autoValues.PARTNER_NAME);
+      addUpdate("Form_3CA", "G25", autoValues.MEMBERSHIP_NO);
+
+      // ANX_Form3CA sign-off block
+      // Row 23: "For," | F23=FIRM_NAME  G23=formula(FIRM_NAME)
+      // Row 25: "Firm Regi. No.:" | G25=FRN
+      // Row 26: "Place:" | C26=PLACE
+      // Row 27: "Date:" | C27=SIGN_DATE
+      // Row 28: "UDIN:" | C28=UDIN  D28=PARTNER_NAME
+      // Row 29: A29=formula(PARTNER_NAME)
+      // Row 31: "Membership No.:" | G31=MEMBERSHIP_NO
+      addUpdate("ANX_Form3CA", "F23", autoValues.FIRM_NAME);
+      addUpdate("ANX_Form3CA", "G25", autoValues.FRN);
+      addUpdate("ANX_Form3CA", "C26", autoValues.PLACE);
+      addUpdate("ANX_Form3CA", "C27", autoValues.SIGN_DATE);
+      addUpdate("ANX_Form3CA", "C28", autoValues.UDIN);
+      addUpdate("ANX_Form3CA", "D28", autoValues.PARTNER_NAME);
+      addUpdate("ANX_Form3CA", "G31", autoValues.MEMBERSHIP_NO);
+
+      // Form_3CA body paragraphs — read from saved form_3ca_paragraphs on the engagement;
+      // fall back to default statutory text built from current client + firm data.
+      // These shared-string cells already contain previously-exported text and will not
+      // be updated by the shared-string placeholder replacement pass, so we write them
+      // directly so every export reflects the current client data.
+      const savedParas3CA = ((eng as any).form_3ca_paragraphs as Record<string, string>) || {};
+      const act3CA = (eng as any).form_3ca_applicable_act || "Companies Act, 2013";
+      const panPart3CA = client.pan ? ` (PAN: ${client.pan})` : "";
+      const addrPart3CA = address ? `, ${address}` : "";
+      // Use report date if available; fall back to sign date or today
+      const dateForPara = autoValues.REPORT_DATE || autoValues.SIGN_DATE ||
+        new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+      const p1_3CA = savedParas3CA.p1 ||
+        `1. We report that the statutory audit of M/s. ${client.name || ""}${addrPart3CA}${panPart3CA}` +
+        ` was conducted by ${firmName} in pursuance of the provisions of the ${act3CA},` +
+        ` and We annex hereto a copy of the audit report dated ${dateForPara} along with a copy of each` +
+        ` of the audited Statement of Profit and Loss Account, the audited Balance Sheet and documents` +
+        ` declared by the said Act to be part of, or annexed to, such accounts.`;
+      const p2_3CA = savedParas3CA.p2 ||
+        `2. The statement of particulars required to be furnished under section 44AB is annexed` +
+        ` herewith in Form No. 3CD.`;
+      const p3_3CA = savedParas3CA.p3 ||
+        `3. In  our opinion and to the best of our information and according to examination of` +
+        ` books of account including other relevant documents and explanations given to us, the` +
+        ` particulars given in the said Form No. 3CD are true and correct as per Annexure attached.`;
+
+      addUpdate("Form_3CA", "B9",  p1_3CA);
+      addUpdate("Form_3CA", "B11", p2_3CA);
+      addUpdate("Form_3CA", "B13", p3_3CA);
+    }
 
     if (form_type === "3CB-3CD") {
       // Form_3CB display cells (assessee info + sign-off block)
@@ -921,6 +997,19 @@ serve(async (req) => {
     addUpdate("Form_3CD", "I243", autoValues.MEMBERSHIP_NO);
 
     // 01_Control header block — always write for both form types (sign-off visibility)
+    // Entity + sign-off fields (named ranges resolve to F-column cells in 01_Control;
+    // we belt-and-suspenders by writing to the named-range targets AND the C-column
+    // display cells that the sheet uses for on-screen audit trail display).
+    addUpdate("01_Control", "C7",  autoValues.ENTITY_NAME);
+    addUpdate("01_Control", "C9",  autoValues.PAN);
+    addUpdate("01_Control", "C14", autoValues.PREVIOUS_YEAR);
+    addUpdate("01_Control", "C15", autoValues.ASSESSMENT_YEAR);
+    addUpdate("01_Control", "C20", autoValues.FIRM_NAME);
+    addUpdate("01_Control", "C21", autoValues.PARTNER_NAME);
+    addUpdate("01_Control", "C22", autoValues.FRN);
+    addUpdate("01_Control", "C23", autoValues.MEMBERSHIP_NO);
+    addUpdate("01_Control", "C26", autoValues.PLACE);
+    // F-column: named-range targets (BS_DATE_0→G16 already handled; F24=UDIN, F25=REPORT_DATE)
     // NOTE: F16/F17 are label cells ("31 March,") — the BS_DATE value cell is G16
     // (named range BS_DATE_0 → 01_Control!$G$16) which is filled by the NR pass.
     addUpdate("01_Control", "G16", autoValues.BS_DATE);
@@ -988,9 +1077,17 @@ serve(async (req) => {
       if (autoValues.FIRM_NAME) {
         ssXml = ssXml.replace(/\[NAME OF AUDIT FIRM\]/g, xmlEsc(autoValues.FIRM_NAME));
       }
-      if (autoValues.REPORT_DATE) {
+      const reportDateForPlaceholder = autoValues.REPORT_DATE || autoValues.SIGN_DATE ||
+        new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+      if (reportDateForPlaceholder) {
         // "[DATE]" in "audit report dated [DATE]"
-        ssXml = ssXml.replace(/\[DATE\]/g, xmlEsc(autoValues.REPORT_DATE));
+        ssXml = ssXml.replace(/\[DATE\]/g, xmlEsc(reportDateForPlaceholder));
+        // Also ensure autoValues.REPORT_DATE is set for downstream uses (e.g. direct cell writes)
+        if (!autoValues.REPORT_DATE) autoValues.REPORT_DATE = reportDateForPlaceholder;
+      }
+      // "[NAME OF CLIENT]" — ANX_Form3CA annexure header uses this placeholder
+      if (autoValues.ENTITY_NAME) {
+        ssXml = ssXml.replace(/\[NAME OF CLIENT\]/g, xmlEsc(autoValues.ENTITY_NAME));
       }
       // [APPLICABLE ACT] — saved by Form3CA tab into form_3ca_applicable_act
       const applicableAct = (eng as any).form_3ca_applicable_act
