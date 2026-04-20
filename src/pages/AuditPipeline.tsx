@@ -17,6 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { ChevronsUpDown, Check } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -201,6 +204,10 @@ export default function AuditPipeline() {
   // Stage 8: non-company clients can choose 3CA+3CD (audited under another law) or 3CB+3CD
   const [nonCorpFormChoice, setNonCorpFormChoice] = useState<"3ca" | "3cb">("3cb");
 
+  // Client combobox (searchable dropdown in Create Engagement dialog)
+  const [clientComboOpen, setClientComboOpen] = useState(false);
+  const [clientSearch, setClientSearch] = useState("");
+
   // ─── Clients with audit services enabled (for new engagement dropdown) ───
   // Mirrors the same four-source logic as useAuditContext so the dialog list
   // always matches the Audit Dashboard:
@@ -214,11 +221,12 @@ export default function AuditPipeline() {
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // 1. All active non-draft clients — include direct audit columns on clients table
+      // 1. All non-deleted clients — include is_draft so we can let audit-classified
+      //    draft clients through (wizard-created clients that haven't completed all
+      //    wizard steps but already have Audit classification + audit setup saved).
       let clientQuery = supabase
         .from("clients")
-        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
-        .eq("is_draft", false)
+        .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
@@ -290,6 +298,7 @@ export default function AuditPipeline() {
             id:          c.id as string,
             name:        (c.name as string) ?? "",
             entity_type: (c.entity_type as string) ?? "",
+            is_draft:    !!c.is_draft,
             tax_audit_type:              (c.tax_audit_type as string) ?? null,
             // merge all sources
             statutory_audit_applicable:  hasStatDirect || !!setup.statutory_audit_applicable || !!svc.hasStat,
@@ -301,13 +310,19 @@ export default function AuditPipeline() {
             has_internal_audit_service:  !!svc.hasInternal,
           };
         })
-        .filter(c =>
-          auditClassifiedIds.has(c.id) ||
-          c.statutory_audit_applicable || c.tax_audit_applicable ||
-          c.internal_audit_applicable  || c.stock_audit_applicable ||
-          c.has_statutory_service      || c.has_tax_audit_service  ||
-          c.has_internal_audit_service
-        );
+        .filter(c => {
+          const hasAuditFlag =
+            auditClassifiedIds.has(c.id) ||
+            c.statutory_audit_applicable || c.tax_audit_applicable ||
+            c.internal_audit_applicable  || c.stock_audit_applicable ||
+            c.has_statutory_service      || c.has_tax_audit_service  ||
+            c.has_internal_audit_service;
+          if (!hasAuditFlag) return false;
+          // Draft clients: only show if they have Audit classification and a name
+          // (wizard-created clients that saved audit setup but haven't fully activated yet)
+          if (c.is_draft) return auditClassifiedIds.has(c.id) && Boolean(c.name?.trim());
+          return true;
+        });
     },
     enabled: !!user?.id,
   });
@@ -731,23 +746,59 @@ export default function AuditPipeline() {
                       {(eligibleClients || []).find(c => c.id === form1A.client_id)?.name || engagement?.clients?.name || form1A.client_id}
                     </div>
                   ) : (
-                    <Select value={form1A.client_id} onValueChange={v => setForm1A(f => ({ ...f, client_id: v }))}>
-                      <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                      <SelectContent>
-                        {(eligibleClients || []).length === 0 ? (
-                          <div className="px-3 py-2 space-y-1">
-                            <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
-                            <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit via Client → Audit Setup.</p>
-                          </div>
-                        ) : (
-                          (eligibleClients || []).map(c => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
+                    <Popover open={clientComboOpen} onOpenChange={setClientComboOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={clientComboOpen}
+                          className="w-full justify-between font-normal"
+                        >
+                          <span className="truncate">
+                            {form1A.client_id
+                              ? ((eligibleClients || []).find(c => c.id === form1A.client_id)?.name ?? "Select client")
+                              : "Select client"}
+                          </span>
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[340px] p-0" align="start">
+                        <Command>
+                          <CommandInput
+                            placeholder="Search client..."
+                            value={clientSearch}
+                            onValueChange={setClientSearch}
+                          />
+                          <CommandList>
+                            <CommandEmpty>No client found.</CommandEmpty>
+                            <CommandGroup>
+                              {(eligibleClients || [])
+                                .filter(c =>
+                                  !clientSearch.trim() ||
+                                  c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+                                  (c.entity_type || "").toLowerCase().includes(clientSearch.toLowerCase())
+                                )
+                                .map(c => (
+                                  <CommandItem
+                                    key={c.id}
+                                    value={c.id}
+                                    onSelect={(v) => {
+                                      setForm1A(f => ({ ...f, client_id: v }));
+                                      setClientComboOpen(false);
+                                      setClientSearch("");
+                                    }}
+                                  >
+                                    <Check className={cn("mr-2 h-4 w-4", form1A.client_id === c.id ? "opacity-100" : "opacity-0")} />
+                                    <span className="truncate">
+                                      {c.name}{c.entity_type ? ` (${c.entity_type})` : ""}
+                                    </span>
+                                  </CommandItem>
+                                ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   )}
                 </div>
                 <div>
@@ -1190,26 +1241,60 @@ export default function AuditPipeline() {
 
             <div>
               <Label>Client *</Label>
-              <Select value={form1A.client_id} onValueChange={v => {
-                const client = (eligibleClients || []).find(c => c.id === v);
-                setForm1A(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
-              }}>
-                <SelectTrigger><SelectValue placeholder="Select client" /></SelectTrigger>
-                <SelectContent>
-                  {(eligibleClients || []).length === 0 ? (
-                    <div className="px-3 py-2 space-y-1">
-                      <p className="text-sm font-medium text-muted-foreground">No audit-eligible clients found.</p>
-                      <p className="text-xs text-muted-foreground">Enable Statutory or Tax Audit for a client via Client → Audit Setup, or set their classification to "Audit" in Client → Classification.</p>
-                    </div>
-                  ) : (
-                    (eligibleClients || []).map(c => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name} {c.entity_type ? `(${c.entity_type})` : ""}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <Popover open={clientComboOpen} onOpenChange={setClientComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={clientComboOpen}
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate">
+                      {form1A.client_id
+                        ? ((eligibleClients || []).find(c => c.id === form1A.client_id)?.name ?? "Select client")
+                        : "Select client"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[340px] p-0" align="start">
+                  <Command>
+                    <CommandInput
+                      placeholder="Search client..."
+                      value={clientSearch}
+                      onValueChange={setClientSearch}
+                    />
+                    <CommandList>
+                      <CommandEmpty>No client found.</CommandEmpty>
+                      <CommandGroup>
+                        {(eligibleClients || [])
+                          .filter(c =>
+                            !clientSearch.trim() ||
+                            c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+                            (c.entity_type || "").toLowerCase().includes(clientSearch.toLowerCase())
+                          )
+                          .map(c => (
+                            <CommandItem
+                              key={c.id}
+                              value={c.id}
+                              onSelect={(v) => {
+                                const client = (eligibleClients || []).find(cl => cl.id === v);
+                                setForm1A(f => ({ ...f, client_id: v, entity_type: client?.entity_type || f.entity_type }));
+                                setClientComboOpen(false);
+                                setClientSearch("");
+                              }}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", form1A.client_id === c.id ? "opacity-100" : "opacity-0")} />
+                              <span className="truncate">
+                                {c.name}{c.entity_type ? ` (${c.entity_type})` : ""}
+                              </span>
+                            </CommandItem>
+                          ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div>
               <Label>Financial Year *</Label>
