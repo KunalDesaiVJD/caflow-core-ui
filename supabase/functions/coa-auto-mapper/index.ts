@@ -91,7 +91,7 @@ serve(async (req) => {
     // ── Load engagement + client to get entity_type ─────────────────────────
     const { data: eng } = await admin
       .from("audit_engagements")
-      .select("id, client_id, firm_id, clients:client_id(id, entity_type)")
+      .select("id, client_id, firm_id, financial_year, clients:client_id(id, entity_type)")
       .eq("id", engagementId)
       .single();
 
@@ -100,12 +100,44 @@ serve(async (req) => {
       (eng.clients as any)?.entity_type ?? "corporate",
     );
     const engFirmId: string | null = (eng as any).firm_id ?? firmId;
+    const clientId: string | null  = (eng as any).client_id ?? null;
+    const fy: string | null        = (eng as any).financial_year ?? null;
 
-    // ── Load tally ledgers for this engagement ──────────────────────────────
+    // ── Resolve the TALLY engagement_id ─────────────────────────────────────
+    // tally_ledgers / tally_trial_balance / tally_vouchers are keyed to the
+    // separate `engagements` table, not `audit_engagements`. Resolve by
+    // client_id + financial_year, with tally_groups.engagement_id as fallback.
+    let tallyEngId: string | null = null;
+    if (clientId && fy) {
+      const { data: tEng } = await admin
+        .from("engagements")
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("financial_year", fy)
+        .maybeSingle();
+      tallyEngId = (tEng as any)?.id ?? null;
+    }
+    if (!tallyEngId && clientId) {
+      const { data: tg } = await admin
+        .from("tally_groups")
+        .select("engagement_id")
+        .eq("client_id", clientId)
+        .limit(1)
+        .maybeSingle();
+      tallyEngId = (tg as any)?.engagement_id ?? null;
+    }
+    if (!tallyEngId) {
+      return json({
+        ok: true, total: 0, auto: 0, heuristic: 0, ai: 0, intelligence: 0,
+        warning: "No Tally data linked to this engagement. Import trial balance first.",
+      });
+    }
+
+    // ── Load tally ledgers for the Tally engagement ─────────────────────────
     const { data: ledgersRaw } = await admin
       .from("tally_ledgers")
       .select("id, ledger_name, parent_group, closing_balance")
-      .eq("engagement_id", engagementId);
+      .eq("engagement_id", tallyEngId);
 
     const ledgers: Ledger[] = (ledgersRaw ?? [])
       .filter((l: any) => l.ledger_name && String(l.ledger_name).trim() !== "")
