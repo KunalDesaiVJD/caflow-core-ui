@@ -248,45 +248,54 @@ export const StepAdvancedInfo = ({
 
     setSavingClassification(true);
     try {
-      // ── Validation 3: conflict check (history row already exists for this FY)
-      const { data: conflict, error: conflictErr } = await (supabase as any)
-        .from("client_classification_history")
-        .select("id")
-        .eq("client_id", clientId)
-        .eq("effective_from_fy", effectiveFromFY);
-      if (conflictErr) throw conflictErr;
-      if (conflict && conflict.length > 0) {
-        toast({
-          title: `A classification change already exists for FY ${effectiveFromFY}`,
-          variant: "destructive",
-        });
-        setSavingClassification(false);
-        return;
-      }
-
       // Resolve current auth user for changed_by audit field
       const { data: authData } = await supabase.auth.getUser();
       const currentUserId = authData?.user?.id ?? null;
 
-      // ── STEP 1: Insert history row ─────────────────────────────────────
-      // NOTE on column names: production schema uses new_classification +
-      // effective_from_fy (both NOT NULL).  previous_classification is a
-      // legacy nullable column; old_classification was added later.
-      // responsible_person is legacy text/uuid; responsible_person_id is the
-      // current FK column.  We populate both pairs for maximum compatibility.
-      const { error: historyError } = await (supabase as any)
+      // ── STEP 1: Upsert history row ─────────────────────────────────────
+      // Schema note: production uses new_classification + effective_from_fy
+      // (both NOT NULL), plus legacy previous_classification / responsible_person
+      // columns alongside the newer old_classification / responsible_person_id.
+      // We populate both pairs for compatibility.
+      //
+      // Behaviour note: if a history row already exists for this (client,
+      // effective_from_fy), we UPDATE it in place instead of failing.  This
+      // makes the flow idempotent — essential for correcting a mis-picked
+      // classification from onboarding without manually clearing stale rows.
+      const historyPayload = {
+        new_classification: pendingClassification,
+        previous_classification: savedClassification || null,
+        old_classification: savedClassification || null,
+        responsible_person_id: pendingResponsiblePersonId || null,
+        changed_by: currentUserId,
+        changed_at: new Date().toISOString(),
+        notes: changeNotes.trim() || null,
+      };
+
+      const { data: existingHist, error: existingHistErr } = await (supabase as any)
         .from("client_classification_history")
-        .insert({
-          client_id: clientId,
-          new_classification: pendingClassification,
-          previous_classification: savedClassification || null,
-          old_classification: savedClassification || null,
-          effective_from_fy: effectiveFromFY,
-          responsible_person_id: pendingResponsiblePersonId || null,
-          changed_by: currentUserId,
-          notes: changeNotes.trim() || null,
-        });
-      if (historyError) throw historyError;
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("effective_from_fy", effectiveFromFY)
+        .limit(1);
+      if (existingHistErr) throw existingHistErr;
+
+      if (existingHist && existingHist.length > 0) {
+        const { error: updErr } = await (supabase as any)
+          .from("client_classification_history")
+          .update(historyPayload)
+          .eq("id", existingHist[0].id);
+        if (updErr) throw updErr;
+      } else {
+        const { error: historyError } = await (supabase as any)
+          .from("client_classification_history")
+          .insert({
+            client_id: clientId,
+            effective_from_fy: effectiveFromFY,
+            ...historyPayload,
+          });
+        if (historyError) throw historyError;
+      }
 
       // ── STEP 2: Upsert client_fy_classifications for the new FY ────────
       const { error: fyError } = await (supabase as any)
