@@ -1041,12 +1041,13 @@ serve(async (req) => {
     addUpdate("01_Control", "F25", autoValues.REPORT_DATE);
 
     // ── Apply updates directly into sheet XMLs ────────────────────────────────
-    // Compute the FY end year (e.g. "2026") for boilerplate template substitutions
-    // like "31st March, ____" that appear inside shared-string or inline-string cells.
+    // Compute the FY end year (e.g. "2026") and start year (e.g. "2025") for
+    // boilerplate template substitutions like "31st March, ____" / "1st April, ____".
     const fyEndYear = (() => {
       const m = (fy || "").match(/(\d{4})/);
       return m ? String(parseInt(m[1]) + 1) : "";
     })();
+    const fyStartYear = fyEndYear ? String(parseInt(fyEndYear) - 1) : "";
 
     // Boilerplate string substitutions — applied as plain-text XML replaces AFTER
     // cell-level updates, so formatted dates land in templated paragraphs too.
@@ -1059,6 +1060,13 @@ serve(async (req) => {
         out = out.replace(/(March,\s*)_{3,}/g, `$1${fyEndYear}`);
         // Standalone "____" after "as on" / "for the year ended" / bare dates
         out = out.replace(/(\b(?:as on|ended on|as at)\s+[^_<>]{0,40}?)_{3,}/gi, `$1${fyEndYear}`);
+      }
+      if (fyStartYear) {
+        // "1st April, ____"  → "1st April, 2025"
+        // Form 3CB paragraph 1: "period beginning from 1st April, ____ to ending on 31st March, 2026"
+        out = out.replace(/(April,\s*)_{3,}/g, `$1${fyStartYear}`);
+        // Also handle "beginning from ____" / "commencing from ____" patterns
+        out = out.replace(/(\b(?:beginning from|commencing from|from\s+1st\s+April)\s*)_{3,}/gi, `$1${fyStartYear}`);
       }
       // Clear "[No.]_ AUTO" annexure-number placeholders (template artifacts with no
       // real value source) — replace with a single space so the cell is no longer noisy.
