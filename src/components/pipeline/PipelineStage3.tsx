@@ -22,19 +22,25 @@ import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2
 } from "lucide-react";
+import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
+import type { FSLineItem } from "@/config/nceLineItems";
 
 // ═══════════════════════════════════════
-// Schedule III Line Item Definitions
+// Non-Corporate entity detection
 // ═══════════════════════════════════════
+const NON_CORPORATE = [
+  "Partnership", "LLP", "Limited Liability Partnership",
+  "Proprietorship", "Sole Proprietorship",
+  "HUF", "Hindu Undivided Family",
+  "Trust",
+  "AOP", "Association of Persons",
+  "BOI", "Body of Individuals",
+  "Individual",
+];
 
-interface FSLineItem {
-  code: string;
-  name: string;
-  noteRef: number | null;
-  section: string;
-  children?: FSLineItem[];
-  scheduleRef?: string;
-}
+// ═══════════════════════════════════════
+// Schedule III Line Item Definitions  (corporate)
+// ═══════════════════════════════════════
 
 const SCHEDULE_III_DIV_I: FSLineItem[] = [
   // ── BALANCE SHEET — EQUITY & LIABILITIES ──
@@ -146,6 +152,10 @@ function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: num
 const FLAT_ITEMS = flattenTree(SCHEDULE_III_DIV_I);
 const LEAF_ITEMS = FLAT_ITEMS.filter(i => !i.children || i.children.length === 0);
 
+// NCE variants — computed once at module level from the shared config
+const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
+const NCE_LEAF_ITEMS = NCE_FLAT_ITEMS.filter(i => !i.children || i.children.length === 0);
+
 // ═══════════════════════════════════════
 // Props
 // ═══════════════════════════════════════
@@ -164,6 +174,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // ─── Entity type detection ───
+  // Check both engagement-level and client-level entity_type for safety.
+  const entityType: string = (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
+  const isNonCorporate: boolean = NON_CORPORATE.includes(entityType);
+
+  // Active line-item set — swap for NCE entities; corporate path is 100% untouched.
+  const activeTree      = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
+  const activeFlatItems = isNonCorporate ? NCE_FLAT_ITEMS  : FLAT_ITEMS;
+  const activeLeafItems = isNonCorporate ? NCE_LEAF_ITEMS  : LEAF_ITEMS;
+  // NCE rules first (higher specificity for capital/remuneration keywords),
+  // then fall back to the general keyword list which covers all common items.
+  const activeAutoRules = isNonCorporate
+    ? [...NCE_AUTO_MAP_RULES, ...AUTO_MAP_RULES]
+    : AUTO_MAP_RULES;
 
   // ─── Ledger Reclassify state ───
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
@@ -313,8 +338,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     for (const acct of tbAccounts) {
       const name = acct.account_name.toLowerCase();
       let bestMatch: { code: string; confidence: string } | null = null;
-      
-      for (const rule of AUTO_MAP_RULES) {
+
+      for (const rule of activeAutoRules) {
         if (rule.keywords.some(kw => name.includes(kw))) {
           if (!bestMatch || confidenceRank(rule.confidence) > confidenceRank(bestMatch.confidence)) {
             bestMatch = { code: rule.code, confidence: rule.confidence };
@@ -323,7 +348,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       }
 
       if (bestMatch) {
-        const lineItem = LEAF_ITEMS.find(i => i.code === bestMatch!.code);
+        const lineItem = activeLeafItems.find(i => i.code === bestMatch!.code);
         newMapping[acct.account_name] = {
           code: bestMatch.code,
           noteRef: lineItem?.noteRef || null,
@@ -334,7 +359,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     setCoaMapping(newMapping);
     toast.success(`Auto-mapped ${Object.keys(newMapping).length} of ${tbAccounts.length} accounts`);
-  }, [tbAccounts]);
+  }, [tbAccounts, activeAutoRules, activeLeafItems]);
 
   // ═══════ IMPORT PRIOR YEAR MAPPING ═══════
   const importPriorMapping = async () => {
@@ -395,7 +420,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const reclassifyAccount = async () => {
     if (!reclassifyDialog || !reclassifyCode) return;
     const { accountName } = reclassifyDialog;
-    const lineItem = LEAF_ITEMS.find(i => i.code === reclassifyCode);
+    const lineItem = activeLeafItems.find(i => i.code === reclassifyCode);
     if (!lineItem) return;
 
     const newEntry = {
@@ -422,7 +447,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     if (!acct) return;
     const name = acct.account_name.toLowerCase();
     let bestMatch: { code: string; confidence: string } | null = null;
-    for (const rule of AUTO_MAP_RULES) {
+    for (const rule of activeAutoRules) {
       if (rule.keywords.some(kw => name.includes(kw))) {
         if (!bestMatch || confidenceRank(rule.confidence) > confidenceRank(bestMatch.confidence)) {
           bestMatch = { code: rule.code, confidence: rule.confidence };
@@ -432,7 +457,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     let newMapping: typeof coaMapping;
     if (bestMatch) {
-      const lineItem = LEAF_ITEMS.find(i => i.code === bestMatch!.code);
+      const lineItem = activeLeafItems.find(i => i.code === bestMatch!.code);
       newMapping = {
         ...coaMapping,
         [accountName]: {
@@ -475,7 +500,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       amounts[code] = override.amount;
     }
 
-    // Compute parent totals
+    // Compute parent totals using the active tree (corporate or NCE)
     const computeTotal = (item: FSLineItem): number => {
       if (!item.children || item.children.length === 0) {
         return amounts[item.code] || 0;
@@ -485,12 +510,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       return total;
     };
 
-    for (const item of SCHEDULE_III_DIV_I) {
+    for (const item of activeTree) {
       computeTotal(item);
     }
 
     return amounts;
-  }, [tbAccounts, coaMapping, manualOverrides]);
+  }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
   // ═══════ STATS ═══════
   const mappedCount = tbAccounts.filter(a => coaMapping[a.account_name]).length;
@@ -550,7 +575,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         });
       };
 
-      for (const item of FLAT_ITEMS) {
+      for (const item of activeFlatItems) {
         addItem(item);
       }
 
@@ -623,8 +648,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         <div>
           <h1 className="text-xl font-bold text-foreground">Stage 6 — COA Mapping</h1>
           <p className="text-sm text-muted-foreground">
-            {engagement.clients?.name} — FY {engagement.financial_year} •
-            {engagement.schedule_iii_division === "div_ii" ? " Ind AS (Div II)" : " Schedule III (Div I)"}
+            {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
+            {isNonCorporate
+              ? entityType                                                          // e.g. "Partnership"
+              : engagement.schedule_iii_division === "div_ii"
+                ? "Ind AS (Div II)"
+                : "Schedule III (Div I)"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -693,7 +722,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
                     const isManualOverride = mapping?.confidence === "manual";
-                    const lineItem = mapping ? LEAF_ITEMS.find(i => i.code === mapping.code) : null;
+                    const lineItem = mapping ? activeLeafItems.find(i => i.code === mapping.code) : null;
                     return (
                       <div
                         key={acct.account_name}
@@ -757,11 +786,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             {/* Right: FS Line Items Tree */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
               <div className="p-2 border-b bg-muted/30">
-                <p className="text-xs font-semibold text-muted-foreground">Schedule III Line Items — Click to assign selected account</p>
+                <p className="text-xs font-semibold text-muted-foreground">
+                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"} — Click to assign selected account
+                </p>
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-1">
-                  {FLAT_ITEMS.map(item => {
+                  {activeFlatItems.map(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amount = computedAmounts[item.code] || 0;
@@ -836,8 +867,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           </DialogHeader>
           {reclassifyDialog && (() => {
             const currentMapping = coaMapping[reclassifyDialog.accountName];
-            const currentLineItem = currentMapping ? LEAF_ITEMS.find(i => i.code === currentMapping.code) : null;
-            const newLineItem = reclassifyCode ? LEAF_ITEMS.find(i => i.code === reclassifyCode) : null;
+            const currentLineItem = currentMapping ? activeLeafItems.find(i => i.code === currentMapping.code) : null;
+            const newLineItem = reclassifyCode ? activeLeafItems.find(i => i.code === reclassifyCode) : null;
             return (
               <div className="space-y-4 py-1">
                 <div>
@@ -867,7 +898,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       <SelectValue placeholder="Select FS Line Item…" />
                     </SelectTrigger>
                     <SelectContent className="max-h-60">
-                      {LEAF_ITEMS.map(item => (
+                      {activeLeafItems.map(item => (
                         <SelectItem key={item.code} value={item.code} className="text-xs">
                           {item.noteRef ? `[N${item.noteRef}] ` : ""}{item.name}
                         </SelectItem>

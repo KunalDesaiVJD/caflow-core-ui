@@ -19,19 +19,12 @@ import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets,
 } from "lucide-react";
+import { NCE_FS_ITEMS } from "@/config/nceLineItems";
+import type { FSLineItem } from "@/config/nceLineItems";
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions
 // ═══════════════════════════════════════
-
-interface FSLineItem {
-  code: string;
-  name: string;
-  noteRef: number | null;
-  section: string;
-  children?: FSLineItem[];
-  scheduleRef?: string;
-}
 
 const SCHEDULE_III_DIV_I: FSLineItem[] = [
   // ── BALANCE SHEET — EQUITY & LIABILITIES ──
@@ -132,80 +125,8 @@ const NON_CORPORATE_TYPES: string[] = [
   "Body of Individuals",
 ];
 
-// ═══════════════════════════════════════
-// NCE Balance Sheet + P&L row definitions
-// (used only when isNonCorporate === true; SCHEDULE_III_DIV_I is never touched)
-// Sections are prefixed "NCE_BS_" / "NCE_PL_" — no collision with "BS_" / "PL_"
-// ═══════════════════════════════════════
-const NCE_FS_ITEMS: FSLineItem[] = [
-  // ── NCE BALANCE SHEET — EQUITY AND LIABILITIES ──
-  { code: "NCE_EL", name: "EQUITY AND LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", children: [
-    { code: "NCE_OWN", name: "(1) Owners Funds", noteRef: null, section: "NCE_BS_liabilities", children: [
-      { code: "NCE_CAP", name: "(a) Owners' Capital Account", noteRef: 2, section: "NCE_BS_liabilities" },
-    ]},
-    { code: "NCE_NCL", name: "(2) Non-Current Liabilities", noteRef: null, section: "NCE_BS_liabilities", children: [
-      { code: "NCE_LTB",  name: "(a) Long-term borrowings",       noteRef: 3, section: "NCE_BS_liabilities" },
-      { code: "NCE_OLTL", name: "(b) Other long-term liabilities", noteRef: 4, section: "NCE_BS_liabilities" },
-      { code: "NCE_LTP",  name: "(c) Long-term provisions",        noteRef: 5, section: "NCE_BS_liabilities" },
-    ]},
-    { code: "NCE_CL", name: "(3) Current Liabilities", noteRef: null, section: "NCE_BS_liabilities", children: [
-      { code: "NCE_STB", name: "(a) Short-term borrowings",      noteRef: 6, section: "NCE_BS_liabilities" },
-      { code: "NCE_TP",  name: "(b) Trade payables",             noteRef: 7, section: "NCE_BS_liabilities" },
-      { code: "NCE_OCL", name: "(c) Other current liabilities",  noteRef: 8, section: "NCE_BS_liabilities" },
-      { code: "NCE_STP", name: "(d) Short-term provisions",      noteRef: 9, section: "NCE_BS_liabilities" },
-    ]},
-  ]},
-  // ── NCE BALANCE SHEET — ASSETS ──
-  { code: "NCE_AST", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", children: [
-    { code: "NCE_NCA", name: "(1) Non-Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
-      { code: "NCE_PPE",   name: "(a)(i) Property, plant and equipment", noteRef: 10, section: "NCE_BS_assets" },
-      { code: "NCE_CWIP",  name: "(a)(ii) Capital work-in-progress",     noteRef: 11, section: "NCE_BS_assets" },
-      { code: "NCE_INTG",  name: "(a)(iii) Intangible assets",           noteRef: 12, section: "NCE_BS_assets" },
-      { code: "NCE_NCINV", name: "(b) Non-current investments",          noteRef: 13, section: "NCE_BS_assets" },
-      { code: "NCE_LTLA",  name: "(c) Long-term loans and advances",     noteRef: 14, section: "NCE_BS_assets" },
-      { code: "NCE_ONCA",  name: "(d) Other non-current assets",         noteRef: 15, section: "NCE_BS_assets" },
-    ]},
-    { code: "NCE_CA", name: "(2) Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
-      { code: "NCE_CINV", name: "(a) Current investments",          noteRef: 16, section: "NCE_BS_assets" },
-      { code: "NCE_STCK", name: "(b) Inventories",                  noteRef: 17, section: "NCE_BS_assets" },
-      { code: "NCE_TR",   name: "(c) Trade receivables",            noteRef: 18, section: "NCE_BS_assets" },
-      { code: "NCE_CASH", name: "(d) Cash and bank balances",       noteRef: 19, section: "NCE_BS_assets" },
-      { code: "NCE_STLA", name: "(e) Short-term loans and advances",noteRef: 20, section: "NCE_BS_assets" },
-      { code: "NCE_OCA",  name: "(f) Other current assets",         noteRef: 21, section: "NCE_BS_assets" },
-    ]},
-  ]},
-  // ── NCE BS FOOTNOTE ──
-  { code: "NCE_ACCTPOL", name: "Summary of Significant Accounting Policies", noteRef: 1, section: "NCE_BS_footnote" },
-  // ── NCE PROFIT & LOSS — INCOME (I + II → NCE_PL_INC auto-summed by computeTotal) ──
-  { code: "NCE_PL_INC", name: "III. Total Income (I + II)", noteRef: null, section: "NCE_PL_income", children: [
-    { code: "NCE_REV_OPS", name: "I.   Revenue from operations", noteRef: 22, section: "NCE_PL_income" },
-    { code: "NCE_REV_OTH", name: "II.  Other income",            noteRef: 23, section: "NCE_PL_income" },
-  ]},
-  // ── NCE PROFIT & LOSS — EXPENSES (a–e → NCE_PL_EXP auto-summed by computeTotal) ──
-  { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", children: [
-    { code: "NCE_COGS",     name: "(a) Cost of goods sold",            noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",     noteRef: 25, section: "NCE_PL_expenses" },
-    { code: "NCE_FIN_COST", name: "(c) Finance costs",                 noteRef: 26, section: "NCE_PL_expenses" },
-    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation", noteRef: 27, section: "NCE_PL_expenses" },
-    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",               noteRef: 28, section: "NCE_PL_expenses" },
-  ]},
-  // ── NCE PROFIT CHAIN (V → XIII; computed in useMemo after computeTotal) ──
-  // "NCE_PL_profit" section prefix keeps these in the NCE_PL_ filter
-  { code: "NCE_PROF_V",   name: "V.    Profit/(Loss) before exceptional items, partners' remuneration and tax", noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_EXCEP",    name: "VI.   Exceptional items",                                                      noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_PROF_VII", name: "VII.  Profit before extraordinary items and tax",                              noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_EXTORD",   name: "VIII. Extraordinary items",                                                    noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_PROF_IX",  name: "IX.   Profit before partners' remuneration and tax",                          noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_PART_REM", name: "X.    Partners' remuneration",                                                noteRef: 29,   section: "NCE_PL_profit" },
-  { code: "NCE_PROF_XI",  name: "XI.   Profit before tax (IX − X)",                                           noteRef: null, section: "NCE_PL_profit" },
-  // Tax group — children auto-summed into NCE_TAX by computeTotal
-  { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", children: [
-    { code: "NCE_CUR_TAX",   name: "(1) Current tax",                                   noteRef: null, section: "NCE_PL_profit" },
-    { code: "NCE_PRIOR_TAX", name: "(2) Short/excess provision for earlier years",       noteRef: null, section: "NCE_PL_profit" },
-  ]},
-  { code: "NCE_NET_PROF", name: "XIII. Profit / (Loss) for the year (XI − XII)", noteRef: null, section: "NCE_PL_profit" },
-];
-
+// ── NCE_FS_ITEMS imported from shared config (src/config/nceLineItems.ts) ──
+// One source of truth — also used by Stage 6 COA Mapping (PipelineStage3.tsx).
 const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
 
 // ─── NCE leaf-code sets for stats bar ────────────────────────────────────────

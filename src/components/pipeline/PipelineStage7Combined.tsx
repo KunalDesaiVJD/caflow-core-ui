@@ -134,7 +134,8 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       { id: 'notes',    label: 'Notes to Accounts', icon: BookMarked,    show: true },
       { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
       { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
-      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) },
+      // Cash Flow applies to corporate only; NCE entities use Receipts & Payments format.
+      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) && isCorporate },
       { id: 'mrl',      label: 'MRL',               icon: ClipboardList, show: true },
     ];
     return all.filter(t => t.show);
