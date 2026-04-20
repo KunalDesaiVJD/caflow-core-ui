@@ -228,14 +228,15 @@ export const StepAdvancedInfo = ({
       return;
     }
 
-    // ── Validation 2: cannot pre-date client creation FY ─────────────────
+    // ── Soft notice: effective FY predates client creation FY ───────────
+    // Earlier this was a hard block, but it prevented correcting a wrong
+    // classification set at onboarding (e.g. a junior picking "Audit" by
+    // mistake).  Allow the change and just inform the user.
     if (clientCreationFY && fyCompare(effectiveFromFY, clientCreationFY) < 0) {
       toast({
-        title: "Effective FY cannot be before client creation FY",
-        description: `Client was created in FY ${clientCreationFY}.`,
-        variant: "destructive",
+        title: "Applying correction",
+        description: `Client was created in FY ${clientCreationFY}. The new classification will still be recorded from FY ${effectiveFromFY}.`,
       });
-      return;
     }
 
     // ── New-client mode: no DB writes — stash & close ────────────────────
