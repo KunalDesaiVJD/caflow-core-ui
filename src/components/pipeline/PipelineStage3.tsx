@@ -288,6 +288,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
 
+  // ─── View/UI state ───
+  const [hideZero, setHideZero]               = useState(true);   // hide closing_balance = 0 ledgers
+  const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
+  const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
+  const [aiRunning, setAiRunning]             = useState(false);
+
   // ─── Fetch TB data (legacy snapshot path) ───
   const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
     queryKey: ["tb-snapshot-stage3", engagementId],
@@ -562,6 +568,117 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [coaMapping, engagementId]);
 
+  // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
+  // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
+  // Returns {ledger, fs_code, confidence, reason}; we merge back into coaMapping.
+  const runAiMapping = useCallback(async () => {
+    if (aiRunning) return;
+    const targets = tbAccounts.filter((a) => {
+      if (hideZero && Math.abs(a.balance) < 0.005 && Math.abs(a.opening_balance ?? 0) < 0.005) return false;
+      const m = coaMapping[a.account_name];
+      if (!m) return true;
+      if (m.confidence === "manual") return false;
+      return m.confidence === "low";
+    });
+    if (targets.length === 0) { toast.info("Nothing left for AI to map"); return; }
+
+    setAiRunning(true);
+    const fsItems = activeLeafItems.map((i) => ({ code: i.code, name: i.name, section: i.section }));
+    const batchSize = 40;
+    const merged = { ...coaMapping };
+    let mappedCount = 0, failedBatches = 0;
+
+    try {
+      for (let i = 0; i < targets.length; i += batchSize) {
+        const batch = targets.slice(i, i + batchSize).map((a) => ({
+          ledger:          a.account_name,
+          tally_group:     a.account_group,
+          closing_balance: Math.round(a.balance),
+          side:            a.balance >= 0 ? "Dr" : "Cr",
+        }));
+        const payload = {
+          entity_type: isNonCorporate ? "nce" : "corporate",
+          fs_items:    fsItems,
+          ledgers:     batch,
+        };
+        const { data, error } = await supabase.functions.invoke("claude-gateway", {
+          body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
+        });
+        if (error) { failedBatches++; continue; }
+        // claude-gateway returns the parsed JSON directly at the top level.
+        // Fall back to .parsed / .content shapes for resilience.
+        const raw = Array.isArray(data) ? data
+                   : (data as any)?.parsed ?? (data as any)?.content ?? [];
+        const arr = Array.isArray(raw) ? raw : [];
+        for (const r of arr) {
+          const ledgerName = r?.ledger ?? r?.ledger_name;
+          const code       = r?.fs_code ?? r?.code;
+          if (!ledgerName || !code) continue;
+          const lineItem = activeLeafItems.find((li) => li.code === code);
+          if (!lineItem) continue;
+          // do not override manual mappings
+          if (merged[ledgerName]?.confidence === "manual") continue;
+          merged[ledgerName] = {
+            code,
+            noteRef:    lineItem.noteRef ?? null,
+            scheduleRef: lineItem.scheduleRef || "",
+            confidence: (r?.confidence as string) || "medium",
+          };
+          mappedCount++;
+        }
+      }
+
+      setCoaMapping(merged);
+      try {
+        await supabase.from("audit_engagements").update({ coa_mapping: merged } as any).eq("id", engagementId);
+      } catch { /* persist errors surfaced to user below */ }
+
+      toast.success(
+        `AI mapped ${mappedCount} ledgers`,
+        { description: failedBatches > 0 ? `${failedBatches} batch(es) failed — re-run to retry` : "Saved to engagement" },
+      );
+    } catch (e: any) {
+      toast.error("AI mapping failed: " + e.message);
+    } finally {
+      setAiRunning(false);
+    }
+  }, [aiRunning, tbAccounts, hideZero, coaMapping, activeLeafItems, isNonCorporate, engagementId]);
+
+  // ═══════ GROUP ACTIONS ═══════
+  const assignGroup = useCallback(async (groupName: string, fsCode: string) => {
+    const lineItem = activeLeafItems.find((i) => i.code === fsCode);
+    if (!lineItem) return;
+    const updated = { ...coaMapping };
+    let n = 0;
+    for (const a of tbAccounts) {
+      if ((a.account_group || "— (no group) —") !== groupName) continue;
+      if (updated[a.account_name]?.confidence === "manual") continue;
+      updated[a.account_name] = {
+        code: fsCode,
+        noteRef: lineItem.noteRef ?? null,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence: "manual",
+      };
+      n++;
+    }
+    setCoaMapping(updated);
+    try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    toast.success(`Mapped ${n} ledgers in "${groupName}" → ${lineItem.name}`);
+  }, [tbAccounts, activeLeafItems, coaMapping, engagementId]);
+
+  const unmapGroup = useCallback(async (groupName: string) => {
+    const updated = { ...coaMapping };
+    let n = 0;
+    for (const a of tbAccounts) {
+      if ((a.account_group || "— (no group) —") !== groupName) continue;
+      if (updated[a.account_name]) { delete updated[a.account_name]; n++; }
+    }
+    if (n === 0) { toast.info("No mappings in that group"); return; }
+    setCoaMapping(updated);
+    try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    toast.success(`Unmapped ${n} ledgers from "${groupName}"`);
+  }, [tbAccounts, coaMapping, engagementId]);
+
   const unmapByConfidence = useCallback(async (level: "low" | "medium") => {
     const updated = { ...coaMapping };
     let n = 0;
@@ -739,15 +856,48 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const unmappedCount = tbAccounts.length - mappedCount;
   const allMapped = unmappedCount === 0 && tbAccounts.length > 0;
 
-  // Filtered accounts
+  // Filtered accounts — respect hideZero + search
   const filteredAccounts = useMemo(() => {
-    if (!search) return tbAccounts;
     const s = search.toLowerCase();
-    return tbAccounts.filter(a => 
-      a.account_name.toLowerCase().includes(s) || 
-      a.account_group.toLowerCase().includes(s)
+    return tbAccounts.filter(a => {
+      if (hideZero && Math.abs(a.balance) < 0.005 && Math.abs(a.opening_balance ?? 0) < 0.005) return false;
+      if (!s) return true;
+      return (
+        a.account_name.toLowerCase().includes(s) ||
+        a.account_group.toLowerCase().includes(s)
+      );
+    });
+  }, [tbAccounts, search, hideZero]);
+
+  // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts
+  const grouped = useMemo(() => {
+    const map = new Map<string, {
+      group: string;
+      items: typeof tbAccounts;
+      mapped: number;
+      total: number;
+      subtotal: number;
+      dominantCode: string | null;  // single FS code if all mapped rows agree
+    }>();
+    for (const a of filteredAccounts) {
+      const key = a.account_group || "— (no group) —";
+      if (!map.has(key)) map.set(key, { group: key, items: [], mapped: 0, total: 0, subtotal: 0, dominantCode: null });
+      const g = map.get(key)!;
+      g.items.push(a);
+      g.total++;
+      g.subtotal += a.balance;
+      const m = coaMapping[a.account_name];
+      if (m) {
+        g.mapped++;
+        if (g.dominantCode === null) g.dominantCode = m.code;
+        else if (g.dominantCode !== m.code) g.dominantCode = "__mixed__";
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      (b.mapped / Math.max(b.total, 1)) - (a.mapped / Math.max(a.total, 1)) ||
+      a.group.localeCompare(b.group)
     );
-  }, [tbAccounts, search]);
+  }, [filteredAccounts, coaMapping]);
 
   // ═══════ SAVE ═══════
   const saveMapping = async () => {
@@ -905,12 +1055,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
         <TabsContent value="mapping" className="mt-4">
-          <div className="flex gap-2 mb-3 flex-wrap">
+          <div className="flex gap-2 mb-3 flex-wrap items-center">
             <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
               <RefreshCw size={12} /> Auto-Map All
             </Button>
+            <Button size="sm" onClick={runAiMapping} disabled={aiRunning} className="gap-1 bg-violet-600 hover:bg-violet-700 text-white">
+              {aiRunning ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+              {aiRunning ? "AI Mapping…" : "AI Map Remaining"}
+            </Button>
             <Button variant="outline" size="sm" onClick={importPriorMapping} className="gap-1">
-              <Download size={12} /> Import Prior Year Mapping
+              <Download size={12} /> Import Prior Year
             </Button>
             {selectedAccount && coaMapping[selectedAccount] && (
               <Button variant="outline" size="sm" onClick={() => mapSimilar(selectedAccount)} className="gap-1">
@@ -922,16 +1076,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 Unmap Selected
               </Button>
             )}
-            <div className="ml-auto flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")} className="gap-1 text-amber-700">
-                Unmap Low-Confidence
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="gap-1 text-amber-700">
-                Unmap Medium
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clearAllMappings} className="gap-1 text-destructive">
-                Clear All
-              </Button>
+
+            <div className="flex items-center gap-2 ml-2 text-xs text-muted-foreground">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <Switch checked={hideZero}  onCheckedChange={setHideZero}  />
+                <span>Hide ₹0</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <Switch checked={groupView} onCheckedChange={setGroupView} />
+                <span>Group by Tally group</span>
+              </label>
+            </div>
+
+            <div className="ml-auto flex gap-1">
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
+              <Button variant="ghost" size="sm" onClick={clearAllMappings}                  className="text-destructive gap-1">Clear All</Button>
             </div>
           </div>
 
@@ -950,6 +1110,133 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 </div>
               </div>
               <ScrollArea className="flex-1">
+                {groupView ? (
+                  <div>
+                    {grouped.map((g) => {
+                      const isOpen = expandedGroups[g.group] ?? true;
+                      const pct    = Math.round((g.mapped / Math.max(g.total, 1)) * 100);
+                      const dominantItem = g.dominantCode && g.dominantCode !== "__mixed__"
+                        ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
+                      return (
+                        <div key={g.group} className="border-b">
+                          <div
+                            onClick={() => setExpandedGroups((p) => ({ ...p, [g.group]: !isOpen }))}
+                            className="px-3 py-2 bg-muted/40 hover:bg-muted/60 cursor-pointer flex items-center justify-between sticky top-0 z-10"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                              <span className="text-xs font-semibold truncate">{g.group}</span>
+                              <Badge variant="outline" className="text-[9px] px-1">{g.mapped}/{g.total}</Badge>
+                              {g.dominantCode === "__mixed__" ? (
+                                <Badge className="text-[8px] bg-amber-100 text-amber-800 border-amber-300 px-1">mixed</Badge>
+                              ) : dominantItem ? (
+                                <span className="text-[10px] text-primary truncate">→ {dominantItem.name}</span>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={cn("font-mono text-[10px]", g.subtotal >= 0 ? "text-foreground" : "text-destructive")}>
+                                ₹{Math.abs(g.subtotal).toLocaleString("en-IN")} {g.subtotal >= 0 ? "Dr" : "Cr"}
+                              </span>
+                              <div className="h-1.5 w-16 bg-background rounded-full overflow-hidden">
+                                <div className={cn("h-full", pct === 100 ? "bg-green-500" : pct > 0 ? "bg-amber-500" : "bg-destructive")} style={{ width: `${pct}%` }} />
+                              </div>
+                              {g.mapped > 0 && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); unmapGroup(g.group); }}
+                                  className="text-[10px] text-destructive hover:underline"
+                                  title="Unmap every ledger in this group"
+                                >Unmap group</button>
+                              )}
+                              {selectedAccount && coaMapping[selectedAccount] && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, coaMapping[selectedAccount].code); }}
+                                  className="text-[10px] text-primary hover:underline"
+                                  title="Map entire group to the currently selected ledger's FS code"
+                                >Remap group</button>
+                              )}
+                            </div>
+                          </div>
+                          {isOpen && g.items.map((acct) => {
+                            const mapping = coaMapping[acct.account_name];
+                            const isSelected = selectedAccount === acct.account_name;
+                            const isManualOverride = mapping?.confidence === "manual";
+                            const lineItem = mapping ? activeLeafItems.find((i) => i.code === mapping.code) : null;
+                            return (
+                              <div
+                                key={acct.account_name}
+                                onClick={() => setSelectedAccount(acct.account_name)}
+                                className={cn(
+                                  "pl-6 pr-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors border-t",
+                                  isSelected && "bg-primary/10 border-l-2 border-l-primary",
+                                  !isSelected && isManualOverride && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                                  !mapping && "bg-destructive/5",
+                                )}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium truncate">{acct.account_name}</p>
+                                    {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (
+                                      <p className="text-[10px] text-muted-foreground">
+                                        Opening ₹{Math.abs(acct.opening_balance).toLocaleString("en-IN")}
+                                        <span className="ml-0.5 text-[9px]">{acct.opening_balance >= 0 ? "Dr" : "Cr"}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                                    <div className="text-right">
+                                      <p className={cn("font-mono text-[11px]", acct.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                        ₹{Math.abs(acct.balance).toLocaleString("en-IN")}
+                                        <span className="ml-0.5 text-[9px]">{acct.balance >= 0 ? "Dr" : "Cr"}</span>
+                                      </p>
+                                      {(acct.tally_debit || acct.tally_credit) ? (
+                                        <p className="text-[9px] text-muted-foreground font-mono">
+                                          Dr ₹{Math.round(acct.tally_debit || 0).toLocaleString("en-IN")} · Cr ₹{Math.round(acct.tally_credit || 0).toLocaleString("en-IN")}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    {mapping && (
+                                      <button
+                                        title="Unmap this ledger"
+                                        onClick={(e) => { e.stopPropagation(); unmapAccount(acct.account_name); }}
+                                        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive ml-1"
+                                      >✕</button>
+                                    )}
+                                    <button
+                                      title="Reclassify ledger"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReclassifyDialog({ accountName: acct.account_name });
+                                        setReclassifyCode(mapping?.code || "");
+                                      }}
+                                      className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground ml-1"
+                                    ><Pencil size={10} /></button>
+                                  </div>
+                                </div>
+                                {mapping ? (
+                                  <div className="flex items-center gap-1 mt-1">
+                                    <Badge variant="outline" className={cn("text-[8px] px-1",
+                                      isManualOverride
+                                        ? "border-violet-400 text-violet-600 dark:text-violet-400"
+                                        : mapping.confidence === "high" ? "border-primary/40 text-primary"
+                                        : mapping.confidence === "medium" ? "border-muted-foreground/40"
+                                        : "border-destructive/40 text-destructive"
+                                    )}>
+                                      {isManualOverride ? "✎ manual" : mapping.confidence}
+                                    </Badge>
+                                    <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
+                                    {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
+                                  </div>
+                                ) : (
+                                  <Badge variant="destructive" className="text-[8px] mt-1">Unmapped</Badge>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div className="divide-y">
                   {filteredAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
@@ -1037,6 +1324,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     );
                   })}
                 </div>
+                )}
               </ScrollArea>
             </div>
 
