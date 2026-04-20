@@ -38,6 +38,7 @@ import {
   FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
 } from "lucide-react";
 import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
+import { resolveFirmNameForDate } from "@/lib/firmName";
 
 // ─── GSTIN State Code Map ───
 const STATE_CODES: Record<string, string> = {
@@ -354,7 +355,7 @@ const NewInvoice = () => {
   // Fetch firms list
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("firms").select("id, name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings").order("name");
+      const { data } = await supabase.from("firms").select("id, name, display_name, logo_url, pan, gstin, phone, email, address, bank_details, primary_color, signature_url, state, settings, legal_name_changes").order("name");
       const firms = (data || []) as Firm[];
       setFirmsList(firms);
       // Don't override selectedFirmId in edit mode — it will be set from the invoice record
@@ -693,7 +694,12 @@ const NewInvoice = () => {
     return firm?.logo_url || settingsLogo || "";
   }, [firm]);
 
-  const firmName = firm?.display_name || firm?.name || "";
+  // Firm name applicable to the document date (handles constitution changes,
+  // e.g. "V J Desai & Co." → "V J Desai & Co. LLP" from 16/04/2026).
+  const firmName = useMemo(
+    () => resolveFirmNameForDate(firm as any, invoiceDate) || firm?.display_name || firm?.name || "",
+    [firm, invoiceDate]
+  );
   const firmAddr = firm?.address as any;
   const firmAddressLines = useMemo(() => {
     if (!firmAddr) return [];

@@ -25,6 +25,7 @@ import { exportToPdf, exportToExcel } from "@/lib/exportUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
+import { resolveFirmNameForDate, type LegalNameChange } from "@/lib/firmName";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -200,7 +201,7 @@ function ClientLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [clients, setClients] = useState<{ id: string; name: string; email?: string | null }[]>([]);
-  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
@@ -222,7 +223,7 @@ function ClientLedgerView() {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
         supabase.from("clients").select("id, name, email").eq("is_draft", false).is("deleted_at", null).order("name"),
-        supabase.from("firms").select("id, name, logo_url").order("name"),
+        supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
       setFirms(f || []);
@@ -758,7 +759,7 @@ function GroupLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
-  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [groupId, setGroupId] = useState("");
   const [firmIds, setFirmIds] = useState<string[]>([]);
   const [fy, setFy] = useState(getCurrentFY());
@@ -780,7 +781,7 @@ function GroupLedgerView() {
     (async () => {
       const [{ data: g }, { data: f }] = await Promise.all([
         supabase.from("client_groups").select("id, name").order("name"),
-        supabase.from("firms").select("id, name, logo_url").order("name"),
+        supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setGroups(g || []);
       setFirms(f || []);
@@ -964,8 +965,12 @@ function GroupLedgerView() {
   // ── Open email dialog — pre-fill subject ────────────────────────────
   const openEmailDialog = () => {
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
+    // Pick firm active in this ledger view; resolve the name in force at the ledger period end.
+    const activeFirmId = (firmIds.length > 0 && firmIds[0] !== "all") ? firmIds[0] : (firms[0]?.id ?? "");
+    const activeFirm   = firms.find(f => f.id === activeFirmId) ?? firms[0] ?? null;
+    const signatureName = resolveFirmNameForDate(activeFirm as any, toDate) || activeFirm?.name || "";
     setEmailSubject(`Group Ledger Statement — ${groupName}`);
-    setEmailMsg(`Dear Sir/Madam,\n\nPlease find attached the Group Ledger Statement for ${groupName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly confirm the balances at your earliest.\n\nRegards,\nV J Desai & Co.`);
+    setEmailMsg(`Dear Sir/Madam,\n\nPlease find attached the Group Ledger Statement for ${groupName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly confirm the balances at your earliest.\n\nRegards,\n${signatureName}`);
     setEmailTo("");
     setEmailCC("");
     setEmailOpen(true);
@@ -1441,7 +1446,7 @@ function GroupLedgerView() {
 function FirmRevenueLedgerView() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string }[]>([]);
+  const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [firmId, setFirmId] = useState("");
   const [fy, setFy] = useState(getCurrentFY());
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);

@@ -23,7 +23,7 @@ const subjects: Record<string, string> = {
   tds_due_7_days:           "TDS Due in 7 Days",
   tds_due_1_day:            "URGENT: TDS Due Tomorrow",
   audit_report_ready:       "Audit Report Ready for Review",
-  invoice_generated:        "Invoice from V J Desai & Co.",
+  invoice_generated:        "Invoice from V J Desai & Co. LLP",
   scrutiny_complete:        "Scrutiny Complete — Findings Summary",
   new_user_welcome:         "Welcome to CAFlow",
   credit_note_issued:       "Credit Note Issued",
@@ -69,7 +69,7 @@ function jsonResponse(body: unknown, status = 200) {
 // ── Email HTML builder ───────────────────────────────────────────────
 
 function buildEmailHTML(type: string, payload: Record<string, any>): string {
-  const firmName = payload.firm_name || "V J Desai & Co., Chartered Accountants";
+  const firmName = payload.firm_name || "V J Desai & Co. LLP, Chartered Accountants";
   const amt = payload.amount
     ? `₹${Number(payload.amount).toLocaleString("en-IN")}`
     : "N/A";
@@ -257,7 +257,7 @@ async function sendEmail(
   customSubject?: string,
 ): Promise<{ success: boolean; providerId?: string; error?: string }> {
   const fromEmail = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
-  const firmName  = payload.firm_name || "V J Desai & Co.";
+  const firmName  = payload.firm_name || "V J Desai & Co. LLP";
   const subject   = customSubject || subjects[type] || `Notification from ${firmName}`;
   const html      = buildEmailHTML(type, payload);
 
@@ -493,7 +493,7 @@ Deno.serve(async (req) => {
       .from("firms").select("name").eq("id", firm_id).single();
     const enrichedPayload = {
       ...payload,
-      firm_name: firmData?.name || "V J Desai & Co.",
+      firm_name: firmData?.name || "V J Desai & Co. LLP",
     };
 
     const allResults: Record<string, any> = {};
