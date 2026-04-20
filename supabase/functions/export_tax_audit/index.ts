@@ -996,6 +996,7 @@ serve(async (req) => {
 
       // ── Form_3CB ANNEX sign-off block ─────────────────────────────────────────
       // Verified from correct template (sheet name: "Form_3CB ANNEX"):
+      //   D3="ENTITY_NAME" (literal shared-string placeholder — no AUTO marker)
       //   F22="For,"  G22="AUDIT FIRM_NAME"  → FIRM_NAME
       //   G23="Chartered Accountants"
       //   G24="FRN: ___________"  → FRN
@@ -1005,6 +1006,7 @@ serve(async (req) => {
       //   G28="[Signing partner Name]"  → PARTNER_NAME
       //   G29="Partner"
       //   F30="Membership No.: "  G30="[Membership No]"  → MEMBERSHIP_NO
+      addUpdate("Form_3CB ANNEX", "D3",  autoValues.ENTITY_NAME);
       addUpdate("Form_3CB ANNEX", "G22", autoValues.FIRM_NAME);
       addUpdate("Form_3CB ANNEX", "G24", autoValues.FRN);
       addUpdate("Form_3CB ANNEX", "C25", autoValues.PLACE);
@@ -1119,6 +1121,10 @@ serve(async (req) => {
       // "[NAME OF CLIENT]" — ANX_Form3CA annexure header uses this placeholder
       if (autoValues.ENTITY_NAME) {
         ssXml = ssXml.replace(/\[NAME OF CLIENT\]/g, xmlEsc(autoValues.ENTITY_NAME));
+        // "ENTITY_NAME" bare literal — 3CB ANNEX row 3 header uses this exact text
+        // as a shared-string value (no AUTO marker, no brackets).  Replace only when
+        // it appears as the sole content of a <t> tag so we don't clobber unrelated text.
+        ssXml = ssXml.replace(/<t>ENTITY_NAME<\/t>/g, `<t>${xmlEsc(autoValues.ENTITY_NAME)}</t>`);
       }
       // [APPLICABLE ACT] — saved by Form3CA tab into form_3ca_applicable_act
       const applicableAct = (eng as any).form_3ca_applicable_act
