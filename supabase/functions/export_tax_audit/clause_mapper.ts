@@ -13,8 +13,7 @@
  *   • Skip undefined / null / empty values silently
  */
 
-// @deno-types="https://esm.sh/xlsx@0.18.5/types/index.d.ts"
-import * as XLSX from "https://esm.sh/xlsx@0.18.5";
+import * as XLSX from "npm:xlsx@0.18.5";
 type WS = XLSX.WorkSheet;
 type WB = XLSX.WorkBook;
 
