@@ -237,23 +237,23 @@ export default function AuditPipeline() {
 
       // Parallel fetches for all four eligibility sources
       const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
-        // Source 3: FY classification snapshot
+        // Source 3: FY classification snapshot — partial match so "Audit" / "Audit Client" etc. all work
         supabase
           .from("client_fy_classifications")
           .select("client_id")
-          .ilike("classification", "audit")
+          .ilike("classification", "%audit%")
           .in("client_id", clientIds),
         // Source 4: classification history
         (supabase as any)
           .from("client_classification_history")
           .select("client_id")
-          .ilike("new_classification", "audit")
+          .ilike("new_classification", "%audit%")
           .in("client_id", clientIds),
-        // Source 2: audit setup flags
+        // Source 2: audit setup flags — no IN clause; RLS already scopes to the firm.
+        // Avoids large URL for firms with many clients and ensures every FY row is included.
         supabase
           .from("client_fy_audit_setup")
-          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
-          .in("client_id", clientIds),
+          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable"),
         // Source 5: active audit services
         supabase
           .from("client_services")
@@ -268,10 +268,20 @@ export default function AuditPipeline() {
         ...(classHistRes?.data ?? []).map((r: any) => r.client_id).filter(Boolean),
       ]);
 
-      // Build per-client flags from setup table (source 2)
-      const setupMap: Record<string, any> = {};
+      // Build per-client flags from setup table (source 2).
+      // OR-aggregate across all FY rows — if ANY financial year has a flag set,
+      // treat the client as eligible.  A plain overwrite would lose flags when
+      // an older FY row (all-false) happens to appear last in the result set.
+      const setupMap: Record<string, { statutory_audit_applicable: boolean; tax_audit_applicable: boolean; internal_audit_applicable: boolean; stock_audit_applicable: boolean }> = {};
       for (const row of (auditSetupRes.data ?? []) as any[]) {
-        setupMap[row.client_id] = row;
+        if (!row.client_id) continue;
+        const ex = setupMap[row.client_id];
+        setupMap[row.client_id] = {
+          statutory_audit_applicable: !!(ex?.statutory_audit_applicable) || !!row.statutory_audit_applicable,
+          tax_audit_applicable:       !!(ex?.tax_audit_applicable)       || !!row.tax_audit_applicable,
+          internal_audit_applicable:  !!(ex?.internal_audit_applicable)  || !!row.internal_audit_applicable,
+          stock_audit_applicable:     !!(ex?.stock_audit_applicable)     || !!row.stock_audit_applicable,
+        };
       }
 
       // Build per-client flags from active services (source 5)
