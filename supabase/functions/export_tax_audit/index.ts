@@ -853,6 +853,43 @@ serve(async (req) => {
     }
     console.log(`[Formula-cell fill] total: ${formulaCellsTotal} cells directly filled`);
 
+    // 0c. Bare-placeholder scan — Form 3CD Part A cells store exact placeholder
+    //     strings as their cell value (inlineStr or shared string).  The AUTO-marker
+    //     scan only catches cells containing "AUTO"; the ssXml pass only catches
+    //     shared strings.  This step catches BOTH by reading the rendered text of
+    //     every cell and replacing it when it matches a known placeholder key.
+    const BARE_PLACEHOLDER_MAP: Record<string, string> = {
+      "ENTITY_NAME":        "ENTITY_NAME",
+      "ENTITY_ADDRESS":     "ENTITY_ADDRESS",
+      "ENTITY_PAN":         "PAN",
+      "ENTITY_GSTIN":       "GSTIN",
+      "ENTITY_TYPE":        "ENTITY_TYPE",
+      "PY_START_TO_PY_END": "PREVIOUS_YEAR",
+      "AY_START_TO_AY_END": "ASSESSMENT_YEAR",
+      "BUSINESS_NATURE":    "BUSINESS_NATURE",
+    };
+    let bareFilled = 0;
+    for (const [sheetName, sheetPath] of sheetPaths) {
+      if (!zip[sheetPath]) continue;
+      const sheetXml = _dec.decode(zip[sheetPath]);
+      const cellRe2 = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+      let cm2: RegExpExecArray | null;
+      while ((cm2 = cellRe2.exec(sheetXml)) !== null) {
+        const attrs2 = cm2[1];
+        const inner2 = cm2[2] ?? "";
+        const addrM2 = attrs2.match(/\br="([A-Z]+\d+)"/);
+        if (!addrM2) continue;
+        const addr2 = addrM2[1];
+        const text2 = cellTextValue(attrs2, inner2, sharedStrings).trim();
+        const fieldKey2 = BARE_PLACEHOLDER_MAP[text2];
+        if (fieldKey2 && autoValues[fieldKey2]) {
+          addUpdate(sheetName, addr2, autoValues[fieldKey2]);
+          bareFilled++;
+        }
+      }
+    }
+    console.log(`[Bare-placeholder fill] ${bareFilled} placeholder cells replaced`);
+
     // 1. Header values from cell_map (overrides AUTO scan where both match)
     for (const cm of cellMapRows ?? []) {
       if (cm.formula_cell) continue;
