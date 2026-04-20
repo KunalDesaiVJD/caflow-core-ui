@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
-import { NCENotesToAccounts } from '@/components/stage7/NotesToAccounts';
 import { IFCReportTab } from '@/components/stage7/IFCReportTab';
+import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNotesToAccounts';
 import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
@@ -94,8 +94,15 @@ export default function PipelineStage7Combined({
           setActiveTab={setActiveTab}
         />
       ) : (
-        /* Non-corporate: NCE Notes to Accounts — no CARO or MRL */
-        <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
+        /* Non-corporate: full 6-tab Stage 8 structure
+           (Note 1, Capital Account, Notes to Accounts, PPE Schedule,
+            Client Certificate, Management Letter) */
+        <EngagementNotesToAccounts
+          engagement={engagement}
+          client={engagement?.clients}
+          isCorporate={false}
+          onUpdate={onSaveDraft}
+        />
       )}
     </div>
   );
