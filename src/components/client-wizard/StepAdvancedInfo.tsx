@@ -298,9 +298,14 @@ export const StepAdvancedInfo = ({
       // ── STEP 3: Flip clients.classification when the change is active ──
       const currentFY = getCurrentFY();
       if (fyCompare(effectiveFromFY, currentFY) <= 0) {
+        const clientUpdate: Record<string, any> = { classification: pendingClassification };
+        // Also sync responsible_person_id on clients row when the user picked one
+        if (pendingResponsiblePersonId) {
+          clientUpdate.responsible_person_id = pendingResponsiblePersonId;
+        }
         const { error: clientErr } = await (supabase as any)
           .from("clients")
-          .update({ classification: pendingClassification })
+          .update(clientUpdate)
           .eq("id", clientId);
         if (clientErr) throw clientErr;
       }
