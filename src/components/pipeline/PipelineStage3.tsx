@@ -568,6 +568,59 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [coaMapping, engagementId]);
 
+  // ═══════ SMART MAP (with group propagation) ═══════
+  // Whenever a user manually maps a ledger, Stage 6 learns that the Tally
+  // parent_group it belongs to likely maps to the same FS code. We immediately
+  // propagate the same code to any UNMAPPED ledger in that group (confidence
+  // "medium", so it can be re-AI'd or manually overridden). Existing manual
+  // mappings are never touched — this only fills empty slots.
+  const mapLedgerWithPropagation = useCallback(async (
+    ledgerName: string,
+    code: string,
+    confidence: "high" | "medium" | "low" | "manual" = "manual",
+    opts: { propagate?: boolean; persist?: boolean } = {},
+  ) => {
+    const { propagate = true, persist = true } = opts;
+    const lineItem = activeLeafItems.find(i => i.code === code);
+    if (!lineItem) return;
+
+    const acct = tbAccounts.find(a => a.account_name === ledgerName);
+    const group = acct?.account_group || "";
+    const updated: typeof coaMapping = { ...coaMapping };
+
+    updated[ledgerName] = {
+      code,
+      noteRef: lineItem.noteRef ?? null,
+      scheduleRef: lineItem.scheduleRef || "",
+      confidence,
+    };
+
+    let propagated = 0;
+    if (propagate && group) {
+      for (const a of tbAccounts) {
+        if (a.account_name === ledgerName) continue;
+        if ((a.account_group || "") !== group) continue;
+        if (updated[a.account_name]) continue; // don't overwrite existing (incl. manual)
+        updated[a.account_name] = {
+          code,
+          noteRef: lineItem.noteRef ?? null,
+          scheduleRef: lineItem.scheduleRef || "",
+          confidence: "medium",
+        };
+        propagated++;
+      }
+    }
+
+    setCoaMapping(updated);
+    if (persist) {
+      try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    }
+    toast.success(
+      `Mapped "${ledgerName}" → ${lineItem.name}`,
+      propagated > 0 ? { description: `Auto-applied to ${propagated} other unmapped ledgers in "${group}"` } : undefined,
+    );
+  }, [activeLeafItems, coaMapping, engagementId, tbAccounts]);
+
   // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
   // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
   // Returns {ledger, fs_code, confidence, reason}; we merge back into coaMapping.
@@ -869,7 +922,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     });
   }, [tbAccounts, search, hideZero]);
 
-  // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts
+  // Left panel = exclusively UNMAPPED ledgers. Mapped ledgers live in the right
+  // panel (grouped under their FS code) with ✕ unmap affordances.
+  const unmappedAccounts = useMemo(
+    () => filteredAccounts.filter(a => !coaMapping[a.account_name]),
+    [filteredAccounts, coaMapping],
+  );
+
+  // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts.
+  // Computed against UNMAPPED accounts so empty groups (fully mapped) drop out of
+  // the left panel automatically.
   const grouped = useMemo(() => {
     const map = new Map<string, {
       group: string;
@@ -879,25 +941,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       subtotal: number;
       dominantCode: string | null;  // single FS code if all mapped rows agree
     }>();
-    for (const a of filteredAccounts) {
+    for (const a of unmappedAccounts) {
       const key = a.account_group || "— (no group) —";
       if (!map.has(key)) map.set(key, { group: key, items: [], mapped: 0, total: 0, subtotal: 0, dominantCode: null });
       const g = map.get(key)!;
       g.items.push(a);
       g.total++;
       g.subtotal += a.balance;
-      const m = coaMapping[a.account_name];
-      if (m) {
-        g.mapped++;
-        if (g.dominantCode === null) g.dominantCode = m.code;
-        else if (g.dominantCode !== m.code) g.dominantCode = "__mixed__";
-      }
     }
-    return Array.from(map.values()).sort((a, b) =>
-      (b.mapped / Math.max(b.total, 1)) - (a.mapped / Math.max(a.total, 1)) ||
-      a.group.localeCompare(b.group)
-    );
-  }, [filteredAccounts, coaMapping]);
+    // Attach "suggested code" from any already-mapped sibling (learning-by-group)
+    for (const [key, g] of map.entries()) {
+      const sibling = tbAccounts.find(
+        (a) => (a.account_group || "— (no group) —") === key && coaMapping[a.account_name]
+      );
+      if (sibling) g.dominantCode = coaMapping[sibling.account_name].code;
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total || a.group.localeCompare(b.group));
+  }, [unmappedAccounts, tbAccounts, coaMapping]);
 
   // ═══════ SAVE ═══════
   const saveMapping = async () => {
@@ -1096,15 +1156,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           </div>
 
           <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
-            {/* Left: TB Accounts */}
+            {/* Left: UNMAPPED TB Accounts — mapping workspace */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
-              <div className="p-2 border-b bg-muted/30">
+              <div className="p-2 border-b bg-muted/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground">
+                    Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">Select → click FS line item on right</p>
+                </div>
                 <div className="relative">
                   <Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" />
                   <Input
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Search accounts..."
+                    placeholder="Search unmapped ledgers..."
                     className="pl-7 h-8 text-xs"
                   />
                 </div>
@@ -1114,8 +1180,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   <div>
                     {grouped.map((g) => {
                       const isOpen = expandedGroups[g.group] ?? true;
-                      const pct    = Math.round((g.mapped / Math.max(g.total, 1)) * 100);
-                      const dominantItem = g.dominantCode && g.dominantCode !== "__mixed__"
+                      const suggestedItem = g.dominantCode
                         ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
                       return (
                         <div key={g.group} className="border-b">
@@ -1126,33 +1191,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             <div className="flex items-center gap-2 min-w-0">
                               {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                               <span className="text-xs font-semibold truncate">{g.group}</span>
-                              <Badge variant="outline" className="text-[9px] px-1">{g.mapped}/{g.total}</Badge>
-                              {g.dominantCode === "__mixed__" ? (
-                                <Badge className="text-[8px] bg-amber-100 text-amber-800 border-amber-300 px-1">mixed</Badge>
-                              ) : dominantItem ? (
-                                <span className="text-[10px] text-primary truncate">→ {dominantItem.name}</span>
-                              ) : null}
+                              <Badge variant="outline" className="text-[9px] px-1">{g.total} unmapped</Badge>
+                              {suggestedItem && (
+                                <span className="text-[10px] text-primary truncate">
+                                  siblings → {suggestedItem.name}
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <span className={cn("font-mono text-[10px]", g.subtotal >= 0 ? "text-foreground" : "text-destructive")}>
                                 ₹{Math.abs(g.subtotal).toLocaleString("en-IN")} {g.subtotal >= 0 ? "Dr" : "Cr"}
                               </span>
-                              <div className="h-1.5 w-16 bg-background rounded-full overflow-hidden">
-                                <div className={cn("h-full", pct === 100 ? "bg-green-500" : pct > 0 ? "bg-amber-500" : "bg-destructive")} style={{ width: `${pct}%` }} />
-                              </div>
-                              {g.mapped > 0 && (
+                              {suggestedItem && (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); unmapGroup(g.group); }}
-                                  className="text-[10px] text-destructive hover:underline"
-                                  title="Unmap every ledger in this group"
-                                >Unmap group</button>
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
+                                  className="text-[10px] text-primary hover:underline"
+                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
+                                >Apply to all</button>
                               )}
                               {selectedAccount && coaMapping[selectedAccount] && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); assignGroup(g.group, coaMapping[selectedAccount].code); }}
                                   className="text-[10px] text-primary hover:underline"
                                   title="Map entire group to the currently selected ledger's FS code"
-                                >Remap group</button>
+                                >Map group</button>
                               )}
                             </div>
                           </div>
@@ -1238,7 +1300,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   </div>
                 ) : (
                 <div className="divide-y">
-                  {filteredAccounts.map(acct => {
+                  {unmappedAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
                     const isManualOverride = mapping?.confidence === "manual";
@@ -1328,11 +1390,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
               </ScrollArea>
             </div>
 
-            {/* Right: FS Line Items Tree */}
+            {/* Right: FS Line Items Tree — mapping destination + unmap workspace */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
-              <div className="p-2 border-b bg-muted/30">
+              <div className="p-2 border-b bg-muted/30 flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">
-                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"} — Click to assign selected account
+                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {selectedAccount
+                    ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
+                    : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
                 </p>
               </div>
               <ScrollArea className="flex-1">
@@ -1341,48 +1408,114 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amount = computedAmounts[item.code] || 0;
+                    const isExpanded = expandedGroups[`fs:${item.code}`] ?? (mappedAccounts.length > 0 && mappedAccounts.length <= 5);
 
                     return (
-                      <div
-                        key={item.code}
-                        onClick={() => {
-                          if (selectedAccount && !isHeader) {
-                            setCoaMapping(prev => ({
-                              ...prev,
-                              [selectedAccount]: {
-                                code: item.code,
-                                noteRef: item.noteRef,
-                                scheduleRef: item.scheduleRef || "",
-                                confidence: "high",
-                              }
-                            }));
-                            toast.success(`Mapped "${selectedAccount}" → ${item.name}`);
-                          }
-                        }}
-                        className={cn(
-                          "px-2 py-1.5 text-xs rounded-sm cursor-pointer transition-colors",
-                          isHeader ? "font-bold text-foreground mt-2" : "hover:bg-primary/10",
-                          !isHeader && selectedAccount && "hover:ring-1 hover:ring-primary/30",
-                        )}
-                        style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            {isHeader && <ChevronDown size={12} />}
-                            <span className={cn("truncate", isHeader && "uppercase text-[11px]")}>{item.name}</span>
-                            {item.noteRef && <Badge variant="outline" className="text-[8px] px-1 shrink-0">N{item.noteRef}</Badge>}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {mappedAccounts.length > 0 && !isHeader && (
-                              <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length} acct</Badge>
-                            )}
-                            {amount !== 0 && (
-                              <span className={cn("font-mono text-[10px]", amount >= 0 ? "text-foreground" : "text-destructive")}>
-                                ₹{Math.abs(amount).toLocaleString("en-IN")}
-                              </span>
-                            )}
+                      <div key={item.code}>
+                        <div
+                          onClick={() => {
+                            if (selectedAccount && !isHeader) {
+                              mapLedgerWithPropagation(selectedAccount, item.code, "manual");
+                              setSelectedAccount(null);
+                            } else if (!isHeader && mappedAccounts.length > 0) {
+                              setExpandedGroups(p => ({ ...p, [`fs:${item.code}`]: !isExpanded }));
+                            }
+                          }}
+                          className={cn(
+                            "px-2 py-1.5 text-xs rounded-sm transition-colors",
+                            isHeader ? "font-bold text-foreground mt-2" : "hover:bg-primary/10 cursor-pointer",
+                            !isHeader && selectedAccount && "ring-1 ring-transparent hover:ring-primary/40",
+                          )}
+                          style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {isHeader && <ChevronDown size={12} />}
+                              {!isHeader && mappedAccounts.length > 0 && (
+                                isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
+                              )}
+                              <span className={cn("truncate", isHeader && "uppercase text-[11px]")}>{item.name}</span>
+                              {item.noteRef && <Badge variant="outline" className="text-[8px] px-1 shrink-0">N{item.noteRef}</Badge>}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {mappedAccounts.length > 0 && !isHeader && (
+                                <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length} acct</Badge>
+                              )}
+                              {amount !== 0 && (
+                                <span className={cn("font-mono text-[10px]", amount >= 0 ? "text-foreground" : "text-destructive")}>
+                                  ₹{Math.abs(amount).toLocaleString("en-IN")}
+                                  <span className="ml-0.5 text-[9px] opacity-70">{amount >= 0 ? "Dr" : "Cr"}</span>
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
+                        {!isHeader && isExpanded && mappedAccounts.length > 0 && (
+                          <div className="bg-muted/20 border-l-2 border-primary/30 ml-2">
+                            {mappedAccounts.map(a => {
+                              const m = coaMapping[a.account_name];
+                              const confClass =
+                                m?.confidence === "manual" ? "bg-violet-100 text-violet-700 border-violet-300" :
+                                m?.confidence === "high" ? "bg-primary/10 text-primary border-primary/30" :
+                                m?.confidence === "medium" ? "bg-muted text-muted-foreground border-muted-foreground/30" :
+                                "bg-destructive/10 text-destructive border-destructive/30";
+                              return (
+                                <div
+                                  key={a.account_name}
+                                  className="flex items-center justify-between px-3 py-1 text-[11px] hover:bg-background"
+                                  style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                >
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="truncate">{a.account_name}</span>
+                                    {a.account_group && (
+                                      <span className="text-[9px] text-muted-foreground truncate">({a.account_group})</span>
+                                    )}
+                                    <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
+                                      {m?.confidence === "manual" ? "✎" : m?.confidence}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                                    <span className={cn("font-mono text-[10px]", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                      ₹{Math.abs(a.balance).toLocaleString("en-IN")}
+                                      <span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span>
+                                    </span>
+                                    <button
+                                      title={`Unmap "${a.account_name}"`}
+                                      onClick={(e) => { e.stopPropagation(); unmapAccount(a.account_name); }}
+                                      className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                    >✕</button>
+                                    <button
+                                      title="Reclassify"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReclassifyDialog({ accountName: a.account_name });
+                                        setReclassifyCode(m?.code || "");
+                                      }}
+                                      className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    ><Pencil size={9} /></button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {mappedAccounts.length > 1 && (
+                              <div
+                                className="flex items-center justify-end px-3 py-1 text-[10px] text-destructive hover:underline cursor-pointer"
+                                style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!window.confirm(`Unmap all ${mappedAccounts.length} ledgers from "${item.name}"?`)) return;
+                                  const updated = { ...coaMapping };
+                                  for (const a of mappedAccounts) delete updated[a.account_name];
+                                  setCoaMapping(updated);
+                                  supabase.from("audit_engagements")
+                                    .update({ coa_mapping: updated } as any)
+                                    .eq("id", engagementId)
+                                    .then(() => toast.success(`Unmapped ${mappedAccounts.length} ledgers from ${item.name}`));
+                                }}
+                              >Unmap all {mappedAccounts.length}</div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
