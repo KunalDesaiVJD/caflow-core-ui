@@ -278,6 +278,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
   const [reclassifyCode, setReclassifyCode] = useState<string>("");
 
+  // ─── Variance drill-down state (Task 4) ───
+  const [varianceDrill, setVarianceDrill] = useState<{ code: string; name: string } | null>(null);
+
+  // ─── Ledger alias state (Task 3) ───
+  // Maps PRIOR-year ledger name → CURRENT-year ledger name for this client.
+  // Surfaced in Stage 6 so renamed/reorganised ledgers correctly combine PY opening
+  // with CY closing under the same FS line item.
+  const [aliases, setAliases] = useState<Record<string, string>>({});
+  const [aliasDialog, setAliasDialog] = useState<{ priorName: string } | null>(null);
+
   // ─── COA Mapping state ───
   // mapping: { [accountName]: { code, noteRef, scheduleRef, confidence } }
   const [coaMapping, setCoaMapping] = useState<Record<string, {
@@ -371,6 +381,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     },
     enabled: !!engagement?.client_id,
   });
+
+  // ─── Fetch ledger aliases for this client (Task 3) ───
+  const { data: aliasRows, refetch: refetchAliases } = useQuery({
+    queryKey: ["ledger-aliases", engagement?.client_id],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      const { data } = await (supabase.from as any)("ledger_aliases")
+        .select("prior_ledger_name, current_ledger_name")
+        .eq("client_id", engagement.client_id);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+
+  useEffect(() => {
+    if (!aliasRows) return;
+    const map: Record<string, string> = {};
+    for (const r of aliasRows as any[]) map[r.prior_ledger_name] = r.current_ledger_name;
+    setAliases(map);
+  }, [aliasRows]);
 
   // ─── Fetch existing FS rows ───
   const { data: existingFs } = useQuery({
@@ -920,7 +950,11 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const computedAmountsPY: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      // Alias redirect: if this is a CLOSED prior-year ledger aliased to a
+      // current-year ledger, aggregate under the current ledger's mapping.
+      let mappingSource = acct.account_name;
+      if (aliases[acct.account_name]) mappingSource = aliases[acct.account_name];
+      const mapping = coaMapping[mappingSource] || coaMapping[acct.account_name];
       if (!mapping) continue;
       const opening = acct.opening_balance ?? 0;
       if (!opening) continue;
@@ -935,6 +969,71 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     for (const item of activeTree) computeTotal(item);
     return amounts;
   }, [tbAccounts, coaMapping, isNonCorporate]);
+
+  // ═══════ OPENING-TB BALANCE CHECK (Task 2) ═══════
+  // Sum signed opening_balance across all ledgers — should net to zero for a
+  // balanced opening trial balance (Dr = Cr). Threshold = ₹1 to ignore rounding.
+  const openingTbDiff = useMemo(() => {
+    const sum = tbAccounts.reduce((s, a) => s + (a.opening_balance ?? 0), 0);
+    return Math.round(sum * 100) / 100;
+  }, [tbAccounts]);
+  const openingTbImbalanced = Math.abs(openingTbDiff) >= 1;
+
+  // ═══════ VARIANCE DRILL-DOWN (Task 4) ═══════
+  // For a given FS code, list the mapped ledgers with CY/PY/Δ so the auditor
+  // can see exactly which ledgers drove the variance. Used by the drill modal.
+  const varianceDrillRows = useMemo(() => {
+    if (!varianceDrill) return [];
+    const rows = tbAccounts
+      .filter(a => {
+        const src = aliases[a.account_name] ? aliases[a.account_name] : a.account_name;
+        const mapping = coaMapping[src] || coaMapping[a.account_name];
+        return mapping?.code === varianceDrill.code;
+      })
+      .map(a => {
+        const cy = a.balance;
+        const py = a.opening_balance ?? 0;
+        return {
+          ledger: a.account_name,
+          group: a.account_group || "",
+          cy, py,
+          delta: cy - py,
+          pct: Math.abs(py) > 0.005 ? Math.round(((cy - py) / Math.abs(py)) * 100) : (Math.abs(cy) > 0.005 ? 100 : 0),
+          isNew:    Math.abs(py) < 0.005 && Math.abs(cy) >= 0.005,
+          isClosed: Math.abs(py) >= 0.005 && Math.abs(cy) < 0.005,
+          isAlias:  !!aliases[a.account_name],
+        };
+      })
+      .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+    return rows;
+  }, [varianceDrill, tbAccounts, coaMapping, aliases]);
+
+  // ═══════ ALIAS HANDLERS (Task 3) ═══════
+  const saveAlias = async (priorName: string, currentName: string) => {
+    if (!engagement?.client_id) return;
+    const { error } = await (supabase.from as any)("ledger_aliases")
+      .upsert({
+        client_id:           engagement.client_id,
+        firm_id:             engagement.firm_id || null,
+        engagement_id:       engagementId,
+        prior_ledger_name:   priorName,
+        current_ledger_name: currentName,
+      }, { onConflict: "client_id,prior_ledger_name" });
+    if (error) { toast.error(error.message); return; }
+    toast.success(`Linked "${priorName}" → "${currentName}"`);
+    setAliasDialog(null);
+    refetchAliases();
+  };
+  const removeAlias = async (priorName: string) => {
+    if (!engagement?.client_id) return;
+    const { error } = await (supabase.from as any)("ledger_aliases")
+      .delete()
+      .eq("client_id", engagement.client_id)
+      .eq("prior_ledger_name", priorName);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Alias removed");
+    refetchAliases();
+  };
 
   // ═══════ STATS ═══════
   const mappedCount = tbAccounts.filter(a => coaMapping[a.account_name]).length;
@@ -1158,6 +1257,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           </Button>
         </div>
       </div>
+
+      {/* Opening-TB balance banner (Task 2) */}
+      {openingTbImbalanced && (
+        <Alert className="bg-destructive/5 border-destructive/30">
+          <AlertTriangle className="h-4 w-4 text-destructive" />
+          <AlertTitle className="text-xs">Opening Trial Balance is out of balance</AlertTitle>
+          <AlertDescription className="text-[11px]">
+            Sum of opening Dr vs Cr differs by{" "}
+            <span className="font-mono font-semibold">₹{Math.abs(openingTbDiff).toLocaleString("en-IN")}</span>
+            {" "}({openingTbDiff > 0 ? "excess Dr" : "excess Cr"}). PY comparative figures will not tally until this is fixed in Tally.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
@@ -1576,12 +1688,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                               <>₹{Math.abs(amountPY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountPY >= 0 ? "Dr" : "Cr"}</span></>
                             ) : <span className="text-muted-foreground/40">—</span>}
                           </span>
-                          <span className={cn("text-[10px] text-right font-mono",
-                            !hasAny ? "text-muted-foreground/40" :
-                            Math.abs(pct) < 5  ? "text-muted-foreground" :
-                            Math.abs(pct) < 50 ? "text-amber-600" :
-                                                 "text-destructive"
-                          )}>
+                          <span
+                            className={cn("text-[10px] text-right font-mono",
+                              !hasAny ? "text-muted-foreground/40" :
+                              Math.abs(pct) < 5  ? "text-muted-foreground" :
+                              Math.abs(pct) < 50 ? "text-amber-600" :
+                                                   "text-destructive",
+                              hasAny && !isHeader && "hover:underline cursor-pointer"
+                            )}
+                            title={hasAny && !isHeader ? "Drill into ledger-level variance" : undefined}
+                            onClick={(e) => {
+                              if (hasAny && !isHeader) {
+                                e.stopPropagation();
+                                setVarianceDrill({ code: item.code, name: item.name });
+                              }
+                            }}
+                          >
                             {hasAny ? `${pct > 0 ? "+" : ""}${pct}%` : "—"}
                           </span>
                         </div>
@@ -1610,6 +1732,20 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                     </Badge>
                                     {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
                                     {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                                    {aliases[a.account_name] && (
+                                      <Badge
+                                        className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0 cursor-pointer"
+                                        title={`Aliased to "${aliases[a.account_name]}" — click to remove`}
+                                        onClick={(e) => { e.stopPropagation(); removeAlias(a.account_name); }}
+                                      >🔗 {aliases[a.account_name]}</Badge>
+                                    )}
+                                    {isClosed && !aliases[a.account_name] && (
+                                      <button
+                                        title="Link this closed ledger to its current-year renamed counterpart"
+                                        onClick={(e) => { e.stopPropagation(); setAliasDialog({ priorName: a.account_name }); }}
+                                        className="text-[8px] px-1 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 shrink-0"
+                                      >🔗 Link</button>
+                                    )}
                                   </div>
                                   <span className={cn("font-mono text-[10px] text-right", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
                                     {Math.abs(a.balance) > 0.005 ? (
@@ -1766,6 +1902,163 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <Button size="sm" disabled={!reclassifyCode} onClick={reclassifyAccount} className="gap-1">
               <Pencil size={12} /> Save Reclassification
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══ Variance Drill-down Dialog (Task 4) ═══ */}
+      <Dialog
+        open={!!varianceDrill}
+        onOpenChange={() => setVarianceDrill(null)}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              Variance Drill — {varianceDrill?.name}
+            </DialogTitle>
+          </DialogHeader>
+          {varianceDrill && (() => {
+            const totals = varianceDrillRows.reduce(
+              (acc, r) => ({ cy: acc.cy + r.cy, py: acc.py + r.py }),
+              { cy: 0, py: 0 }
+            );
+            const totalDelta = totals.cy - totals.py;
+            return (
+              <div className="space-y-3">
+                {/* Summary strip */}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="p-2 rounded bg-muted/40">
+                    <p className="text-[10px] text-muted-foreground uppercase">Current Yr</p>
+                    <p className="font-mono font-semibold">₹{Math.abs(totals.cy).toLocaleString("en-IN")} {totals.cy >= 0 ? "Dr" : "Cr"}</p>
+                  </div>
+                  <div className="p-2 rounded bg-muted/40">
+                    <p className="text-[10px] text-muted-foreground uppercase">Prior Yr</p>
+                    <p className="font-mono font-semibold">₹{Math.abs(totals.py).toLocaleString("en-IN")} {totals.py >= 0 ? "Dr" : "Cr"}</p>
+                  </div>
+                  <div className={cn(
+                    "p-2 rounded",
+                    Math.abs(totalDelta) < 1 ? "bg-muted/40" : "bg-amber-100 dark:bg-amber-950/30"
+                  )}>
+                    <p className="text-[10px] text-muted-foreground uppercase">Δ</p>
+                    <p className="font-mono font-semibold">{totalDelta >= 0 ? "+" : ""}₹{Math.abs(totalDelta).toLocaleString("en-IN")}</p>
+                  </div>
+                </div>
+
+                {/* Ledger-level rows */}
+                <div className="border rounded-md overflow-hidden">
+                  <div className="grid grid-cols-[1fr_110px_110px_110px_50px] gap-1 bg-muted/60 px-3 py-1.5 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+                    <span>Ledger</span>
+                    <span className="text-right">CY</span>
+                    <span className="text-right">PY</span>
+                    <span className="text-right">Δ</span>
+                    <span className="text-right">Δ%</span>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {varianceDrillRows.length === 0 ? (
+                      <div className="p-4 text-xs text-muted-foreground text-center">No mapped ledgers.</div>
+                    ) : varianceDrillRows.map(r => (
+                      <div
+                        key={r.ledger}
+                        className="grid grid-cols-[1fr_110px_110px_110px_50px] gap-1 px-3 py-1 text-[11px] border-t hover:bg-muted/30"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate" title={r.group}>{r.ledger}</span>
+                          {r.isNew    && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
+                          {r.isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                          {r.isAlias  && <Badge className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0">ALIAS</Badge>}
+                        </div>
+                        <span className="font-mono text-right">
+                          {Math.abs(r.cy) > 0.005 ? `₹${Math.abs(r.cy).toLocaleString("en-IN")}` : "—"}
+                        </span>
+                        <span className="font-mono text-right opacity-80">
+                          {Math.abs(r.py) > 0.005 ? `₹${Math.abs(r.py).toLocaleString("en-IN")}` : "—"}
+                        </span>
+                        <span className={cn(
+                          "font-mono text-right",
+                          Math.abs(r.delta) < 1      ? "text-muted-foreground" :
+                          Math.abs(r.pct)   < 50     ? "text-amber-600" :
+                                                       "text-destructive font-semibold"
+                        )}>
+                          {Math.abs(r.delta) < 0.005 ? "—" : `${r.delta >= 0 ? "+" : "−"}₹${Math.abs(r.delta).toLocaleString("en-IN")}`}
+                        </span>
+                        <span className={cn(
+                          "text-right font-mono text-[10px]",
+                          Math.abs(r.pct) < 5  ? "text-muted-foreground" :
+                          Math.abs(r.pct) < 50 ? "text-amber-600" :
+                                                 "text-destructive"
+                        )}>
+                          {r.pct >= 0 ? "+" : ""}{r.pct}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-muted-foreground">
+                  Sorted by |Δ| descending. NEW = opening 0 &amp; closing ≠ 0.
+                  CLOSED = opening ≠ 0 &amp; closing 0. ALIAS = linked to a renamed prior-year ledger.
+                </p>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setVarianceDrill(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══ Ledger Alias Picker (Task 3) ═══ */}
+      <Dialog
+        open={!!aliasDialog}
+        onOpenChange={() => setAliasDialog(null)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Link Renamed Ledger</DialogTitle>
+          </DialogHeader>
+          {aliasDialog && (() => {
+            const priorName = aliasDialog.priorName;
+            // Candidate NEW ledgers in CY = opening 0, closing ≠ 0, not already an alias target.
+            const existingTargets = new Set(Object.values(aliases));
+            const candidates = tbAccounts
+              .filter(a => {
+                const op = Math.abs(a.opening_balance ?? 0) < 0.005;
+                const cl = Math.abs(a.balance) >= 0.005;
+                return op && cl && !existingTargets.has(a.account_name);
+              })
+              .sort((x, y) => x.account_name.localeCompare(y.account_name));
+            return (
+              <div className="space-y-3">
+                <div className="p-3 rounded bg-muted/40 border">
+                  <p className="text-[10px] uppercase text-muted-foreground">Prior-year ledger (CLOSED)</p>
+                  <p className="text-sm font-semibold">{priorName}</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Link to current-year ledger (NEW) *</Label>
+                  <Select
+                    onValueChange={v => saveAlias(priorName, v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs mt-1">
+                      <SelectValue placeholder={candidates.length === 0 ? "No NEW ledgers found" : "Select current-year ledger…"} />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {candidates.map(c => (
+                        <SelectItem key={c.account_name} value={c.account_name} className="text-xs">
+                          {c.account_name}
+                          {c.account_group && <span className="ml-1.5 text-muted-foreground">· {c.account_group}</span>}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    The prior ledger's opening balance will roll up under the current ledger's FS line item for PY comparatives.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAliasDialog(null)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
