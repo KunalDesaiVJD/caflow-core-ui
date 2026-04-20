@@ -2,9 +2,14 @@
  * NCEManagementLetter — Management Representation Letter for Non-Corporate Entities
  * Stage 8 | Tab 6 | NCE only
  *
- * Renders as a formal printed letter. All body text is fixed; only letter_date
- * is editable. All other values are auto-linked from engagement / client / firm.
+ * Renders as a formal printed letter. Body is fully auto-derived.
+ * Only editable field: letter_date (defaults to today).
+ * Address fallback: shows editable textarea when clients.address or
+ *   firms.address is absent (not persisted — update records in settings).
  * Saves to nce_letters (letter_type = 'management_letter').
+ *
+ * FRN column: firms.icai_firm_reg_no (fallback: firms.icai_reg_no).
+ * FY end date: "2025-26" → "31st March, 2026".
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -20,7 +25,7 @@ interface Props {
   engagementId: string;
 }
 
-// ─── Helper: firms.address is Json (may be object or plain string) ────────────
+// ─── Helper: firms.address is Json — may be object or plain string ────────────
 
 function formatFirmAddress(addr: unknown): string {
   if (!addr) return "";
@@ -35,14 +40,46 @@ function formatFirmAddress(addr: unknown): string {
     .join(", ");
 }
 
-// ─── Helper: derive FY end date string from "2025-26" → "31st March, 2026" ───
+// ─── Helper: "2025-26" → "31st March, 2026" ──────────────────────────────────
 
 function fyEndDate(fy: string): string {
   if (!fy) return "[Date]";
   const part = fy.split("-")[1];
   if (!part) return "[Date]";
-  const year = parseInt(part) + 2000;
-  return `31st March, ${year}`;
+  const yr = parseInt(part) + 2000;
+  return `31st March, ${yr}`;
+}
+
+// ─── today helper ─────────────────────────────────────────────────────────────
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+// ─── Fallback address textarea (shown when address is not in DB) ──────────────
+
+interface AddrFallbackProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}
+
+function AddrFallback({ label, value, onChange }: AddrFallbackProps) {
+  return (
+    <div className="my-1">
+      <p className="text-xs text-orange-500 mb-0.5">{label} not on file — enter below:</p>
+      <textarea
+        rows={2}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Enter address..."
+        className={[
+          "w-full border-0 border-b border-gray-400 bg-transparent resize-none",
+          "text-sm font-serif text-gray-700",
+          "focus:outline-none focus:border-primary",
+          "placeholder:text-gray-300",
+        ].join(" ")}
+      />
+    </div>
+  );
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -50,23 +87,32 @@ function fyEndDate(fy: string): string {
 export function NCEManagementLetter({ engagementId }: Props) {
   const letterRef = useRef<HTMLDivElement>(null);
 
-  // ── Auto-linked data ──────────────────────────────────────────────────────
+  // ── Engagement data (auto-linked) ─────────────────────────────────────────
   const [eng, setEng] = useState<any>(null);
 
-  // ── Only editable field ───────────────────────────────────────────────────
-  const [letterDate, setLetterDate] = useState("");
+  // ── Only persisted editable field ────────────────────────────────────────
+  const [letterDate, setLetterDate] = useState(today);
+
+  // ── Address overrides (local only — fill when DB address is absent) ────────
+  const [clientAddrInput, setClientAddrInput] = useState("");
+  const [firmAddrInput,   setFirmAddrInput]   = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
 
   // ── Derived auto-linked values ────────────────────────────────────────────
-  const financialYear = (eng?.financial_year  as string) || "";
-  const clientName    = (eng?.clients?.name   as string) || "";
-  const clientAddress = (eng?.clients?.address as string) || "";
-  const firmName      = (eng?.firms?.display_name || eng?.firms?.name || "") as string;
-  const firmAddress   = formatFirmAddress(eng?.firms?.address);
-  const firmFRN       = (eng?.firms?.icai_firm_reg_no || eng?.firms?.icai_reg_no || "") as string;
+  const financialYear = (eng?.financial_year as string) || "";
+  const clientName    = (eng?.clients?.name  as string) || "";
+  const clientAddrDb  = (eng?.clients?.address as string) || "";
+  const firmName      = ((eng?.firms?.display_name || eng?.firms?.name) as string) || "";
+  const firmAddrDb    = formatFirmAddress(eng?.firms?.address);
+  // FRN: confirmed column names are icai_firm_reg_no / icai_reg_no
+  const firmFRN       = ((eng?.firms?.icai_firm_reg_no || eng?.firms?.icai_reg_no) as string) || "";
   const fyEnd         = fyEndDate(financialYear);
+
+  // Resolved display addresses (DB value preferred; fallback to local input)
+  const clientAddress = clientAddrDb || clientAddrInput;
+  const firmAddress   = firmAddrDb   || firmAddrInput;
 
   // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -76,13 +122,10 @@ export function NCEManagementLetter({ engagementId }: Props) {
     (async () => {
       setLoading(true);
 
+      // Wildcard fetch — engagement + full clients and firms objects
       const { data: engRow } = await supabase
         .from("audit_engagements")
-        .select(
-          "financial_year, " +
-          "clients(name, address), " +
-          "firms(name, display_name, icai_firm_reg_no, icai_reg_no, address)"
-        )
+        .select("*, clients(*), firms(*)")
         .eq("id", engagementId)
         .single();
 
@@ -95,13 +138,14 @@ export function NCEManagementLetter({ engagementId }: Props) {
       // Load previously saved letter data
       const { data: saved } = await (supabase as any)
         .from("nce_letters")
-        .select("letter_date")
+        .select("*")
         .eq("engagement_id", engagementId)
         .eq("financial_year", fy)
         .eq("letter_type", "management_letter")
         .maybeSingle();
 
       if (!cancelled && saved?.letter_date) {
+        // Use saved date; keep today() default if never saved before
         setLetterDate(saved.letter_date);
       }
 
@@ -206,9 +250,17 @@ export function NCEManagementLetter({ engagementId }: Props) {
             <p className="font-semibold text-base">
               {clientName || <span className="text-gray-400">[Entity Name]</span>}
             </p>
-            {clientAddress && (
-              <p className="text-gray-700 whitespace-pre-line">{clientAddress}</p>
-            )}
+
+            {/* Client address — DB value or editable fallback */}
+            {clientAddrDb
+              ? <p className="text-gray-700 whitespace-pre-line">{clientAddrDb}</p>
+              : <AddrFallback
+                  label="Client address"
+                  value={clientAddrInput}
+                  onChange={setClientAddrInput}
+                />
+            }
+
             <p className="flex items-baseline gap-1">
               <span>Date :</span>
               <input
@@ -226,9 +278,17 @@ export function NCEManagementLetter({ engagementId }: Props) {
             <p className="font-semibold">
               {firmName || <span className="text-gray-400">[Audit Firm Name]</span>}
             </p>
-            {firmAddress && (
-              <p className="text-gray-700 whitespace-pre-line">{firmAddress}</p>
-            )}
+
+            {/* Firm address — DB value or editable fallback */}
+            {firmAddrDb
+              ? <p className="text-gray-700 whitespace-pre-line">{firmAddrDb}</p>
+              : <AddrFallback
+                  label="Firm address"
+                  value={firmAddrInput}
+                  onChange={setFirmAddrInput}
+                />
+            }
+
             {firmFRN && <p>FRN: {firmFRN}</p>}
           </div>
 

@@ -3,9 +3,16 @@
  * Stage 8 | Tab 5 | NCE only
  *
  * Renders as a formal printed letter with inline editable fields.
- * Auto-linked values: entity name, address, firm name/address/FRN, financial year.
- * Editable fields: letter_date, cash_on_hand, closing_stock, closing_stock_date.
+ * Auto-linked: entity name/address, firm name/address/FRN, financial year.
+ * Editable: letter_date (default today), cash_on_hand, closing_stock,
+ *           closing_stock_date.
+ * Address fallback: shows editable textarea when clients.address or
+ *   firms.address is absent (not persisted — update client/firm records
+ *   in settings for permanent storage).
  * Saves to nce_letters (letter_type = 'client_certificate').
+ *
+ * FRN column: firms.icai_firm_reg_no (fallback: firms.icai_reg_no).
+ * There is no firms.registration_number or firms.frn column in the schema.
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -21,7 +28,7 @@ interface Props {
   engagementId: string;
 }
 
-// ─── Helper: firms.address is Json (may be object or plain string) ────────────
+// ─── Helper: firms.address is Json — may be object or plain string ────────────
 
 function formatFirmAddress(addr: unknown): string {
   if (!addr) return "";
@@ -35,6 +42,10 @@ function formatFirmAddress(addr: unknown): string {
     .filter(Boolean)
     .join(", ");
 }
+
+// ─── today helper ─────────────────────────────────────────────────────────────
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 // ─── Inline underlined numeric input (sits inside letter paragraph text) ──────
 
@@ -85,30 +96,67 @@ function InlineDate({ value, onChange }: InlineDateProps) {
   );
 }
 
+// ─── Fallback address textarea (shown when address is not in DB) ──────────────
+
+interface AddrFallbackProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}
+
+function AddrFallback({ label, value, onChange }: AddrFallbackProps) {
+  return (
+    <div className="my-1">
+      <p className="text-xs text-orange-500 mb-0.5">{label} not on file — enter below:</p>
+      <textarea
+        rows={2}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Enter address..."
+        className={[
+          "w-full border-0 border-b border-gray-400 bg-transparent resize-none",
+          "text-sm font-serif text-gray-700",
+          "focus:outline-none focus:border-primary",
+          "placeholder:text-gray-300",
+        ].join(" ")}
+      />
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function NCEClientCertificate({ engagementId }: Props) {
   const letterRef = useRef<HTMLDivElement>(null);
 
-  // ── Auto-linked data ──────────────────────────────────────────────────────
+  // ── Engagement data (auto-linked) ─────────────────────────────────────────
   const [eng, setEng] = useState<any>(null);
 
-  // ── Editable fields ───────────────────────────────────────────────────────
-  const [letterDate,       setLetterDate]       = useState("");
+  // ── Persisted editable fields ─────────────────────────────────────────────
+  const [letterDate,       setLetterDate]       = useState(today);
   const [cashOnHand,       setCashOnHand]       = useState("");
   const [closingStock,     setClosingStock]     = useState("");
   const [closingStockDate, setClosingStockDate] = useState("");
+
+  // ── Address overrides (local only — fill when DB address is absent) ────────
+  const [clientAddrInput, setClientAddrInput] = useState("");
+  const [firmAddrInput,   setFirmAddrInput]   = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
 
   // ── Derived auto-linked values ────────────────────────────────────────────
-  const financialYear = (eng?.financial_year  as string) || "";
-  const clientName    = (eng?.clients?.name   as string) || "";
-  const clientAddress = (eng?.clients?.address as string) || "";
-  const firmName      = (eng?.firms?.display_name || eng?.firms?.name || "") as string;
-  const firmAddress   = formatFirmAddress(eng?.firms?.address);
-  const firmFRN       = (eng?.firms?.icai_firm_reg_no || eng?.firms?.icai_reg_no || "") as string;
+  const financialYear  = (eng?.financial_year as string) || "";
+  const clientName     = (eng?.clients?.name  as string) || "";
+  const clientAddrDb   = (eng?.clients?.address as string) || "";
+  const firmName       = ((eng?.firms?.display_name || eng?.firms?.name) as string) || "";
+  const firmAddrDb     = formatFirmAddress(eng?.firms?.address);
+  // FRN: confirmed column names are icai_firm_reg_no / icai_reg_no
+  const firmFRN        = ((eng?.firms?.icai_firm_reg_no || eng?.firms?.icai_reg_no) as string) || "";
+
+  // Resolved display addresses (DB value preferred; fallback to local input)
+  const clientAddress = clientAddrDb || clientAddrInput;
+  const firmAddress   = firmAddrDb   || firmAddrInput;
 
   // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -118,14 +166,10 @@ export function NCEClientCertificate({ engagementId }: Props) {
     (async () => {
       setLoading(true);
 
-      // Fetch engagement + all needed joins in one query
+      // Wildcard fetch — engagement + full clients and firms objects
       const { data: engRow } = await supabase
         .from("audit_engagements")
-        .select(
-          "financial_year, " +
-          "clients(name, address), " +
-          "firms(name, display_name, icai_firm_reg_no, icai_reg_no, address)"
-        )
+        .select("*, clients(*), firms(*)")
         .eq("id", engagementId)
         .single();
 
@@ -133,25 +177,23 @@ export function NCEClientCertificate({ engagementId }: Props) {
       if (engRow) setEng(engRow);
 
       const fy = (engRow?.financial_year as string) || "";
-      if (!fy) {
-        setLoading(false);
-        return;
-      }
+      if (!fy) { setLoading(false); return; }
 
       // Load previously saved letter data
       const { data: saved } = await (supabase as any)
         .from("nce_letters")
-        .select("letter_date, cash_on_hand, closing_stock, closing_stock_date")
+        .select("*")
         .eq("engagement_id", engagementId)
         .eq("financial_year", fy)
         .eq("letter_type", "client_certificate")
         .maybeSingle();
 
       if (!cancelled && saved) {
-        if (saved.letter_date)         setLetterDate(saved.letter_date);
-        if (saved.cash_on_hand != null) setCashOnHand(String(saved.cash_on_hand));
+        // letter_date: use saved value; keep today() default if never saved
+        if (saved.letter_date)           setLetterDate(saved.letter_date);
+        if (saved.cash_on_hand != null)  setCashOnHand(String(saved.cash_on_hand));
         if (saved.closing_stock != null) setClosingStock(String(saved.closing_stock));
-        if (saved.closing_stock_date)  setClosingStockDate(saved.closing_stock_date);
+        if (saved.closing_stock_date)    setClosingStockDate(saved.closing_stock_date);
       }
 
       if (!cancelled) setLoading(false);
@@ -172,8 +214,8 @@ export function NCEClientCertificate({ engagementId }: Props) {
           financial_year:     financialYear,
           letter_type:        "client_certificate",
           letter_date:        letterDate        || null,
-          cash_on_hand:       cashOnHand        ? parseFloat(cashOnHand)    : null,
-          closing_stock:      closingStock      ? parseFloat(closingStock)  : null,
+          cash_on_hand:       cashOnHand        ? parseFloat(cashOnHand)   : null,
+          closing_stock:      closingStock      ? parseFloat(closingStock) : null,
           closing_stock_date: closingStockDate  || null,
           updated_at:         new Date().toISOString(),
         },
@@ -208,10 +250,7 @@ export function NCEClientCertificate({ engagementId }: Props) {
   return (
     <div className="space-y-4">
 
-      {/*
-       * Print isolation: hide everything except the letter area.
-       * The "nce-cert-letter-print" class is applied only to the letter div.
-       */}
+      {/* Print isolation: hide everything except the letter area */}
       <style>{`
         @media print {
           body * { visibility: hidden !important; }
@@ -261,9 +300,17 @@ export function NCEClientCertificate({ engagementId }: Props) {
             <p className="font-semibold text-base">
               {clientName || <span className="text-gray-400">[Entity Name]</span>}
             </p>
-            {clientAddress && (
-              <p className="text-gray-700 whitespace-pre-line">{clientAddress}</p>
-            )}
+
+            {/* Client address — show DB value or editable fallback */}
+            {clientAddrDb
+              ? <p className="text-gray-700 whitespace-pre-line">{clientAddrDb}</p>
+              : <AddrFallback
+                  label="Client address"
+                  value={clientAddrInput}
+                  onChange={setClientAddrInput}
+                />
+            }
+
             <p className="flex items-baseline gap-1">
               <span>Date :</span>
               <input
@@ -281,9 +328,17 @@ export function NCEClientCertificate({ engagementId }: Props) {
             <p className="font-semibold">
               {firmName || <span className="text-gray-400">[Audit Firm Name]</span>}
             </p>
-            {firmAddress && (
-              <p className="text-gray-700 whitespace-pre-line">{firmAddress}</p>
-            )}
+
+            {/* Firm address — show DB value or editable fallback */}
+            {firmAddrDb
+              ? <p className="text-gray-700 whitespace-pre-line">{firmAddrDb}</p>
+              : <AddrFallback
+                  label="Firm address"
+                  value={firmAddrInput}
+                  onChange={setFirmAddrInput}
+                />
+            }
+
             {firmFRN && <p>FRN: {firmFRN}</p>}
           </div>
 
@@ -303,25 +358,16 @@ export function NCEClientCertificate({ engagementId }: Props) {
             {/* 1 — Cash on hand */}
             <li>
               Cash on hand Rs.{" "}
-              <InlineNum
-                value={cashOnHand}
-                onChange={setCashOnHand}
-              />{" "}
+              <InlineNum value={cashOnHand} onChange={setCashOnHand} />{" "}
               was with the firm and same was tallied with the cash book.
             </li>
 
             {/* 2 — Closing stock */}
             <li>
               Approxi. Value of the Closing stock is Rs.{" "}
-              <InlineNum
-                value={closingStock}
-                onChange={setClosingStock}
-              />{" "}
+              <InlineNum value={closingStock} onChange={setClosingStock} />{" "}
               as on{" "}
-              <InlineDate
-                value={closingStockDate}
-                onChange={setClosingStockDate}
-              />{" "}
+              <InlineDate value={closingStockDate} onChange={setClosingStockDate} />{" "}
               and same was physically verified.
             </li>
 
