@@ -297,7 +297,18 @@ export const StepAdvancedInfo = ({
         if (historyError) throw historyError;
       }
 
-      // ── STEP 2: Upsert client_fy_classifications for the new FY ────────
+      // ── STEP 2: Sync client_fy_classifications for effective FY + all
+      //           later FYs that already have a row.
+      //
+      // The new classification takes effect "FROM this FY onward", so every
+      // existing per-FY snapshot at or after effective_from_fy must reflect
+      // the new value.  Without this, an onboarding row created for the
+      // current FY (e.g. 2026-27 = "Audit") would linger even after the user
+      // corrects the classification from FY 2025-26, and the Edit form /
+      // Audit pipeline would still treat them as Audit.
+      const currentFYForSync = getCurrentFY();
+
+      // 2a) Upsert the effective_from_fy row itself
       const { error: fyError } = await (supabase as any)
         .from("client_fy_classifications")
         .upsert({
@@ -307,6 +318,44 @@ export const StepAdvancedInfo = ({
           responsible_person_id: pendingResponsiblePersonId || null,
         }, { onConflict: "client_id,financial_year" });
       if (fyError) throw fyError;
+
+      // 2b) Also upsert the current FY row if it's >= effective_from_fy
+      //     (covers the common case of correcting an onboarding mis-pick
+      //     where only the creation-FY row exists).
+      if (fyCompare(effectiveFromFY, currentFYForSync) < 0) {
+        const { error: currFyError } = await (supabase as any)
+          .from("client_fy_classifications")
+          .upsert({
+            client_id: clientId,
+            financial_year: currentFYForSync,
+            classification: pendingClassification,
+            responsible_person_id: pendingResponsiblePersonId || null,
+          }, { onConflict: "client_id,financial_year" });
+        if (currFyError) throw currFyError;
+      }
+
+      // 2c) Overwrite any OTHER later-FY rows (beyond current FY) that
+      //     already exist — so pre-set future-FY snapshots don't linger
+      //     with the old classification.
+      const { data: laterRows } = await (supabase as any)
+        .from("client_fy_classifications")
+        .select("id, financial_year")
+        .eq("client_id", clientId);
+      if (Array.isArray(laterRows) && laterRows.length > 0) {
+        const idsToUpdate = (laterRows as any[])
+          .filter(r => fyCompare(r.financial_year, effectiveFromFY) > 0)
+          .map(r => r.id);
+        if (idsToUpdate.length > 0) {
+          const { error: bulkErr } = await (supabase as any)
+            .from("client_fy_classifications")
+            .update({
+              classification: pendingClassification,
+              responsible_person_id: pendingResponsiblePersonId || null,
+            })
+            .in("id", idsToUpdate);
+          if (bulkErr) throw bulkErr;
+        }
+      }
 
       // ── STEP 3: Flip clients.classification when the change is active ──
       const currentFY = getCurrentFY();

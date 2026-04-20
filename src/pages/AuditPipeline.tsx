@@ -237,17 +237,20 @@ export default function AuditPipeline() {
 
       // Parallel fetches for all four eligibility sources
       const [classRes, classHistRes, auditSetupRes, auditSvcRes] = await Promise.all([
-        // Source 3: FY classification snapshot — partial match so "Audit" / "Audit Client" etc. all work
+        // Source 3: FY classification snapshot — exact "Audit" only.
+        // Wildcards like %audit% wrongly match "Non-Audit" and "Partner in
+        // Audited Firm", so a client reclassified to Non-Audit would still
+        // appear in the Audit pipeline.
         supabase
           .from("client_fy_classifications")
           .select("client_id")
-          .ilike("classification", "%audit%")
+          .ilike("classification", "Audit")
           .in("client_id", clientIds),
-        // Source 4: classification history
+        // Source 4: classification history (exact match — same reason as above)
         (supabase as any)
           .from("client_classification_history")
           .select("client_id")
-          .ilike("new_classification", "%audit%")
+          .ilike("new_classification", "Audit")
           .in("client_id", clientIds),
         // Source 2: audit setup flags — no IN clause; RLS already scopes to the firm.
         // Avoids large URL for firms with many clients and ensures every FY row is included.
