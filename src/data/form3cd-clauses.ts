@@ -363,7 +363,7 @@ export const FORM_3CD_CLAUSES: ClauseDefinition[] = [
     clauseNo: '18', displayOrder: 18, isActive: true,
     title: 'Depreciation allowable',
     heading: 'Particulars of depreciation allowable as per the Income-tax Act, 1961 in respect of each asset or block of assets, as the case may be, in the following form.',
-    control: 'not_applicable_annexure',
+    control: 'note_reference',
     annexureColumns: [
       { key: 'block', label: 'Block of Assets', type: 'text', minWidth: 160 },
       { key: 'rate', label: 'Rate (%)', type: 'numeric', width: 80 },
