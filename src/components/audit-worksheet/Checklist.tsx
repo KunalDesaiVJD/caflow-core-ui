@@ -10,7 +10,9 @@
  * Items 8, 10, 12 contain "{fyEndYear}" which is replaced at render
  * with the actual year derived from data.fyEndDate (Req #4).
  *
- * Each row has a Document upload column (PDF / image, 5 MB max).
+ * Each row supports MULTIPLE document uploads (PDF, image, Excel, Word, CSV).
+ * Files up to 10 MB each. Excel files use application/octet-stream to bypass
+ * Supabase bucket MIME restrictions.
  */
 import { useRef, useState } from "react";
 import { Button }  from "@/components/ui/button";
@@ -20,6 +22,7 @@ import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import { useChecklistSheetStorage } from "./hooks/useChecklistSheetStorage";
+import type { ChecklistFile } from "./hooks/useChecklistSheetStorage";
 import type { AuditWorksheetData }  from "./hooks/useAuditWorksheetData";
 
 // ─── Static row definitions ───────────────────────────────────────────────────
@@ -28,7 +31,7 @@ interface ChecklistDef {
   id:          string;
   sr:          number;
   particulars: string;   // may contain "{fyEndYear}" placeholder
-  isCustom?:   boolean;  // rows 21-22: user-editable particulars
+  isCustom?:   boolean;  // dynamically added rows: user-editable particulars
 }
 
 const CHECKLIST_DEFS: ChecklistDef[] = [
@@ -105,6 +108,18 @@ function injectYear(text: string, year: string): string {
   return text.replace(/\{fyEndYear\}/g, year);
 }
 
+/**
+ * Determine content-type for upload.
+ * Excel files must use application/octet-stream to bypass Supabase bucket
+ * MIME-type allow-lists that don't include spreadsheet types.
+ */
+function resolveContentType(file: File): string {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "xlsx" || ext === "xls") return "application/octet-stream";
+  if (ext === "doc" || ext === "docx") return "application/octet-stream";
+  return file.type || "application/octet-stream";
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -116,8 +131,16 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Checklist({ data, engagementId, onSaved }: Props) {
-  const { data: checklistData, getRow, setRowField, patchRowFields, addRow, manualSave, saving } =
-    useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
+  const {
+    data: checklistData,
+    getRow,
+    setRowField,
+    addFileToRow,
+    removeFileFromRow,
+    addRow,
+    manualSave,
+    saving,
+  } = useChecklistSheetStorage(engagementId, data.engagement?.firm_id);
 
   const fyEndYear = fyEndYearFromDate(data.fyEndDate);
 
@@ -130,14 +153,15 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
   }));
   const allDefs = [...CHECKLIST_DEFS, ...dynamicDefs];
 
-  // Count rows that have a document attached
-  const filledCount = allDefs.filter(def => getRow(def.id).file_name?.trim()).length;
+  // Count rows that have at least one document
+  const filledCount = allDefs.filter(def => getRow(def.id).files.length > 0).length;
 
   // ── Document upload state ──────────────────────────────────────────────────
   const fileInputRef  = useRef<HTMLInputElement>(null);
   const [pendingRowId, setPendingRowId] = useState<string | null>(null);
-  const [uploadingRows, setUploadingRows] = useState<Record<string, boolean>>({});
-  const [deletingRows,  setDeletingRows]  = useState<Record<string, boolean>>({});
+  // uploadingRows: rowId → count of in-progress uploads
+  const [uploadingRows, setUploadingRows] = useState<Record<string, number>>({});
+  const [deletingFiles, setDeletingFiles] = useState<Record<string, boolean>>({});
 
   const openFilePicker = (rowId: string) => {
     setPendingRowId(rowId);
@@ -146,79 +170,86 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !pendingRowId) return;
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length || !pendingRowId) return;
 
-    // 5 MB guard
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File exceeds 5MB limit");
-      setPendingRowId(null);
-      return;
-    }
-
-    const def    = allDefs.find(d => d.id === pendingRowId);
-    const srNo   = def?.sr ?? 0;
-    // Sanitise filename: replace spaces with underscores
-    const safeName = file.name.replace(/\s+/g, "_");
-    const filePath = `checklist/${engagementId}/${srNo}_${safeName}`;
-
-    setUploadingRows(prev => ({ ...prev, [pendingRowId]: true }));
-
-    const { error } = await supabase.storage
-      .from("documents")
-      .upload(filePath, file, { upsert: true });
-
-    setUploadingRows(prev => ({ ...prev, [pendingRowId]: false }));
-
-    if (error) {
-      toast.error(`Upload failed: ${error.message}`);
-      setPendingRowId(null);
-      return;
-    }
-
-    patchRowFields(pendingRowId, { file_path: filePath, file_name: file.name });
-    toast.success(`"${file.name}" uploaded`);
+    const rowId = pendingRowId;
     setPendingRowId(null);
+
+    for (const file of files) {
+      // 10 MB guard
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error(`"${file.name}" exceeds 10 MB limit — skipped`);
+        continue;
+      }
+
+      const def    = allDefs.find(d => d.id === rowId);
+      const srNo   = def?.sr ?? 0;
+      const safeName = file.name.replace(/\s+/g, "_");
+      // Add a short timestamp suffix to avoid collisions when uploading
+      // multiple files with the same name to the same row.
+      const ts = Date.now();
+      const filePath = `checklist/${engagementId}/${srNo}_${ts}_${safeName}`;
+      const contentType = resolveContentType(file);
+
+      setUploadingRows(prev => ({ ...prev, [rowId]: (prev[rowId] ?? 0) + 1 }));
+
+      const { error } = await supabase.storage
+        .from("documents")
+        .upload(filePath, file, { upsert: true, contentType });
+
+      setUploadingRows(prev => {
+        const next = { ...prev, [rowId]: (prev[rowId] ?? 1) - 1 };
+        if (next[rowId] <= 0) delete next[rowId];
+        return next;
+      });
+
+      if (error) {
+        toast.error(`Upload failed: "${file.name}" — ${error.message}`);
+        continue;
+      }
+
+      addFileToRow(rowId, { file_path: filePath, file_name: file.name });
+      toast.success(`"${file.name}" uploaded`);
+    }
   };
 
-  const handlePreview = (rowId: string) => {
-    const row = getRow(rowId);
-    if (!row.file_path) return;
+  const handlePreview = (file: ChecklistFile) => {
+    if (!file.file_path) return;
     const { data: urlData } = supabase.storage
       .from("documents")
-      .getPublicUrl(row.file_path);
+      .getPublicUrl(file.file_path);
     window.open(urlData.publicUrl, "_blank", "noreferrer");
   };
 
-  const handleDelete = async (rowId: string) => {
-    const row = getRow(rowId);
-    if (!row.file_path) return;
-
-    setDeletingRows(prev => ({ ...prev, [rowId]: true }));
+  const handleDeleteFile = async (rowId: string, file: ChecklistFile) => {
+    const key = `${rowId}__${file.file_path}`;
+    setDeletingFiles(prev => ({ ...prev, [key]: true }));
 
     const { error } = await supabase.storage
       .from("documents")
-      .remove([row.file_path]);
+      .remove([file.file_path]);
 
-    setDeletingRows(prev => ({ ...prev, [rowId]: false }));
+    setDeletingFiles(prev => { const n = { ...prev }; delete n[key]; return n; });
 
     if (error) {
       toast.error(`Delete failed: ${error.message}`);
       return;
     }
 
-    patchRowFields(rowId, { file_path: "", file_name: "" });
+    removeFileFromRow(rowId, file.file_path);
     toast.success("Document removed");
   };
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
 
-      {/* Hidden file input — shared by all rows */}
+      {/* Hidden file input — shared by all rows, multiple selection enabled */}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.xlsx,.xls,.doc,.docx,.csv"
+        multiple
+        accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.xlsx,.xls,.doc,.docx,.csv,.txt"
         className="hidden"
         onChange={handleFileChange}
       />
@@ -272,7 +303,7 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
             <tr className="bg-violet-700 text-white text-[11px] uppercase tracking-wide">
               <th className="border border-violet-600 px-2 py-2.5 text-center w-10">Sr.</th>
               <th className="border border-violet-600 px-3 py-2.5 text-left w-full min-w-[380px]">Particulars</th>
-              <th className="border border-violet-600 px-2 py-2.5 text-center w-48 min-w-[192px]">Document</th>
+              <th className="border border-violet-600 px-2 py-2.5 text-center w-52 min-w-[208px]">Documents</th>
             </tr>
           </thead>
           <tbody>
@@ -282,11 +313,12 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
                 ? ""
                 : injectYear(def.particulars, fyEndYear);
               const displayValue = row.particulars !== "" ? row.particulars : defaultText;
+              const isUploading = (uploadingRows[def.id] ?? 0) > 0;
 
               return (
                 <tr
                   key={def.id}
-                  className="align-middle hover:bg-muted/10 transition-colors"
+                  className="align-top hover:bg-muted/10 transition-colors"
                 >
                   {/* Sr No */}
                   <td className="border border-border px-2 py-2 text-center">
@@ -295,7 +327,7 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
                     </span>
                   </td>
 
-                  {/* Particulars — wide, text not clipped */}
+                  {/* Particulars */}
                   <td className="border border-border px-3 py-2 w-full">
                     <Input
                       className="h-7 text-xs w-full border-dashed whitespace-normal"
@@ -307,52 +339,66 @@ export default function Checklist({ data, engagementId, onSaved }: Props) {
                     />
                   </td>
 
-                  {/* Document */}
-                  <td className="border border-border px-2 py-2 text-center w-48">
-                    {row.file_name ? (
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={row.file_name}>
-                          {row.file_name}
-                        </span>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
-                            onClick={() => handlePreview(def.id)}
+                  {/* Documents — shows all uploaded files + upload button */}
+                  <td className="border border-border px-2 py-2 text-center w-52">
+                    <div className="flex flex-col items-center gap-1.5">
+
+                      {/* Existing files list */}
+                      {row.files.map(file => {
+                        const deleteKey = `${def.id}__${file.file_path}`;
+                        const isDeleting = !!deletingFiles[deleteKey];
+                        return (
+                          <div
+                            key={file.file_path}
+                            className="flex items-center gap-1 w-full max-w-[192px] bg-muted/40 rounded px-1.5 py-0.5"
                           >
-                            <Eye size={10} /> Preview
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 text-[10px] gap-0.5 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => handleDelete(def.id)}
-                            disabled={deletingRows[def.id]}
-                          >
-                            {deletingRows[def.id]
-                              ? <Loader2 size={10} className="animate-spin" />
-                              : <Trash2 size={10} />
-                            }
-                            Delete
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
+                            <span
+                              className="text-[10px] text-muted-foreground flex-1 truncate min-w-0"
+                              title={file.file_name}
+                            >
+                              {file.file_name}
+                            </span>
+                            <button
+                              className="shrink-0 text-violet-700 hover:text-violet-900 p-0.5 rounded"
+                              title="Preview"
+                              onClick={() => handlePreview(file)}
+                            >
+                              <Eye size={10} />
+                            </button>
+                            <button
+                              className="shrink-0 text-destructive hover:text-destructive/80 p-0.5 rounded disabled:opacity-40"
+                              title="Delete"
+                              disabled={isDeleting}
+                              onClick={() => handleDeleteFile(def.id, file)}
+                            >
+                              {isDeleting
+                                ? <Loader2 size={10} className="animate-spin" />
+                                : <Trash2  size={10} />
+                              }
+                            </button>
+                          </div>
+                        );
+                      })}
+
+                      {/* Upload button — always visible to add more */}
                       <Button
                         size="sm"
                         variant="outline"
                         className="h-6 text-[10px] gap-0.5 px-2 border-violet-300 text-violet-700 hover:bg-violet-50"
                         onClick={() => openFilePicker(def.id)}
-                        disabled={uploadingRows[def.id]}
+                        disabled={isUploading}
                       >
-                        {uploadingRows[def.id]
+                        {isUploading
                           ? <Loader2 size={10} className="animate-spin" />
                           : <Paperclip size={10} />
                         }
-                        {uploadingRows[def.id] ? "Uploading…" : "Upload"}
+                        {isUploading
+                          ? "Uploading…"
+                          : row.files.length > 0 ? "+ Add" : "Upload"
+                        }
                       </Button>
-                    )}
+
+                    </div>
                   </td>
 
                 </tr>

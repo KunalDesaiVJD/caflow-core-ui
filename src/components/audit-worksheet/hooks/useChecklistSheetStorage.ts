@@ -4,8 +4,11 @@
  * Manages the Audit Documentation Checklist (Sheet 6) — 22 fixed rows stored
  * as a JSON object in audit_worksheet_master.checklist_sheet_json (jsonb column).
  *
- * Per-row state: particulars (custom rows only), page_from, page_to.
- * 1-second debounced auto-save on every field change.
+ * Per-row state: particulars (custom rows only), page_from, page_to,
+ * and an array of attached files (supports multiple docs per row).
+ *
+ * Backward-compat: old rows with file_path/file_name strings are
+ * automatically migrated into the files[] array on first read.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
@@ -14,31 +17,56 @@ import { useAuth } from "@/hooks/useAuth";
 
 // ─── Per-row state ────────────────────────────────────────────────────────────
 
+export interface ChecklistFile {
+  file_path: string;
+  file_name: string;
+}
+
 export interface ChecklistRowState {
   /** Editable particulars — stored but only surfaced for custom rows 21 & 22 */
   particulars: string;
   /** Page number string; empty = blank / document not present */
   page_from:   string;
   page_to:     string;
-  /** Supabase Storage path — e.g. checklist/{engId}/{sr}_{filename} */
-  file_path:   string;
-  /** Original filename for display */
-  file_name:   string;
+  /**
+   * Multiple attached documents per row.
+   * Replaces the old single file_path / file_name strings.
+   * Old data with file_path/file_name is migrated in normalizeRow().
+   */
+  files: ChecklistFile[];
+  /** @deprecated — kept for backward-compat migration only */
+  file_path?: string;
+  /** @deprecated — kept for backward-compat migration only */
+  file_name?: string;
 }
 
 export const BLANK_CHECKLIST_ROW: ChecklistRowState = {
   particulars: "",
   page_from:   "",
   page_to:     "",
-  file_path:   "",
-  file_name:   "",
+  files:       [],
 };
+
+/** Migrate old single-file rows into the new files[] array. */
+function normalizeRow(raw: Partial<ChecklistRowState>): ChecklistRowState {
+  const base: ChecklistRowState = {
+    particulars: raw.particulars ?? "",
+    page_from:   raw.page_from   ?? "",
+    page_to:     raw.page_to     ?? "",
+    files:       Array.isArray(raw.files) ? raw.files : [],
+  };
+  // Migrate legacy file_path / file_name into files[]
+  if (base.files.length === 0 && raw.file_path) {
+    base.files = [{ file_path: raw.file_path, file_name: raw.file_name || raw.file_path }];
+  }
+  return base;
+}
 
 // ─── Full checklist data ──────────────────────────────────────────────────────
 
 export interface ChecklistSheetData {
   rows:          Record<string, ChecklistRowState>;
-  /** Issue #11: IDs of dynamically added rows (beyond the static 22) */
+  /** IDs of dynamically added rows (beyond the static set) */
   dynamicRowIds: string[];
 }
 
@@ -60,13 +88,22 @@ export function useChecklistSheetStorage(
   useEffect(() => {
     if (!engagementId || loaded) return;
     setLoaded(true);
+
+    const applyData = (raw: ChecklistSheetData) => {
+      const normalized: Record<string, ChecklistRowState> = {};
+      for (const [k, v] of Object.entries(raw.rows ?? {})) {
+        normalized[k] = normalizeRow(v as Partial<ChecklistRowState>);
+      }
+      return { rows: normalized, dynamicRowIds: raw.dynamicRowIds || [] };
+    };
+
     const cached = awLoad<ChecklistSheetData>(engagementId, "checklist_sheet_json");
     if (cached && typeof cached === "object" && cached.rows && typeof cached.rows === "object") {
-      setData({ rows: cached.rows, dynamicRowIds: cached.dynamicRowIds || [] });
+      setData(applyData(cached));
     }
     awLoadFromDB<ChecklistSheetData>(engagementId, "checklist_sheet_json").then(remote => {
       if (remote && typeof remote === "object" && remote.rows && typeof remote.rows === "object") {
-        setData({ rows: remote.rows, dynamicRowIds: remote.dynamicRowIds || [] });
+        setData(applyData(remote));
       }
     });
   }, [engagementId, loaded]);
@@ -127,6 +164,47 @@ export function useChecklistSheetStorage(
     [debounce]
   );
 
+  // ── addFileToRow — append a new file attachment ───────────────────────────
+  const addFileToRow = useCallback(
+    (rowId: string, file: ChecklistFile) => {
+      setData(prev => {
+        const prevRow = prev.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW };
+        const next: ChecklistSheetData = {
+          rows: {
+            ...prev.rows,
+            [rowId]: { ...prevRow, files: [...prevRow.files, file] },
+          },
+          dynamicRowIds: prev.dynamicRowIds,
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
+  // ── removeFileFromRow — remove a specific file by file_path ───────────────
+  const removeFileFromRow = useCallback(
+    (rowId: string, filePath: string) => {
+      setData(prev => {
+        const prevRow = prev.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW };
+        const next: ChecklistSheetData = {
+          rows: {
+            ...prev.rows,
+            [rowId]: {
+              ...prevRow,
+              files: prevRow.files.filter(f => f.file_path !== filePath),
+            },
+          },
+          dynamicRowIds: prev.dynamicRowIds,
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   const getRow = useCallback(
     (rowId: string): ChecklistRowState =>
       data.rows[rowId] ?? { ...BLANK_CHECKLIST_ROW },
@@ -152,5 +230,16 @@ export function useChecklistSheetStorage(
     return persist(data, false);
   }, [data, persist]);
 
-  return { data, setRowField, patchRowFields, getRow, addRow, manualSave, saving, loaded };
+  return {
+    data,
+    setRowField,
+    patchRowFields,
+    addFileToRow,
+    removeFileFromRow,
+    getRow,
+    addRow,
+    manualSave,
+    saving,
+    loaded,
+  };
 }
