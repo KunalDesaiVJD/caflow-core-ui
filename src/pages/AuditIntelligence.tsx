@@ -190,20 +190,26 @@ export default function AuditIntelligence() {
   }, [selectedEngagementId]);
 
   const loadMetrics = async (engId: string) => {
-    const [queriesRes, workpapersRes, caroRes] = await Promise.all([
-      supabase.from("audit_client_queries").select("id, status", { count: "exact" }).eq("engagement_id", engId),
-      supabase.from("audit_workpapers").select("id", { count: "exact" }).eq("engagement_id", engId),
-      supabase.from("audit_caro_responses").select("id, status", { count: "exact" }).eq("engagement_id", engId),
-    ]);
-    const queries = queriesRes.data || [];
-    const caroRows = caroRes.data || [];
-    setMetrics({
-      ledgers: 0,
-      queriesRaised: queries.length,
-      queriesPending: queries.filter(q => q.status === "Open" || q.status === "Pending").length,
-      workpapers: workpapersRes.count || 0,
-      caroCompleted: caroRows.filter(c => c.status === "completed" || c.status === "reviewed").length,
-    });
+    try {
+      const [queriesRes, workpapersRes, caroRes] = await Promise.all([
+        supabase.from("audit_client_queries").select("id, status", { count: "exact" }).eq("engagement_id", engId),
+        (supabase as any).from("audit_workpapers").select("id", { count: "exact" }).eq("engagement_id", engId),
+        supabase.from("audit_caro_responses").select("id, status", { count: "exact" }).eq("engagement_id", engId),
+      ]);
+      const queries = queriesRes.data || [];
+      const caroRows = caroRes.data || [];
+      setMetrics({
+        ledgers: 0,
+        queriesRaised: queries.length,
+        queriesPending: queries.filter((q: any) => q.status === "Open" || q.status === "Pending").length,
+        workpapers: workpapersRes.count || 0,
+        caroCompleted: caroRows.filter((c: any) =>
+          c.status === "completed" || c.status === "reviewed" || c.status === "approved"
+        ).length,
+      });
+    } catch (err) {
+      console.error("loadMetrics failed", err);
+    }
   };
 
   // Filter engagements by all 4 filters and auto-resolve
@@ -531,7 +537,50 @@ export default function AuditIntelligence() {
             </Card>
             <Card className="p-4 space-y-1">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Partner</p>
-              <p className="text-sm font-semibold text-foreground">{userMap.get(selectedEngagement.partner_id) || "—"}</p>
+              <p className="text-sm font-semibold text-foreground">
+                {selectedEngagement.partner_name ||
+                  userMap.get(selectedEngagement.partner_id) || "—"}
+              </p>
+            </Card>
+          </div>
+
+          {/* Metrics Row */}
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-md bg-blue-50 dark:bg-blue-950">
+                <ClipboardCheck size={16} className="text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Queries Raised</p>
+                <p className="text-xl font-bold text-foreground">{metrics.queriesRaised}</p>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-md bg-amber-50 dark:bg-amber-950">
+                <Circle size={16} className="text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Queries Pending</p>
+                <p className="text-xl font-bold text-foreground">{metrics.queriesPending}</p>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-md bg-purple-50 dark:bg-purple-950">
+                <Shield size={16} className="text-purple-600 dark:text-purple-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Workpapers</p>
+                <p className="text-xl font-bold text-foreground">{metrics.workpapers}</p>
+              </div>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-md bg-emerald-50 dark:bg-emerald-950">
+                <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">CARO Completed</p>
+                <p className="text-xl font-bold text-foreground">{metrics.caroCompleted}</p>
+              </div>
             </Card>
           </div>
 
