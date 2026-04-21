@@ -16,10 +16,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
 import { ClassificationByFYView } from "@/components/clients/ClassificationByFYView";
+import { GroupedView } from "@/components/clients/GroupedView";
 
 interface Client {
   id: string;
@@ -49,7 +50,7 @@ interface GroupInfo {
 const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
-type ViewMode = "it" | "table" | "card" | "classify";
+type ViewMode = "it" | "table" | "card" | "classify" | "grouped";
 
 const VIEW_KEY = "caflow_client_view";
 
@@ -427,6 +428,13 @@ const Clients = () => {
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
             <button
+              onClick={() => setViewMode("grouped")}
+              title="Group-wise"
+              className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "grouped" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+            </button>
+            <button
               onClick={() => setViewMode("classify")}
               title="Classification by FY"
               className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "classify" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
@@ -794,6 +802,28 @@ const Clients = () => {
           </div>
           <PaginationControls />
         </>
+      ) : viewMode === "grouped" ? (
+        /* GROUPED VIEW — clients organized by client_group
+           Each group becomes a collapsible section showing all its clients.
+           Clients in multiple groups appear under each. Clients with no
+           group land under the "Ungrouped" section at the bottom. Reuses
+           the same filter pipeline (search / entity / source / api sub-tab)
+           as other views, but bypasses the groupFilter so the section
+           structure is visible even when no group is selected. */
+        <GroupedView
+          filtered={filtered}
+          groups={groups}
+          clientGroupMap={clientGroupMap}
+          serviceCountMap={serviceCountMap}
+          showAllFirms={showAllFirms}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          onOpenClient={(id) => navigate(`/clients/${id}`)}
+          onEditClient={(id) => navigate(`/clients/edit/${id}`)}
+          onManageGroups={(client) => setManageGroupsClient(client)}
+          onDelete={(client) => setDeleteClient(client)}
+          onCreateGroup={() => navigate("/clients/groups")}
+        />
       ) : viewMode === "classify" ? (
         /* CLASSIFICATION BY FY VIEW */
         <ClassificationByFYView
