@@ -308,6 +308,12 @@ export const StepAdvancedInfo = ({
       // Audit pipeline would still treat them as Audit.
       const currentFYForSync = getCurrentFY();
 
+      // firm_id is required by the RLS INSERT policy:
+      //   WITH CHECK (is_superadmin() OR firm_id = current_user_firm_id())
+      // Without it the new row has firm_id = NULL which never satisfies the
+      // policy for a regular (non-superadmin) user → "new row violates RLS".
+      const userFirmId = user?.firm_id ?? null;
+
       // 2a) Upsert the effective_from_fy row itself
       const { error: fyError } = await (supabase as any)
         .from("client_fy_classifications")
@@ -316,6 +322,7 @@ export const StepAdvancedInfo = ({
           financial_year: effectiveFromFY,
           classification: pendingClassification,
           responsible_person_id: pendingResponsiblePersonId || null,
+          firm_id: userFirmId,
         }, { onConflict: "client_id,financial_year" });
       if (fyError) throw fyError;
 
@@ -330,6 +337,7 @@ export const StepAdvancedInfo = ({
             financial_year: currentFYForSync,
             classification: pendingClassification,
             responsible_person_id: pendingResponsiblePersonId || null,
+            firm_id: userFirmId,
           }, { onConflict: "client_id,financial_year" });
         if (currFyError) throw currFyError;
       }
@@ -351,6 +359,7 @@ export const StepAdvancedInfo = ({
             .update({
               classification: pendingClassification,
               responsible_person_id: pendingResponsiblePersonId || null,
+              firm_id: userFirmId,
             })
             .in("id", idsToUpdate);
           if (bulkErr) throw bulkErr;
