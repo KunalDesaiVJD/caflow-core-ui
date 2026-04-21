@@ -29,9 +29,12 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
-    if (!user?.firm_id && user?.role !== "superadmin") return;
+    if (!user?.firm_id && user?.role !== "superadmin") {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-
+    try {
     let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
     let clientQuery: any = supabase
       .from("clients")
@@ -180,7 +183,11 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(ENGAGEMENT_STORAGE_KEY, pick);
       }
     }
-    setLoading(false);
+    } catch (err) {
+      console.error("AuditContext: fetchData failed", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchData(); }, [user?.firm_id, user?.role]);
