@@ -56,7 +56,15 @@ export default function EngagementHeader({
 
   const frameworkLabel = (() => {
     const t = String(entityType || "").toLowerCase();
-    const isCorporate = t.includes("company") || t.includes("opc");
+    // "Private Ltd" / "Public Ltd" / "Pvt Ltd" / "Ltd" / "Limited" / "Company" / "OPC"
+    // all qualify as corporate entities under Schedule III.
+    const isCorporate =
+      t.includes("company") ||
+      t.includes("opc") ||
+      t.includes("ltd") ||
+      t.includes("limited") ||
+      t.includes("private") ||
+      t.includes("public");
     if (isCorporate) {
       const div = engagement?.schedule_iii_division;
       if (div === "div_ii") return "Schedule III · Ind AS (Div II)";

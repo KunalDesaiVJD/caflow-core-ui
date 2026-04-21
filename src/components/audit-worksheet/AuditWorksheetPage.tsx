@@ -133,11 +133,11 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
           )}
           {showSpecial && (
             <TabsTrigger value="special" className="text-xs">
-              Special Attention
+              Audit Worksheet
             </TabsTrigger>
           )}
           <TabsTrigger value="worksheet" className="text-xs">
-            Audit Worksheet
+            Vouching
           </TabsTrigger>
           <TabsTrigger value="queries" className="text-xs">
             Query Sheet

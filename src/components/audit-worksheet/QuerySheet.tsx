@@ -3,7 +3,7 @@
  *
  * Query tracking with Correction Status gate (Req #6).
  *
- * Columns: SR NO | HEAD | Particulars | Query Description |
+ * Columns: SR NO | Group/Subgroup | Ledger | Query Description |
  *          Required Documents | Remark | Correction Status
  *
  * Gate rule: ALL queries must have Correction Status = "Yes" before
@@ -36,8 +36,11 @@ import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 // ─── Excel helpers ────────────────────────────────────────────────────────────
 
+// Column order is the contract for Excel import/export.
+// Parser reads by index (row[1], row[2]…) so header label changes are
+// safe — only the order matters.
 const HEADERS = [
-  "SR.", "HEAD", "PARTICULARS", "QUERY DESCRIPTION",
+  "SR.", "GROUP/SUBGROUP", "LEDGER", "QUERY DESCRIPTION",
   "REQUIRED DOCUMENTS", "REMARK", "CORRECTION STATUS",
 ];
 
@@ -302,8 +305,8 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
           <thead>
             <tr className="bg-orange-600 text-white text-[11px] uppercase tracking-wide">
               <th className="border border-orange-500 px-2 py-2.5 text-center w-12">Sr.</th>
-              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[110px]">Head</th>
-              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[140px]">Particulars</th>
+              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[130px]">Group/Subgroup</th>
+              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[140px]">Ledger</th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[190px]">Query Description</th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[150px]">Required Documents</th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[130px]">Remark</th>
@@ -353,21 +356,21 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
                       </span>
                     </td>
 
-                    {/* Head */}
+                    {/* Group/Subgroup */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Input
                         className="h-7 text-xs w-full"
-                        placeholder="Head…"
+                        placeholder="Group/Subgroup…"
                         value={row.head}
                         onChange={e => updateQuery(row.id, "head", e.target.value)}
                       />
                     </td>
 
-                    {/* Particulars */}
+                    {/* Ledger */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Input
                         className="h-7 text-xs w-full"
-                        placeholder="Particulars…"
+                        placeholder="Ledger…"
                         value={row.particulars}
                         onChange={e => updateQuery(row.id, "particulars", e.target.value)}
                       />
@@ -504,7 +507,7 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
             <Table className="text-xs">
               <TableHeader>
                 <TableRow className="bg-muted/60">
-                  {["#", "Head", "Particulars", "Query Description", "Correction Status"].map(h => (
+                  {["#", "Group/Subgroup", "Ledger", "Query Description", "Correction Status"].map(h => (
                     <TableHead key={h} className="text-xs py-2">{h}</TableHead>
                   ))}
                 </TableRow>
