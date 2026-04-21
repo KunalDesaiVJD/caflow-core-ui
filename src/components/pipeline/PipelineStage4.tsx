@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   AlertTriangle, CheckCircle2, Shield, ShieldAlert, Eye, Search,
   Play, ChevronDown, ChevronRight, ArrowRight, Loader2, Filter,
@@ -340,11 +341,12 @@ export default function PipelineStage4({ engagementId, engagement, onStageComple
   }, [engagement, engagementId]);
 
   return (
-    <div className="max-w-7xl space-y-6">
+    <div className="max-w-7xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={4} stageLabel="Scrutiny Engine" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 4 — Scrutiny Engine</h1>
+          <h1 className="text-lg font-bold text-foreground">Stage 4 — Scrutiny Engine</h1>
           <p className="text-sm text-muted-foreground">Run automated checks against TB & ledger data using 120+ audit rules</p>
         </div>
         <div className="flex gap-2">

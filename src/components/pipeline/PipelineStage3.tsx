@@ -18,6 +18,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2
@@ -277,6 +278,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [reclassifyDialog, setReclassifyDialog] = useState<{ accountName: string } | null>(null);
   const [reclassifyCode, setReclassifyCode] = useState<string>("");
 
+  // ─── Variance drill-down state (Task 4) ───
+  const [varianceDrill, setVarianceDrill] = useState<{ code: string; name: string } | null>(null);
+
+  // ─── Ledger alias state (Task 3) ───
+  // Maps PRIOR-year ledger name → CURRENT-year ledger name for this client.
+  // Surfaced in Stage 6 so renamed/reorganised ledgers correctly combine PY opening
+  // with CY closing under the same FS line item.
+  const [aliases, setAliases] = useState<Record<string, string>>({});
+  const [aliasDialog, setAliasDialog] = useState<{ priorName: string } | null>(null);
+
   // ─── COA Mapping state ───
   // mapping: { [accountName]: { code, noteRef, scheduleRef, confidence } }
   const [coaMapping, setCoaMapping] = useState<Record<string, {
@@ -287,6 +298,18 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // ─── FS state (manual overrides) ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
+
+  // ─── View/UI state ───
+  const [hideZero, setHideZero]               = useState(true);   // hide opening=0 AND closing=0 ledgers
+  const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
+  const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
+  const [aiRunning, setAiRunning]             = useState(false);
+  // PY-first workflow mode for the left panel.
+  //   "all"    — all unmapped ledgers
+  //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
+  //   "cy"     — new ledgers this year: opening = 0, closing ≠ 0
+  //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
+  const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
 
   // ─── Fetch TB data (legacy snapshot path) ───
   const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
@@ -358,6 +381,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     },
     enabled: !!engagement?.client_id,
   });
+
+  // ─── Fetch ledger aliases for this client (Task 3) ───
+  const { data: aliasRows, refetch: refetchAliases } = useQuery({
+    queryKey: ["ledger-aliases", engagement?.client_id],
+    queryFn: async () => {
+      if (!engagement?.client_id) return [];
+      const { data } = await (supabase.from as any)("ledger_aliases")
+        .select("prior_ledger_name, current_ledger_name")
+        .eq("client_id", engagement.client_id);
+      return (data || []) as any[];
+    },
+    enabled: !!engagement?.client_id,
+  });
+
+  useEffect(() => {
+    if (!aliasRows) return;
+    const map: Record<string, string> = {};
+    for (const r of aliasRows as any[]) map[r.prior_ledger_name] = r.current_ledger_name;
+    setAliases(map);
+  }, [aliasRows]);
 
   // ─── Fetch existing FS rows ───
   const { data: existingFs } = useQuery({
@@ -562,6 +605,170 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [coaMapping, engagementId]);
 
+  // ═══════ SMART MAP (with group propagation) ═══════
+  // Whenever a user manually maps a ledger, Stage 6 learns that the Tally
+  // parent_group it belongs to likely maps to the same FS code. We immediately
+  // propagate the same code to any UNMAPPED ledger in that group (confidence
+  // "medium", so it can be re-AI'd or manually overridden). Existing manual
+  // mappings are never touched — this only fills empty slots.
+  const mapLedgerWithPropagation = useCallback(async (
+    ledgerName: string,
+    code: string,
+    confidence: "high" | "medium" | "low" | "manual" = "manual",
+    opts: { propagate?: boolean; persist?: boolean } = {},
+  ) => {
+    const { propagate = true, persist = true } = opts;
+    const lineItem = activeLeafItems.find(i => i.code === code);
+    if (!lineItem) return;
+
+    const acct = tbAccounts.find(a => a.account_name === ledgerName);
+    const group = acct?.account_group || "";
+    const updated: typeof coaMapping = { ...coaMapping };
+
+    updated[ledgerName] = {
+      code,
+      noteRef: lineItem.noteRef ?? null,
+      scheduleRef: lineItem.scheduleRef || "",
+      confidence,
+    };
+
+    let propagated = 0;
+    if (propagate && group) {
+      for (const a of tbAccounts) {
+        if (a.account_name === ledgerName) continue;
+        if ((a.account_group || "") !== group) continue;
+        if (updated[a.account_name]) continue; // don't overwrite existing (incl. manual)
+        updated[a.account_name] = {
+          code,
+          noteRef: lineItem.noteRef ?? null,
+          scheduleRef: lineItem.scheduleRef || "",
+          confidence: "medium",
+        };
+        propagated++;
+      }
+    }
+
+    setCoaMapping(updated);
+    if (persist) {
+      try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    }
+    toast.success(
+      `Mapped "${ledgerName}" → ${lineItem.name}`,
+      propagated > 0 ? { description: `Auto-applied to ${propagated} other unmapped ledgers in "${group}"` } : undefined,
+    );
+  }, [activeLeafItems, coaMapping, engagementId, tbAccounts]);
+
+  // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
+  // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
+  // Returns {ledger, fs_code, confidence, reason}; we merge back into coaMapping.
+  const runAiMapping = useCallback(async () => {
+    if (aiRunning) return;
+    const targets = tbAccounts.filter((a) => {
+      if (hideZero && Math.abs(a.balance) < 0.005 && Math.abs(a.opening_balance ?? 0) < 0.005) return false;
+      const m = coaMapping[a.account_name];
+      if (!m) return true;
+      if (m.confidence === "manual") return false;
+      return m.confidence === "low";
+    });
+    if (targets.length === 0) { toast.info("Nothing left for AI to map"); return; }
+
+    setAiRunning(true);
+    const fsItems = activeLeafItems.map((i) => ({ code: i.code, name: i.name, section: i.section }));
+    const batchSize = 40;
+    const merged = { ...coaMapping };
+    let mappedCount = 0, failedBatches = 0;
+
+    try {
+      for (let i = 0; i < targets.length; i += batchSize) {
+        const batch = targets.slice(i, i + batchSize).map((a) => ({
+          ledger:          a.account_name,
+          tally_group:     a.account_group,
+          closing_balance: Math.round(a.balance),
+          side:            a.balance >= 0 ? "Dr" : "Cr",
+        }));
+        const payload = {
+          entity_type: isNonCorporate ? "nce" : "corporate",
+          fs_items:    fsItems,
+          ledgers:     batch,
+        };
+        const { data, error } = await supabase.functions.invoke("claude-gateway", {
+          body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
+        });
+        if (error) { failedBatches++; continue; }
+        // claude-gateway returns the parsed JSON directly at the top level.
+        // Fall back to .parsed / .content shapes for resilience.
+        const raw = Array.isArray(data) ? data
+                   : (data as any)?.parsed ?? (data as any)?.content ?? [];
+        const arr = Array.isArray(raw) ? raw : [];
+        for (const r of arr) {
+          const ledgerName = r?.ledger ?? r?.ledger_name;
+          const code       = r?.fs_code ?? r?.code;
+          if (!ledgerName || !code) continue;
+          const lineItem = activeLeafItems.find((li) => li.code === code);
+          if (!lineItem) continue;
+          // do not override manual mappings
+          if (merged[ledgerName]?.confidence === "manual") continue;
+          merged[ledgerName] = {
+            code,
+            noteRef:    lineItem.noteRef ?? null,
+            scheduleRef: lineItem.scheduleRef || "",
+            confidence: (r?.confidence as string) || "medium",
+          };
+          mappedCount++;
+        }
+      }
+
+      setCoaMapping(merged);
+      try {
+        await supabase.from("audit_engagements").update({ coa_mapping: merged } as any).eq("id", engagementId);
+      } catch { /* persist errors surfaced to user below */ }
+
+      toast.success(
+        `AI mapped ${mappedCount} ledgers`,
+        { description: failedBatches > 0 ? `${failedBatches} batch(es) failed — re-run to retry` : "Saved to engagement" },
+      );
+    } catch (e: any) {
+      toast.error("AI mapping failed: " + e.message);
+    } finally {
+      setAiRunning(false);
+    }
+  }, [aiRunning, tbAccounts, hideZero, coaMapping, activeLeafItems, isNonCorporate, engagementId]);
+
+  // ═══════ GROUP ACTIONS ═══════
+  const assignGroup = useCallback(async (groupName: string, fsCode: string) => {
+    const lineItem = activeLeafItems.find((i) => i.code === fsCode);
+    if (!lineItem) return;
+    const updated = { ...coaMapping };
+    let n = 0;
+    for (const a of tbAccounts) {
+      if ((a.account_group || "— (no group) —") !== groupName) continue;
+      if (updated[a.account_name]?.confidence === "manual") continue;
+      updated[a.account_name] = {
+        code: fsCode,
+        noteRef: lineItem.noteRef ?? null,
+        scheduleRef: lineItem.scheduleRef || "",
+        confidence: "manual",
+      };
+      n++;
+    }
+    setCoaMapping(updated);
+    try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    toast.success(`Mapped ${n} ledgers in "${groupName}" → ${lineItem.name}`);
+  }, [tbAccounts, activeLeafItems, coaMapping, engagementId]);
+
+  const unmapGroup = useCallback(async (groupName: string) => {
+    const updated = { ...coaMapping };
+    let n = 0;
+    for (const a of tbAccounts) {
+      if ((a.account_group || "— (no group) —") !== groupName) continue;
+      if (updated[a.account_name]) { delete updated[a.account_name]; n++; }
+    }
+    if (n === 0) { toast.info("No mappings in that group"); return; }
+    setCoaMapping(updated);
+    try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
+    toast.success(`Unmapped ${n} ledgers from "${groupName}"`);
+  }, [tbAccounts, coaMapping, engagementId]);
+
   const unmapByConfidence = useCallback(async (level: "low" | "medium") => {
     const updated = { ...coaMapping };
     let n = 0;
@@ -734,20 +941,183 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
+  // ═══════ COMPARATIVE (PY) AMOUNTS ═══════
+  // Prior-year amounts derived from opening_balance on the CY trial balance.
+  // Valid for Balance Sheet items (asset/equity/liability). For P&L items,
+  // opening is always 0 — so PY P&L must come from prior engagement's
+  // fa_financial_statements (handled in Stage 7). The same coa_mapping
+  // serves both CY and PY — re-mapping a ledger re-groups both periods.
+  const computedAmountsPY: Record<string, number> = useMemo(() => {
+    const amounts: Record<string, number> = {};
+    for (const acct of tbAccounts) {
+      // Alias redirect: if this is a CLOSED prior-year ledger aliased to a
+      // current-year ledger, aggregate under the current ledger's mapping.
+      let mappingSource = acct.account_name;
+      if (aliases[acct.account_name]) mappingSource = aliases[acct.account_name];
+      const mapping = coaMapping[mappingSource] || coaMapping[acct.account_name];
+      if (!mapping) continue;
+      const opening = acct.opening_balance ?? 0;
+      if (!opening) continue;
+      amounts[mapping.code] = (amounts[mapping.code] || 0) + opening;
+    }
+    const computeTotal = (item: FSLineItem): number => {
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((sum, child) => sum + computeTotal(child), 0);
+      amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeTotal(item);
+    return amounts;
+  }, [tbAccounts, coaMapping, isNonCorporate]);
+
+  // ═══════ OPENING-TB BALANCE CHECK (Task 2) ═══════
+  // Sum signed opening_balance across all ledgers — should net to zero for a
+  // balanced opening trial balance (Dr = Cr). Threshold = ₹1 to ignore rounding.
+  const openingTbDiff = useMemo(() => {
+    const sum = tbAccounts.reduce((s, a) => s + (a.opening_balance ?? 0), 0);
+    return Math.round(sum * 100) / 100;
+  }, [tbAccounts]);
+  const openingTbImbalanced = Math.abs(openingTbDiff) >= 1;
+
+  // ═══════ VARIANCE DRILL-DOWN (Task 4) ═══════
+  // For a given FS code, list the mapped ledgers with CY/PY/Δ so the auditor
+  // can see exactly which ledgers drove the variance. Used by the drill modal.
+  const varianceDrillRows = useMemo(() => {
+    if (!varianceDrill) return [];
+    const rows = tbAccounts
+      .filter(a => {
+        const src = aliases[a.account_name] ? aliases[a.account_name] : a.account_name;
+        const mapping = coaMapping[src] || coaMapping[a.account_name];
+        return mapping?.code === varianceDrill.code;
+      })
+      .map(a => {
+        const cy = a.balance;
+        const py = a.opening_balance ?? 0;
+        return {
+          ledger: a.account_name,
+          group: a.account_group || "",
+          cy, py,
+          delta: cy - py,
+          pct: Math.abs(py) > 0.005 ? Math.round(((cy - py) / Math.abs(py)) * 100) : (Math.abs(cy) > 0.005 ? 100 : 0),
+          isNew:    Math.abs(py) < 0.005 && Math.abs(cy) >= 0.005,
+          isClosed: Math.abs(py) >= 0.005 && Math.abs(cy) < 0.005,
+          isAlias:  !!aliases[a.account_name],
+        };
+      })
+      .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+    return rows;
+  }, [varianceDrill, tbAccounts, coaMapping, aliases]);
+
+  // ═══════ ALIAS HANDLERS (Task 3) ═══════
+  const saveAlias = async (priorName: string, currentName: string) => {
+    if (!engagement?.client_id) return;
+    const { error } = await (supabase.from as any)("ledger_aliases")
+      .upsert({
+        client_id:           engagement.client_id,
+        firm_id:             engagement.firm_id || null,
+        engagement_id:       engagementId,
+        prior_ledger_name:   priorName,
+        current_ledger_name: currentName,
+      }, { onConflict: "client_id,prior_ledger_name" });
+    if (error) { toast.error(error.message); return; }
+    toast.success(`Linked "${priorName}" → "${currentName}"`);
+    setAliasDialog(null);
+    refetchAliases();
+  };
+  const removeAlias = async (priorName: string) => {
+    if (!engagement?.client_id) return;
+    const { error } = await (supabase.from as any)("ledger_aliases")
+      .delete()
+      .eq("client_id", engagement.client_id)
+      .eq("prior_ledger_name", priorName);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Alias removed");
+    refetchAliases();
+  };
+
   // ═══════ STATS ═══════
   const mappedCount = tbAccounts.filter(a => coaMapping[a.account_name]).length;
   const unmappedCount = tbAccounts.length - mappedCount;
   const allMapped = unmappedCount === 0 && tbAccounts.length > 0;
 
-  // Filtered accounts
+  // Filtered accounts — respect hideZero + search + workMode (PY/CY/Closed)
   const filteredAccounts = useMemo(() => {
-    if (!search) return tbAccounts;
     const s = search.toLowerCase();
-    return tbAccounts.filter(a => 
-      a.account_name.toLowerCase().includes(s) || 
-      a.account_group.toLowerCase().includes(s)
-    );
-  }, [tbAccounts, search]);
+    return tbAccounts.filter(a => {
+      const opening = a.opening_balance ?? 0;
+      const closing = a.balance;
+      const hasOpen  = Math.abs(opening) >= 0.005;
+      const hasClose = Math.abs(closing) >= 0.005;
+      if (hideZero && !hasOpen && !hasClose) return false;
+
+      // Workflow-mode narrowing
+      if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
+      if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
+      if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
+
+      if (!s) return true;
+      return (
+        a.account_name.toLowerCase().includes(s) ||
+        a.account_group.toLowerCase().includes(s)
+      );
+    });
+  }, [tbAccounts, search, hideZero, workMode]);
+
+  // Left panel = exclusively UNMAPPED ledgers. Mapped ledgers live in the right
+  // panel (grouped under their FS code) with ✕ unmap affordances.
+  // "Closed" mode is an exception — it shows all matching ledgers (mapped + unmapped)
+  // so the auditor can review PY-only impact. Other modes hide already-mapped.
+  const unmappedAccounts = useMemo(
+    () => workMode === "closed"
+      ? filteredAccounts
+      : filteredAccounts.filter(a => !coaMapping[a.account_name]),
+    [filteredAccounts, coaMapping, workMode],
+  );
+
+  // Counts per mode (shown on the segmented control)
+  const modeCounts = useMemo(() => {
+    let py = 0, cy = 0, closed = 0, all = 0;
+    for (const a of tbAccounts) {
+      const hasOpen  = Math.abs(a.opening_balance ?? 0) >= 0.005;
+      const hasClose = Math.abs(a.balance) >= 0.005;
+      if (!hasOpen && !hasClose) continue;               // dormant both years
+      if (!coaMapping[a.account_name]) all++;
+      if (hasOpen  && !coaMapping[a.account_name]) py++;
+      if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
+      if (hasOpen  && !hasClose) closed++;               // review regardless of mapped state
+    }
+    return { py, cy, closed, all };
+  }, [tbAccounts, coaMapping]);
+
+  // Grouped view — keyed by parent_group, aggregated subtotal + mapped/total counts.
+  // Computed against UNMAPPED accounts so empty groups (fully mapped) drop out of
+  // the left panel automatically.
+  const grouped = useMemo(() => {
+    const map = new Map<string, {
+      group: string;
+      items: typeof tbAccounts;
+      mapped: number;
+      total: number;
+      subtotal: number;
+      dominantCode: string | null;  // single FS code if all mapped rows agree
+    }>();
+    for (const a of unmappedAccounts) {
+      const key = a.account_group || "— (no group) —";
+      if (!map.has(key)) map.set(key, { group: key, items: [], mapped: 0, total: 0, subtotal: 0, dominantCode: null });
+      const g = map.get(key)!;
+      g.items.push(a);
+      g.total++;
+      g.subtotal += a.balance;
+    }
+    // Attach "suggested code" from any already-mapped sibling (learning-by-group)
+    for (const [key, g] of map.entries()) {
+      const sibling = tbAccounts.find(
+        (a) => (a.account_group || "— (no group) —") === key && coaMapping[a.account_name]
+      );
+      if (sibling) g.dominantCode = coaMapping[sibling.account_name].code;
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total || a.group.localeCompare(b.group));
+  }, [unmappedAccounts, tbAccounts, coaMapping]);
 
   // ═══════ SAVE ═══════
   const saveMapping = async () => {
@@ -776,6 +1146,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
       const addItem = (item: FSLineItem & { depth: number }) => {
         const isManual = !!manualOverrides[item.code];
+        // PY source-of-truth:
+        //   BS items → sum of opening_balance on CY's own TB (computedAmountsPY)
+        //   P&L items → fall back to prior engagement's fa_financial_statements (pyAmounts)
+        const isBS = String(item.section || "").toLowerCase().includes("bs") ||
+                     String(item.section || "").toLowerCase().includes("asset") ||
+                     String(item.section || "").toLowerCase().includes("liab") ||
+                     String(item.section || "").toLowerCase().includes("equity");
+        const pyFromOpening = computedAmountsPY[item.code] || 0;
+        const pyFromPrior   = pyAmounts[item.code]         || 0;
+        const amount_py     = isBS
+          ? (Math.abs(pyFromOpening) > 0.005 ? pyFromOpening : (pyFromPrior || null))
+          : (pyFromPrior || null);
+
         rows.push({
           engagement_id: engagementId,
           section: item.section,
@@ -784,7 +1167,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           note_ref: item.noteRef,
           schedule_ref: item.scheduleRef || null,
           amount_cy: Math.round((computedAmounts[item.code] || 0) * 100) / 100,
-          amount_py: pyAmounts[item.code] || null,
+          amount_py: amount_py !== null ? Math.round((amount_py as number) * 100) / 100 : null,
           is_manual: isManual,
           override_reason: isManual ? manualOverrides[item.code].reason : null,
           source: isManual ? "manual" : "tb_mapped",
@@ -860,18 +1243,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={6} stageLabel="COA Mapping" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 6 — COA Mapping</h1>
-          <p className="text-sm text-muted-foreground">
-            {engagement.clients?.name} — FY {engagement.financial_year} •{" "}
-            {isNonCorporate
-              ? entityType                                                          // e.g. "Partnership"
-              : engagement.schedule_iii_division === "div_ii"
-                ? "Ind AS (Div II)"
-                : "Schedule III (Div I)"}
-          </p>
+          <h1 className="text-lg font-bold text-foreground">Stage 6 — COA Mapping</h1>
+          <p className="text-xs text-muted-foreground">Map every ledger to its financial-statement line item</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={saveMapping} disabled={saving}>Save Mapping</Button>
@@ -880,6 +1257,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           </Button>
         </div>
       </div>
+
+      {/* Opening-TB balance banner (Task 2) */}
+      {openingTbImbalanced && (
+        <Alert className="bg-destructive/5 border-destructive/30">
+          <AlertTriangle className="h-4 w-4 text-destructive" />
+          <AlertTitle className="text-xs">Opening Trial Balance is out of balance</AlertTitle>
+          <AlertDescription className="text-[11px]">
+            Sum of opening Dr vs Cr differs by{" "}
+            <span className="font-mono font-semibold">₹{Math.abs(openingTbDiff).toLocaleString("en-IN")}</span>
+            {" "}({openingTbDiff > 0 ? "excess Dr" : "excess Cr"}). PY comparative figures will not tally until this is fixed in Tally.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
@@ -905,12 +1295,62 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
         <TabsContent value="mapping" className="mt-4">
-          <div className="flex gap-2 mb-3 flex-wrap">
+          {/* PY-first workflow segmented control */}
+          <div className="flex items-stretch gap-0 mb-3 border rounded-md overflow-hidden">
+            {([
+              { key: "py",     label: "Prior Year",         hint: "opening ≠ 0",           count: modeCounts.py,     color: "bg-amber-100 text-amber-800 border-amber-300" },
+              { key: "cy",     label: "Current Year (new)", hint: "opening = 0, closing ≠ 0", count: modeCounts.cy, color: "bg-primary/10 text-primary" },
+              { key: "closed", label: "Closed Accounts",    hint: "opening ≠ 0, closing = 0", count: modeCounts.closed, color: "bg-slate-100 text-slate-700 dark:bg-slate-900/60 dark:text-slate-300" },
+              { key: "all",    label: "All Unmapped",       hint: "every unmapped ledger", count: modeCounts.all,   color: "bg-violet-100 text-violet-800 dark:bg-violet-950/30 dark:text-violet-200" },
+            ] as const).map((m, i) => (
+              <button
+                key={m.key}
+                onClick={() => setWorkMode(m.key)}
+                className={cn(
+                  "flex-1 px-3 py-2 text-xs text-left transition-colors",
+                  i > 0 && "border-l",
+                  workMode === m.key ? m.color + " font-semibold" : "hover:bg-muted/50 text-muted-foreground"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span>{m.label}</span>
+                  <Badge variant="outline" className={cn("text-[9px] px-1 ml-2", workMode === m.key && "border-current")}>{m.count}</Badge>
+                </div>
+                <p className={cn("text-[10px] mt-0.5", workMode === m.key ? "opacity-80" : "opacity-60")}>{m.hint}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Workflow-mode guidance banner */}
+          {workMode === "py" && (
+            <Alert className="mb-3 bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertTitle className="text-xs">Prior-Year Mapping Mode</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                You're mapping ledgers with non-zero opening balances. Each mapping serves both PY and CY — once these are done, only new CY ledgers remain.
+              </AlertDescription>
+            </Alert>
+          )}
+          {workMode === "closed" && (
+            <Alert className="mb-3 bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-700">
+              <AlertTriangle className="h-4 w-4 text-slate-600" />
+              <AlertTitle className="text-xs">Closed Accounts Review</AlertTitle>
+              <AlertDescription className="text-[11px]">
+                These ledgers had balances last year but are now zero. They only affect the PY comparative column. Verify mapping — they may be ledgers that were renamed or reclassified mid-year.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="flex gap-2 mb-3 flex-wrap items-center">
             <Button variant="outline" size="sm" onClick={runAutoMapping} className="gap-1">
               <RefreshCw size={12} /> Auto-Map All
             </Button>
+            <Button size="sm" onClick={runAiMapping} disabled={aiRunning} className="gap-1 bg-violet-600 hover:bg-violet-700 text-white">
+              {aiRunning ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+              {aiRunning ? "AI Mapping…" : "AI Map Remaining"}
+            </Button>
             <Button variant="outline" size="sm" onClick={importPriorMapping} className="gap-1">
-              <Download size={12} /> Import Prior Year Mapping
+              <Download size={12} /> Import Prior Year
             </Button>
             {selectedAccount && coaMapping[selectedAccount] && (
               <Button variant="outline" size="sm" onClick={() => mapSimilar(selectedAccount)} className="gap-1">
@@ -922,36 +1362,171 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                 Unmap Selected
               </Button>
             )}
-            <div className="ml-auto flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")} className="gap-1 text-amber-700">
-                Unmap Low-Confidence
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="gap-1 text-amber-700">
-                Unmap Medium
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clearAllMappings} className="gap-1 text-destructive">
-                Clear All
-              </Button>
+
+            <div className="flex items-center gap-2 ml-2 text-xs text-muted-foreground">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <Switch checked={hideZero}  onCheckedChange={setHideZero}  />
+                <span>Hide ₹0</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <Switch checked={groupView} onCheckedChange={setGroupView} />
+                <span>Group by Tally group</span>
+              </label>
+            </div>
+
+            <div className="ml-auto flex gap-1">
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
+              <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
+              <Button variant="ghost" size="sm" onClick={clearAllMappings}                  className="text-destructive gap-1">Clear All</Button>
             </div>
           </div>
 
           <div className="flex gap-4" style={{ height: "calc(100vh - 22rem)" }}>
-            {/* Left: TB Accounts */}
+            {/* Left: UNMAPPED TB Accounts — mapping workspace */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
-              <div className="p-2 border-b bg-muted/30">
+              <div className="p-2 border-b bg-muted/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground">
+                    Unmapped Ledgers <Badge variant="outline" className="text-[9px] ml-1">{unmappedAccounts.length}</Badge>
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">Select → click FS line item on right</p>
+                </div>
                 <div className="relative">
                   <Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" />
                   <Input
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Search accounts..."
+                    placeholder="Search unmapped ledgers..."
                     className="pl-7 h-8 text-xs"
                   />
                 </div>
               </div>
               <ScrollArea className="flex-1">
+                {groupView ? (
+                  <div>
+                    {grouped.map((g) => {
+                      const isOpen = expandedGroups[g.group] ?? true;
+                      const suggestedItem = g.dominantCode
+                        ? activeLeafItems.find((i) => i.code === g.dominantCode) : null;
+                      return (
+                        <div key={g.group} className="border-b">
+                          <div
+                            onClick={() => setExpandedGroups((p) => ({ ...p, [g.group]: !isOpen }))}
+                            className="px-3 py-2 bg-muted/40 hover:bg-muted/60 cursor-pointer flex items-center justify-between sticky top-0 z-10"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                              <span className="text-xs font-semibold truncate">{g.group}</span>
+                              <Badge variant="outline" className="text-[9px] px-1">{g.total} unmapped</Badge>
+                              {suggestedItem && (
+                                <span className="text-[10px] text-primary truncate">
+                                  siblings → {suggestedItem.name}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className={cn("font-mono text-[10px]", g.subtotal >= 0 ? "text-foreground" : "text-destructive")}>
+                                ₹{Math.abs(g.subtotal).toLocaleString("en-IN")} {g.subtotal >= 0 ? "Dr" : "Cr"}
+                              </span>
+                              {suggestedItem && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, suggestedItem.code); }}
+                                  className="text-[10px] text-primary hover:underline"
+                                  title={`Apply "${suggestedItem.name}" to all ${g.total} unmapped ledgers in this group`}
+                                >Apply to all</button>
+                              )}
+                              {selectedAccount && coaMapping[selectedAccount] && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); assignGroup(g.group, coaMapping[selectedAccount].code); }}
+                                  className="text-[10px] text-primary hover:underline"
+                                  title="Map entire group to the currently selected ledger's FS code"
+                                >Map group</button>
+                              )}
+                            </div>
+                          </div>
+                          {isOpen && g.items.map((acct) => {
+                            const mapping = coaMapping[acct.account_name];
+                            const isSelected = selectedAccount === acct.account_name;
+                            const isManualOverride = mapping?.confidence === "manual";
+                            const lineItem = mapping ? activeLeafItems.find((i) => i.code === mapping.code) : null;
+                            return (
+                              <div
+                                key={acct.account_name}
+                                onClick={() => setSelectedAccount(acct.account_name)}
+                                className={cn(
+                                  "pl-6 pr-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors border-t",
+                                  isSelected && "bg-primary/10 border-l-2 border-l-primary",
+                                  !isSelected && isManualOverride && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                                  !mapping && "bg-destructive/5",
+                                )}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium truncate">{acct.account_name}</p>
+                                    {typeof acct.opening_balance === "number" && acct.opening_balance !== 0 && (
+                                      <p className="text-[10px] text-muted-foreground">
+                                        Opening ₹{Math.abs(acct.opening_balance).toLocaleString("en-IN")}
+                                        <span className="ml-0.5 text-[9px]">{acct.opening_balance >= 0 ? "Dr" : "Cr"}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                                    <div className="text-right">
+                                      <p className={cn("font-mono text-[11px]", acct.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                        ₹{Math.abs(acct.balance).toLocaleString("en-IN")}
+                                        <span className="ml-0.5 text-[9px]">{acct.balance >= 0 ? "Dr" : "Cr"}</span>
+                                      </p>
+                                      {(acct.tally_debit || acct.tally_credit) ? (
+                                        <p className="text-[9px] text-muted-foreground font-mono">
+                                          Dr ₹{Math.round(acct.tally_debit || 0).toLocaleString("en-IN")} · Cr ₹{Math.round(acct.tally_credit || 0).toLocaleString("en-IN")}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    {mapping && (
+                                      <button
+                                        title="Unmap this ledger"
+                                        onClick={(e) => { e.stopPropagation(); unmapAccount(acct.account_name); }}
+                                        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive ml-1"
+                                      >✕</button>
+                                    )}
+                                    <button
+                                      title="Reclassify ledger"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReclassifyDialog({ accountName: acct.account_name });
+                                        setReclassifyCode(mapping?.code || "");
+                                      }}
+                                      className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground ml-1"
+                                    ><Pencil size={10} /></button>
+                                  </div>
+                                </div>
+                                {mapping ? (
+                                  <div className="flex items-center gap-1 mt-1">
+                                    <Badge variant="outline" className={cn("text-[8px] px-1",
+                                      isManualOverride
+                                        ? "border-violet-400 text-violet-600 dark:text-violet-400"
+                                        : mapping.confidence === "high" ? "border-primary/40 text-primary"
+                                        : mapping.confidence === "medium" ? "border-muted-foreground/40"
+                                        : "border-destructive/40 text-destructive"
+                                    )}>
+                                      {isManualOverride ? "✎ manual" : mapping.confidence}
+                                    </Badge>
+                                    <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
+                                    {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
+                                  </div>
+                                ) : (
+                                  <Badge variant="destructive" className="text-[8px] mt-1">Unmapped</Badge>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div className="divide-y">
-                  {filteredAccounts.map(acct => {
+                  {unmappedAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
                     const isManualOverride = mapping?.confidence === "manual";
@@ -1037,64 +1612,189 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     );
                   })}
                 </div>
+                )}
               </ScrollArea>
             </div>
 
-            {/* Right: FS Line Items Tree */}
+            {/* Right: FS Line Items Tree — mapping destination + unmap workspace */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
-              <div className="p-2 border-b bg-muted/30">
+              <div className="p-2 border-b bg-muted/30 flex items-center justify-between">
                 <p className="text-xs font-semibold text-muted-foreground">
-                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"} — Click to assign selected account
+                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {selectedAccount
+                    ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
+                    : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
                 </p>
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-1">
+                  {/* Column header: CY | PY | Δ */}
+                  <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-1 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                    <span>FS Line Item</span>
+                    <span className="text-right">Current Yr</span>
+                    <span className="text-right">Prior Yr</span>
+                    <span className="text-right">Δ %</span>
+                  </div>
                   {activeFlatItems.map(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
-                    const amount = computedAmounts[item.code] || 0;
+                    const amountCY = computedAmounts[item.code]   || 0;
+                    const amountPY = computedAmountsPY[item.code] || 0;
+                    const delta    = amountCY - amountPY;
+                    const pct      = Math.abs(amountPY) > 0.005
+                      ? Math.round((delta / Math.abs(amountPY)) * 100)
+                      : (Math.abs(amountCY) > 0.005 ? 100 : 0);
+                    const hasAny   = Math.abs(amountCY) > 0.005 || Math.abs(amountPY) > 0.005;
+                    const isExpanded = expandedGroups[`fs:${item.code}`] ?? (mappedAccounts.length > 0 && mappedAccounts.length <= 5);
 
                     return (
-                      <div
-                        key={item.code}
-                        onClick={() => {
-                          if (selectedAccount && !isHeader) {
-                            setCoaMapping(prev => ({
-                              ...prev,
-                              [selectedAccount]: {
-                                code: item.code,
-                                noteRef: item.noteRef,
-                                scheduleRef: item.scheduleRef || "",
-                                confidence: "high",
-                              }
-                            }));
-                            toast.success(`Mapped "${selectedAccount}" → ${item.name}`);
-                          }
-                        }}
-                        className={cn(
-                          "px-2 py-1.5 text-xs rounded-sm cursor-pointer transition-colors",
-                          isHeader ? "font-bold text-foreground mt-2" : "hover:bg-primary/10",
-                          !isHeader && selectedAccount && "hover:ring-1 hover:ring-primary/30",
-                        )}
-                        style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
-                      >
-                        <div className="flex items-center justify-between">
+                      <div key={item.code}>
+                        <div
+                          onClick={() => {
+                            if (selectedAccount && !isHeader) {
+                              mapLedgerWithPropagation(selectedAccount, item.code, "manual");
+                              setSelectedAccount(null);
+                            } else if (!isHeader && mappedAccounts.length > 0) {
+                              setExpandedGroups(p => ({ ...p, [`fs:${item.code}`]: !isExpanded }));
+                            }
+                          }}
+                          className={cn(
+                            "px-2 py-1.5 text-xs rounded-sm transition-colors grid grid-cols-[1fr_90px_90px_60px] gap-1 items-center",
+                            isHeader ? "font-bold text-foreground mt-2 bg-muted/30" : "hover:bg-primary/10 cursor-pointer",
+                            !isHeader && selectedAccount && "ring-1 ring-transparent hover:ring-primary/40",
+                          )}
+                          style={{ paddingLeft: `${item.depth * 16 + 8}px` }}
+                        >
                           <div className="flex items-center gap-1.5 min-w-0">
                             {isHeader && <ChevronDown size={12} />}
+                            {!isHeader && mappedAccounts.length > 0 && (
+                              isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
+                            )}
                             <span className={cn("truncate", isHeader && "uppercase text-[11px]")}>{item.name}</span>
                             {item.noteRef && <Badge variant="outline" className="text-[8px] px-1 shrink-0">N{item.noteRef}</Badge>}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
                             {mappedAccounts.length > 0 && !isHeader && (
-                              <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length} acct</Badge>
-                            )}
-                            {amount !== 0 && (
-                              <span className={cn("font-mono text-[10px]", amount >= 0 ? "text-foreground" : "text-destructive")}>
-                                ₹{Math.abs(amount).toLocaleString("en-IN")}
-                              </span>
+                              <Badge className="text-[8px] px-1 bg-primary/10 text-primary">{mappedAccounts.length}</Badge>
                             )}
                           </div>
+                          <span className={cn("font-mono text-[10px] text-right", amountCY >= 0 ? "text-foreground" : "text-destructive")}>
+                            {Math.abs(amountCY) > 0.005 ? (
+                              <>₹{Math.abs(amountCY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountCY >= 0 ? "Dr" : "Cr"}</span></>
+                            ) : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span className={cn("font-mono text-[10px] text-right", amountPY >= 0 ? "text-foreground" : "text-destructive", "opacity-80")}>
+                            {Math.abs(amountPY) > 0.005 ? (
+                              <>₹{Math.abs(amountPY).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px] opacity-70">{amountPY >= 0 ? "Dr" : "Cr"}</span></>
+                            ) : <span className="text-muted-foreground/40">—</span>}
+                          </span>
+                          <span
+                            className={cn("text-[10px] text-right font-mono",
+                              !hasAny ? "text-muted-foreground/40" :
+                              Math.abs(pct) < 5  ? "text-muted-foreground" :
+                              Math.abs(pct) < 50 ? "text-amber-600" :
+                                                   "text-destructive",
+                              hasAny && !isHeader && "hover:underline cursor-pointer"
+                            )}
+                            title={hasAny && !isHeader ? "Drill into ledger-level variance" : undefined}
+                            onClick={(e) => {
+                              if (hasAny && !isHeader) {
+                                e.stopPropagation();
+                                setVarianceDrill({ code: item.code, name: item.name });
+                              }
+                            }}
+                          >
+                            {hasAny ? `${pct > 0 ? "+" : ""}${pct}%` : "—"}
+                          </span>
                         </div>
+                        {!isHeader && isExpanded && mappedAccounts.length > 0 && (
+                          <div className="bg-muted/20 border-l-2 border-primary/30 ml-2">
+                            {mappedAccounts.map(a => {
+                              const m = coaMapping[a.account_name];
+                              const confClass =
+                                m?.confidence === "manual" ? "bg-violet-100 text-violet-700 border-violet-300" :
+                                m?.confidence === "high" ? "bg-primary/10 text-primary border-primary/30" :
+                                m?.confidence === "medium" ? "bg-muted text-muted-foreground border-muted-foreground/30" :
+                                "bg-destructive/10 text-destructive border-destructive/30";
+                              const opening = a.opening_balance ?? 0;
+                              const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
+                              const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
+                              return (
+                                <div
+                                  key={a.account_name}
+                                  className="grid grid-cols-[1fr_90px_90px_28px] gap-1 items-center px-3 py-1 text-[11px] hover:bg-background"
+                                  style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                >
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="truncate">{a.account_name}</span>
+                                    <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
+                                      {m?.confidence === "manual" ? "✎" : m?.confidence}
+                                    </Badge>
+                                    {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
+                                    {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                                    {aliases[a.account_name] && (
+                                      <Badge
+                                        className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0 cursor-pointer"
+                                        title={`Aliased to "${aliases[a.account_name]}" — click to remove`}
+                                        onClick={(e) => { e.stopPropagation(); removeAlias(a.account_name); }}
+                                      >🔗 {aliases[a.account_name]}</Badge>
+                                    )}
+                                    {isClosed && !aliases[a.account_name] && (
+                                      <button
+                                        title="Link this closed ledger to its current-year renamed counterpart"
+                                        onClick={(e) => { e.stopPropagation(); setAliasDialog({ priorName: a.account_name }); }}
+                                        className="text-[8px] px-1 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 shrink-0"
+                                      >🔗 Link</button>
+                                    )}
+                                  </div>
+                                  <span className={cn("font-mono text-[10px] text-right", a.balance >= 0 ? "text-foreground" : "text-destructive")}>
+                                    {Math.abs(a.balance) > 0.005 ? (
+                                      <>₹{Math.abs(a.balance).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{a.balance >= 0 ? "Dr" : "Cr"}</span></>
+                                    ) : <span className="text-muted-foreground/40">—</span>}
+                                  </span>
+                                  <span className={cn("font-mono text-[10px] text-right opacity-80", opening >= 0 ? "text-foreground" : "text-destructive")}>
+                                    {Math.abs(opening) > 0.005 ? (
+                                      <>₹{Math.abs(opening).toLocaleString("en-IN")}<span className="ml-0.5 text-[9px]">{opening >= 0 ? "Dr" : "Cr"}</span></>
+                                    ) : <span className="text-muted-foreground/40">—</span>}
+                                  </span>
+                                  <div className="flex items-center gap-0.5 justify-end">
+                                    <button
+                                      title={`Unmap "${a.account_name}"`}
+                                      onClick={(e) => { e.stopPropagation(); unmapAccount(a.account_name); }}
+                                      className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                    >✕</button>
+                                    <button
+                                      title="Reclassify"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReclassifyDialog({ accountName: a.account_name });
+                                        setReclassifyCode(m?.code || "");
+                                      }}
+                                      className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    ><Pencil size={9} /></button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {mappedAccounts.length > 1 && (
+                              <div
+                                className="flex items-center justify-end px-3 py-1 text-[10px] text-destructive hover:underline cursor-pointer"
+                                style={{ paddingLeft: `${item.depth * 16 + 28}px` }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!window.confirm(`Unmap all ${mappedAccounts.length} ledgers from "${item.name}"?`)) return;
+                                  const updated = { ...coaMapping };
+                                  for (const a of mappedAccounts) delete updated[a.account_name];
+                                  setCoaMapping(updated);
+                                  supabase.from("audit_engagements")
+                                    .update({ coa_mapping: updated } as any)
+                                    .eq("id", engagementId)
+                                    .then(() => toast.success(`Unmapped ${mappedAccounts.length} ledgers from ${item.name}`));
+                                }}
+                              >Unmap all {mappedAccounts.length}</div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1202,6 +1902,163 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             <Button size="sm" disabled={!reclassifyCode} onClick={reclassifyAccount} className="gap-1">
               <Pencil size={12} /> Save Reclassification
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══ Variance Drill-down Dialog (Task 4) ═══ */}
+      <Dialog
+        open={!!varianceDrill}
+        onOpenChange={() => setVarianceDrill(null)}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              Variance Drill — {varianceDrill?.name}
+            </DialogTitle>
+          </DialogHeader>
+          {varianceDrill && (() => {
+            const totals = varianceDrillRows.reduce(
+              (acc, r) => ({ cy: acc.cy + r.cy, py: acc.py + r.py }),
+              { cy: 0, py: 0 }
+            );
+            const totalDelta = totals.cy - totals.py;
+            return (
+              <div className="space-y-3">
+                {/* Summary strip */}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="p-2 rounded bg-muted/40">
+                    <p className="text-[10px] text-muted-foreground uppercase">Current Yr</p>
+                    <p className="font-mono font-semibold">₹{Math.abs(totals.cy).toLocaleString("en-IN")} {totals.cy >= 0 ? "Dr" : "Cr"}</p>
+                  </div>
+                  <div className="p-2 rounded bg-muted/40">
+                    <p className="text-[10px] text-muted-foreground uppercase">Prior Yr</p>
+                    <p className="font-mono font-semibold">₹{Math.abs(totals.py).toLocaleString("en-IN")} {totals.py >= 0 ? "Dr" : "Cr"}</p>
+                  </div>
+                  <div className={cn(
+                    "p-2 rounded",
+                    Math.abs(totalDelta) < 1 ? "bg-muted/40" : "bg-amber-100 dark:bg-amber-950/30"
+                  )}>
+                    <p className="text-[10px] text-muted-foreground uppercase">Δ</p>
+                    <p className="font-mono font-semibold">{totalDelta >= 0 ? "+" : ""}₹{Math.abs(totalDelta).toLocaleString("en-IN")}</p>
+                  </div>
+                </div>
+
+                {/* Ledger-level rows */}
+                <div className="border rounded-md overflow-hidden">
+                  <div className="grid grid-cols-[1fr_110px_110px_110px_50px] gap-1 bg-muted/60 px-3 py-1.5 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+                    <span>Ledger</span>
+                    <span className="text-right">CY</span>
+                    <span className="text-right">PY</span>
+                    <span className="text-right">Δ</span>
+                    <span className="text-right">Δ%</span>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {varianceDrillRows.length === 0 ? (
+                      <div className="p-4 text-xs text-muted-foreground text-center">No mapped ledgers.</div>
+                    ) : varianceDrillRows.map(r => (
+                      <div
+                        key={r.ledger}
+                        className="grid grid-cols-[1fr_110px_110px_110px_50px] gap-1 px-3 py-1 text-[11px] border-t hover:bg-muted/30"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate" title={r.group}>{r.ledger}</span>
+                          {r.isNew    && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
+                          {r.isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
+                          {r.isAlias  && <Badge className="text-[8px] px-1 bg-violet-100 text-violet-700 border-violet-300 shrink-0">ALIAS</Badge>}
+                        </div>
+                        <span className="font-mono text-right">
+                          {Math.abs(r.cy) > 0.005 ? `₹${Math.abs(r.cy).toLocaleString("en-IN")}` : "—"}
+                        </span>
+                        <span className="font-mono text-right opacity-80">
+                          {Math.abs(r.py) > 0.005 ? `₹${Math.abs(r.py).toLocaleString("en-IN")}` : "—"}
+                        </span>
+                        <span className={cn(
+                          "font-mono text-right",
+                          Math.abs(r.delta) < 1      ? "text-muted-foreground" :
+                          Math.abs(r.pct)   < 50     ? "text-amber-600" :
+                                                       "text-destructive font-semibold"
+                        )}>
+                          {Math.abs(r.delta) < 0.005 ? "—" : `${r.delta >= 0 ? "+" : "−"}₹${Math.abs(r.delta).toLocaleString("en-IN")}`}
+                        </span>
+                        <span className={cn(
+                          "text-right font-mono text-[10px]",
+                          Math.abs(r.pct) < 5  ? "text-muted-foreground" :
+                          Math.abs(r.pct) < 50 ? "text-amber-600" :
+                                                 "text-destructive"
+                        )}>
+                          {r.pct >= 0 ? "+" : ""}{r.pct}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-muted-foreground">
+                  Sorted by |Δ| descending. NEW = opening 0 &amp; closing ≠ 0.
+                  CLOSED = opening ≠ 0 &amp; closing 0. ALIAS = linked to a renamed prior-year ledger.
+                </p>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setVarianceDrill(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══ Ledger Alias Picker (Task 3) ═══ */}
+      <Dialog
+        open={!!aliasDialog}
+        onOpenChange={() => setAliasDialog(null)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Link Renamed Ledger</DialogTitle>
+          </DialogHeader>
+          {aliasDialog && (() => {
+            const priorName = aliasDialog.priorName;
+            // Candidate NEW ledgers in CY = opening 0, closing ≠ 0, not already an alias target.
+            const existingTargets = new Set(Object.values(aliases));
+            const candidates = tbAccounts
+              .filter(a => {
+                const op = Math.abs(a.opening_balance ?? 0) < 0.005;
+                const cl = Math.abs(a.balance) >= 0.005;
+                return op && cl && !existingTargets.has(a.account_name);
+              })
+              .sort((x, y) => x.account_name.localeCompare(y.account_name));
+            return (
+              <div className="space-y-3">
+                <div className="p-3 rounded bg-muted/40 border">
+                  <p className="text-[10px] uppercase text-muted-foreground">Prior-year ledger (CLOSED)</p>
+                  <p className="text-sm font-semibold">{priorName}</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Link to current-year ledger (NEW) *</Label>
+                  <Select
+                    onValueChange={v => saveAlias(priorName, v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs mt-1">
+                      <SelectValue placeholder={candidates.length === 0 ? "No NEW ledgers found" : "Select current-year ledger…"} />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-60">
+                      {candidates.map(c => (
+                        <SelectItem key={c.account_name} value={c.account_name} className="text-xs">
+                          {c.account_name}
+                          {c.account_group && <span className="ml-1.5 text-muted-foreground">· {c.account_group}</span>}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    The prior ledger's opening balance will roll up under the current ledger's FS line item for PY comparatives.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAliasDialog(null)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   Plus, ArrowRight, MessageSquare, Send, Search, Filter,
   AlertTriangle, CheckCircle2, CornerDownRight, Loader2, X, Mail, Phone
@@ -231,11 +232,12 @@ export default function PipelineStage5({ engagementId, engagement, onStageComple
   }, [engagement, engagementId]);
 
   return (
-    <div className="max-w-7xl space-y-6">
+    <div className="max-w-7xl space-y-4">
+      <EngagementHeader engagement={engagement} stageNumber={3} stageLabel="Audit Query Tracker" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Stage 3 — Audit Query Tracker</h1>
+          <h1 className="text-lg font-bold text-foreground">Stage 3 — Audit Query Tracker</h1>
           <p className="text-sm text-muted-foreground">Manage all queries — auto-generated from scrutiny + manual entries</p>
         </div>
         <div className="flex gap-2">
