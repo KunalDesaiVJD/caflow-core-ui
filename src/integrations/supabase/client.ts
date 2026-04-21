@@ -8,10 +8,26 @@ const SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiO
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
+// Simple in-memory promise-chain lock. Replaces @supabase/gotrue-js's
+// default navigator.locks implementation which has been getting wedged
+// on Vercel production (React Strict Mode double-mount causes "Lock
+// broken by another request with the 'steal' option" and — worse —
+// sometimes hangs getSession() forever, rendering the app blank and
+// preventing login). This simple chain is single-tab only but matches
+// how Supabase sessions actually behave in practice, and removes the
+// cross-tab wedging entirely.
+let memoryLockChain: Promise<unknown> = Promise.resolve();
+const memoryLock = <R,>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => {
+  const run = memoryLockChain.then(fn, fn);
+  memoryLockChain = run.catch(() => {});
+  return run;
+};
+
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     storage: localStorage,
     persistSession: true,
     autoRefreshToken: true,
+    lock: memoryLock,
   }
 });
