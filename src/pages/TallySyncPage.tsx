@@ -504,6 +504,21 @@ export default function TallySyncPage() {
   const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
   const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
 
+  // Per-ledger reconciliation against Tally's authoritative closing
+  const tbReconStats = useMemo(() => {
+    let matched = 0;
+    const mismatches: { name: string; expected: number; actual: number }[] = [];
+    for (const r of filteredTB) {
+      const { debit, credit } = getTurnover(r);
+      const openingSigned = r.opening_balance * (r.opening_type === "Dr" ? 1 : -1);
+      const closingSigned = r.closing_balance * (r.balance_type  === "Dr" ? 1 : -1);
+      const derivedSigned = openingSigned + debit - credit;
+      if (Math.abs(derivedSigned - closingSigned) < 1) matched++;
+      else mismatches.push({ name: r.ledger_name, expected: closingSigned, actual: derivedSigned });
+    }
+    return { matched, total: filteredTB.length, allMatched: filteredTB.length > 0 && matched === filteredTB.length, mismatches };
+  }, [filteredTB, getTurnover]);
+
   // ── Group map for BS/PL classification ───────────────────────────────────────
   const groupInfoMap = useMemo(() => {
     const map = new Map<string, TallyGroup>();
@@ -919,7 +934,20 @@ export default function TallySyncPage() {
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-base">Trial Balance</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2">
+                  Trial Balance
+                  {hasData && (
+                    tbReconStats.allMatched ? (
+                      <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-100 gap-1">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Tallied with Tally · {tbReconStats.matched}/{tbReconStats.total}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-amber-400 text-amber-700 bg-amber-50 gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5" /> {tbReconStats.matched}/{tbReconStats.total} reconciled · {tbReconStats.total - tbReconStats.matched} with variance
+                      </Badge>
+                    )
+                  )}
+                </CardTitle>
                 <CardDescription>
                   {rowCounts.trial_balance > 0
                     ? `${rowCounts.trial_balance} ledgers · group-wise · BS first · click group to collapse`
