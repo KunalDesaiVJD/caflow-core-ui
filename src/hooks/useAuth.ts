@@ -110,30 +110,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void applySession(session);
     });
 
-    // CRITICAL: if getSession() rejects (e.g. @supabase/gotrue-js Web Lock
-    // "AbortError: Lock broken by another request with the 'steal' option"
-    // which happens during React Strict Mode double-mount), applySession
-    // never runs, loading stays true forever, and the whole app shows an
-    // empty loading screen. Always resolve loading even on failure, and
-    // fall back to the cached localStorage session synchronously so the
-    // UI can still render.
-    const getSessionWithFallback = async () => {
+    // CRITICAL: @supabase/gotrue-js uses the Web Locks API for auth-token
+    // access. Under React Strict Mode double-mount (and some production
+    // flows) the lock can be held/stolen so getSession() hangs forever —
+    // neither resolving nor rejecting. If we only awaited it, `loading`
+    // would stay true forever and the entire app would render an empty
+    // loading div (this was the Vercel "blank screen" bug).
+    //
+    // Strategy:
+    //   1. Try to read the session from localStorage directly. If a
+    //      session exists and is unexpired, we can unblock the UI
+    //      immediately from the JWT claims.
+    //   2. Race the async getSession() against a 4-second timeout so
+    //      loading is always resolved, even if the lock is wedged.
+    //   3. If nothing resolves, render as signed-out (redirects to login).
+    const readLocalSession = () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (isActive) await applySession(session);
+        const projectRef = (supabase as any).supabaseUrl?.match(/https:\/\/([a-z0-9]+)\./)?.[1];
+        const storageKey = `sb-${projectRef}-auth-token`;
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed?.access_token || !parsed?.user) return null;
+        // Check expiry
+        if (parsed.expires_at && parsed.expires_at * 1000 < Date.now()) return null;
+        return parsed;
+      } catch {
+        return null;
+      }
+    };
+
+    const timeout = <T,>(ms: number): Promise<T> =>
+      new Promise((_, reject) => setTimeout(() => reject(new Error("getSession timeout")), ms));
+
+    const getSessionWithFallback = async () => {
+      // Step 1: optimistic unblock from localStorage (no await on getSession)
+      const local = readLocalSession();
+      if (local && isActive) {
+        void applySession(local as any);
+      }
+
+      // Step 2: race getSession() against a timeout
+      try {
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          timeout<Awaited<ReturnType<typeof supabase.auth.getSession>>>(4000),
+        ]);
+        if (isActive) await applySession(result.data.session);
       } catch (err) {
-        console.warn("[AuthProvider] getSession failed, retrying once:", err);
-        // Second attempt after the lock-steal has cleared
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (isActive) await applySession(session);
-        } catch (err2) {
-          console.error("[AuthProvider] getSession failed twice, rendering as signed-out:", err2);
-          if (isActive) {
-            setUser(null);
-            setLoading(false);
-          }
+        console.warn("[AuthProvider] getSession hung or failed:", err);
+        if (!local && isActive) {
+          // No local session and getSession is wedged — render signed-out
+          setUser(null);
+          setLoading(false);
         }
+        // If we already applied from local, leave UI as-is; auth state
+        // change listener will correct if/when Supabase recovers.
       }
     };
     void getSessionWithFallback();
