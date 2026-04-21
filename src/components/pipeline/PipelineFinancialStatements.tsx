@@ -351,6 +351,33 @@ export default function PipelineFinancialStatements({
     enabled: !!(engagement as any)?.partner_id && isNonCorporate,
   });
 
+  // ─── Fetch NCE Capital Account rows (for Notes to Accounts-Capital sheet) ─
+  const { data: nceCapitalData } = useQuery({
+    queryKey: ["nce-capital-account", engagementId],
+    queryFn: async () => {
+      const { data } = await (supabase.from as any)("nce_capital_account")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .order("partner_no");
+      return (data || []) as any[];
+    },
+    enabled: !!engagementId && isNonCorporate,
+  });
+
+  // ─── Fetch NCE PPE Schedule rows (for Notes to Accounts-PPE sheet) ────────
+  const { data: ncePpeData } = useQuery({
+    queryKey: ["nce-ppe-schedule", engagementId],
+    queryFn: async () => {
+      const { data } = await (supabase.from as any)("nce_ppe_schedule")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .order("asset_category")
+        .order("sort_order");
+      return (data || []) as any[];
+    },
+    enabled: !!engagementId && isNonCorporate,
+  });
+
   // ─── TB accounts ───
   // Includes opening_balance (signed; Cr → negative) so Stage 7 can derive PY
   // from the same coa_mapping as Stage 6. Opening = PY closing for BS items.
@@ -1195,156 +1222,598 @@ export default function PipelineFinancialStatements({
     pl.getCell(`F${pr}`).value = sigDate || "";
     pl.mergeCells(`F${pr}:G${pr}`);
 
-    // ───────────────────────── NOTES INDEX ─────────────────────────
-    const notedItems = activeFlatItems.filter(i => i.noteRef);
-    const nx = wb.addWorksheet("Notes Index");
-    nx.columns = [
-      { header: "Note",     key: "n",  width: 8 },
-      { header: "Line Item", key: "li", width: 42 },
-      { header: "Code",     key: "c",  width: 16 },
-      { header: `CY ${cyYear} (Rs.)`, key: "cy", width: 18 },
-      { header: `PY ${pyYear} (Rs.)`, key: "py", width: 18 },
-    ];
-    nx.getRow(1).font = { bold: true };
-    for (const i of notedItems) {
-      const r = nx.addRow({
-        n: `N${i.noteRef}`,
-        li: i.name,
-        c:  i.code,
-        cy: fmt(computedAmounts[i.code] || 0),
-        py: fmt(mergedPY[i.code] || 0),
-      });
-      r.getCell("cy").numFmt = MONEY_FMT;
-      r.getCell("py").numFmt = MONEY_FMT;
-    }
+    // ══════════════════════════════════════════════════════════════════════
+    // NCE: Revised template sheets  (Note 1 | Capital | Notes | PPE)
+    // Corporate: legacy Notes Index + per-note annexures + PY Reconciliation
+    // ══════════════════════════════════════════════════════════════════════
 
-    // ───────────────────────── NOTE ANNEXURES ─────────────────────────
-    for (const item of notedItems) {
-      const tbLedgerNames = new Set<string>();
-      const rows: Array<Record<string, any>> = tbAccounts
-        .filter(a => coaMapping[a.account_name]?.code === item.code)
-        .map(a => {
-          tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
-          return {
-            ledger: a.account_name,
-            group:  a.account_group || "",
-            cy: fmt(a.balance),
-            py: fmt(a.opening_balance || 0),
-            variance: fmt(a.balance - (a.opening_balance || 0)),
-            status: (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
-              ? "NEW"
-              : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
-                ? "CLOSED" : "",
-          };
-        });
-      // Fold PY-only manual annexures
-      const manualRows = pyAnnexures[item.code] || [];
-      for (const r of manualRows) {
-        const name = String(r.ledger_name || "").trim();
-        if (!name) continue;
-        const key = name.toLowerCase();
-        if (tbLedgerNames.has(key)) {
-          const existing = rows.find(l => String(l.ledger).toLowerCase().trim() === key);
-          if (existing) {
-            existing.py = fmt(r.amount);
-            existing.variance = fmt((existing.cy as number) - r.amount);
-          }
-        } else {
-          rows.push({
-            ledger: name, group: r.group || "",
-            cy: 0, py: fmt(r.amount),
-            variance: fmt(-r.amount), status: "PY-ONLY",
-          });
+    if (isNonCorporate) {
+      // ─────────────────────── NOTE 1: Accounting Policies ───────────────────
+      const n1 = wb.addWorksheet("Note 1", { views: [{ showGridLines: false }] });
+      n1.columns = [
+        { width: 2 },   // A spacer
+        { width: 6 },   // B point number
+        { width: 86 },  // C content (wide for wrapped text)
+      ];
+      let n1r = 2;
+      n1.getCell(`B${n1r}`).value = clientName;
+      n1.getCell(`B${n1r}`).font = { bold: true, size: 13 };
+      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
+      n1r++;
+      n1.getCell(`B${n1r}`).value = "Note 1 — Summary of Significant Accounting Policies";
+      n1.getCell(`B${n1r}`).font = { bold: true, size: 11 };
+      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
+      n1r++;
+      n1.getCell(`B${n1r}`).value = `For the year ended 31 March, ${cyYear}`;
+      n1.getCell(`B${n1r}`).font = { italic: true, size: 9 };
+      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "right" };
+      n1r += 2;
+
+      const policies: { num: string; text: string }[] = [
+        { num: "1.", text: "Basis of Preparation\nThe financial statements have been prepared under the historical cost convention on an accrual basis in accordance with generally accepted accounting principles applicable to Non-Corporate Entities in India." },
+        { num: "2.", text: "Revenue Recognition\nRevenue from operations is recognised when it is earned and no significant uncertainty exists as to its ultimate realisation or collection. Interest income is recognised on a time proportionate basis taking into account the principal outstanding and the applicable rate." },
+        { num: "3.", text: "Property, Plant & Equipment\nFixed assets are stated at cost less accumulated depreciation. Cost comprises the purchase price and any attributable costs of bringing the asset to its working condition for its intended use. Subsequent costs are included in the asset's carrying amount only when it is probable that future economic benefits associated with the item will flow to the entity." },
+        { num: "4.", text: "Depreciation\nDepreciation on fixed assets is provided on the Written Down Value (WDV) method at rates prescribed under the Income Tax Act, 1961 / as estimated by management to reflect the useful economic lives of the assets. Depreciation on assets acquired / disposed of during the year is charged on a pro-rata basis." },
+        { num: "5.", text: "Inventories\nInventories are valued at the lower of cost (computed on FIFO / weighted average basis) and net realisable value. Cost includes all costs of purchase and other costs incurred in bringing the inventories to their present location and condition." },
+        { num: "6.", text: "Employee Benefits\nShort-term employee benefit obligations such as salaries, wages and bonus are recognised as an expense in the period in which the related services are rendered. Gratuity and other long-term benefit liabilities are recognised on an accrual basis or as per actuarial valuation, as applicable." },
+        { num: "7.", text: "Borrowing Costs\nBorrowing costs directly attributable to acquisition or construction of qualifying assets are capitalised as part of the cost of such assets. Other borrowing costs are charged to the Statement of Profit and Loss in the period in which they are incurred." },
+        { num: "8.", text: "Provisions and Contingent Liabilities\nProvisions are recognised when the entity has a present obligation as a result of a past event, it is probable that an outflow of resources will be required to settle the obligation and a reliable estimate can be made. Contingent liabilities are disclosed unless the possibility of an outflow of resources embodying economic benefits is remote." },
+        { num: "9.", text: "Taxes on Income\nCurrent tax is determined on the basis of the taxable income computed in accordance with the Income Tax Act, 1961 using applicable tax rates and tax laws. Advance tax and tax deducted at source are shown as assets after adjustment against current tax provisions." },
+        { num: "10.", text: "Foreign Currency Transactions\nTransactions denominated in foreign currencies are recorded at the exchange rate prevailing at the date of the transaction. Monetary assets and liabilities denominated in foreign currencies are restated at the exchange rate prevailing at the balance sheet date. Any income or expense on account of exchange difference is recognised in the Statement of Profit and Loss." },
+        { num: "11.", text: "Cash and Cash Equivalents\nCash and cash equivalents for the purposes of cash flow statement comprise cash at bank, cash in hand and fixed deposits with an original maturity of three months or less that are readily convertible to known amounts of cash." },
+        { num: "12.", text: "Use of Estimates\nThe preparation of financial statements requires the management to make estimates and assumptions that affect the reported balances of assets and liabilities, disclosures relating to contingent liabilities as at the date of the financial statements and the reported amounts of income and expenses during the year. Management believes that the estimates used in the preparation of financial statements are prudent and reasonable." },
+      ];
+
+      for (const p of policies) {
+        n1.getCell(`B${n1r}`).value = p.num;
+        n1.getCell(`B${n1r}`).font = { bold: true };
+        n1.getCell(`B${n1r}`).alignment = { vertical: "top" };
+        n1.getCell(`C${n1r}`).value = p.text;
+        n1.getCell(`C${n1r}`).alignment = { wrapText: true, vertical: "top" };
+        n1r += 2;
+      }
+
+      // Signature block
+      n1r += 1;
+      n1.getCell(`B${n1r}`).value = "For,";
+      n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
+      n1.getCell(`C${n1r}`).font = { bold: true };
+      n1r++;
+      n1.getCell(`B${n1r}`).value = "Chartered Accountants";
+      n1.getCell(`B${n1r}`).font = { italic: true };
+      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1r++;
+      n1.getCell(`B${n1r}`).value = "FRN:";
+      n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
+      n1r += 3;
+      n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
+      n1.getCell(`B${n1r}`).font = { bold: true };
+      n1r++;
+      n1.getCell(`B${n1r}`).value = "Partner";
+      n1r++;
+      n1.getCell(`B${n1r}`).value = "Membership No.";
+      n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+
+      // ─────────────────── NOTES TO ACCOUNTS — CAPITAL ───────────────────────
+      const nc = wb.addWorksheet("Notes to Accounts-Capital", { views: [{ showGridLines: false }] });
+      nc.columns = [
+        { width: 2 },   // A spacer
+        { width: 6 },   // B Sr.No
+        { width: 28 },  // C Partner Name
+        { width: 10 },  // D Share%
+        { width: 16 },  // E Opening
+        { width: 16 },  // F Introduced
+        { width: 16 },  // G Remuneration
+        { width: 16 },  // H Interest
+        { width: 16 },  // I Withdrawals
+        { width: 18 },  // J Share of P/L
+        { width: 18 },  // K Closing
+      ];
+      let ncr = 2;
+      nc.getCell(`B${ncr}`).value = clientName;
+      nc.getCell(`B${ncr}`).font = { bold: true, size: 13 };
+      nc.mergeCells(`B${ncr}:K${ncr}`);
+      nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
+      ncr++;
+      nc.getCell(`B${ncr}`).value = "Notes to Accounts — Note 2: Owners' Capital Account";
+      nc.getCell(`B${ncr}`).font = { bold: true, size: 11 };
+      nc.mergeCells(`B${ncr}:K${ncr}`);
+      nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
+      ncr++;
+      nc.getCell(`B${ncr}`).value = "Amount (in Rs)";
+      nc.getCell(`B${ncr}`).font = { italic: true, size: 9 };
+      nc.mergeCells(`B${ncr}:K${ncr}`);
+      nc.getCell(`B${ncr}`).alignment = { horizontal: "right" };
+      ncr++;
+
+      // Two-row column header
+      const capHdr1 = ncr++, capHdr2 = ncr++;
+      const capHdrDefs: [string, string, string][] = [
+        ["B", "Sr.", "No."],
+        ["C", "Name of", "Partner / Proprietor"],
+        ["D", "Share", "%"],
+        ["E", "Opening", "Balance (Rs.)"],
+        ["F", "Capital", "Introduced (Rs.)"],
+        ["G", "Remuneration", "(Rs.)"],
+        ["H", "Interest on", "Capital (Rs.)"],
+        ["I", "Withdrawals /", "Drawings (Rs.)"],
+        ["J", "Share of", "Profit / (Loss) (Rs.)"],
+        ["K", "Closing", "Balance (Rs.)"],
+      ];
+      for (const [col, h1, h2] of capHdrDefs) {
+        nc.getCell(`${col}${capHdr1}`).value = h1;
+        nc.getCell(`${col}${capHdr2}`).value = h2;
+        for (const r of [capHdr1, capHdr2]) {
+          nc.getCell(`${col}${r}`).font = { bold: true };
+          nc.getCell(`${col}${r}`).border = fullBorder;
+          nc.getCell(`${col}${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
         }
       }
-      if (rows.length === 0) continue;
-      const totCy = rows.reduce((s, l) => s + (l.cy as number), 0);
-      const totPy = rows.reduce((s, l) => s + (l.py as number), 0);
 
-      const sheetName = `N${item.noteRef} ${item.name}`.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
-      const ns = wb.addWorksheet(sheetName);
-      ns.columns = [
-        { width: 2 },
-        { width: 38 },
-        { width: 24 },
-        { width: 18 },
-        { width: 18 },
-        { width: 16 },
-        { width: 10 },
+      const capRows = (nceCapitalData || []) as any[];
+      let capTotO = 0, capTotI = 0, capTotR = 0, capTotInt = 0;
+      let capTotW = 0, capTotPS = 0, capTotCl = 0;
+
+      const writeCapRow = (p: any, suffix: "cy" | "py") => {
+        const openBal    = Number(p[`opening_balance_${suffix}`] || 0);
+        const introduced = Number(p[`introduced_${suffix}`]      || 0);
+        const remun      = Number(p[`remuneration_${suffix}`]    || 0);
+        const interest   = Number(p[`interest_${suffix}`]        || 0);
+        const withdrawals = Number(p[`withdrawals_${suffix}`]    || 0);
+        const profitShare = Number(p[`profit_share_${suffix}`]   || 0);
+        const closing    = fmt(openBal + introduced + remun + interest - withdrawals + profitShare);
+        if (suffix === "cy") {
+          capTotO   += openBal; capTotI   += introduced; capTotR  += remun;
+          capTotInt += interest; capTotW  += withdrawals; capTotPS += profitShare;
+          capTotCl  += closing;
+        }
+        nc.getCell(`B${ncr}`).value = p.partner_no;
+        nc.getCell(`C${ncr}`).value = p.partner_name || "";
+        nc.getCell(`D${ncr}`).value = p.profit_share_pct != null ? `${p.profit_share_pct}%` : "";
+        nc.getCell(`E${ncr}`).value = fmt(openBal);
+        nc.getCell(`F${ncr}`).value = fmt(introduced);
+        nc.getCell(`G${ncr}`).value = fmt(remun);
+        nc.getCell(`H${ncr}`).value = fmt(interest);
+        nc.getCell(`I${ncr}`).value = fmt(withdrawals);
+        nc.getCell(`J${ncr}`).value = fmt(profitShare);
+        nc.getCell(`K${ncr}`).value = closing;
+        for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
+        nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
+        nc.getCell(`D${ncr}`).alignment = { horizontal: "center" };
+        ncr++;
+      };
+
+      // CY rows
+      if (capRows.length > 0) {
+        for (const p of capRows) writeCapRow(p, "cy");
+      } else {
+        nc.getCell(`C${ncr}`).value = "(No capital account data entered — please complete Stage 8)";
+        nc.getCell(`C${ncr}`).font = { italic: true, color: { argb: "FF888888" } };
+        nc.mergeCells(`C${ncr}:K${ncr}`);
+        ncr++;
+      }
+
+      // CY Total row
+      nc.getCell(`B${ncr}`).value = "Total";
+      nc.getCell(`E${ncr}`).value = fmt(capTotO);   nc.getCell(`F${ncr}`).value = fmt(capTotI);
+      nc.getCell(`G${ncr}`).value = fmt(capTotR);   nc.getCell(`H${ncr}`).value = fmt(capTotInt);
+      nc.getCell(`I${ncr}`).value = fmt(capTotW);   nc.getCell(`J${ncr}`).value = fmt(capTotPS);
+      nc.getCell(`K${ncr}`).value = fmt(capTotCl);
+      for (const col of ["B","C","D","E","F","G","H","I","J","K"]) {
+        nc.getCell(`${col}${ncr}`).font = { bold: true };
+        nc.getCell(`${col}${ncr}`).border = { top: thin, bottom: thin };
+      }
+      for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
+      ncr += 2;
+
+      // PY section
+      if (capRows.length > 0) {
+        nc.getCell(`B${ncr}`).value = "Prior Year (PY)";
+        nc.getCell(`B${ncr}`).font = { bold: true, italic: true };
+        nc.mergeCells(`B${ncr}:K${ncr}`);
+        ncr++;
+        let pyTotO = 0, pyTotI = 0, pyTotR = 0, pyTotInt = 0;
+        let pyTotW = 0, pyTotPS = 0, pyTotCl = 0;
+        for (const p of capRows) {
+          const openBal = Number(p.opening_balance_py || 0);
+          const intro   = Number(p.introduced_py      || 0);
+          const remun   = Number(p.remuneration_py    || 0);
+          const interest= Number(p.interest_py        || 0);
+          const withd   = Number(p.withdrawals_py     || 0);
+          const ps      = Number(p.profit_share_py    || 0);
+          const closing = fmt(openBal + intro + remun + interest - withd + ps);
+          pyTotO += openBal; pyTotI += intro; pyTotR += remun;
+          pyTotInt += interest; pyTotW += withd; pyTotPS += ps; pyTotCl += closing;
+          nc.getCell(`B${ncr}`).value = p.partner_no;
+          nc.getCell(`C${ncr}`).value = p.partner_name || "";
+          nc.getCell(`D${ncr}`).value = p.profit_share_pct != null ? `${p.profit_share_pct}%` : "";
+          nc.getCell(`E${ncr}`).value = fmt(openBal);  nc.getCell(`F${ncr}`).value = fmt(intro);
+          nc.getCell(`G${ncr}`).value = fmt(remun);    nc.getCell(`H${ncr}`).value = fmt(interest);
+          nc.getCell(`I${ncr}`).value = fmt(withd);    nc.getCell(`J${ncr}`).value = fmt(ps);
+          nc.getCell(`K${ncr}`).value = closing;
+          for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
+          nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
+          nc.getCell(`D${ncr}`).alignment = { horizontal: "center" };
+          ncr++;
+        }
+        nc.getCell(`B${ncr}`).value = "Total";
+        nc.getCell(`E${ncr}`).value = fmt(pyTotO);  nc.getCell(`F${ncr}`).value = fmt(pyTotI);
+        nc.getCell(`G${ncr}`).value = fmt(pyTotR);  nc.getCell(`H${ncr}`).value = fmt(pyTotInt);
+        nc.getCell(`I${ncr}`).value = fmt(pyTotW);  nc.getCell(`J${ncr}`).value = fmt(pyTotPS);
+        nc.getCell(`K${ncr}`).value = fmt(pyTotCl);
+        for (const col of ["B","C","D","E","F","G","H","I","J","K"]) {
+          nc.getCell(`${col}${ncr}`).font = { bold: true };
+          nc.getCell(`${col}${ncr}`).border = { top: thin, bottom: thin };
+        }
+        for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
+      }
+
+      // ──────────────── NOTES TO ACCOUNTS (consolidated) ─────────────────────
+      const na = wb.addWorksheet("Notes to Accounts", { views: [{ showGridLines: false }] });
+      na.columns = [
+        { width: 2 },   // A spacer
+        { width: 46 },  // B Particulars (wide)
+        { width: 2 },   // C continuation
+        { width: 18 },  // D CY (Rs.)
+        { width: 18 },  // E PY (Rs.)
       ];
-      // Title block
-      ns.getCell("B2").value = clientName;
-      ns.getCell("B2").font = { bold: true, size: 12 };
-      ns.mergeCells("B2:G2");
-      ns.getCell("B2").alignment = { horizontal: "center" };
-      ns.getCell("B3").value = `Note ${item.noteRef} — ${item.name}`;
-      ns.getCell("B3").font = { bold: true };
-      ns.mergeCells("B3:G3");
-      ns.getCell("B3").alignment = { horizontal: "center" };
-      ns.getCell("B4").value = `(Amount in Rs.)  FY ${fy}`;
-      ns.getCell("B4").font = { italic: true, size: 9 };
-      ns.mergeCells("B4:G4");
-      ns.getCell("B4").alignment = { horizontal: "right" };
-      // Column header
-      const hdr = ns.getRow(6);
-      hdr.values = [null, "Ledger", "Group", `CY ${cyYear} (Rs.)`, `PY ${pyYear} (Rs.)`, "Variance (Rs.)", "Status"];
-      hdr.font = { bold: true };
-      hdr.alignment = { horizontal: "center", vertical: "middle" };
-      hdr.eachCell((c, n) => { if (n >= 2) c.border = fullBorder; });
-      // Data
-      let nr = 7;
-      for (const l of rows) {
-        ns.getCell(`B${nr}`).value = l.ledger;
-        ns.getCell(`C${nr}`).value = l.group;
-        ns.getCell(`D${nr}`).value = l.cy;
-        ns.getCell(`E${nr}`).value = l.py;
-        ns.getCell(`F${nr}`).value = l.variance;
-        ns.getCell(`G${nr}`).value = l.status;
+      let nar = 2;
+      na.getCell(`B${nar}`).value = clientName;
+      na.getCell(`B${nar}`).font = { bold: true, size: 13 };
+      na.mergeCells(`B${nar}:E${nar}`);
+      na.getCell(`B${nar}`).alignment = { horizontal: "center" };
+      nar++;
+      na.getCell(`B${nar}`).value = "Notes to Accounts";
+      na.getCell(`B${nar}`).font = { bold: true, size: 11 };
+      na.mergeCells(`B${nar}:E${nar}`);
+      na.getCell(`B${nar}`).alignment = { horizontal: "center" };
+      nar++;
+      na.getCell(`B${nar}`).value = `For the year ended 31 March, ${cyYear}`;
+      na.getCell(`B${nar}`).font = { italic: true, size: 9 };
+      na.mergeCells(`B${nar}:E${nar}`);
+      na.getCell(`B${nar}`).alignment = { horizontal: "right" };
+      nar += 2;
+
+      // Notes 1 (policies), 2 (capital), and 10/11/12 (PPE/CWIP/Intangible)
+      // have their own dedicated sheets — skip them in the consolidated sheet.
+      const skipNotes = new Set([1, 2, 10, 11, 12]);
+      const notedItemsNCE = activeFlatItems.filter(i => i.noteRef && !skipNotes.has(i.noteRef));
+
+      for (const item of notedItemsNCE) {
+        // Collect ledger rows mapped to this FS code
+        const tbLedgerNames = new Set<string>();
+        const noteRows: Array<{ ledger: string; cy: number; py: number }> = tbAccounts
+          .filter(a => coaMapping[a.account_name]?.code === item.code)
+          .map(a => {
+            tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
+            return {
+              ledger: a.account_name,
+              cy: fmt(a.balance),
+              py: fmt(a.opening_balance || 0),
+            };
+          });
+        // Fold in PY-only manual annexures
+        for (const r of pyAnnexures[item.code] || []) {
+          const name = String(r.ledger_name || "").trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          if (tbLedgerNames.has(key)) {
+            const ex = noteRows.find(l => l.ledger.toLowerCase().trim() === key);
+            if (ex) ex.py = fmt(r.amount);
+          } else {
+            noteRows.push({ ledger: name, cy: 0, py: fmt(r.amount) });
+          }
+        }
+
+        const totalCy = noteRows.length > 0
+          ? noteRows.reduce((s, l) => s + l.cy, 0)
+          : fmt(computedAmounts[item.code] || 0);
+        const totalPy = noteRows.length > 0
+          ? noteRows.reduce((s, l) => s + l.py, 0)
+          : fmt(mergedPY[item.code] || 0);
+
+        if (Math.abs(totalCy) < 0.005 && Math.abs(totalPy) < 0.005 && noteRows.length === 0) continue;
+
+        // Note section heading (shaded row)
+        na.getCell(`B${nar}`).value = `Note ${item.noteRef} — ${item.name}`;
+        na.getCell(`B${nar}`).font = { bold: true };
+        na.mergeCells(`B${nar}:E${nar}`);
+        na.getCell(`B${nar}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F5F5" } };
+        nar++;
+
+        // Sub-header row
+        na.getCell(`B${nar}`).value = "Particulars";
+        na.getCell(`D${nar}`).value = `31 March, ${cyYear} (Rs.)`;
+        na.getCell(`E${nar}`).value = `31 March, ${pyYear} (Rs.)`;
+        na.mergeCells(`B${nar}:C${nar}`);
+        for (const col of ["B","C","D","E"]) {
+          na.getCell(`${col}${nar}`).font = { bold: true };
+          na.getCell(`${col}${nar}`).border = fullBorder;
+          na.getCell(`${col}${nar}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        }
+        nar++;
+
+        // Data rows
+        if (noteRows.length > 0) {
+          for (const l of noteRows) {
+            na.getCell(`B${nar}`).value = l.ledger;
+            na.mergeCells(`B${nar}:C${nar}`);
+            na.getCell(`D${nar}`).value = l.cy;
+            na.getCell(`E${nar}`).value = l.py;
+            na.getCell(`D${nar}`).numFmt = MONEY_FMT;
+            na.getCell(`E${nar}`).numFmt = MONEY_FMT;
+            nar++;
+          }
+        } else {
+          na.getCell(`B${nar}`).value = item.name;
+          na.mergeCells(`B${nar}:C${nar}`);
+          na.getCell(`D${nar}`).value = totalCy;
+          na.getCell(`E${nar}`).value = totalPy;
+          na.getCell(`D${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`E${nar}`).numFmt = MONEY_FMT;
+          nar++;
+        }
+
+        // Total row
+        na.getCell(`B${nar}`).value = "Total";
+        na.mergeCells(`B${nar}:C${nar}`);
+        na.getCell(`D${nar}`).value = fmt(totalCy);
+        na.getCell(`E${nar}`).value = fmt(totalPy);
+        na.getCell(`D${nar}`).numFmt = MONEY_FMT;
+        na.getCell(`E${nar}`).numFmt = MONEY_FMT;
+        for (const col of ["B","C","D","E"]) {
+          na.getCell(`${col}${nar}`).font = { bold: true };
+          na.getCell(`${col}${nar}`).border = { top: thin, bottom: thin };
+        }
+        nar += 2; // blank spacer between notes
+      }
+
+      // ──────────────── NOTES TO ACCOUNTS — PPE ──────────────────────────────
+      const np = wb.addWorksheet("Notes to Accounts-PPE", { views: [{ showGridLines: false }] });
+      np.columns = [
+        { width: 2 },   // A spacer
+        { width: 24 },  // B Asset Name
+        { width: 8 },   // C Rate%
+        { width: 16 },  // D Opening Gross Block
+        { width: 16 },  // E Additions (Pre-Sep)
+        { width: 16 },  // F Additions (Post-Sep)
+        { width: 16 },  // G Total Gross Block
+        { width: 16 },  // H Depreciation for Year
+        { width: 16 },  // I Net Block CY
+        { width: 16 },  // J Net Block PY
+      ];
+      let npr = 2;
+      np.getCell(`B${npr}`).value = clientName;
+      np.getCell(`B${npr}`).font = { bold: true, size: 13 };
+      np.mergeCells(`B${npr}:J${npr}`);
+      np.getCell(`B${npr}`).alignment = { horizontal: "center" };
+      npr++;
+      np.getCell(`B${npr}`).value = "Notes to Accounts — Note 10: Property, Plant & Equipment";
+      np.getCell(`B${npr}`).font = { bold: true, size: 11 };
+      np.mergeCells(`B${npr}:J${npr}`);
+      np.getCell(`B${npr}`).alignment = { horizontal: "center" };
+      npr++;
+      np.getCell(`B${npr}`).value = "Amount (in Rs)";
+      np.getCell(`B${npr}`).font = { italic: true, size: 9 };
+      np.mergeCells(`B${npr}:J${npr}`);
+      np.getCell(`B${npr}`).alignment = { horizontal: "right" };
+      npr++;
+
+      // Two-row PPE column header
+      const ppeHdr1 = npr++, ppeHdr2 = npr++;
+      const ppeHdrDefs: [string, string, string][] = [
+        ["B", "Asset Name", ""],
+        ["C", "Rate", "%"],
+        ["D", "Opening", "Gross Block (Rs.)"],
+        ["E", "Additions", "Pre-Sep (Rs.)"],
+        ["F", "Additions", "Post-Sep (Rs.)"],
+        ["G", "Total", "Gross Block (Rs.)"],
+        ["H", "Depreciation", "for Year (Rs.)"],
+        ["I", "Net Block", `31 Mar ${cyYear} (Rs.)`],
+        ["J", "Net Block", `31 Mar ${pyYear} (Rs.)`],
+      ];
+      for (const [col, h1, h2] of ppeHdrDefs) {
+        np.getCell(`${col}${ppeHdr1}`).value = h1;
+        np.getCell(`${col}${ppeHdr2}`).value = h2;
+        for (const r of [ppeHdr1, ppeHdr2]) {
+          np.getCell(`${col}${r}`).font = { bold: true };
+          np.getCell(`${col}${r}`).border = fullBorder;
+          np.getCell(`${col}${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        }
+      }
+
+      const ppeRows = (ncePpeData || []) as any[];
+      const ppeTangible  = ppeRows.filter((r: any) => r.asset_category === "tangible");
+      const ppeIntangible = ppeRows.filter((r: any) => r.asset_category === "intangible");
+
+      const writePpeSection = (rows: any[], label: string) => {
+        if (rows.length === 0) return;
+        np.getCell(`B${npr}`).value = label;
+        np.getCell(`B${npr}`).font = { bold: true, italic: true };
+        np.mergeCells(`B${npr}:J${npr}`);
+        npr++;
+        let tO = 0, tPre = 0, tPost = 0, tTot = 0, tDep = 0, tNetCy = 0, tNetPy = 0;
+        for (const r of rows) {
+          const opening = Number(r.opening_balance || 0);
+          const addPre  = Number(r.additions_pre   || 0);
+          const addPost = Number(r.additions_post  || 0);
+          const total   = Number(r.total || 0) || (opening + addPre + addPost);
+          const dep     = Number(r.depreciation    || 0);
+          const netCy   = Number(r.closing_balance || 0) || (total - dep);
+          // PY net block = prior opening (= current opening before additions) - prior dep
+          // Best approximation without PY PPE data: opening block net of dep already embedded.
+          const netPy   = Math.max(0, opening - dep);
+          tO += opening; tPre += addPre; tPost += addPost;
+          tTot += total; tDep += dep; tNetCy += netCy; tNetPy += netPy;
+          np.getCell(`B${npr}`).value = r.asset_name || "";
+          np.getCell(`C${npr}`).value = r.rate_pct != null ? `${r.rate_pct}%` : "";
+          np.getCell(`C${npr}`).alignment = { horizontal: "center" };
+          np.getCell(`D${npr}`).value = fmt(opening);
+          np.getCell(`E${npr}`).value = fmt(addPre);
+          np.getCell(`F${npr}`).value = fmt(addPost);
+          np.getCell(`G${npr}`).value = fmt(total);
+          np.getCell(`H${npr}`).value = fmt(dep);
+          np.getCell(`I${npr}`).value = fmt(netCy);
+          np.getCell(`J${npr}`).value = fmt(netPy);
+          for (const col of ["D","E","F","G","H","I","J"]) np.getCell(`${col}${npr}`).numFmt = MONEY_FMT;
+          npr++;
+        }
+        // Sub-total
+        np.getCell(`B${npr}`).value = `Total — ${label}`;
+        np.getCell(`D${npr}`).value = fmt(tO);   np.getCell(`E${npr}`).value = fmt(tPre);
+        np.getCell(`F${npr}`).value = fmt(tPost); np.getCell(`G${npr}`).value = fmt(tTot);
+        np.getCell(`H${npr}`).value = fmt(tDep);  np.getCell(`I${npr}`).value = fmt(tNetCy);
+        np.getCell(`J${npr}`).value = fmt(tNetPy);
+        for (const col of ["B","C","D","E","F","G","H","I","J"]) {
+          np.getCell(`${col}${npr}`).font = { bold: true };
+          np.getCell(`${col}${npr}`).border = { top: thin, bottom: thin };
+        }
+        for (const col of ["D","E","F","G","H","I","J"]) np.getCell(`${col}${npr}`).numFmt = MONEY_FMT;
+        npr += 2;
+      };
+
+      writePpeSection(ppeTangible,  "Tangible Assets");
+      writePpeSection(ppeIntangible, "Intangible Assets");
+
+      if (ppeRows.length === 0) {
+        np.getCell(`B${npr}`).value = "(No PPE data entered — please complete Stage 8)";
+        np.getCell(`B${npr}`).font = { italic: true, color: { argb: "FF888888" } };
+        np.mergeCells(`B${npr}:J${npr}`);
+      }
+
+    } else {
+      // ─────── Corporate: Notes Index + per-note annexures + PY Reconciliation ─
+      const notedItems = activeFlatItems.filter(i => i.noteRef);
+      const nx = wb.addWorksheet("Notes Index");
+      nx.columns = [
+        { header: "Note",     key: "n",  width: 8 },
+        { header: "Line Item", key: "li", width: 42 },
+        { header: "Code",     key: "c",  width: 16 },
+        { header: `CY ${cyYear} (Rs.)`, key: "cy", width: 18 },
+        { header: `PY ${pyYear} (Rs.)`, key: "py", width: 18 },
+      ];
+      nx.getRow(1).font = { bold: true };
+      for (const i of notedItems) {
+        const r = nx.addRow({
+          n: `N${i.noteRef}`,
+          li: i.name,
+          c:  i.code,
+          cy: fmt(computedAmounts[i.code] || 0),
+          py: fmt(mergedPY[i.code] || 0),
+        });
+        r.getCell("cy").numFmt = MONEY_FMT;
+        r.getCell("py").numFmt = MONEY_FMT;
+      }
+
+      for (const item of notedItems) {
+        const tbLedgerNames = new Set<string>();
+        const rows: Array<Record<string, any>> = tbAccounts
+          .filter(a => coaMapping[a.account_name]?.code === item.code)
+          .map(a => {
+            tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
+            return {
+              ledger: a.account_name,
+              group:  a.account_group || "",
+              cy: fmt(a.balance),
+              py: fmt(a.opening_balance || 0),
+              variance: fmt(a.balance - (a.opening_balance || 0)),
+              status: (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
+                ? "NEW"
+                : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
+                  ? "CLOSED" : "",
+            };
+          });
+        const manualRows = pyAnnexures[item.code] || [];
+        for (const r of manualRows) {
+          const name = String(r.ledger_name || "").trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          if (tbLedgerNames.has(key)) {
+            const existing = rows.find(l => String(l.ledger).toLowerCase().trim() === key);
+            if (existing) {
+              existing.py = fmt(r.amount);
+              existing.variance = fmt((existing.cy as number) - r.amount);
+            }
+          } else {
+            rows.push({
+              ledger: name, group: r.group || "",
+              cy: 0, py: fmt(r.amount),
+              variance: fmt(-r.amount), status: "PY-ONLY",
+            });
+          }
+        }
+        if (rows.length === 0) continue;
+        const totCy = rows.reduce((s, l) => s + (l.cy as number), 0);
+        const totPy = rows.reduce((s, l) => s + (l.py as number), 0);
+
+        const sheetName = `N${item.noteRef} ${item.name}`.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
+        const ns = wb.addWorksheet(sheetName);
+        ns.columns = [
+          { width: 2 }, { width: 38 }, { width: 24 },
+          { width: 18 }, { width: 18 }, { width: 16 }, { width: 10 },
+        ];
+        ns.getCell("B2").value = clientName; ns.getCell("B2").font = { bold: true, size: 12 };
+        ns.mergeCells("B2:G2"); ns.getCell("B2").alignment = { horizontal: "center" };
+        ns.getCell("B3").value = `Note ${item.noteRef} — ${item.name}`;
+        ns.getCell("B3").font = { bold: true };
+        ns.mergeCells("B3:G3"); ns.getCell("B3").alignment = { horizontal: "center" };
+        ns.getCell("B4").value = `(Amount in Rs.)  FY ${fy}`;
+        ns.getCell("B4").font = { italic: true, size: 9 };
+        ns.mergeCells("B4:G4"); ns.getCell("B4").alignment = { horizontal: "right" };
+        const hdr = ns.getRow(6);
+        hdr.values = [null, "Ledger", "Group", `CY ${cyYear} (Rs.)`, `PY ${pyYear} (Rs.)`, "Variance (Rs.)", "Status"];
+        hdr.font = { bold: true }; hdr.alignment = { horizontal: "center", vertical: "middle" };
+        hdr.eachCell((c, n) => { if (n >= 2) c.border = fullBorder; });
+        let nr = 7;
+        for (const l of rows) {
+          ns.getCell(`B${nr}`).value = l.ledger; ns.getCell(`C${nr}`).value = l.group;
+          ns.getCell(`D${nr}`).value = l.cy;     ns.getCell(`E${nr}`).value = l.py;
+          ns.getCell(`F${nr}`).value = l.variance; ns.getCell(`G${nr}`).value = l.status;
+          ns.getCell(`D${nr}`).numFmt = MONEY_FMT;
+          ns.getCell(`E${nr}`).numFmt = MONEY_FMT;
+          ns.getCell(`F${nr}`).numFmt = MONEY_FMT;
+          nr++;
+        }
+        ns.getCell(`B${nr}`).value = "TOTAL";
+        ns.getCell(`D${nr}`).value = fmt(totCy); ns.getCell(`E${nr}`).value = fmt(totPy);
+        ns.getCell(`F${nr}`).value = fmt(totCy - totPy);
         ns.getCell(`D${nr}`).numFmt = MONEY_FMT;
         ns.getCell(`E${nr}`).numFmt = MONEY_FMT;
         ns.getCell(`F${nr}`).numFmt = MONEY_FMT;
-        nr++;
+        for (const a of ["B","C","D","E","F","G"]) {
+          ns.getCell(`${a}${nr}`).font = { bold: true };
+          ns.getCell(`${a}${nr}`).border = { top: thin, bottom: thin };
+        }
       }
-      // Total
-      ns.getCell(`B${nr}`).value = "TOTAL";
-      ns.getCell(`D${nr}`).value = fmt(totCy);
-      ns.getCell(`E${nr}`).value = fmt(totPy);
-      ns.getCell(`F${nr}`).value = fmt(totCy - totPy);
-      ns.getCell(`D${nr}`).numFmt = MONEY_FMT;
-      ns.getCell(`E${nr}`).numFmt = MONEY_FMT;
-      ns.getCell(`F${nr}`).numFmt = MONEY_FMT;
-      for (const a of ["B","C","D","E","F","G"]) {
-        ns.getCell(`${a}${nr}`).font = { bold: true };
-        ns.getCell(`${a}${nr}`).border = { top: thin, bottom: thin };
-      }
-    }
 
-    // ───────────────────────── PY RECONCILIATION ─────────────────────────
-    const rec = wb.addWorksheet("PY Reconciliation");
-    rec.columns = [
-      { header: "Code",      key: "c",  width: 16 },
-      { header: "Line Item", key: "li", width: 42 },
-      { header: "PY (from CY Opening) (Rs.)", key: "o", width: 22 },
-      { header: "PY (from Prior Audited) (Rs.)", key: "a", width: 22 },
-      { header: "Difference (Rs.)", key: "d", width: 18 },
-      { header: "Tallied",    key: "t", width: 10 },
-    ];
-    rec.getRow(1).font = { bold: true };
-    for (const i of bsItems.filter(x => !x.children || x.children.length === 0)) {
-      const fromOpening = computedAmountsPY[i.code] || 0;
-      const fromAudited = pyAmounts[i.code] || 0;
-      const r = rec.addRow({
-        c:  i.code,
-        li: i.name,
-        o:  fmt(fromOpening),
-        a:  fmt(fromAudited),
-        d:  fmt(fromOpening - fromAudited),
-        t:  Math.abs(fromOpening - fromAudited) < 1 ? "✓" : "✗",
-      });
-      r.getCell("o").numFmt = MONEY_FMT;
-      r.getCell("a").numFmt = MONEY_FMT;
-      r.getCell("d").numFmt = MONEY_FMT;
-    }
+      // PY Reconciliation
+      const rec = wb.addWorksheet("PY Reconciliation");
+      rec.columns = [
+        { header: "Code",      key: "c",  width: 16 },
+        { header: "Line Item", key: "li", width: 42 },
+        { header: "PY (from CY Opening) (Rs.)", key: "o", width: 22 },
+        { header: "PY (from Prior Audited) (Rs.)", key: "a", width: 22 },
+        { header: "Difference (Rs.)", key: "d", width: 18 },
+        { header: "Tallied",    key: "t", width: 10 },
+      ];
+      rec.getRow(1).font = { bold: true };
+      for (const i of bsItems.filter(x => !x.children || x.children.length === 0)) {
+        const fromOpening = computedAmountsPY[i.code] || 0;
+        const fromAudited = pyAmounts[i.code] || 0;
+        const r = rec.addRow({
+          c:  i.code, li: i.name,
+          o:  fmt(fromOpening), a: fmt(fromAudited),
+          d:  fmt(fromOpening - fromAudited),
+          t:  Math.abs(fromOpening - fromAudited) < 1 ? "✓" : "✗",
+        });
+        r.getCell("o").numFmt = MONEY_FMT;
+        r.getCell("a").numFmt = MONEY_FMT;
+        r.getCell("d").numFmt = MONEY_FMT;
+      }
+    } // end corporate notes
 
     // ───────────────────────── WRITE FILE ─────────────────────────
     const buf = await wb.xlsx.writeBuffer();
