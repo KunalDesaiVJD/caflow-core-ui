@@ -17,6 +17,49 @@ import * as XLSX from "npm:xlsx@0.18.5";
 type WS = XLSX.WorkSheet;
 type WB = XLSX.WorkBook;
 
+// ─── Dropdown label lookup tables ────────────────────────────────────────────
+// Mirrors src/data/form3cd-dropdowns.ts so edge function can resolve raw
+// stored values (e.g. "44AB_a") to human-readable labels for the Excel output.
+
+const LABEL: Record<string, Record<string, string>> = {
+  SEC_44AB: {
+    "44AB_a":       "Clause 44AB(a) — Total sales/turnover/gross receipts of business exceeding specified limits",
+    "44AB_a_prov":  "Clause 44AB(a) — Proviso — Cash receipts/payments ≤ specified % but turnover exceeds limit",
+    "44AB_b":       "Clause 44AB(b) — Gross receipts of profession exceeding specified limits",
+    "44AB_c_i":     "Clause 44AB(c)(i) — Profits lower than deemed profit u/s 44AE",
+    "44AB_c_ii":    "Clause 44AB(c)(ii) — Profits lower than deemed profit u/s 44BB",
+    "44AB_c_iii":   "Clause 44AB(c)(iii) — Profits lower than deemed profit u/s 44BBB",
+    "44AB_d":       "Clause 44AB(d) — Profits lower than deemed profit u/s 44ADA",
+    "44AB_e":       "Clause 44AB(e) — Provisions of section 44AD(4) applicable",
+    "44AB_third_prov": "Third Proviso to section 44AB — Audited under any other law",
+  },
+  ACCOUNTING_METHOD: {
+    "cash":       "Cash system",
+    "mercantile": "Mercantile system",
+  },
+  STOCK_VALUATION: {
+    "at_cost":   "At Cost",
+    "at_market": "At Market Price",
+    "lower":     "Lower of Cost or Market rate",
+    "na":        "N.A.",
+  },
+};
+
+/** Resolve a stored dropdown value to its display label. Falls back to the raw value. */
+function labelOf(map: string, rawValue: unknown): string {
+  if (!rawValue) return "";
+  const v = String(rawValue);
+  return LABEL[map]?.[v] ?? v;
+}
+
+/** Extract the scalar _value from a composite/yes_no/dropdown stored object, or return as-is. */
+function extractValue(raw: unknown): unknown {
+  if (raw && typeof raw === "object" && "_value" in (raw as object)) {
+    return (raw as Record<string, unknown>)._value;
+  }
+  return raw;
+}
+
 // ─── low-level helpers ────────────────────────────────────────────────────────
 
 /** Write a value to a cell, preserving its existing style. */
@@ -114,30 +157,26 @@ export function buildClauseValues(
   if (!f3) return wb;
 
   // ── Clause 8 — Section 44AB & 115BA option ──────────────────────────────
-  // clauseNo '8' → DB col 'cl_8' (flat). Section field uses composite+dropdown
-  // so the value is stored as { _value: "44AB(a)" }, not a plain string.
+  // clauseNo '8' → DB col 'cl_8' (flat).
+  // Dropdown sub-fields store { _value: "44AB_a" }; look up the display label.
   const cl8 = dig(cl, "cl_8");
-  const cl8SectionRaw = cl8.cl_8_section;
-  const cl8section = (typeof cl8SectionRaw === "object" && cl8SectionRaw !== null)
-    ? String((cl8SectionRaw as Record<string, unknown>)._value ?? "")
-    : String(cl8SectionRaw ?? "");
+  const cl8section = labelOf("SEC_44AB", extractValue(cl8.cl_8_section));
   setV(f3, "J14", cl8section);
   const cl8OptedRaw = cl8.cl_8_opted as Record<string, unknown> | undefined;
-  const cl8opted = cl8OptedRaw?._value;
+  const cl8opted = extractValue(cl8OptedRaw);
   if (cl8opted === true) {
-    const schemeRaw = cl8OptedRaw?.cl_8_scheme as Record<string, unknown> | string | undefined;
-    const scheme = (typeof schemeRaw === "object" && schemeRaw !== null)
-      ? String((schemeRaw as Record<string, unknown>)._value ?? "")
-      : String(schemeRaw ?? "");
+    const scheme = String(extractValue(
+      (cl8OptedRaw as Record<string,unknown>)?.cl_8_scheme
+    ) ?? "");
     setV(f3, "J15", scheme ? `Yes – ${scheme}` : "Yes");
   } else if (cl8opted === false) {
     setV(f3, "J15", "No");
   }
 
   // ── Clause 9 — Partners / members ───────────────────────────────────────
-  // clauseNo '9a' → DB col 'cl_9a' (flat); clauseNo '9b' → DB col 'cl_9b' (flat)
-  const cl9a = dig(cl, "cl_9a");
-  const cl9b = dig(cl, "cl_9b");
+  // clauseNos '9a','9b' share DB col 'cl_9' (nested under "9a" / "9b")
+  const cl9a = dig(cl, "cl_9", "9a");
+  const cl9b = dig(cl, "cl_9", "9b");
   const cl9bDetails = dig(cl9b, "cl_9b_details");
   const partners9 = rows(cl9bDetails).length > 0 ? rows(cl9bDetails) : rows(cl9a);
   if (ax && partners9.length > 0) {
@@ -162,9 +201,9 @@ export function buildClauseValues(
   }
 
   // ── Clause 10 — Nature of business ──────────────────────────────────────
-  // clauseNo '10a' → DB col 'cl_10a' (flat); clauseNo '10b' → DB col 'cl_10b' (flat)
-  const cl10a = dig(cl, "cl_10a");
-  const cl10b = dig(cl, "cl_10b");
+  // clauseNos '10a','10b' share DB col 'cl_10' (nested under "10a" / "10b")
+  const cl10a = dig(cl, "cl_10", "10a");
+  const cl10b = dig(cl, "cl_10", "10b");
   const bizRows = rows(cl10a);
   if (bizRows.length > 0) {
     const desc = bizRows
@@ -179,8 +218,8 @@ export function buildClauseValues(
   setV(f3, "J20", cl10bAnswer);
 
   // ── Clause 11 — Books of account ────────────────────────────────────────
-  // clauseNo '11a' → DB col 'cl_11a' (flat)
-  const cl11a = dig(cl, "cl_11a");
+  // clauseNos '11a','11b','11c' share DB col 'cl_11' (nested under "11a" / "11b" / "11c")
+  const cl11a = dig(cl, "cl_11", "11a");
   const books11 = rows(dig(cl11a, "cl_11a_books"));
   if (ax && books11.length > 0) {
     const ANX_CL11A_START = 14; // display row 15 → 0-idx 14
@@ -202,12 +241,13 @@ export function buildClauseValues(
   setV(f3, "J24", ynSummary(cl12, "Not Applicable") || naSummary(dig(cl12, "cl_12_details")));
 
   // ── Clause 13 — Accounting method / ICDS ────────────────────────────────
-  // clauseNos '13a','13b','13d','13f' → separate flat DB cols ('cl_13a' etc.)
-  const cl13a = dig(cl, "cl_13a");
-  const cl13b = dig(cl, "cl_13b");
-  const cl13d = dig(cl, "cl_13d");
-  const cl13f = dig(cl, "cl_13f");
-  setV(f3, "J28", cl13a._value as string || "");
+  // clauseNos '13a'-'13f' share DB col 'cl_13' (nested under "13a", "13b", etc.)
+  const cl13 = dig(cl, "cl_13");
+  const cl13a = dig(cl13, "13a");
+  const cl13b = dig(cl13, "13b");
+  const cl13d = dig(cl13, "13d");
+  const cl13f = dig(cl13, "13f");
+  setV(f3, "J28", labelOf("ACCOUNTING_METHOD", extractValue(cl13a)) || extractValue(cl13a) as string || "");
   setV(f3, "J29", ynSummary(cl13b, "No"));
   setV(f3, "J32", ynSummary(cl13d, "Not Applicable"));
   // 13f ICDS disclosure → ANX rows 22-31 col C (0-idx 2)
@@ -221,9 +261,9 @@ export function buildClauseValues(
   }
 
   // ── Clause 14 — Closing stock method ─────────────────────────────────────
-  // clauseNo '14a' → DB col 'cl_14a' (flat)
-  const cl14a = dig(cl, "cl_14a");
-  setV(f3, "J36", cl14a._value as string || "");
+  // clauseNos '14a','14b' share DB col 'cl_14' (nested under "14a" / "14b")
+  const cl14a = dig(cl, "cl_14", "14a");
+  setV(f3, "J36", labelOf("STOCK_VALUATION", extractValue(cl14a)) || extractValue(cl14a) as string || "");
 
   // ── Clause 15–16 — Capital asset / P&L credits ───────────────────────────
   // clauseNos '15','16' share DB col 'cl_15_16' (nested under "15" / "16")
@@ -267,8 +307,8 @@ export function buildClauseValues(
   setV(f3, "J60", naSummary(cl19) || "Not Applicable");
 
   // ── Clause 20 — Bonus, employee fund contributions ───────────────────────
-  // clauseNo '20b' → DB col 'cl_20b' (flat, separate from cl_20a)
-  const cl20b = dig(cl, "cl_20b");
+  // clauseNos '20a','20b' share DB col 'cl_20' (nested under "20a" / "20b")
+  const cl20b = dig(cl, "cl_20", "20b");
   const fundRows = rows(cl20b);
   if (ax && fundRows.length > 0) {
     const ANX_FUND_START = 44; // display row 45 → 0-idx 44
@@ -461,13 +501,13 @@ export function buildClauseValues(
   setV(f3, "J172", rows27b.length > 0 ? "As Per Annexure" : "Not Applicable");
 
   // ── Clause 30 — Hundi ────────────────────────────────────────────────────
-  // clauseNo '30' → DB col 'cl_30' (flat)
-  const cl30 = dig(cl, "cl_30");
+  // clauseNos '30','30A' share DB col 'cl_30' (nested under "30" / "30A")
+  const cl30 = dig(cl, "cl_30", "30");
   setV(f3, "J173", ynSummary(cl30, "No"));
 
   // ── Clause 30A — Transfer pricing / sec 94B / GAAR ──────────────────────
-  // clauseNo '30A' → DB col 'cl_30A' (flat; contains sub-items cl_30a/cl_30b/cl_30c)
-  const cl30A = dig(cl, "cl_30A");
+  // clauseNo '30A' → DB col 'cl_30' nested key "30A"
+  const cl30A = dig(cl, "cl_30", "30A");
   const cl30a_sub = dig(cl30A, "cl_30a");
   const cl30b_sub = dig(cl30A, "cl_30b");
   const cl30c_sub = dig(cl30A, "cl_30c");
