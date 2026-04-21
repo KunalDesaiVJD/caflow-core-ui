@@ -1081,10 +1081,13 @@ serve(async (req) => {
       addUpdate("Form_3CB ANNEX", "G30", autoValues.MEMBERSHIP_NO); // G30 = ss[457] = "[Membership No]"
     }
 
-    // Form_3CD signature block — same cells exist in both 3CA-3CD and 3CB-3CD
-    addUpdate("Form_3CD", "H235", autoValues.FIRM_NAME);
-    addUpdate("Form_3CD", "I237", autoValues.FRN);
-    addUpdate("Form_3CD", "I243", autoValues.MEMBERSHIP_NO);
+    // Form_3CD signature block (3CB-3CD template)
+    // Actual sign-off rows are 275-283 (K275="For,", L275=firm name, M277=FRN, M281=partner, M283=membership)
+    // Columns H and I are near-zero-width spacer columns — do NOT write there.
+    addUpdate("Form_3CD", "L275", autoValues.FIRM_NAME);   // firm name after "For,"
+    addUpdate("Form_3CD", "M277", autoValues.FRN);         // FRN value (label "FRN:" is in L277)
+    addUpdate("Form_3CD", "M281", autoValues.PARTNER_NAME);// signing partner name
+    addUpdate("Form_3CD", "M283", autoValues.MEMBERSHIP_NO); // membership no
 
     // 01_Control header block — always write for both form types (sign-off visibility)
     // Entity + sign-off fields (named ranges resolve to F-column cells in 01_Control;
@@ -1168,7 +1171,9 @@ serve(async (req) => {
         const addrM = attrs.match(/\br="([A-Z]+(\d+))"/);
         if (!addrM) return match;
         const rowNum = parseInt(addrM[2], 10);
-        if (rowNum < 228 || rowNum > 260) return match; // sign-off area only
+        // Cover sign-off rows: 228-260 (old template location) and 268-290 (3CB-3CD template rows 275-283)
+        const inSignOff = (rowNum >= 228 && rowNum <= 260) || (rowNum >= 268 && rowNum <= 290);
+        if (!inSignOff) return match;
 
         const rawText = cellTextValue(attrs, inner, sharedStrings).trim();
         // cellTextValue() returns raw XML-encoded text (e.g. "V. J. Desai &amp; Co.").
@@ -1191,18 +1196,17 @@ serve(async (req) => {
           return `<c r="${addrM[1]}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">FRN: </t></is></c>`;
         }
 
-        // "_<firmName>" still in cell (rich-text shared string partially resolved).
-        if (autoValues.FIRM_NAME && (
-          text === `_${autoValues.FIRM_NAME}` ||
-          text === `_ ${autoValues.FIRM_NAME}`
-        )) {
+        // "_+<firmName>" — any number of leading underscores before the firm name.
+        // Handles both 1-underscore and multi-underscore (e.g. "__V. J. Desai & Co.") variants.
+        const textStripped = text.replace(/^_+\s*/, "");
+        if (autoValues.FIRM_NAME && text.startsWith("_") && textStripped === autoValues.FIRM_NAME) {
           decorFixed++;
           return setCellInXml(match, addrM[1], autoValues.FIRM_NAME);
         }
 
-        // "_<FRN>" or "FRN: _<FRN>" — FRN value with underscore prefix
+        // "_+<FRN>" or "FRN: _+<FRN>" — FRN with any number of underscore prefix
         if (autoValues.FRN && (
-          text === `_${autoValues.FRN}` ||
+          (text.startsWith("_") && textStripped === autoValues.FRN) ||
           text === `FRN: _${autoValues.FRN}`
         )) {
           decorFixed++;
@@ -1360,20 +1364,26 @@ serve(async (req) => {
         const fn  = autoValues.FIRM_NAME ?? "";
         const frn = autoValues.FRN ?? "";
 
-        // Firm name: placeholder or already-partially-replaced variant with leading _
+        // Firm name: placeholder or any-length underscore prefix before the firm name.
+        // The template can have 1..N leading underscores (e.g. "_" or "__") in a separate
+        // rich-text run, so combined may be "_AUDIT FIRM_NAME", "__V. J. Desai & Co.", etc.
+        const combinedStripped = combined.replace(/^_+\s*/, "");
         if (fn && (
           /^_+\s*(?:AUDIT FIRM[_ ]?NAME|\[AUDIT FIRM[_ ]?NAME\])$/i.test(combined) ||
-          combined === `_${fn}` || combined === `_ ${fn}`
+          (combined.startsWith("_") && combinedStripped === fn)
         )) {
           return `<si><t>${xmlEsc(fn)}</t></si>`;
         }
 
-        // FRN: "FRN: ___" still not replaced, or "FRN: _<value>" partially replaced
+        // FRN: "FRN: ___" label cell, "FRN: _<value>" partial, or pure "_+<value>" decoration.
         if (frn && (
           /^FRN:\s*_+$/.test(combined) ||
-          combined === `FRN: _${frn}` || combined === `FRN:_${frn}`
+          combined === `FRN: _${frn}` || combined === `FRN:_${frn}` ||
+          (combined.startsWith("_") && combinedStripped === frn)
         )) {
-          return `<si><t>FRN: ${xmlEsc(frn)}</t></si>`;
+          // Keep "FRN: " prefix when it was part of the original combined value
+          const prefix = /^FRN:/.test(combined) ? "FRN: " : "";
+          return `<si><t>${prefix}${xmlEsc(frn)}</t></si>`;
         }
 
         return siBlock;
