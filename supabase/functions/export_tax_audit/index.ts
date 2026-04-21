@@ -1269,6 +1269,42 @@ serve(async (req) => {
         : "Companies Act, 2013";
       ssXml = ssXml.replace(/\[APPLICABLE ACT\]/g, xmlEsc(applicableAct));
 
+      // ── Final pass: multi-run rich-text <si> normalizer ───────────────────────
+      // Some sign-off cells use multiple <r> runs (rich text), e.g.:
+      //   <si><r><t>_</t></r><r><t>AUDIT FIRM_NAME</t></r></si>
+      // Simple string regex can't span XML tag boundaries, so the combined text
+      // "_AUDIT FIRM_NAME" or "_V. J. Desai & Co." never matches.
+      // This pass parses each <si> block, concatenates all <t> values, and
+      // replaces the whole <si> when the combined text matches a known pattern.
+      ssXml = ssXml.replace(/<si>[\s\S]*?<\/si>/g, (siBlock) => {
+        const parts = [...siBlock.matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(m => m[1]);
+        const combined = parts.join("").trim();
+        if (!combined) return siBlock;
+
+        const fn  = autoValues.FIRM_NAME ?? "";
+        const frn = autoValues.FRN ?? "";
+
+        // Firm name: placeholder or already-partially-replaced variant with leading _
+        if (fn && (
+          /^_+\s*(?:AUDIT FIRM[_ ]?NAME|\[AUDIT FIRM[_ ]?NAME\])$/i.test(combined) ||
+          combined === `_${fn}` ||
+          combined === `_ ${fn}`
+        )) {
+          return `<si><t>${xmlEsc(fn)}</t></si>`;
+        }
+
+        // FRN: "FRN: ___" still not replaced, or "FRN: _<value>" partially replaced
+        if (frn && (
+          /^FRN:\s*_+$/.test(combined) ||
+          combined === `FRN: _${frn}` ||
+          combined === `FRN:_${frn}`
+        )) {
+          return `<si><t>FRN: ${xmlEsc(frn)}</t></si>`;
+        }
+
+        return siBlock;
+      });
+
       zip["xl/sharedStrings.xml"] = _enc.encode(ssXml);
     }
 
