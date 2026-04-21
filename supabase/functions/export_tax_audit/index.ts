@@ -113,6 +113,16 @@ function xmlEsc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Decode XML entities back to plain text (inverse of xmlEsc). */
+function xmlDec(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
 // ── Named-range filling ───────────────────────────────────────────────────────
 //
 // Templates use Excel defined names (e.g. ENTITY_NAME → 01_Control!$F$7).
@@ -1160,7 +1170,10 @@ serve(async (req) => {
         const rowNum = parseInt(addrM[2], 10);
         if (rowNum < 228 || rowNum > 260) return match; // sign-off area only
 
-        const text = cellTextValue(attrs, inner, sharedStrings).trim();
+        const rawText = cellTextValue(attrs, inner, sharedStrings).trim();
+        // cellTextValue() returns raw XML-encoded text (e.g. "V. J. Desai &amp; Co.").
+        // Decode it so we can compare against plain autoValues strings.
+        const text = xmlDec(rawText);
 
         // Standalone single "_" — decoration before firm name or FRN value
         if (text === "_") {
@@ -1178,16 +1191,23 @@ serve(async (req) => {
           return `<c r="${addrM[1]}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">FRN: </t></is></c>`;
         }
 
-        // "_<firmName>" still in cell (rich-text shared string partially resolved)
-        if (autoValues.FIRM_NAME && text === `_${autoValues.FIRM_NAME}`) {
+        // "_<firmName>" still in cell (rich-text shared string partially resolved).
+        if (autoValues.FIRM_NAME && (
+          text === `_${autoValues.FIRM_NAME}` ||
+          text === `_ ${autoValues.FIRM_NAME}`
+        )) {
           decorFixed++;
           return setCellInXml(match, addrM[1], autoValues.FIRM_NAME);
         }
 
-        // "_<FRN>" — FRN value with underscore prefix in a single cell
-        if (autoValues.FRN && (text === `_${autoValues.FRN}` || text === autoValues.FRN.replace(/^/, "_"))) {
+        // "_<FRN>" or "FRN: _<FRN>" — FRN value with underscore prefix
+        if (autoValues.FRN && (
+          text === `_${autoValues.FRN}` ||
+          text === `FRN: _${autoValues.FRN}`
+        )) {
           decorFixed++;
-          return setCellInXml(match, addrM[1], autoValues.FRN);
+          const prefix = text.startsWith("FRN:") ? "FRN: " : "";
+          return setCellInXml(match, addrM[1], prefix + autoValues.FRN);
         }
 
         return match;
@@ -1331,8 +1351,11 @@ serve(async (req) => {
       // replaces the whole <si> when the combined text matches a known pattern.
       ssXml = ssXml.replace(/<si>[\s\S]*?<\/si>/g, (siBlock) => {
         const parts = [...siBlock.matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(m => m[1]);
-        const combined = parts.join("").trim();
-        if (!combined) return siBlock;
+        const rawCombined = parts.join("").trim();
+        if (!rawCombined) return siBlock;
+        // Decode XML entities so comparisons work against plain autoValues strings
+        // (e.g. "V. J. Desai &amp; Co." → "V. J. Desai & Co.")
+        const combined = xmlDec(rawCombined);
 
         const fn  = autoValues.FIRM_NAME ?? "";
         const frn = autoValues.FRN ?? "";
@@ -1340,8 +1363,7 @@ serve(async (req) => {
         // Firm name: placeholder or already-partially-replaced variant with leading _
         if (fn && (
           /^_+\s*(?:AUDIT FIRM[_ ]?NAME|\[AUDIT FIRM[_ ]?NAME\])$/i.test(combined) ||
-          combined === `_${fn}` ||
-          combined === `_ ${fn}`
+          combined === `_${fn}` || combined === `_ ${fn}`
         )) {
           return `<si><t>${xmlEsc(fn)}</t></si>`;
         }
@@ -1349,8 +1371,7 @@ serve(async (req) => {
         // FRN: "FRN: ___" still not replaced, or "FRN: _<value>" partially replaced
         if (frn && (
           /^FRN:\s*_+$/.test(combined) ||
-          combined === `FRN: _${frn}` ||
-          combined === `FRN:_${frn}`
+          combined === `FRN: _${frn}` || combined === `FRN:_${frn}`
         )) {
           return `<si><t>FRN: ${xmlEsc(frn)}</t></si>`;
         }
