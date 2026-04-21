@@ -220,6 +220,8 @@ export function buildClauseValues(
   // ── Clause 11 — Books of account ────────────────────────────────────────
   // clauseNos '11a','11b','11c' share DB col 'cl_11' (nested under "11a" / "11b" / "11c")
   const cl11a = dig(cl, "cl_11", "11a");
+  const cl11b = dig(cl, "cl_11", "11b");
+  const cl11c = dig(cl, "cl_11", "11c");
   const books11 = rows(dig(cl11a, "cl_11a_books"));
   if (ax && books11.length > 0) {
     const ANX_CL11A_START = 14; // display row 15 → 0-idx 14
@@ -233,6 +235,18 @@ export function buildClauseValues(
     setV(f3, "J21", "Yes – As Per Annexure");
   } else if (cl11a._value === false) {
     setV(f3, "J21", "No");
+  }
+  // 11(b) — books maintained + address. _sameAs=true → "Same as 11(a)"; else free text in _value
+  if (cl11b._sameAs === true) {
+    setV(f3, "J22", "Same as 11(a)");
+  } else if (cl11b._value) {
+    setV(f3, "J22", String(cl11b._value));
+  }
+  // 11(c) — books & documents examined. _sameAs=true → "Same as 11(a)"; else free text in _value
+  if (cl11c._sameAs === true) {
+    setV(f3, "J23", "Same as 11(a)");
+  } else if (cl11c._value) {
+    setV(f3, "J23", String(cl11c._value));
   }
 
   // ── Clause 12 — Presumptive basis ────────────────────────────────────────
