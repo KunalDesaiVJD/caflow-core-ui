@@ -196,20 +196,18 @@ export default function LedgerVouchersView() {
         p_ledger_name:   ledgerName,
       });
       if (Array.isArray(rec) && rec.length > 0) {
-        // Sync agent emits inverted Dr/Cr — swap debit/credit totals and flip
-        // all dr/cr-typed fields so the displayed reconciliation matches Tally.
+        // RPC rolls up raw voucher legs whose dr/cr is inverted vs Tally —
+        // swap debit_total and credit_total so the Dr/Cr columns match.
+        // opening_type and tally_closing_type come from the TB row (not from
+        // voucher legs) and are already in Tally's convention — don't flip.
         const raw = rec[0] as Reconciliation;
         const flipped: Reconciliation = {
           ...raw,
-          opening_type:         flipDrCr(raw.opening_type),
-          debit_total:          raw.credit_total,
-          credit_total:         raw.debit_total,
-          derived_closing_type: flipDrCr(raw.derived_closing_type),
-          tally_closing_type:   flipDrCr(raw.tally_closing_type),
+          debit_total:  raw.credit_total,
+          credit_total: raw.debit_total,
         };
-        // Recompute derived closing & variance against the flipped totals
-        const openingSigned  = flipped.opening_balance * (flipped.opening_type === "Dr" ? 1 : -1);
-        const derivedSigned  = openingSigned + flipped.debit_total - flipped.credit_total;
+        const openingSigned = flipped.opening_balance * (flipped.opening_type === "Dr" ? 1 : -1);
+        const derivedSigned = openingSigned + flipped.debit_total - flipped.credit_total;
         flipped.derived_closing      = Math.abs(derivedSigned);
         flipped.derived_closing_type = derivedSigned >= 0 ? "Dr" : "Cr";
         const tallySigned = flipped.tally_closing * (flipped.tally_closing_type === "Dr" ? 1 : -1);
