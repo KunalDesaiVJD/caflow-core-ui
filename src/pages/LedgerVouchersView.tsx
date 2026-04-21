@@ -171,7 +171,8 @@ export default function LedgerVouchersView() {
           // Prefer server-computed this_amount / this_dr_cr, fall back to
           // aggregating all matching legs client-side.
           let thisAmount = Number(v.this_amount ?? 0);
-          let thisDrCr: string = String(v.this_dr_cr ?? "Dr");
+          // Sync agent emits inverted Dr/Cr — flip RPC result to match Tally's convention
+          let thisDrCr: string = flipDrCr(String(v.this_dr_cr ?? "Dr"));
           if (!thisAmount) {
             const matched = items.filter(i => i.ledger_name === ledgerName);
             const dr = matched.filter(i => i.dr_cr === "Dr").reduce((s, i) => s + i.amount, 0);
@@ -194,7 +195,28 @@ export default function LedgerVouchersView() {
         p_engagement_id: engId,
         p_ledger_name:   ledgerName,
       });
-      if (Array.isArray(rec) && rec.length > 0) setRecon(rec[0] as Reconciliation);
+      if (Array.isArray(rec) && rec.length > 0) {
+        // Sync agent emits inverted Dr/Cr — swap debit/credit totals and flip
+        // all dr/cr-typed fields so the displayed reconciliation matches Tally.
+        const raw = rec[0] as Reconciliation;
+        const flipped: Reconciliation = {
+          ...raw,
+          opening_type:         flipDrCr(raw.opening_type),
+          debit_total:          raw.credit_total,
+          credit_total:         raw.debit_total,
+          derived_closing_type: flipDrCr(raw.derived_closing_type),
+          tally_closing_type:   flipDrCr(raw.tally_closing_type),
+        };
+        // Recompute derived closing & variance against the flipped totals
+        const openingSigned  = flipped.opening_balance * (flipped.opening_type === "Dr" ? 1 : -1);
+        const derivedSigned  = openingSigned + flipped.debit_total - flipped.credit_total;
+        flipped.derived_closing      = Math.abs(derivedSigned);
+        flipped.derived_closing_type = derivedSigned >= 0 ? "Dr" : "Cr";
+        const tallySigned = flipped.tally_closing * (flipped.tally_closing_type === "Dr" ? 1 : -1);
+        flipped.variance   = derivedSigned - tallySigned;
+        flipped.reconciled = Math.abs(flipped.variance) < 0.01;
+        setRecon(flipped);
+      }
 
       setLoading(false);
     }
