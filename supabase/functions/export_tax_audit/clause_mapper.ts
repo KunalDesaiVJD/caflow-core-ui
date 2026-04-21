@@ -206,11 +206,11 @@ export function buildClauseValues(
   const cl10b = dig(cl, "cl_10", "10b");
   const bizRows = rows(cl10a);
   if (bizRows.length > 0) {
+    // sub_sector stores the code value (same as r.code), so use only sector + code to avoid duplication
     const desc = bizRows
-      .map((r) => [r.sector, r.sub_sector, r.code].filter(Boolean).join(" - "))
+      .map((r) => [r.sector, r.code].filter(Boolean).join(" - "))
       .join("; ");
-    const codes = bizRows.map((r) => r.code || r.sub_sector || r.sector).filter(Boolean).join(", ");
-    setV(f3, "J19", desc || codes || "As Per Annexure");
+    setV(f3, "J19", desc || "As Per Annexure");
   } else if (cl10a._notApplicable) {
     setV(f3, "J19", "Not Applicable");
   }
