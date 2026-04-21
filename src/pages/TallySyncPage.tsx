@@ -178,6 +178,7 @@ export default function TallySyncPage() {
   const [collapsedLedgerGroups,  setCollapsedLedgerGroups]  = useState<Set<string>>(new Set()); // Ledgers tab
   const [collapsedGroupMasters,  setCollapsedGroupMasters]  = useState<Set<string>>(new Set()); // Groups tab (collapses children under primary)
   const [expandedVoucher,        setExpandedVoucher]        = useState<string | null>(null);
+  const [reconExpanded,          setReconExpanded]          = useState(false);
 
   const makeToggler = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
     (name: string) => setter(prev => {
@@ -435,6 +436,31 @@ export default function TallySyncPage() {
     (v.voucher_number ?? "").toLowerCase().includes(voucherSearch.toLowerCase()) ||
     decodeHtml(v.narration).toLowerCase().includes(voucherSearch.toLowerCase())
   );
+
+  // ── Voucher reconciliation: per-month counts from DB vs last sync batch ──
+  const voucherRecon = useMemo(() => {
+    const monthly = new Map<string, number>(); // "YYYY-MM" -> count
+    for (const v of vouchers) {
+      const d = (v.voucher_date ?? "").slice(0, 7);
+      if (!d) continue;
+      monthly.set(d, (monthly.get(d) ?? 0) + 1);
+    }
+    const lastBatch = batches.find(b => (b.vouchers_fetched ?? 0) > 0) ?? batches[0];
+    const dbTotal = rowCounts.vouchers;
+    const fetchedTotal = lastBatch?.vouchers_fetched ?? 0;
+    const months = Array.from(monthly.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ym, count]) => {
+        const [y, m] = ym.split("-");
+        const label = new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-IN", { month: "short", year: "2-digit" });
+        return { ym, label, count };
+      });
+    const matched = fetchedTotal > 0 && dbTotal === fetchedTotal;
+    const delta = dbTotal - fetchedTotal;
+    const loadedShown = vouchers.length;
+    const loadedTruncated = loadedShown < dbTotal; // 5000-row cap hit
+    return { monthly, months, dbTotal, fetchedTotal, matched, delta, lastBatch, loadedShown, loadedTruncated };
+  }, [vouchers, batches, rowCounts.vouchers]);
 
   // ── Current-year turnover derived from vouchers (fallback when tally_trial_balance.debit_amount/credit_amount is 0) ──
   const ledgerTurnover = useMemo(() => {
@@ -817,6 +843,66 @@ export default function TallySyncPage() {
           </Card>
         ))}
       </div>
+
+      {/* Voucher Reconciliation Card */}
+      {hasData && (
+        <Card className="border-l-4" style={{ borderLeftColor: voucherRecon.matched ? "#16a34a" : voucherRecon.fetchedTotal === 0 ? "#9ca3af" : "#dc2626" }}>
+          <CardHeader className="pb-2 flex flex-row items-start justify-between">
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                {voucherRecon.matched ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                ) : voucherRecon.fetchedTotal === 0 ? (
+                  <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-red-600" />
+                )}
+                Voucher Reconciliation
+                {voucherRecon.matched && <Badge variant="outline" className="text-[10px] border-green-600 text-green-700">Tallied</Badge>}
+                {!voucherRecon.matched && voucherRecon.fetchedTotal > 0 && (
+                  <Badge variant="outline" className="text-[10px] border-red-600 text-red-700">
+                    {voucherRecon.delta > 0 ? `+${voucherRecon.delta}` : voucherRecon.delta}
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                DB <span className="font-semibold text-foreground">{voucherRecon.dbTotal.toLocaleString()}</span>
+                {" · "}Last sync fetched <span className="font-semibold text-foreground">{voucherRecon.fetchedTotal.toLocaleString()}</span>
+                {voucherRecon.lastBatch?.completed_at && <> · {fmtDate(voucherRecon.lastBatch.completed_at)}</>}
+                {voucherRecon.loadedTruncated && (
+                  <> · <span className="text-amber-600">monthly breakdown limited to most recent {voucherRecon.loadedShown.toLocaleString()} rows</span></>
+                )}
+              </CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setReconExpanded(v => !v)}>
+              {reconExpanded ? <ChevronDown className="h-3.5 w-3.5 mr-1" /> : <ChevronRight className="h-3.5 w-3.5 mr-1" />}
+              Monthly breakdown
+            </Button>
+          </CardHeader>
+          {reconExpanded && (
+            <CardContent className="pt-0 pb-3">
+              {voucherRecon.months.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No vouchers in current data set.</div>
+              ) : (
+                <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-12 gap-2">
+                  {voucherRecon.months.map(m => (
+                    <div key={m.ym} className="border rounded px-2 py-1.5 bg-muted/20">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{m.label}</div>
+                      <div className="text-sm font-semibold">{m.count.toLocaleString()}</div>
+                    </div>
+                  ))}
+                  <div className="border rounded px-2 py-1.5 bg-blue-50 border-blue-200">
+                    <div className="text-[10px] uppercase tracking-wide text-blue-700">Total</div>
+                    <div className="text-sm font-semibold text-blue-900">
+                      {voucherRecon.months.reduce((s, m) => s + m.count, 0).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
+      )}
 
       {/* Main Tabs */}
       <Tabs defaultValue={hasData ? "trial-balance" : "overview"} className="space-y-4">
