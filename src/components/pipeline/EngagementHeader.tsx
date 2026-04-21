@@ -102,6 +102,11 @@ export default function EngagementHeader({
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-muted-foreground/30 text-muted-foreground">
                   {frameworkLabel}
                 </Badge>
+                {engagement?.is_py_shell && (
+                  <Badge className="text-[10px] px-1.5 py-0 bg-amber-600 hover:bg-amber-600 text-white">
+                    PY SHELL
+                  </Badge>
+                )}
               </div>
               <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground flex-wrap">
                 <span className="inline-flex items-center gap-1">

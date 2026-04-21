@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -168,6 +169,7 @@ export default function PipelineFinancialStatements({
   onSaveDraft,
 }: PipelineFinancialStatementsProps) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
 
   // ─── Entity-type gate ─────────────────────────────────────────────────────
@@ -203,6 +205,17 @@ export default function PipelineFinancialStatements({
   const [pyManualAmounts, setPyManualAmounts] = useState<Record<string, number>>({});
   const [pyManualDirty,   setPyManualDirty]   = useState(false);
   const [pyManualSaving,  setPyManualSaving]  = useState(false);
+
+  // ─── Manual PY note-wise annexures (ledger-level breakdown per FS code) ──
+  // Shape: { "<fs_code>": [{ ledger_name, amount, group? }] }
+  type PyAnnexRow = { ledger_name: string; amount: number; group?: string };
+  const [pyAnnexures,        setPyAnnexures]        = useState<Record<string, PyAnnexRow[]>>({});
+  const [pyAnnexuresDirty,   setPyAnnexuresDirty]   = useState(false);
+  const [pyAnnexuresSaving,  setPyAnnexuresSaving]  = useState(false);
+
+  // ─── PY Data Source setup dialog ────────────────────────────────────────
+  const [pySourceDialog,  setPySourceDialog]  = useState(false);
+  const [creatingPyShell, setCreatingPyShell] = useState(false);
 
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
@@ -410,6 +423,24 @@ export default function PipelineFinancialStatements({
     }
   }, [(engagement as any)?.py_manual_amounts]);
 
+  // ─── Load manual PY annexures from engagement.py_manual_annexures ──────
+  useEffect(() => {
+    const raw = (engagement as any)?.py_manual_annexures;
+    if (raw && typeof raw === "object") {
+      const parsed: Record<string, PyAnnexRow[]> = {};
+      for (const [code, rows] of Object.entries(raw)) {
+        if (!Array.isArray(rows)) continue;
+        parsed[code] = (rows as any[]).map(r => ({
+          ledger_name: String(r?.ledger_name || ""),
+          amount:      Number(r?.amount || 0),
+          group:       r?.group ? String(r.group) : undefined,
+        })).filter(r => r.ledger_name);
+      }
+      setPyAnnexures(parsed);
+      setPyAnnexuresDirty(false);
+    }
+  }, [(engagement as any)?.py_manual_annexures]);
+
   // When no prior engagement returns rows, PY P&L is sourced from py_manual_amounts.
   const noPriorEngagement: boolean =
     priorEngagement === null ||
@@ -581,6 +612,109 @@ export default function PipelineFinancialStatements({
     setOverrideReason(existing?.reason || "");
   };
 
+  // ─── Save manual PY annexures to audit_engagements.py_manual_annexures ──
+  const savePyAnnexures = async () => {
+    setPyAnnexuresSaving(true);
+    try {
+      const payload: Record<string, PyAnnexRow[]> = {};
+      for (const [code, rows] of Object.entries(pyAnnexures)) {
+        const clean = (rows || [])
+          .map(r => ({
+            ledger_name: String(r.ledger_name || "").trim(),
+            amount: Math.round(Number(r.amount || 0) * 100) / 100,
+            ...(r.group ? { group: String(r.group).trim() } : {}),
+          }))
+          .filter(r => r.ledger_name && (Math.abs(r.amount) > 0.005 || r.ledger_name.length > 0));
+        if (clean.length) payload[code] = clean;
+      }
+      const { error } = await (supabase.from as any)("audit_engagements")
+        .update({ py_manual_annexures: payload })
+        .eq("id", engagementId);
+      if (error) throw error;
+      toast.success("PY annexures saved");
+      setPyAnnexuresDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save PY annexures");
+    } finally {
+      setPyAnnexuresSaving(false);
+    }
+  };
+
+  // ─── Create a PY Shell engagement (FY-1) for split-Tally / new-Tally clients ──
+  // Inserts a minimal audit_engagements row flagged is_py_shell=true. User then
+  // completes Stages 2–7 on the shell to produce PY FS; Stage 10 of the CY
+  // engagement auto-picks it up via the existing priorEngagement query.
+  const createPyShellEngagement = async () => {
+    if (!engagement?.client_id || !engagement?.financial_year) {
+      toast.error("Client / financial year missing on CY engagement");
+      return;
+    }
+    const fyParts = String(engagement.financial_year).split("-");
+    if (fyParts.length !== 2) {
+      toast.error("Invalid financial year on CY engagement");
+      return;
+    }
+    const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
+    setCreatingPyShell(true);
+    try {
+      // Guard: if any engagement (shell or real) already exists for client+FY-1, reuse it.
+      const { data: existing } = await (supabase.from as any)("audit_engagements")
+        .select("id, is_py_shell")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .maybeSingle();
+      if (existing?.id) {
+        toast.info("An FY-1 engagement already exists — opening it");
+        navigate(`/audit/pipeline/${existing.id}?stage=2`);
+        setPySourceDialog(false);
+        return;
+      }
+      const { data, error } = await (supabase.from as any)("audit_engagements").insert({
+        client_id: engagement.client_id,
+        firm_id: engagement.firm_id ?? null,
+        financial_year: prevFy,
+        audit_type: engagement.audit_type ?? "statutory",
+        entity_type: engagement.entity_type ?? engagement?.clients?.entity_type ?? null,
+        audit_period_type: engagement.audit_period_type ?? "annual",
+        status: "py_shell",
+        pipeline_stage: 2,
+        is_py_shell: true,
+        stage_statuses: { "1": "complete", "2": "in_progress", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started" },
+      }).select("id").single();
+      if (error) throw error;
+      // Also stamp source on CY engagement
+      await (supabase.from as any)("audit_engagements")
+        .update({ py_source: "py_shell", py_setup_completed: true })
+        .eq("id", engagementId);
+      toast.success(`PY shell engagement created for FY ${prevFy}`);
+      setPySourceDialog(false);
+      queryClient.invalidateQueries({ queryKey: ["prior-engagement-fs"] });
+      navigate(`/audit/pipeline/${data.id}?stage=2`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create PY shell engagement");
+    } finally {
+      setCreatingPyShell(false);
+    }
+  };
+
+  // ─── Stamp py_source on CY engagement (for "manual" or "none" choices) ──
+  const setPySource = async (src: "manual" | "none") => {
+    try {
+      const { error } = await (supabase.from as any)("audit_engagements")
+        .update({ py_source: src, py_setup_completed: true })
+        .eq("id", engagementId);
+      if (error) throw error;
+      toast.success(src === "manual"
+        ? "PY data source set to manual — use the panels below"
+        : "PY comparative skipped");
+      setPySourceDialog(false);
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    } catch (err: any) {
+      toast.error(err.message || "Failed");
+    }
+  };
+
   // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
   const savePyManual = async () => {
     setPyManualSaving(true);
@@ -717,19 +851,50 @@ export default function PipelineFinancialStatements({
     // For each note, list the mapped ledgers with CY (closing) + PY (opening).
     // Ledgers come from tbAccounts; mapping from coaMapping.
     for (const item of notedItems) {
+      const tbLedgerNames = new Set<string>();
       const ledgers = tbAccounts
         .filter(a => coaMapping[a.account_name]?.code === item.code)
-        .map(a => ({
-          "Ledger": a.account_name,
-          "Group":  a.account_group || "",
-          [`CY ${cyYear} (₹)`]: fmt(a.balance),
-          [`PY ${pyYear} (₹)`]: fmt(a.opening_balance || 0),
-          "Variance (₹)": fmt(a.balance - (a.opening_balance || 0)),
-          "Status": (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
-            ? "NEW"
-            : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
-              ? "CLOSED" : "",
-        }));
+        .map(a => {
+          tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
+          return {
+            "Ledger": a.account_name,
+            "Group":  a.account_group || "",
+            [`CY ${cyYear} (₹)`]: fmt(a.balance),
+            [`PY ${pyYear} (₹)`]: fmt(a.opening_balance || 0),
+            "Variance (₹)": fmt(a.balance - (a.opening_balance || 0)),
+            "Status": (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
+              ? "NEW"
+              : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
+                ? "CLOSED" : "",
+          };
+        });
+
+      // Fold in PY-only ledgers from manual annexures (PY exists, no CY match).
+      // These represent ledgers present only in the prior year — e.g. P&L items
+      // that didn't recur in CY, or ledgers closed before CY began.
+      const manualRows = pyAnnexures[item.code] || [];
+      for (const r of manualRows) {
+        const name = String(r.ledger_name || "").trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (tbLedgerNames.has(key)) {
+          // If a CY ledger already exists with the same name, overwrite PY col.
+          const existing = ledgers.find(l => String(l["Ledger"]).toLowerCase().trim() === key);
+          if (existing) {
+            existing[`PY ${pyYear} (₹)`] = fmt(r.amount);
+            existing["Variance (₹)"] = fmt((existing[`CY ${cyYear} (₹)`] as number) - r.amount);
+          }
+        } else {
+          ledgers.push({
+            "Ledger": name,
+            "Group":  r.group || "",
+            [`CY ${cyYear} (₹)`]: 0,
+            [`PY ${pyYear} (₹)`]: fmt(r.amount),
+            "Variance (₹)": fmt(-r.amount),
+            "Status": "PY-ONLY",
+          });
+        }
+      }
       if (ledgers.length === 0) continue;
       // Append total row
       const totalCY = ledgers.reduce((s, l) => s + (l[`CY ${cyYear} (₹)`] as number), 0);
@@ -966,6 +1131,36 @@ export default function PipelineFinancialStatements({
         </div>
       </div>
 
+      {/* ── PY Data Source card ───────────────────────────────────────────
+          Shows when no prior engagement FS rows are found. Lets the user pick
+          one of four paths: existing engagement, PY shell import, manual
+          entry, or skip. Hidden once py_setup_completed is true and a prior
+          engagement / annexures / amounts have been recorded. */}
+      {noPriorEngagement && !(engagement as any)?.is_py_shell && (
+        <Alert className="border-primary/30">
+          <FileSpreadsheet className="h-4 w-4" />
+          <AlertTitle className="text-xs flex items-center justify-between">
+            <span>PY Data Source — FY {pyYear - 1}-{String(pyYear).slice(-2)}</span>
+            <div className="flex gap-2">
+              {(engagement as any)?.py_source && (
+                <Badge variant="outline" className="text-[10px]">
+                  Source: {(engagement as any).py_source}
+                </Badge>
+              )}
+              <Button size="sm" variant="default" className="h-7 text-xs"
+                onClick={() => setPySourceDialog(true)}>
+                Setup PY Data
+              </Button>
+            </div>
+          </AlertTitle>
+          <AlertDescription className="text-xs">
+            No prior-year engagement found. Choose how PY comparative data should be sourced:
+            running Tally opening balances cover the Balance Sheet, but PY P&L needs either a
+            prior engagement, a PY shell import, or manual entry.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-3">
         <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
@@ -1055,8 +1250,12 @@ export default function PipelineFinancialStatements({
 
           {/* ── P&L Statement ── */}
           <TabsContent value="pl" className="mt-3">
-            {/* ── Manual PY P&L entry (only when no prior engagement exists) ── */}
-            {noPriorEngagement && (
+            {/* ── Manual PY P&L entry ──
+                Shows when no prior engagement FS rows exist AND the user has
+                not opted into py_shell or explicitly skipped (none). */}
+            {noPriorEngagement &&
+             (engagement as any)?.py_source !== "py_shell" &&
+             (engagement as any)?.py_source !== "none" && (
               <Alert className="mb-3">
                 <Pencil className="h-4 w-4" />
                 <AlertTitle className="text-xs flex items-center justify-between">
@@ -1113,6 +1312,152 @@ export default function PipelineFinancialStatements({
                 </AlertDescription>
               </Alert>
             )}
+
+            {/* ── Manual PY Annexures (ledger-level breakdown per FS code) ──
+                Shown alongside manual P&L entry. Allows PY line items that
+                don't exist in CY — each FS code can carry its own ledger list. */}
+            {noPriorEngagement &&
+             (engagement as any)?.py_source !== "py_shell" &&
+             (engagement as any)?.py_source !== "none" && (
+              <Alert className="mb-3">
+                <BarChart3 className="h-4 w-4" />
+                <AlertTitle className="text-xs flex items-center justify-between">
+                  <span>PY Annexures — Ledger Detail ({pyYear})</span>
+                  <Button
+                    size="sm"
+                    variant={pyAnnexuresDirty ? "default" : "outline"}
+                    disabled={pyAnnexuresSaving || !pyAnnexuresDirty}
+                    onClick={savePyAnnexures}
+                    className="h-7 text-xs"
+                  >
+                    {pyAnnexuresSaving ? (
+                      <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving…</>
+                    ) : pyAnnexuresDirty ? "Save Annexures" : "Saved"}
+                  </Button>
+                </AlertTitle>
+                <AlertDescription className="text-xs">
+                  Enter ledger-level breakdown behind each PY P&L note. These rows appear in the
+                  PY column of note-wise annexures and the Excel export. PY may contain ledgers
+                  that don't exist in CY — add them freely.
+                  <div className="mt-3 space-y-3 max-h-[420px] overflow-y-auto pr-2">
+                    {activeFlatItems
+                      .filter(i => {
+                        const sec = String(i.section || "").toLowerCase();
+                        const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+                        const isLeaf = !i.children || i.children.length === 0;
+                        const hasNote = !!i.noteRef;
+                        return isPL && isLeaf && hasNote;
+                      })
+                      .map(i => {
+                        const rows = pyAnnexures[i.code] || [];
+                        const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+                        const booked = pyManualAmounts[i.code] ?? (pyAmounts[i.code] || 0);
+                        const delta = Math.round((total - booked) * 100) / 100;
+                        return (
+                          <div key={i.code} className="rounded-md border p-2 bg-background/50">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11px] font-semibold truncate" title={i.name}>
+                                  {i.noteRef ? `N${i.noteRef} · ` : ""}{i.name}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  Booked PY: ₹{booked.toLocaleString("en-IN")}
+                                  {rows.length > 0 && (
+                                    <> · Annexure Total: ₹{total.toLocaleString("en-IN")}
+                                       {Math.abs(delta) >= 1 && (
+                                         <span className="text-destructive"> · Δ ₹{Math.abs(delta).toLocaleString("en-IN")}</span>
+                                       )}
+                                    </>
+                                  )}
+                                </p>
+                              </div>
+                              <Button
+                                size="sm" variant="outline" className="h-6 text-[10px] shrink-0"
+                                onClick={() => {
+                                  setPyAnnexures(prev => ({
+                                    ...prev,
+                                    [i.code]: [...(prev[i.code] || []), { ledger_name: "", amount: 0 }],
+                                  }));
+                                  setPyAnnexuresDirty(true);
+                                }}
+                              >+ Add Ledger</Button>
+                            </div>
+                            {rows.length > 0 && (
+                              <div className="space-y-1">
+                                {rows.map((r, idx) => (
+                                  <div key={idx} className="flex items-center gap-1">
+                                    <Input
+                                      placeholder="Ledger name"
+                                      value={r.ledger_name}
+                                      onChange={e => {
+                                        const v = e.target.value;
+                                        setPyAnnexures(prev => {
+                                          const next = { ...prev };
+                                          next[i.code] = [...(next[i.code] || [])];
+                                          next[i.code][idx] = { ...next[i.code][idx], ledger_name: v };
+                                          return next;
+                                        });
+                                        setPyAnnexuresDirty(true);
+                                      }}
+                                      className="h-7 text-xs flex-1"
+                                    />
+                                    <Input
+                                      placeholder="Group (opt.)"
+                                      value={r.group || ""}
+                                      onChange={e => {
+                                        const v = e.target.value;
+                                        setPyAnnexures(prev => {
+                                          const next = { ...prev };
+                                          next[i.code] = [...(next[i.code] || [])];
+                                          next[i.code][idx] = { ...next[i.code][idx], group: v };
+                                          return next;
+                                        });
+                                        setPyAnnexuresDirty(true);
+                                      }}
+                                      className="h-7 text-xs w-28"
+                                    />
+                                    <Input
+                                      type="number"
+                                      inputMode="decimal"
+                                      placeholder="Amount"
+                                      value={r.amount === 0 ? "" : r.amount}
+                                      onChange={e => {
+                                        const v = e.target.value;
+                                        const n = v === "" || v === "-" ? 0 : Number(v);
+                                        setPyAnnexures(prev => {
+                                          const next = { ...prev };
+                                          next[i.code] = [...(next[i.code] || [])];
+                                          next[i.code][idx] = { ...next[i.code][idx], amount: Number.isFinite(n) ? n : 0 };
+                                          return next;
+                                        });
+                                        setPyAnnexuresDirty(true);
+                                      }}
+                                      className="h-7 text-xs w-28 text-right font-mono tabular-nums"
+                                    />
+                                    <Button
+                                      size="icon" variant="ghost" className="h-6 w-6 text-destructive"
+                                      onClick={() => {
+                                        setPyAnnexures(prev => {
+                                          const next = { ...prev };
+                                          next[i.code] = (next[i.code] || []).filter((_, k) => k !== idx);
+                                          if (next[i.code].length === 0) delete next[i.code];
+                                          return next;
+                                        });
+                                        setPyAnnexuresDirty(true);
+                                      }}
+                                    >×</Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
+
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -1287,6 +1632,65 @@ export default function PipelineFinancialStatements({
             >
               Apply Override
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── PY Data Source dialog ──────────────────────────────────────── */}
+      <Dialog open={pySourceDialog} onOpenChange={setPySourceDialog}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Setup PY Comparative Data</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-xs">
+            <p className="text-muted-foreground">
+              No prior-year engagement was found for this client. Choose how PY data should be sourced:
+            </p>
+
+            <div className="rounded-lg border p-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">Option A — Create PY Shell Engagement</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Creates a cut-down FY {String(pyYear - 1)}-{String(pyYear).slice(-2)} engagement. Import PY trial balance, map COA, and freeze PY FS there — Stage 10 here picks it up automatically.
+                  </p>
+                </div>
+                <Button size="sm" disabled={creatingPyShell} onClick={createPyShellEngagement} className="shrink-0">
+                  {creatingPyShell ? <Loader2 className="h-3 w-3 animate-spin" /> : "Create Shell"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">Option B — Enter PY Data Manually</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Type PY P&L amounts and note-wise annexures directly. Best for small clients without Tally. Figures auto-flow as next year's PY source.
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setPySource("manual")} className="shrink-0">
+                  Use Manual
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">Option C — Skip PY Comparative</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    First-year engagement. PY column stays blank on BS &amp; P&amp;L.
+                  </p>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setPySource("none")} className="shrink-0">
+                  Skip
+                </Button>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setPySourceDialog(false)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

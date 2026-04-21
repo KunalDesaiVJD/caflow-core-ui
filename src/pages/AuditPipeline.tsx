@@ -185,6 +185,9 @@ export default function AuditPipeline() {
         .select("id, client_id, financial_year, audit_type, pipeline_stage, stage_statuses, final_locked, status, entity_type, clients(name)")
         // TODO: Supabase RLS policy needs superadmin bypass; guarded by enabled: !!user?.firm_id
         .eq("firm_id", user?.firm_id ?? "")
+        // Hide PY shell engagements from the main audit list — they're managed
+        // from the parent engagement's Stage 10 and don't have their own sign-off.
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
         .order("financial_year", { ascending: false });
       return (data || []) as any[];
     },
@@ -645,6 +648,16 @@ export default function AuditPipeline() {
       audit_firm_id: form1A.audit_firm_id || null,
       partner_name:  form1A.partner_name  || null,
       questionnaire_answers: questionnaire,
+      // Sync PY data-source choice to the dedicated column so Stage 10 can
+      // query it without parsing questionnaire JSON. Map questionnaire values
+      // to canonical py_source strings (prior_engagement | py_shell | manual | none).
+      py_source: (() => {
+        const v = questionnaire.py_data_availability;
+        if (v === "py_shell_import") return "py_shell";
+        if (v === "py_tally_running") return "prior_engagement";
+        if (v === "prior_engagement" || v === "manual" || v === "none") return v;
+        return null;
+      })(),
       stage_statuses: newStatuses,
       pipeline_stage: complete ? 2 : 1,
       requires_caro: autoFlags.requires_caro,
@@ -995,6 +1008,65 @@ export default function AuditPipeline() {
                       <YesNo label="Any capital transactions (issue/buyback of shares, debentures)?" value={questionnaire.capital_transactions || ""} onChange={v => setQ("capital_transactions", v)} />
                       <YesNo label="Long-term borrowings outstanding?" value={questionnaire.long_term_borrowings || ""} onChange={v => setQ("long_term_borrowings", v)} />
                       <YesNo label="Loans to/from directors or related parties?" value={questionnaire.director_loans || ""} onChange={v => setQ("director_loans", v)} />
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  {/* Block PY — Prior-Year Data Source ───────────────────
+                   *  Determines how Stage 10 builds the PY comparative. Four paths:
+                   *   • prior_engagement  — an FY-1 audit engagement already exists in CAFlow
+                   *   • py_tally_running  — running Tally carries opening balances; BS auto-builds from opening, user must still source PY P&L (prior_engagement or py_shell)
+                   *   • py_shell_import   — client uses split/new Tally; we create a cut-down FY-1 engagement to import full PY TB + produce PY FS
+                   *   • manual            — no Tally/engagement exists for PY; user types amounts + annexures directly
+                   *   • none              — first-year engagement or auditor skips comparative
+                   * Stage 10 reads questionnaire.py_data_availability to guide the setup card. */}
+                  <AccordionItem value="block-py" className="border rounded-lg px-4">
+                    <AccordionTrigger className="text-sm font-semibold">
+                      Block PY — Prior-Year Data Source
+                      {questionnaire.py_data_availability && <CheckCircle2 size={14} className="ml-2 text-primary" />}
+                    </AccordionTrigger>
+                    <AccordionContent className="space-y-4 pt-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">How is prior-year (comparative) data available?</Label>
+                        <Select
+                          value={questionnaire.py_data_availability || ""}
+                          onValueChange={v => setQ("py_data_availability", v)}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Select PY data source" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="prior_engagement">Prior audit engagement exists in CAFlow (FY-1)</SelectItem>
+                            <SelectItem value="py_tally_running">Running Tally — opening balances carry PY closing (BS only; P&L still needed)</SelectItem>
+                            <SelectItem value="py_shell_import">Split / new Tally — import full PY data as a PY shell engagement</SelectItem>
+                            <SelectItem value="manual">No Tally / no prior engagement — enter PY P&L + annexures manually</SelectItem>
+                            <SelectItem value="none">First-year engagement — no PY comparative</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[11px] text-muted-foreground">
+                          This drives the "PY Data Source" card in Stage 10 (Financial Statements) and determines whether a PY shell engagement needs to be created.
+                        </p>
+                      </div>
+                      {questionnaire.py_data_availability === "py_tally_running" && (
+                        <YesNo
+                          label="Do you also have access to last year's audited P&L figures (to fill the P&L comparative)?"
+                          value={questionnaire.py_pl_available || ""}
+                          onChange={v => setQ("py_pl_available", v)}
+                        />
+                      )}
+                      {questionnaire.py_data_availability === "py_shell_import" && (
+                        <div className="rounded-md border border-dashed p-3 text-[11px] bg-muted/30 space-y-1">
+                          <p className="font-medium">Next step</p>
+                          <p className="text-muted-foreground">
+                            After completing Stage 1, go to Stage 10 → "PY Data Source" card → "Create PY Shell Engagement". You'll then import the PY trial balance and map it like a normal engagement; Stage 10 picks up the PY FS automatically.
+                          </p>
+                        </div>
+                      )}
+                      {questionnaire.py_data_availability === "manual" && (
+                        <div className="rounded-md border border-dashed p-3 text-[11px] bg-muted/30 space-y-1">
+                          <p className="font-medium">Next step</p>
+                          <p className="text-muted-foreground">
+                            In Stage 10, use the "Manual PY P&L Entry" panel for line-item amounts, and the "PY Annexures" grid to type ledger-level detail per note. Data is saved against this engagement and auto-flows as next year's PY source.
+                          </p>
+                        </div>
+                      )}
                     </AccordionContent>
                   </AccordionItem>
 
