@@ -138,6 +138,17 @@ export function buildClauseValues(
   } else if (ynSummary(cl9b)) {
     setV(f3, "F18", ynSummary(cl9b, "No change"));
   }
+  // J17: note reference for clause 9a (visible answer cell — top-left of J:M merge)
+  if (cl9a._notApplicable) {
+    setV(f3, "J17", "Not Applicable");
+  } else if (cl9a._noteRef) {
+    const noteText = cl9a._asPerAnnexure
+      ? `As Per Note No. ${cl9a._noteRef}`
+      : `Note No. ${cl9a._noteRef}`;
+    setV(f3, "J17", noteText);
+  } else if (cl9a._asPerAnnexure || partners9.length > 0) {
+    setV(f3, "J17", "As Per Annexure");
+  }
 
   // ── Clause 10 — Nature of business ──────────────────────────────────────
   const cl10a = dig(cl, "cl_10", "10a");
@@ -146,8 +157,18 @@ export function buildClauseValues(
   if (bizRows.length > 0) {
     const codes = bizRows.map((r) => r.code || r.sub_sector || r.sector).filter(Boolean).join(", ");
     setV(f3, "F19", codes || "As Per Note");
+    // J19: visible answer cell (top-left of J:M merge) — sector / sub-sector / NIC code
+    const desc = bizRows
+      .map((r) => [r.sector, r.sub_sector, r.code].filter(Boolean).join(" - "))
+      .join("; ");
+    setV(f3, "J19", desc || codes || "As Per Annexure");
+  } else if (cl10a._notApplicable) {
+    setV(f3, "J19", "Not Applicable");
   }
-  setV(f3, "F20", ynSummary(cl10b, "No change"));
+  const cl10bAnswer = ynSummary(cl10b, "No change");
+  setV(f3, "F20", cl10bAnswer);
+  // J20: visible answer cell for clause 10b
+  setV(f3, "J20", cl10bAnswer);
 
   // ── Clause 11 — Books of account ────────────────────────────────────────
   const cl11a = dig(cl, "cl_11", "11a");
