@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets,
@@ -782,174 +783,582 @@ export default function PipelineFinancialStatements({
     }
   };
 
-  // ─── Export to Excel (full annexures) ───
-  // Emits: Cover · Balance Sheet · P&L · Notes Index · Note-wise ledger annexures
-  //        · PY Reconciliation · Signature block. One self-contained workbook.
-  const exportToExcel = () => {
-    const wb = XLSX.utils.book_new();
+  // ─── Export to Excel (template-shaped, data auto-filled) ───
+  // Primary BS + P&L sheets mirror the standard NCE template (entity title,
+  // two-line column header, section headings on merged rows, blank spacer rows,
+  // bold TOTAL rows, in-sheet signature block). Supporting sheets (Notes Index,
+  // note-wise ledger annexures, PY Reconciliation) follow. Built with ExcelJS
+  // so merges, fonts, borders and number formats survive into the .xlsx.
+  const exportToExcel = async () => {
     const bsPrefix = isNonCorporate ? "NCE_BS_" : "BS_";
     const plPrefix = isNonCorporate ? "NCE_PL_" : "PL_";
     const bsItems = activeFlatItems.filter(i => i.section.startsWith(bsPrefix));
     const plItems = activeFlatItems.filter(i => i.section.startsWith(plPrefix));
-
     const fmt = (n: number) => Math.round((n || 0) * 100) / 100;
 
-    // ── Cover sheet ──
     const clientName = engagement?.clients?.name || "—";
-    const pan = engagement?.clients?.pan || engagement?.pan || "—";
-    const fy  = engagement?.financial_year || "—";
-    const ay  = (() => {
-      const parts = fy.split("-");
-      if (parts.length !== 2) return "—";
-      const s = parseInt(parts[0]) + 1;
-      const e = parseInt(parts[0]) + 2;
-      return `${s}-${String(e).slice(-2)}`;
-    })();
-    const coverRows = [
-      ["FINANCIAL STATEMENTS"],
-      [],
-      ["Client",           clientName],
-      ["Entity Type",      entityType || "—"],
-      ["PAN",              pan],
-      ["Financial Year",   fy],
-      ["Assessment Year",  ay],
-      ["Framework",        isNonCorporate ? "Non-Corporate Entity (NCE)" : "Schedule III Div I"],
-      ["CY",               `As at 31 March ${cyYear}`],
-      ["PY",               `As at 31 March ${pyYear}`],
-      ["Generated on",     new Date().toISOString().split("T")[0]],
+    const fy = engagement?.financial_year || "—";
+    const cyLabel = `As at 31 March, ${cyYear}`;
+    const pyLabel = `As at 31 March, ${pyYear}`;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "CAFlow";
+    wb.created = new Date();
+
+    const MONEY_FMT = '#,##0.00;(#,##0.00);"-"';
+    const thin = { style: "thin" as const, color: { argb: "FF000000" } };
+    const fullBorder = { top: thin, bottom: thin, left: thin, right: thin };
+
+    // A leaf row is one whose code is never referenced as a parent; for NCE
+    // we encoded that as having a noteRef OR being part of the profit chain.
+    const isLeaf = (it: FSLineItem & { depth: number }) =>
+      !it.children || it.children.length === 0;
+
+    // ───────────────────────── BALANCE SHEET ─────────────────────────
+    const bs = wb.addWorksheet("Balance Sheet", {
+      views: [{ showGridLines: false }],
+    });
+    // Col A: padding · B: Particulars · C-E: continuation (merged w/ B for
+    // headings) · F: Note · G: CY · H: PY (matches template column layout).
+    bs.columns = [
+      { width: 2 },   // A  spacer
+      { width: 46 },  // B  Particulars
+      { width: 2 },   // C
+      { width: 2 },   // D
+      { width: 2 },   // E
+      { width: 8 },   // F  Note
+      { width: 18 },  // G  CY
+      { width: 18 },  // H  PY
     ];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coverRows), "Cover");
 
-    // ── BS / P&L primary statements ──
-    const toRows = (items: typeof bsItems) =>
-      items.map(i => ({
-        "Code": i.code,
-        "Line Item": "  ".repeat(i.depth) + i.name,
-        "Note Ref": i.noteRef ? `N${i.noteRef}` : "",
-        [`CY ${cyYear} (₹)`]: fmt(computedAmounts[i.code] || 0),
-        [`PY ${pyYear} (₹)`]: fmt(mergedPY[i.code] || 0),
-        "Variance (₹)": fmt((computedAmounts[i.code] || 0) - (mergedPY[i.code] || 0)),
-        "Override": manualOverrides[i.code] ? "Yes" : "",
-        "Override Reason": manualOverrides[i.code]?.reason || "",
-      }));
+    let row = 3;
+    bs.getCell(`B${row}`).value = clientName;
+    bs.getCell(`B${row}`).font = { bold: true, size: 13 };
+    bs.mergeCells(`B${row}:H${row}`);
+    bs.getCell(`B${row}`).alignment = { horizontal: "center" };
+    row++;
+    bs.getCell(`B${row}`).value = `Balance Sheet as at 31 March, ${cyYear}`;
+    bs.getCell(`B${row}`).font = { bold: true, size: 11 };
+    bs.mergeCells(`B${row}:H${row}`);
+    bs.getCell(`B${row}`).alignment = { horizontal: "center" };
+    row++;
+    bs.getCell(`B${row}`).value = "Amount (in Rs)";
+    bs.getCell(`B${row}`).font = { italic: true, size: 9 };
+    bs.mergeCells(`B${row}:H${row}`);
+    bs.getCell(`B${row}`).alignment = { horizontal: "right" };
+    row++;
 
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(toRows(bsItems)), "Balance Sheet");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(toRows(plItems)), "P&L Statement");
+    // Header block (2 rows): Particulars | Note | As at (Rs.) | As at (Rs.)
+    const hdrTop = row++, hdrBot = row++;
+    bs.getCell(`B${hdrTop}`).value = "Particulars";
+    bs.mergeCells(`B${hdrTop}:E${hdrBot}`);
+    bs.getCell(`F${hdrTop}`).value = "Note";
+    bs.mergeCells(`F${hdrTop}:F${hdrBot}`);
+    bs.getCell(`G${hdrTop}`).value = "As at (Rs.)";
+    bs.getCell(`G${hdrBot}`).value = `31 March, ${cyYear}`;
+    bs.getCell(`H${hdrTop}`).value = "As at (Rs.)";
+    bs.getCell(`H${hdrBot}`).value = `31 March, ${pyYear}`;
+    for (const a of ["B","F","G","H"]) {
+      bs.getCell(`${a}${hdrTop}`).font = { bold: true };
+      bs.getCell(`${a}${hdrBot}`).font = { bold: true };
+    }
+    for (let r = hdrTop; r <= hdrBot; r++) {
+      for (const a of ["B","C","D","E","F","G","H"]) {
+        bs.getCell(`${a}${r}`).border = fullBorder;
+        bs.getCell(`${a}${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      }
+    }
 
-    // ── Notes Index ──
+    // Emit a leaf line: "  name" at B, note at F, CY at G, PY at H.
+    const writeLeaf = (it: FSLineItem & { depth: number }) => {
+      const cy = fmt(computedAmounts[it.code] || 0);
+      const py = fmt(mergedPY[it.code] || 0);
+      bs.getCell(`B${row}`).value = "  ".repeat(Math.max(0, it.depth - 1)) + it.name;
+      bs.mergeCells(`B${row}:E${row}`);
+      bs.getCell(`F${row}`).value = it.noteRef ? it.noteRef : "";
+      bs.getCell(`F${row}`).alignment = { horizontal: "center" };
+      bs.getCell(`G${row}`).value = cy;
+      bs.getCell(`H${row}`).value = py;
+      bs.getCell(`G${row}`).numFmt = MONEY_FMT;
+      bs.getCell(`H${row}`).numFmt = MONEY_FMT;
+      row++;
+    };
+    const writeBlank = () => { row++; };
+    const writeSectionHeader = (text: string) => {
+      bs.getCell(`B${row}`).value = text;
+      bs.getCell(`B${row}`).font = { bold: true };
+      bs.mergeCells(`B${row}:H${row}`);
+      row++;
+    };
+    const writeGroupHeader = (text: string) => {
+      bs.getCell(`B${row}`).value = text;
+      bs.getCell(`B${row}`).font = { bold: true, italic: true };
+      bs.mergeCells(`B${row}:E${row}`);
+      row++;
+    };
+    const writeTotal = (text: string, cy: number, py: number) => {
+      bs.getCell(`B${row}`).value = text;
+      bs.getCell(`B${row}`).font = { bold: true };
+      bs.mergeCells(`B${row}:F${row}`);
+      bs.getCell(`G${row}`).value = fmt(cy);
+      bs.getCell(`H${row}`).value = fmt(py);
+      bs.getCell(`G${row}`).numFmt = MONEY_FMT;
+      bs.getCell(`H${row}`).numFmt = MONEY_FMT;
+      for (const a of ["B","C","D","E","F","G","H"]) {
+        bs.getCell(`${a}${row}`).font = { bold: true };
+        bs.getCell(`${a}${row}`).border = { top: thin, bottom: thin };
+      }
+      row++;
+    };
+
+    // Walk the NCE tree: top-level sections (EL / AST), sub-groups, leaves.
+    const ownSum = (code: string): { cy: number; py: number } => {
+      const item = activeFlatItems.find(i => i.code === code);
+      if (!item) return { cy: 0, py: 0 };
+      return {
+        cy: fmt(computedAmounts[code] || 0),
+        py: fmt(mergedPY[code] || 0),
+      };
+    };
+
+    // EQUITY AND LIABILITIES
+    const topLiab = bsItems.find(i => i.code === "NCE_EL" || i.code === "BS_EL");
+    const topAst  = bsItems.find(i => i.code === "NCE_AST" || i.code === "BS_AST");
+    if (topLiab) {
+      writeSectionHeader(topLiab.name);
+      const groups = bsItems.filter(i => i.depth === 1 && i.section === topLiab.section && i.code !== topLiab.code);
+      for (const g of groups) {
+        writeGroupHeader(g.name);
+        const leaves = bsItems.filter(i => i.depth === 2 && i.section === g.section
+          && bsItems.indexOf(i) > bsItems.indexOf(g)
+          && bsItems.indexOf(i) < bsItems.indexOf(g) + 1 + (g.children?.length || 0));
+        // Fallback: if tree depth info is ambiguous, use tree descent
+        const directChildren = (g.children || []).filter(c => isLeaf(c as any));
+        const rowsToEmit = directChildren.length ? directChildren : leaves;
+        for (const c of rowsToEmit) writeLeaf(c as any);
+        writeBlank();
+      }
+      const { cy, py } = ownSum(topLiab.code);
+      writeTotal("TOTAL EQUITY AND LIABILITIES", cy, py);
+      writeBlank();
+    }
+    // ASSETS
+    if (topAst) {
+      writeSectionHeader(topAst.name);
+      const groups = (topAst.children || []);
+      for (const g of groups) {
+        writeGroupHeader(g.name);
+        for (const c of (g.children || [])) writeLeaf(c as any);
+        writeBlank();
+      }
+      const { cy, py } = ownSum(topAst.code);
+      writeTotal("TOTAL ASSETS", cy, py);
+      writeBlank();
+    }
+    // Significant accounting policies line (NCE only)
+    const acctPol = bsItems.find(i => i.code === "NCE_ACCTPOL");
+    if (acctPol) {
+      bs.getCell(`B${row}`).value = "Summary of Significant Accounting Policies";
+      bs.mergeCells(`B${row}:E${row}`);
+      bs.getCell(`F${row}`).value = acctPol.noteRef || 1;
+      bs.getCell(`F${row}`).alignment = { horizontal: "center" };
+      bs.getCell(`B${row}`).font = { italic: true };
+      row++;
+    }
+
+    // Signature block embedded in-sheet (per template)
+    row += 2;
+    bs.getCell(`B${row}`).value = "For,";
+    bs.getCell(`C${row}`).value = sigFirmName || "[CA FIRM NAME]";
+    bs.getCell(`C${row}`).font = { bold: true };
+    bs.getCell(`F${row}`).value = "For,";
+    bs.getCell(`G${row}`).value = sigClientName || clientName;
+    bs.getCell(`G${row}`).font = { bold: true };
+    bs.mergeCells(`G${row}:H${row}`);
+    row++;
+    bs.getCell(`B${row}`).value = "Chartered Accountants";
+    bs.getCell(`B${row}`).font = { italic: true };
+    bs.mergeCells(`B${row}:E${row}`);
+    row++;
+    bs.getCell(`B${row}`).value = "FRN:";
+    bs.getCell(`C${row}`).value = sigFirmFRN || "[FRN]";
+    row += 3;
+    bs.getCell(`B${row}`).value = sigPartnerName || "[Partner Name]";
+    bs.getCell(`B${row}`).font = { bold: true };
+    row++;
+    bs.getCell(`B${row}`).value = "Partner";
+    bs.getCell(`F${row}`).value = "Place:";
+    bs.getCell(`G${row}`).value = sigPlace || "";
+    bs.mergeCells(`G${row}:H${row}`);
+    row++;
+    bs.getCell(`B${row}`).value = "Membership No.";
+    bs.getCell(`C${row}`).value = sigMembershipNo || "";
+    bs.getCell(`F${row}`).value = "Date:";
+    bs.getCell(`G${row}`).value = sigDate || "";
+    bs.mergeCells(`G${row}:H${row}`);
+
+    // ───────────────────────── PROFIT & LOSS ─────────────────────────
+    const pl = wb.addWorksheet("Profit & Loss", {
+      views: [{ showGridLines: false }],
+    });
+    pl.columns = [
+      { width: 2 },   // A spacer
+      { width: 8 },   // B  Roman/sub-code
+      { width: 40 },  // C  Particulars
+      { width: 2 },   // D  continuation
+      { width: 8 },   // E  Note
+      { width: 18 },  // F  CY
+      { width: 18 },  // G  PY
+    ];
+    let pr = 3;
+    pl.getCell(`B${pr}`).value = clientName;
+    pl.getCell(`B${pr}`).font = { bold: true, size: 13 };
+    pl.mergeCells(`B${pr}:G${pr}`);
+    pl.getCell(`B${pr}`).alignment = { horizontal: "center" };
+    pr++;
+    pl.getCell(`B${pr}`).value = `Statement of Profit and Loss for the year ended 31 March, ${cyYear}`;
+    pl.getCell(`B${pr}`).font = { bold: true, size: 11 };
+    pl.mergeCells(`B${pr}:G${pr}`);
+    pl.getCell(`B${pr}`).alignment = { horizontal: "center" };
+    pr++;
+    pl.getCell(`B${pr}`).value = "Amount (in Rs)";
+    pl.getCell(`B${pr}`).font = { italic: true, size: 9 };
+    pl.mergeCells(`B${pr}:G${pr}`);
+    pl.getCell(`B${pr}`).alignment = { horizontal: "right" };
+    pr++;
+    const pHdrTop = pr++, pHdrBot = pr++;
+    pl.getCell(`B${pHdrTop}`).value = "Particulars";
+    pl.mergeCells(`B${pHdrTop}:D${pHdrBot}`);
+    pl.getCell(`E${pHdrTop}`).value = "Note";
+    pl.mergeCells(`E${pHdrTop}:E${pHdrBot}`);
+    pl.getCell(`F${pHdrTop}`).value = "As at";
+    pl.getCell(`F${pHdrBot}`).value = `31 March, ${cyYear}`;
+    pl.getCell(`G${pHdrTop}`).value = "As at";
+    pl.getCell(`G${pHdrBot}`).value = `31 March, ${pyYear}`;
+    for (const a of ["B","E","F","G"]) {
+      pl.getCell(`${a}${pHdrTop}`).font = { bold: true };
+      pl.getCell(`${a}${pHdrBot}`).font = { bold: true };
+    }
+    for (let r = pHdrTop; r <= pHdrBot; r++) {
+      for (const a of ["B","C","D","E","F","G"]) {
+        pl.getCell(`${a}${r}`).border = fullBorder;
+        pl.getCell(`${a}${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      }
+    }
+
+    // Roman numeral / sub-code prefixes are already baked into item.name
+    // (e.g. "I.  Revenue from operations"). Split them into col B vs col C so
+    // the template's two-column layout is preserved.
+    const splitRoman = (full: string): [string, string] => {
+      // Match leading "I." / "II." / "(a)" / "(1)" etc.
+      const m = full.match(/^\s*(\([a-zA-Z0-9]+\)|[IVXLCDM]+\.?)\s*(.*)$/);
+      if (m) return [m[1], m[2]];
+      return ["", full];
+    };
+    const plLeaf = (it: FSLineItem & { depth: number }, noteVisible = true) => {
+      const [roman, rest] = splitRoman(it.name);
+      pl.getCell(`B${pr}`).value = roman;
+      pl.getCell(`B${pr}`).alignment = { horizontal: "center" };
+      pl.getCell(`C${pr}`).value = rest;
+      pl.mergeCells(`C${pr}:D${pr}`);
+      pl.getCell(`E${pr}`).value = noteVisible && it.noteRef ? it.noteRef : "";
+      pl.getCell(`E${pr}`).alignment = { horizontal: "center" };
+      pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
+      pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+      pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
+      pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+      pr++;
+    };
+    const plComputed = (it: FSLineItem & { depth: number }) => {
+      const [roman, rest] = splitRoman(it.name);
+      pl.getCell(`B${pr}`).value = roman;
+      pl.getCell(`C${pr}`).value = rest;
+      pl.mergeCells(`C${pr}:D${pr}`);
+      pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
+      pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+      pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
+      pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+      for (const a of ["B","C","D","E","F","G"]) {
+        pl.getCell(`${a}${pr}`).font = { bold: true };
+        pl.getCell(`${a}${pr}`).border = { top: thin };
+      }
+      pl.getCell(`B${pr}`).alignment = { horizontal: "center" };
+      pr++;
+    };
+    const plSection = (text: string) => {
+      pl.getCell(`B${pr}`).value = text;
+      pl.getCell(`B${pr}`).font = { bold: true };
+      pl.mergeCells(`B${pr}:G${pr}`);
+      pr++;
+    };
+    const plBlank = () => { pr++; };
+
+    const find = (c: string) => activeFlatItems.find(i => i.code === c) as any;
+
+    // INCOME
+    plSection("INCOME");
+    const rev  = find("NCE_REV_OPS") || find("PL_REV_OPS");
+    const othI = find("NCE_REV_OTH") || find("PL_REV_OTH");
+    const totInc = find("NCE_PL_INC") || find("PL_TOT_INC");
+    if (rev)  plLeaf(rev);
+    if (othI) plLeaf(othI);
+    if (totInc) plComputed(totInc);
+    plBlank();
+
+    // EXPENSES
+    plSection("EXPENSES");
+    const expCodes = ["NCE_COGS","NCE_EMP_EXP","NCE_FIN_COST","NCE_DEPR","NCE_OTH_EXP"];
+    for (const c of expCodes) {
+      const it = find(c);
+      if (it) plLeaf(it);
+    }
+    const totExp = find("NCE_PL_EXP");
+    if (totExp) plComputed(totExp);
+    plBlank();
+
+    // Profit chain
+    for (const c of ["NCE_PROF_V","NCE_EXCEP","NCE_PROF_VII","NCE_EXTORD","NCE_PROF_IX"]) {
+      const it = find(c);
+      if (it) plComputed(it);
+    }
+    plBlank();
+    const partRem = find("NCE_PART_REM");
+    if (partRem) plLeaf(partRem);
+    const profXI = find("NCE_PROF_XI");
+    if (profXI) plComputed(profXI);
+    plBlank();
+
+    // Tax expense with indented children
+    const tax = find("NCE_TAX");
+    if (tax) {
+      const [roman, rest] = splitRoman(tax.name);
+      pl.getCell(`B${pr}`).value = roman;
+      pl.getCell(`C${pr}`).value = rest;
+      pl.mergeCells(`C${pr}:D${pr}`);
+      pl.getCell(`B${pr}`).font = { bold: true };
+      pl.getCell(`C${pr}`).font = { bold: true };
+      pr++;
+      for (const c of ["NCE_CUR_TAX","NCE_PRIOR_TAX"]) {
+        const it = find(c);
+        if (!it) continue;
+        pl.getCell(`C${pr}`).value = "       " + it.name;
+        pl.mergeCells(`C${pr}:D${pr}`);
+        pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
+        pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+        pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
+        pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+        pr++;
+      }
+      pl.getCell(`C${pr}`).value = "       Total tax expense";
+      pl.mergeCells(`C${pr}:D${pr}`);
+      const taxCy = fmt(computedAmounts["NCE_TAX"] || 0);
+      const taxPy = fmt(mergedPY["NCE_TAX"] || 0);
+      pl.getCell(`F${pr}`).value = taxCy;
+      pl.getCell(`G${pr}`).value = taxPy;
+      pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
+      pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+      for (const a of ["C","D","F","G"]) pl.getCell(`${a}${pr}`).font = { bold: true };
+      pr++;
+    }
+    plBlank();
+    const net = find("NCE_NET_PROF");
+    if (net) plComputed(net);
+
+    // Signature in P&L (mirror template)
+    pr += 2;
+    pl.getCell(`B${pr}`).value = "For,";
+    pl.getCell(`C${pr}`).value = sigFirmName || "[CA FIRM NAME]";
+    pl.getCell(`C${pr}`).font = { bold: true };
+    pl.getCell(`E${pr}`).value = "For,";
+    pl.getCell(`F${pr}`).value = sigClientName || clientName;
+    pl.getCell(`F${pr}`).font = { bold: true };
+    pl.mergeCells(`F${pr}:G${pr}`);
+    pr++;
+    pl.getCell(`C${pr}`).value = "Chartered Accountants";
+    pl.getCell(`C${pr}`).font = { italic: true };
+    pr++;
+    pl.getCell(`B${pr}`).value = "FRN:";
+    pl.getCell(`C${pr}`).value = sigFirmFRN || "[FRN]";
+    pr += 3;
+    pl.getCell(`B${pr}`).value = sigPartnerName || "[Partner Name]";
+    pl.getCell(`B${pr}`).font = { bold: true };
+    pl.mergeCells(`B${pr}:C${pr}`);
+    pr++;
+    pl.getCell(`B${pr}`).value = "Partner";
+    pl.getCell(`E${pr}`).value = "Place:";
+    pl.getCell(`F${pr}`).value = sigPlace || "";
+    pl.mergeCells(`F${pr}:G${pr}`);
+    pr++;
+    pl.getCell(`B${pr}`).value = "Membership No.";
+    pl.getCell(`C${pr}`).value = sigMembershipNo || "";
+    pl.getCell(`E${pr}`).value = "Date:";
+    pl.getCell(`F${pr}`).value = sigDate || "";
+    pl.mergeCells(`F${pr}:G${pr}`);
+
+    // ───────────────────────── NOTES INDEX ─────────────────────────
     const notedItems = activeFlatItems.filter(i => i.noteRef);
-    const noteIndex = notedItems.map(i => ({
-      "Note": `N${i.noteRef}`,
-      "Line Item": i.name,
-      "Code": i.code,
-      [`CY ${cyYear} (₹)`]: fmt(computedAmounts[i.code] || 0),
-      [`PY ${pyYear} (₹)`]: fmt(mergedPY[i.code] || 0),
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteIndex), "Notes Index");
+    const nx = wb.addWorksheet("Notes Index");
+    nx.columns = [
+      { header: "Note",     key: "n",  width: 8 },
+      { header: "Line Item", key: "li", width: 42 },
+      { header: "Code",     key: "c",  width: 16 },
+      { header: `CY ${cyYear} (Rs.)`, key: "cy", width: 18 },
+      { header: `PY ${pyYear} (Rs.)`, key: "py", width: 18 },
+    ];
+    nx.getRow(1).font = { bold: true };
+    for (const i of notedItems) {
+      const r = nx.addRow({
+        n: `N${i.noteRef}`,
+        li: i.name,
+        c:  i.code,
+        cy: fmt(computedAmounts[i.code] || 0),
+        py: fmt(mergedPY[i.code] || 0),
+      });
+      r.getCell("cy").numFmt = MONEY_FMT;
+      r.getCell("py").numFmt = MONEY_FMT;
+    }
 
-    // ── Note-wise ledger annexures ──
-    // For each note, list the mapped ledgers with CY (closing) + PY (opening).
-    // Ledgers come from tbAccounts; mapping from coaMapping.
+    // ───────────────────────── NOTE ANNEXURES ─────────────────────────
     for (const item of notedItems) {
       const tbLedgerNames = new Set<string>();
-      const ledgers = tbAccounts
+      const rows: Array<Record<string, any>> = tbAccounts
         .filter(a => coaMapping[a.account_name]?.code === item.code)
         .map(a => {
           tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
           return {
-            "Ledger": a.account_name,
-            "Group":  a.account_group || "",
-            [`CY ${cyYear} (₹)`]: fmt(a.balance),
-            [`PY ${pyYear} (₹)`]: fmt(a.opening_balance || 0),
-            "Variance (₹)": fmt(a.balance - (a.opening_balance || 0)),
-            "Status": (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
+            ledger: a.account_name,
+            group:  a.account_group || "",
+            cy: fmt(a.balance),
+            py: fmt(a.opening_balance || 0),
+            variance: fmt(a.balance - (a.opening_balance || 0)),
+            status: (Math.abs(a.opening_balance || 0) < 0.005 && Math.abs(a.balance) >= 0.005)
               ? "NEW"
               : (Math.abs(a.opening_balance || 0) >= 0.005 && Math.abs(a.balance) < 0.005)
                 ? "CLOSED" : "",
           };
         });
-
-      // Fold in PY-only ledgers from manual annexures (PY exists, no CY match).
-      // These represent ledgers present only in the prior year — e.g. P&L items
-      // that didn't recur in CY, or ledgers closed before CY began.
+      // Fold PY-only manual annexures
       const manualRows = pyAnnexures[item.code] || [];
       for (const r of manualRows) {
         const name = String(r.ledger_name || "").trim();
         if (!name) continue;
         const key = name.toLowerCase();
         if (tbLedgerNames.has(key)) {
-          // If a CY ledger already exists with the same name, overwrite PY col.
-          const existing = ledgers.find(l => String(l["Ledger"]).toLowerCase().trim() === key);
+          const existing = rows.find(l => String(l.ledger).toLowerCase().trim() === key);
           if (existing) {
-            existing[`PY ${pyYear} (₹)`] = fmt(r.amount);
-            existing["Variance (₹)"] = fmt((existing[`CY ${cyYear} (₹)`] as number) - r.amount);
+            existing.py = fmt(r.amount);
+            existing.variance = fmt((existing.cy as number) - r.amount);
           }
         } else {
-          ledgers.push({
-            "Ledger": name,
-            "Group":  r.group || "",
-            [`CY ${cyYear} (₹)`]: 0,
-            [`PY ${pyYear} (₹)`]: fmt(r.amount),
-            "Variance (₹)": fmt(-r.amount),
-            "Status": "PY-ONLY",
+          rows.push({
+            ledger: name, group: r.group || "",
+            cy: 0, py: fmt(r.amount),
+            variance: fmt(-r.amount), status: "PY-ONLY",
           });
         }
       }
-      if (ledgers.length === 0) continue;
-      // Append total row
-      const totalCY = ledgers.reduce((s, l) => s + (l[`CY ${cyYear} (₹)`] as number), 0);
-      const totalPY = ledgers.reduce((s, l) => s + (l[`PY ${pyYear} (₹)`] as number), 0);
-      ledgers.push({
-        "Ledger": "TOTAL",
-        "Group":  "",
-        [`CY ${cyYear} (₹)`]: fmt(totalCY),
-        [`PY ${pyYear} (₹)`]: fmt(totalPY),
-        "Variance (₹)": fmt(totalCY - totalPY),
-        "Status": "",
-      } as any);
+      if (rows.length === 0) continue;
+      const totCy = rows.reduce((s, l) => s + (l.cy as number), 0);
+      const totPy = rows.reduce((s, l) => s + (l.py as number), 0);
+
       const sheetName = `N${item.noteRef} ${item.name}`.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ledgers), sheetName);
-    }
-
-    // ── PY Reconciliation (computed-from-opening vs prior-engagement audited) ──
-    const reconRows = bsItems
-      .filter(i => !i.children || i.children.length === 0)
-      .map(i => {
-        const fromOpening = computedAmountsPY[i.code] || 0;
-        const fromAudited = pyAmounts[i.code]         || 0;
-        return {
-          "Code": i.code,
-          "Line Item": i.name,
-          "PY (from CY Opening Balance) (₹)": fmt(fromOpening),
-          "PY (from Prior Audited FS) (₹)": fmt(fromAudited),
-          "Difference (₹)": fmt(fromOpening - fromAudited),
-          "Tallied": Math.abs(fromOpening - fromAudited) < 1 ? "✓" : "✗",
-        };
-      });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reconRows), "PY Reconciliation");
-
-    // ── Signature block (NCE only) ──
-    if (isNonCorporate) {
-      const sigRows = [
-        ["SIGNATURE BLOCK"], [],
-        ["For,",             sigFirmName || ""],
-        ["",                 "Chartered Accountants"],
-        ["FRN",              sigFirmFRN  || ""],
-        [],
-        ["Partner",          sigPartnerName  || ""],
-        ["Membership No.",   sigMembershipNo || ""],
-        [],
-        ["For Client,",      sigClientName || ""],
-        ["Auth. Signatory",  sigSignatoryName || ""],
-        ["Place",            sigPlace || ""],
-        ["Date",             sigDate  || ""],
+      const ns = wb.addWorksheet(sheetName);
+      ns.columns = [
+        { width: 2 },
+        { width: 38 },
+        { width: 24 },
+        { width: 18 },
+        { width: 18 },
+        { width: 16 },
+        { width: 10 },
       ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sigRows), "Signature");
+      // Title block
+      ns.getCell("B2").value = clientName;
+      ns.getCell("B2").font = { bold: true, size: 12 };
+      ns.mergeCells("B2:G2");
+      ns.getCell("B2").alignment = { horizontal: "center" };
+      ns.getCell("B3").value = `Note ${item.noteRef} — ${item.name}`;
+      ns.getCell("B3").font = { bold: true };
+      ns.mergeCells("B3:G3");
+      ns.getCell("B3").alignment = { horizontal: "center" };
+      ns.getCell("B4").value = `(Amount in Rs.)  FY ${fy}`;
+      ns.getCell("B4").font = { italic: true, size: 9 };
+      ns.mergeCells("B4:G4");
+      ns.getCell("B4").alignment = { horizontal: "right" };
+      // Column header
+      const hdr = ns.getRow(6);
+      hdr.values = [null, "Ledger", "Group", `CY ${cyYear} (Rs.)`, `PY ${pyYear} (Rs.)`, "Variance (Rs.)", "Status"];
+      hdr.font = { bold: true };
+      hdr.alignment = { horizontal: "center", vertical: "middle" };
+      hdr.eachCell((c, n) => { if (n >= 2) c.border = fullBorder; });
+      // Data
+      let nr = 7;
+      for (const l of rows) {
+        ns.getCell(`B${nr}`).value = l.ledger;
+        ns.getCell(`C${nr}`).value = l.group;
+        ns.getCell(`D${nr}`).value = l.cy;
+        ns.getCell(`E${nr}`).value = l.py;
+        ns.getCell(`F${nr}`).value = l.variance;
+        ns.getCell(`G${nr}`).value = l.status;
+        ns.getCell(`D${nr}`).numFmt = MONEY_FMT;
+        ns.getCell(`E${nr}`).numFmt = MONEY_FMT;
+        ns.getCell(`F${nr}`).numFmt = MONEY_FMT;
+        nr++;
+      }
+      // Total
+      ns.getCell(`B${nr}`).value = "TOTAL";
+      ns.getCell(`D${nr}`).value = fmt(totCy);
+      ns.getCell(`E${nr}`).value = fmt(totPy);
+      ns.getCell(`F${nr}`).value = fmt(totCy - totPy);
+      ns.getCell(`D${nr}`).numFmt = MONEY_FMT;
+      ns.getCell(`E${nr}`).numFmt = MONEY_FMT;
+      ns.getCell(`F${nr}`).numFmt = MONEY_FMT;
+      for (const a of ["B","C","D","E","F","G"]) {
+        ns.getCell(`${a}${nr}`).font = { bold: true };
+        ns.getCell(`${a}${nr}`).border = { top: thin, bottom: thin };
+      }
     }
 
+    // ───────────────────────── PY RECONCILIATION ─────────────────────────
+    const rec = wb.addWorksheet("PY Reconciliation");
+    rec.columns = [
+      { header: "Code",      key: "c",  width: 16 },
+      { header: "Line Item", key: "li", width: 42 },
+      { header: "PY (from CY Opening) (Rs.)", key: "o", width: 22 },
+      { header: "PY (from Prior Audited) (Rs.)", key: "a", width: 22 },
+      { header: "Difference (Rs.)", key: "d", width: 18 },
+      { header: "Tallied",    key: "t", width: 10 },
+    ];
+    rec.getRow(1).font = { bold: true };
+    for (const i of bsItems.filter(x => !x.children || x.children.length === 0)) {
+      const fromOpening = computedAmountsPY[i.code] || 0;
+      const fromAudited = pyAmounts[i.code] || 0;
+      const r = rec.addRow({
+        c:  i.code,
+        li: i.name,
+        o:  fmt(fromOpening),
+        a:  fmt(fromAudited),
+        d:  fmt(fromOpening - fromAudited),
+        t:  Math.abs(fromOpening - fromAudited) < 1 ? "✓" : "✗",
+      });
+      r.getCell("o").numFmt = MONEY_FMT;
+      r.getCell("a").numFmt = MONEY_FMT;
+      r.getCell("d").numFmt = MONEY_FMT;
+    }
+
+    // ───────────────────────── WRITE FILE ─────────────────────────
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const safeClient = String(clientName).replace(/[^a-z0-9]+/gi, "_").slice(0, 30);
-    XLSX.writeFile(wb, `FS_${safeClient}_${fy || "FY"}.xlsx`);
-    toast.success("Financial Statements exported with all annexures");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `FS_${safeClient}_${fy || "FY"}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success("Financial Statements exported (template-shaped)");
   };
 
   // ─── Complete Stage 10 ───
