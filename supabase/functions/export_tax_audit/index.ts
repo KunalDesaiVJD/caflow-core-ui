@@ -687,10 +687,6 @@ serve(async (req) => {
       SIGN_DATE:      signDate,
     };
 
-    // Strip leading/trailing whitespace and underscore artifacts from structured fields.
-    // FRN numbers like "113541W" are sometimes entered as "_113541W" in the DB.
-    if (autoValues.FRN) autoValues.FRN = autoValues.FRN.replace(/^[_\s]+|[_\s]+$/g, "");
-
     const nonEmptyValues = Object.entries(autoValues).filter(([,v]) => !!v);
     console.log("[export_tax_audit] autoValues non-empty:", nonEmptyValues.length, "/", Object.keys(autoValues).length);
     nonEmptyValues.forEach(([k, v]) => console.log("  ", k, "=", v));
@@ -706,6 +702,12 @@ serve(async (req) => {
         autoValues[row.field_key] = row.current_value;
       }
     }
+
+    // Strip leading/trailing underscore artifacts AFTER overrides so that
+    // tax_audit_values entries like "_113541W" are also cleaned.
+    // FRN and MEMBERSHIP_NO never legitimately start with "_".
+    if (autoValues.FRN)          autoValues.FRN          = autoValues.FRN.replace(/^[_\s]+|[_\s]+$/g, "");
+    if (autoValues.MEMBERSHIP_NO) autoValues.MEMBERSHIP_NO = autoValues.MEMBERSHIP_NO.replace(/^[_\s]+|[_\s]+$/g, "");
 
     // ── Load cell_map ─────────────────────────────────────────────────────────
     const { data: cellMapRows } = await supabase
@@ -1173,13 +1175,19 @@ serve(async (req) => {
           decorFixed++;
           const sM = attrs.match(/\bs="(\d+)"/);
           const styleAttr = sM ? ` s="${sM[1]}"` : "";
-          return `<c r="${addrM[1]}"${styleAttr} t="inlineStr"><is><t>FRN:</t></is></c>`;
+          return `<c r="${addrM[1]}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">FRN: </t></is></c>`;
         }
 
         // "_<firmName>" still in cell (rich-text shared string partially resolved)
         if (autoValues.FIRM_NAME && text === `_${autoValues.FIRM_NAME}`) {
           decorFixed++;
           return setCellInXml(match, addrM[1], autoValues.FIRM_NAME);
+        }
+
+        // "_<FRN>" — FRN value with underscore prefix in a single cell
+        if (autoValues.FRN && (text === `_${autoValues.FRN}` || text === autoValues.FRN.replace(/^/, "_"))) {
+          decorFixed++;
+          return setCellInXml(match, addrM[1], autoValues.FRN);
         }
 
         return match;
