@@ -95,10 +95,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Session still in storage — force a token refresh in case it expired
           supabase.auth.refreshSession().then(({ data: { session: refreshed } }) => {
             if (refreshed && isActive) void applySession(refreshed);
-          });
+          }).catch(() => { /* ignore lock/abort errors from background refresh */ });
         }
         // If no session at all, auth state change will handle setting user to null
-      });
+      }).catch(() => { /* ignore lock/abort errors from background getSession */ });
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -110,9 +110,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void applySession(session);
     });
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      void applySession(session);
-    });
+    // CRITICAL: if getSession() rejects (e.g. @supabase/gotrue-js Web Lock
+    // "AbortError: Lock broken by another request with the 'steal' option"
+    // which happens during React Strict Mode double-mount), applySession
+    // never runs, loading stays true forever, and the whole app shows an
+    // empty loading screen. Always resolve loading even on failure, and
+    // fall back to the cached localStorage session synchronously so the
+    // UI can still render.
+    const getSessionWithFallback = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (isActive) await applySession(session);
+      } catch (err) {
+        console.warn("[AuthProvider] getSession failed, retrying once:", err);
+        // Second attempt after the lock-steal has cleared
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (isActive) await applySession(session);
+        } catch (err2) {
+          console.error("[AuthProvider] getSession failed twice, rendering as signed-out:", err2);
+          if (isActive) {
+            setUser(null);
+            setLoading(false);
+          }
+        }
+      }
+    };
+    void getSessionWithFallback();
 
     return () => {
       isActive = false;
