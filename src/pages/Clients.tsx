@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
@@ -53,6 +54,126 @@ const PAGE_SIZE = 20;
 type ViewMode = "it" | "table" | "card" | "classify" | "grouped";
 
 const VIEW_KEY = "caflow_client_view";
+
+/**
+ * Compact hover-card body for a client row. Shows identity, registration IDs,
+ * group memberships, active services and metadata — enough for auditors to
+ * decide at a glance without opening the full profile.
+ */
+function ClientDetailsHover({
+  client,
+  groups,
+  svcCount,
+}: {
+  client: Client;
+  groups: GroupInfo[];
+  svcCount: number;
+}) {
+  const gstinList = Array.isArray(client.gstin) ? client.gstin : [];
+  const createdDate = client.created_at
+    ? new Date(client.created_at).toLocaleDateString()
+    : null;
+  const sourceLabel =
+    client.source === "api_import"
+      ? client.is_draft
+        ? "Draft (Imported)"
+        : "Imported"
+      : "Manual";
+  const sourceClass =
+    client.source === "api_import" && client.is_draft
+      ? "border-amber-500 text-amber-600"
+      : client.source === "api_import"
+      ? "border-blue-500 text-blue-600"
+      : "border-slate-400 text-slate-600";
+
+  return (
+    <div className="space-y-2.5 text-xs">
+      <div>
+        <div className="font-semibold text-sm truncate">{client.name || "Unnamed"}</div>
+        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+          {client.entity_type && (
+            <Badge variant="outline" className="text-[10px]">
+              {client.entity_type}
+            </Badge>
+          )}
+          <Badge variant="outline" className={`text-[10px] ${sourceClass}`}>
+            {sourceLabel}
+          </Badge>
+          {client.is_active === false && (
+            <Badge variant="outline" className="text-[10px] border-red-500 text-red-600">
+              Inactive
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[70px_1fr] gap-y-1 gap-x-2">
+        {client.pan && (
+          <>
+            <span className="text-muted-foreground">PAN</span>
+            <span className="font-mono truncate">{client.pan}</span>
+          </>
+        )}
+        {client.cin && (
+          <>
+            <span className="text-muted-foreground">CIN</span>
+            <span className="font-mono truncate">{client.cin}</span>
+          </>
+        )}
+        {gstinList.length > 0 && (
+          <>
+            <span className="text-muted-foreground">GSTIN</span>
+            <div className="space-y-0.5 min-w-0">
+              {gstinList.slice(0, 3).map((g, i) => (
+                <div key={i} className="font-mono truncate">{g}</div>
+              ))}
+              {gstinList.length > 3 && (
+                <div className="text-muted-foreground">+{gstinList.length - 3} more</div>
+              )}
+            </div>
+          </>
+        )}
+        {client.firm_name && (
+          <>
+            <span className="text-muted-foreground">Firm</span>
+            <span className="truncate">{client.firm_name}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">Services</span>
+        <span>{svcCount} active</span>
+        {createdDate && (
+          <>
+            <span className="text-muted-foreground">Created</span>
+            <span>{createdDate}</span>
+          </>
+        )}
+      </div>
+
+      <div className="pt-1 border-t">
+        <div className="text-[10px] text-muted-foreground mb-1">Groups</div>
+        {groups.length === 0 ? (
+          <span className="italic text-muted-foreground">Ungrouped</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {groups.map((g) => (
+              <Badge
+                key={g.id}
+                variant="outline"
+                className="text-[10px]"
+                style={{
+                  borderColor: g.color || "#6B7280",
+                  color: g.color || "#6B7280",
+                }}
+              >
+                {g.name}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const Clients = () => {
   const navigate = useNavigate();
@@ -141,29 +262,46 @@ const Clients = () => {
     setGroups((groupsRes.data as GroupInfo[]) || []);
 
     // Phase 2: memberships + services scoped to the loaded client IDs only.
-    // Without this filter both tables return rows for ALL firms which is very slow.
+    // IMPORTANT: PostgREST caps `in()` lists and the default response row
+    // limit is 1,000. For firms with >1k clients the naïve query silently
+    // truncates results — which manifests as the group filter "not working"
+    // and empty Groups columns. Batch the IDs into chunks of 500 and
+    // page responses to stay under every limit.
     const clientIds = allFetchedClients.map(c => c.id);
     if (clientIds.length > 0) {
-      const [membershipsRes, servicesRes] = await Promise.all([
-        supabase.from("client_group_memberships")
-          .select("client_id, group_id, client_groups(id, name, color)")
-          .in("client_id", clientIds),
-        supabase.from("client_services")
-          .select("client_id, is_active")
-          .in("client_id", clientIds),
-      ]);
-
+      const BATCH = 500;
       const map: Record<string, GroupInfo[]> = {};
-      for (const m of (membershipsRes.data || []) as any[]) {
-        if (!map[m.client_id]) map[m.client_id] = [];
-        if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
+      const svcMap: Record<string, number> = {};
+
+      for (let i = 0; i < clientIds.length; i += BATCH) {
+        const ids = clientIds.slice(i, i + BATCH);
+        // Page through memberships (up to 5000 rows per batch)
+        let from = 0; const step = 1000;
+        while (true) {
+          const { data, error } = await supabase
+            .from("client_group_memberships")
+            .select("client_id, group_id, client_groups(id, name, color)")
+            .in("client_id", ids)
+            .range(from, from + step - 1);
+          if (error || !data) break;
+          for (const m of data as any[]) {
+            if (!map[m.client_id]) map[m.client_id] = [];
+            if (m.client_groups) map[m.client_id].push(m.client_groups as GroupInfo);
+          }
+          if (data.length < step) break;
+          from += step;
+        }
+        // Services — flat counter only, one page normally sufficient
+        const { data: svcData } = await supabase
+          .from("client_services")
+          .select("client_id, is_active")
+          .in("client_id", ids)
+          .range(0, 4999);
+        for (const s of (svcData || []) as any[]) {
+          if (s.is_active) svcMap[s.client_id] = (svcMap[s.client_id] || 0) + 1;
+        }
       }
       setClientGroupMap(map);
-
-      const svcMap: Record<string, number> = {};
-      for (const s of (servicesRes.data || []) as any[]) {
-        if (s.is_active) svcMap[s.client_id] = (svcMap[s.client_id] || 0) + 1;
-      }
       setServiceCountMap(svcMap);
     }
 
@@ -313,8 +451,9 @@ const Clients = () => {
     if (groupFilter.includes("ungrouped")) {
       matchesGroup = !clientGroupMap[c.id] || clientGroupMap[c.id].length === 0;
     } else if (groupFilter.length > 0) {
+      // OR semantics: client matches if it belongs to ANY selected group.
       const cGroups = (clientGroupMap[c.id] || []).map(g => g.id);
-      matchesGroup = groupFilter.every(gId => cGroups.includes(gId));
+      matchesGroup = groupFilter.some(gId => cGroups.includes(gId));
     }
     // Source tab bifurcation — NULL/undefined source treated as 'manual' (legacy clients)
     const matchesSource =
@@ -659,6 +798,7 @@ const Clients = () => {
                   <TableHead className="text-xs">PAN</TableHead>
                   <TableHead className="text-xs">Constitution</TableHead>
                   {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
+                  <TableHead className="text-xs">Groups</TableHead>
                   <TableHead className="text-xs">Active Services</TableHead>
                   <TableHead className="text-xs w-12"></TableHead>
                 </TableRow>
@@ -666,18 +806,44 @@ const Clients = () => {
               <TableBody>
                 {paginatedItems.map(client => {
                   const svcCount = serviceCountMap[client.id] || 0;
+                  const cGroups = clientGroupMap[client.id] || [];
                   return (
                     <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
                       <TableCell className="font-medium text-sm">
-                        <span className="flex items-center gap-1.5">
-                          {client.name || "Unnamed"}
-                          {client.source === "api_import" && !client.is_draft && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
-                          {client.source === "api_import" && client.is_draft && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500 text-amber-600">Draft</Badge>}
-                        </span>
+                        <HoverCard openDelay={150} closeDelay={50}>
+                          <HoverCardTrigger asChild>
+                            <span className="flex items-center gap-1.5 hover:underline decoration-dotted underline-offset-4">
+                              {client.name || "Unnamed"}
+                              {client.source === "api_import" && !client.is_draft && <Badge variant="secondary" className="text-[9px] px-1 py-0">Imported</Badge>}
+                              {client.source === "api_import" && client.is_draft && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500 text-amber-600">Draft</Badge>}
+                            </span>
+                          </HoverCardTrigger>
+                          <HoverCardContent className="w-80" onClick={(e) => e.stopPropagation()}>
+                            <ClientDetailsHover client={client} groups={cGroups} svcCount={svcCount} />
+                          </HoverCardContent>
+                        </HoverCard>
                       </TableCell>
                       <TableCell className="text-xs font-mono text-muted-foreground">{client.pan || "—"}</TableCell>
                       <TableCell>{client.entity_type && <Badge variant="outline" className="text-[10px]">{client.entity_type}</Badge>}</TableCell>
                       {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1 max-w-[220px]">
+                          {cGroups.length === 0
+                            ? <span className="text-[10px] text-muted-foreground italic">Ungrouped</span>
+                            : cGroups.slice(0, 3).map(g => (
+                                <Badge key={g.id} variant="outline" className="text-[10px] px-1.5 py-0 gap-1"
+                                       style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>
+                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: g.color || "#6B7280" }} />
+                                  {g.name}
+                                </Badge>
+                              ))}
+                          {cGroups.length > 3 && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+                              +{cGroups.length - 3}
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>{svcCount > 0 ? <Badge variant="secondary" className="text-[10px]">{svcCount} active</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                       <TableCell>
                         <DropdownMenu>
