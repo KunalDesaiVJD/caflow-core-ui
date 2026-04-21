@@ -687,6 +687,10 @@ serve(async (req) => {
       SIGN_DATE:      signDate,
     };
 
+    // Strip leading/trailing whitespace and underscore artifacts from structured fields.
+    // FRN numbers like "113541W" are sometimes entered as "_113541W" in the DB.
+    if (autoValues.FRN) autoValues.FRN = autoValues.FRN.replace(/^[_\s]+|[_\s]+$/g, "");
+
     const nonEmptyValues = Object.entries(autoValues).filter(([,v]) => !!v);
     console.log("[export_tax_audit] autoValues non-empty:", nonEmptyValues.length, "/", Object.keys(autoValues).length);
     nonEmptyValues.forEach(([k, v]) => console.log("  ", k, "=", v));
@@ -1235,12 +1239,20 @@ serve(async (req) => {
         ssXml = ssXml.replace(/\[Membership No[^\]]*\]/g,      xmlEsc(autoValues.MEMBERSHIP_NO));
       }
       if (autoValues.FIRM_NAME) {
-        // "_+AUDIT FIRM_NAME" — 1 or more leading underscores (template uses 1–3 variants)
-        ssXml = ssXml.replace(/_+AUDIT FIRM_NAME/g, xmlEsc(autoValues.FIRM_NAME));
-        // "AUDIT FIRM_NAME" with no leading underscore (bare variant)
-        ssXml = ssXml.replace(/\bAUDIT FIRM_NAME\b/g, xmlEsc(autoValues.FIRM_NAME));
-        // "[AUDIT FIRM NAME]" bracket variant
-        ssXml = ssXml.replace(/\[AUDIT FIRM[_ ]?NAME\]/gi, xmlEsc(autoValues.FIRM_NAME));
+        const escapedFirm = xmlEsc(autoValues.FIRM_NAME);
+        // 1. Full bracket form first: "[AUDIT FIRM NAME]" / "[AUDIT FIRM_NAME]"
+        //    Must run BEFORE bare/underscore patterns so we replace the whole token
+        //    and don't leave stray brackets behind.
+        ssXml = ssXml.replace(/\[AUDIT FIRM[_ ]?NAME\]/gi, escapedFirm);
+        // 2. Underscore-prefixed bare form: "_AUDIT FIRM_NAME" / "___AUDIT FIRM_NAME"
+        ssXml = ssXml.replace(/_+AUDIT FIRM_NAME/g, escapedFirm);
+        // 3. Exact <t> tag match (no brackets, no underscores)
+        ssXml = ssXml.replace(/<t>AUDIT FIRM_NAME<\/t>/g, `<t>${escapedFirm}</t>`);
+        // 4. Post-replacement cleanup: if brackets or underscores still wrap the firm name
+        //    (e.g. template had "_[AUDIT FIRM NAME]" where inner replacement ran first),
+        //    strip them now.
+        const re = new RegExp(`_*\\[${escapedFirm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`, "g");
+        ssXml = ssXml.replace(re, escapedFirm);
       }
       if (autoValues.FRN) {
         // "FRN: _+" — 1 or more underscores (template uses 1–11 underscore variants)
