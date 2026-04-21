@@ -1143,6 +1143,51 @@ serve(async (req) => {
       zip[sheetPath] = _enc.encode(xml);
     }
 
+    // ── Form_3CD sign-off decoration cleanup ─────────────────────────────────
+    // The template has standalone "_" cells (decoration before firm name) and
+    // "FRN: _" label cells in the sign-off block (rows ~230–255).  These are
+    // separate cells from the value cells written by addUpdate, so the cell-map
+    // pass never touches them.  Scan Form_3CD and fix them now.
+    const f3cdSheetPath = sheetPaths.get("Form_3CD");
+    if (f3cdSheetPath && zip[f3cdSheetPath]) {
+      let f3cdXml = _dec.decode(zip[f3cdSheetPath]);
+      let decorFixed = 0;
+      f3cdXml = f3cdXml.replace(/<c\b([^>]*)>([\s\S]*?)<\/c>/g, (match, attrs, inner) => {
+        const addrM = attrs.match(/\br="([A-Z]+(\d+))"/);
+        if (!addrM) return match;
+        const rowNum = parseInt(addrM[2], 10);
+        if (rowNum < 228 || rowNum > 260) return match; // sign-off area only
+
+        const text = cellTextValue(attrs, inner, sharedStrings).trim();
+
+        // Standalone single "_" — decoration before firm name or FRN value
+        if (text === "_") {
+          decorFixed++;
+          const sM = attrs.match(/\bs="(\d+)"/);
+          const styleAttr = sM ? ` s="${sM[1]}"` : "";
+          return `<c r="${addrM[1]}"${styleAttr}/>`;  // empty cell, preserve style
+        }
+
+        // "FRN: _" label — strip the trailing underscore
+        if (/^FRN:\s*_+$/.test(text)) {
+          decorFixed++;
+          const sM = attrs.match(/\bs="(\d+)"/);
+          const styleAttr = sM ? ` s="${sM[1]}"` : "";
+          return `<c r="${addrM[1]}"${styleAttr} t="inlineStr"><is><t>FRN:</t></is></c>`;
+        }
+
+        // "_<firmName>" still in cell (rich-text shared string partially resolved)
+        if (autoValues.FIRM_NAME && text === `_${autoValues.FIRM_NAME}`) {
+          decorFixed++;
+          return setCellInXml(match, addrM[1], autoValues.FIRM_NAME);
+        }
+
+        return match;
+      });
+      console.log(`[Form_3CD sign-off cleanup] ${decorFixed} decoration cells fixed`);
+      zip[f3cdSheetPath] = _enc.encode(f3cdXml);
+    }
+
     // Apply boilerplate subs to sharedStrings.xml — many template paragraphs
     // live in shared strings rather than inline strings, so cell-level edits miss them.
     // Also replace Form_3CA / 3CB body-text placeholders that the template uses.
