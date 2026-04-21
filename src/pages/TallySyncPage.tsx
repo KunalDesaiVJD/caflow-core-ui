@@ -261,6 +261,26 @@ export default function TallySyncPage() {
       return;
     }
 
+    // Paginate vouchers — PostgREST caps a single response at 1,000 rows, so
+    // fetch in 1,000-row ranges until we have every voucher. Without this,
+    // voucher-derived turnover and the reconciliation card under-report.
+    async function fetchAllVouchers() {
+      const pageSize = 1000;
+      const all: any[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from("tally_vouchers" as any)
+          .select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration,line_items")
+          .eq("engagement_id", engId)
+          .order("voucher_date", { ascending: false })
+          .range(from, from + pageSize - 1);
+        if (error || !data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < pageSize) break;
+      }
+      return { data: all };
+    }
+
     const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData, vchData] = await Promise.all([
       supabase.from("sync_batches" as any).select("*").eq("engagement_id", engId).order("started_at", { ascending: false }).limit(20),
       supabase.from("tally_groups" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
@@ -270,7 +290,7 @@ export default function TallySyncPage() {
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
       supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", engId).order("ledger_name").limit(2000),
       supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
-      supabase.from("tally_vouchers" as any).select("id,voucher_date,voucher_type,voucher_number,party_ledger,amount,dr_cr,narration,line_items").eq("engagement_id", engId).order("voucher_date", { ascending: false }).limit(5000),
+      fetchAllVouchers(),
     ]);
 
     if (batchRes.data) setBatches(batchRes.data as SyncBatch[]);
@@ -486,13 +506,17 @@ export default function TallySyncPage() {
     return m;
   }, [vouchers]);
 
-  // Return effective debit/credit for a TB row: prefer DB values; fallback to voucher-derived
+  // Return effective debit/credit for a TB row. The sync agent's
+  // tally_trial_balance.debit_amount/credit_amount comes from a separate TDL
+  // pull that only sees a subset of voucher types, so it under-reports turnover
+  // (e.g. Krishna Buildspace: TB says Cr 6,558 while voucher-derived is
+  // Dr 60,903 / Cr 52,929). Voucher-aggregated turnover is the accurate
+  // figure — prefer it, and only fall back to the DB column when there are
+  // no vouchers at all for the ledger.
   const getTurnover = useCallback((r: TallyTB): { debit: number; credit: number } => {
-    const db = r.debit_amount  ?? 0;
-    const cr = r.credit_amount ?? 0;
-    if (db > 0 || cr > 0) return { debit: db, credit: cr };
     const t = ledgerTurnover.get(decodeHtml(r.ledger_name).trim().toLowerCase());
-    return t ?? { debit: 0, credit: 0 };
+    if (t && (t.debit > 0 || t.credit > 0)) return t;
+    return { debit: r.debit_amount ?? 0, credit: r.credit_amount ?? 0 };
   }, [ledgerTurnover]);
 
   // TB totals (for footer, now using effective turnover)
