@@ -378,20 +378,76 @@ function setCellInXml(xml: string, addr: string, value: string): string {
   // ── Full element variant ──────────────────────────────────────────────────
   const openRe = new RegExp(String.raw`<c(\s[^>]*)\br="${addrRe}"([^>]*?)>`);
   const openM  = openRe.exec(xml);
-  if (!openM) return xml; // cell not in this sheet — silently skip
+  if (openM) {
+    const allA = openM[1] + openM[2];
+    const sM   = allA.match(/\bs="(\d+)"/);
+    const sA   = sM ? ` s="${sM[1]}"` : "";
 
-  const allA = openM[1] + openM[2];
-  const sM   = allA.match(/\bs="(\d+)"/);
-  const sA   = sM ? ` s="${sM[1]}"` : "";
+    const closeIdx = xml.indexOf("</c>", openM.index + openM[0].length);
+    if (closeIdx === -1) return xml;
 
-  const closeIdx = xml.indexOf("</c>", openM.index + openM[0].length);
-  if (closeIdx === -1) return xml;
+    return (
+      xml.slice(0, openM.index) +
+      `<c r="${addr}"${sA} t="str"><v>${esc}</v></c>` +
+      xml.slice(closeIdx + 4)
+    );
+  }
 
-  return (
-    xml.slice(0, openM.index) +
-    `<c r="${addr}"${sA} t="str"><v>${esc}</v></c>` +
-    xml.slice(closeIdx + 4)
-  );
+  // ── Cell not present — insert it into the matching <row>, or create row ─────
+  // Empty template cells often have no <c> element at all.  Without this fallback
+  // every setV/setN for such a cell is silently lost (annex Sr.No, book name, etc.).
+  const rowMatch = addr.match(/^([A-Z]+)(\d+)$/);
+  if (!rowMatch) return xml;
+  const colLetters = rowMatch[1];
+  const rowNum     = rowMatch[2];
+  const newCell    = `<c r="${addr}" t="str"><v>${esc}</v></c>`;
+
+  // Column ordering helper: convert A→1, B→2, AA→27 etc.
+  const colIndex = (letters: string): number => {
+    let n = 0;
+    for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n;
+  };
+  const targetCol = colIndex(colLetters);
+
+  // Try to find the existing <row r="N" ...>...</row>
+  const rowOpenRe  = new RegExp(String.raw`<row\b([^>]*)\br="${rowNum}"([^>]*)>`);
+  const rowOpenM   = rowOpenRe.exec(xml);
+  if (rowOpenM) {
+    const rowContentStart = rowOpenM.index + rowOpenM[0].length;
+    const rowCloseIdx     = xml.indexOf("</row>", rowContentStart);
+    if (rowCloseIdx === -1) return xml;
+    const rowInner = xml.slice(rowContentStart, rowCloseIdx);
+
+    // Find the first existing <c> whose column index is > targetCol and insert before it.
+    const cellRe = /<c\s[^>]*?\br="([A-Z]+)\d+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g;
+    let insertAt = rowInner.length;
+    let m: RegExpExecArray | null;
+    while ((m = cellRe.exec(rowInner)) !== null) {
+      if (colIndex(m[1]) > targetCol) { insertAt = m.index; break; }
+    }
+    const newRowInner = rowInner.slice(0, insertAt) + newCell + rowInner.slice(insertAt);
+    return xml.slice(0, rowContentStart) + newRowInner + xml.slice(rowCloseIdx);
+  }
+
+  // Row doesn't exist — insert a new <row> inside <sheetData> in correct numeric order.
+  const sheetDataOpen = xml.match(/<sheetData\b[^>]*>/);
+  if (!sheetDataOpen || sheetDataOpen.index === undefined) return xml;
+  const sdStart = sheetDataOpen.index + sheetDataOpen[0].length;
+  const sdEnd   = xml.indexOf("</sheetData>", sdStart);
+  if (sdEnd === -1) return xml;
+  const sdInner = xml.slice(sdStart, sdEnd);
+
+  const rowNumInt = parseInt(rowNum, 10);
+  const existingRowRe = /<row\b[^>]*\br="(\d+)"[^>]*>[\s\S]*?<\/row>/g;
+  let rowInsertAt = sdInner.length;
+  let rm: RegExpExecArray | null;
+  while ((rm = existingRowRe.exec(sdInner)) !== null) {
+    if (parseInt(rm[1], 10) > rowNumInt) { rowInsertAt = rm.index; break; }
+  }
+  const newRow = `<row r="${rowNum}">${newCell}</row>`;
+  const newSdInner = sdInner.slice(0, rowInsertAt) + newRow + sdInner.slice(rowInsertAt);
+  return xml.slice(0, sdStart) + newSdInner + xml.slice(sdEnd);
 }
 
 // ── Formula-cell direct fill ──────────────────────────────────────────────────

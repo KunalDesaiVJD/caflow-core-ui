@@ -239,16 +239,24 @@ export function buildClauseValues(
       cl11a._value === false ? "No" : "Yes – As Per Annexure (ANX_01)",
     );
     if (ax) {
-      // Annex layout: row 7 (1-idx) = column headers, row 8 onward = data rows
-      // → first data row is 0-indexed 7.
+      // ANX_01 template column layout (3CD ANNEX sheet):
+      //   Col B (c:1) = Sr. No.
+      //   Col C (c:2) = Books of Accounts  (top-left of wide merged cell)
+      //   Col I (c:8) = Specify (if Others) (top-left of merged cell)
+      // Row 8 (0-idx 7) = first data row (rows 1-7 are section title, clause title, header row, etc.)
       const ANX_CL11A_START = 7;
-      writeSrNos(ax, ANX_CL11A_START, Math.min(books11.length, 3));
+      // Write Sr.No to column B (c:1) — not column A
+      for (let i = 0; i < Math.min(books11.length, 3); i++) {
+        setN(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 1 }), i + 1);
+      }
       books11.slice(0, 3).forEach((r, i) => {
         const bookName = prettyBook(r.book);
         const specify = String(r.specify || "").trim();
-        setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 1 }), bookName);
+        // Book name → column C (c:2)
+        setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 2 }), bookName);
         if (specify) {
-          setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 3 }), specify);
+          // Specify → column I (c:8)
+          setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 8 }), specify);
         }
       });
     }
