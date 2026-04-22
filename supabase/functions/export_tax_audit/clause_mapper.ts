@@ -635,20 +635,80 @@ export function buildClauseValues(
   }
 
   // ── Clause 34 — TDS/TCS ──────────────────────────────────────────────────
+  // clauseNo '34' → DB col 'cl_34' (flat; sub-items cl_34a/b/c nested within)
+  // The TDS annexure sheet is named differently across templates (e.g.
+  // "3CD ANNEX Clause 34" vs "ANX_3CD_Cl34_TDS"), so the optional `td` write
+  // can silently no-op. Write inline summaries to Form_3CD (J227/J228/J229)
+  // UNCONDITIONALLY so the user always sees the data in the form itself.
+  const cl34 = dig(cl, "cl_34");
+  const cl34a = dig(cl34, "cl_34a");
+  const cl34b = dig(cl34, "cl_34b");
+  const cl34c = dig(cl34, "cl_34c");
+  const fmtINR = (a: unknown): string => {
+    if (a === undefined || a === null || a === "") return "";
+    const n = Number(a);
+    if (isNaN(n)) return String(a);
+    return `₹${n.toLocaleString("en-IN")}`;
+  };
+
+  // 34(a): inline summary — "194J – Professional/Technical – ₹41,000"
+  const rows34a = rows(cl34a);
+  if (rows34a.length > 0) {
+    const summary = rows34a
+      .map((r) => {
+        const parts = [
+          String(r.section || "").trim(),
+          String(r.nature_of_payment || "").trim(),
+          fmtINR(r.total_payment),
+        ].filter(Boolean);
+        return parts.join(" – ");
+      })
+      .filter(Boolean)
+      .join("; ");
+    setV(f3, "J227", summary || "As Per Annexure");
+  } else {
+    setV(f3, "J227", naSummary(cl34a) || "Not Applicable");
+  }
+
+  // 34(b): inline summary — "26Q (31/07/2024); 27EQ (15/07/2024); 24Q (31/07/2024)"
+  const rows34b = rows(cl34b);
+  if (rows34b.length > 0) {
+    const summary = rows34b
+      .map((r) => {
+        const f = String(r.form_type || "").trim();
+        const d = String(r.due_date || "").trim();
+        return f && d ? `${f} (${d})` : f || d;
+      })
+      .filter(Boolean)
+      .join("; ");
+    setV(f3, "J228", summary || "As Per Annexure");
+  } else {
+    setV(f3, "J228", naSummary(cl34b) || "Not Applicable");
+  }
+
+  // 34(c): inline summary — interest payable / amount paid
+  const rows34c = rows(cl34c);
+  if (rows34c.length > 0) {
+    const summary = rows34c
+      .map((r) => {
+        const ip = fmtINR(r.interest_payable);
+        const ap = fmtINR(r.amount_paid);
+        const dp = String(r.date_of_payment || "").trim();
+        return [ip ? `Payable ${ip}` : "", ap ? `Paid ${ap}` : "", dp ? `on ${dp}` : ""]
+          .filter(Boolean)
+          .join(", ");
+      })
+      .filter(Boolean)
+      .join("; ");
+    setV(f3, "J229", summary || "As Per Annexure");
+  } else {
+    setV(f3, "J229", naSummary(cl34c) || "Not Applicable");
+  }
+
+  // Mirror the data into the TDS annexure sheet (best-effort; sheet name varies).
   if (td) {
-    // clauseNo '34' → DB col 'cl_34' (flat; sub-items cl_34a/b/c nested within)
-    const cl34 = dig(cl, "cl_34");
-    const cl34a = dig(cl34, "cl_34a");
-    const cl34b = dig(cl34, "cl_34b");
-    const cl34c = dig(cl34, "cl_34c");
+    if (clientName) setV(td, "B2", clientName);
 
-    // Write client name to TDS sheet header
-    if (clientName) {
-      setV(td, "B2", clientName);
-    }
-
-    // 34(a) → rows 9-11 (0-idx 8-10)
-    const rows34a = rows(cl34a);
     if (rows34a.length > 0) {
       const ANX_34A_START = 8;
       const colMap34a: Record<string, number> = {
@@ -658,13 +718,8 @@ export function buildClauseValues(
       };
       writeSrNos(td, ANX_34A_START, Math.min(rows34a.length, 3));
       rows34a.slice(0, 3).forEach((r, i) => writeRow(td, ANX_34A_START + i, r, colMap34a));
-      setV(f3, "J227", "As Per Annexure");
-    } else {
-      setV(f3, "J227", naSummary(cl34a));
     }
 
-    // 34(b) → rows 18-21 (0-idx 17-20)
-    const rows34b = rows(cl34b);
     if (rows34b.length > 0) {
       const ANX_34B_START = 17;
       const colMap34b: Record<string, number> = {
@@ -672,13 +727,8 @@ export function buildClauseValues(
       };
       writeSrNos(td, ANX_34B_START, Math.min(rows34b.length, 4));
       rows34b.slice(0, 4).forEach((r, i) => writeRow(td, ANX_34B_START + i, r, colMap34b));
-      setV(f3, "J228", "As Per Annexure");
-    } else {
-      setV(f3, "J228", naSummary(cl34b));
     }
 
-    // 34(c) → rows 26-28 (0-idx 25-27)
-    const rows34c = rows(cl34c);
     if (rows34c.length > 0) {
       const ANX_34C_START = 25;
       const colMap34c: Record<string, number> = {
@@ -686,9 +736,6 @@ export function buildClauseValues(
       };
       writeSrNos(td, ANX_34C_START, Math.min(rows34c.length, 3));
       rows34c.slice(0, 3).forEach((r, i) => writeRow(td, ANX_34C_START + i, r, colMap34c));
-      setV(f3, "J229", "As Per Annexure");
-    } else {
-      setV(f3, "J229", naSummary(cl34c));
     }
   }
 
