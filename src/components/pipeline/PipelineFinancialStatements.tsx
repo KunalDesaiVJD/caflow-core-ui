@@ -1451,124 +1451,641 @@ export default function PipelineFinancialStatements({
         for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
       }
 
-      // ──────────────── NOTES TO ACCOUNTS (consolidated) ─────────────────────
+      // ──────────────── NOTES TO ACCOUNTS (NCE template format) ─────────────
+      // 9-column layout mirroring the "NCE Financials" reference template:
+      //   A spacer · B Particulars (wide) · C/D/E continuation ·
+      //   F/G = Long-Term CY/PY · H/I = Short-Term CY/PY (or single CY/PY).
       const na = wb.addWorksheet("Notes to Accounts", { views: [{ showGridLines: false }] });
       na.columns = [
         { width: 2 },   // A spacer
-        { width: 46 },  // B Particulars (wide)
-        { width: 2 },   // C continuation
-        { width: 18 },  // D CY (Rs.)
-        { width: 18 },  // E PY (Rs.)
+        { width: 52 },  // B Particulars
+        { width: 2 },   // C
+        { width: 2 },   // D
+        { width: 2 },   // E
+        { width: 18 },  // F LT CY
+        { width: 18 },  // G LT PY
+        { width: 18 },  // H ST/single CY
+        { width: 18 },  // I ST/single PY
       ];
-      let nar = 2;
-      na.getCell(`B${nar}`).value = clientName;
-      na.getCell(`B${nar}`).font = { bold: true, size: 13 };
-      na.mergeCells(`B${nar}:E${nar}`);
-      na.getCell(`B${nar}`).alignment = { horizontal: "center" };
-      nar++;
-      na.getCell(`B${nar}`).value = "Notes to Accounts";
-      na.getCell(`B${nar}`).font = { bold: true, size: 11 };
-      na.mergeCells(`B${nar}:E${nar}`);
-      na.getCell(`B${nar}`).alignment = { horizontal: "center" };
-      nar++;
-      na.getCell(`B${nar}`).value = `For the year ended 31 March, ${cyYear}`;
-      na.getCell(`B${nar}`).font = { italic: true, size: 9 };
-      na.mergeCells(`B${nar}:E${nar}`);
-      na.getCell(`B${nar}`).alignment = { horizontal: "right" };
-      nar += 2;
 
-      // Notes 1 (policies), 2 (capital), and 10/11/12 (PPE/CWIP/Intangible)
-      // have their own dedicated sheets — skip them in the consolidated sheet.
-      const skipNotes = new Set([1, 2, 10, 11, 12]);
-      const notedItemsNCE = activeFlatItems.filter(i => i.noteRef && !skipNotes.has(i.noteRef));
-
-      for (const item of notedItemsNCE) {
-        // Collect ledger rows mapped to this FS code
-        const tbLedgerNames = new Set<string>();
-        const noteRows: Array<{ ledger: string; cy: number; py: number }> = tbAccounts
-          .filter(a => coaMapping[a.account_name]?.code === item.code)
-          .map(a => {
-            tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
-            return {
-              ledger: a.account_name,
-              cy: fmt(a.balance),
-              py: fmt(a.opening_balance || 0),
-            };
+      // ── Ledger-classification helpers ────────────────────────────────────
+      // Collect ledgers mapped to a given FS code, folding in PY-only annexures.
+      type LedgerLine = { name: string; group: string; cy: number; py: number };
+      const getLedgersForCode = (code: string): LedgerLine[] => {
+        const out: LedgerLine[] = [];
+        const seen = new Set<string>();
+        for (const a of tbAccounts) {
+          if (coaMapping[a.account_name]?.code !== code) continue;
+          const key = String(a.account_name).toLowerCase().trim();
+          seen.add(key);
+          out.push({
+            name: a.account_name,
+            group: a.account_group || "",
+            cy: fmt(a.balance),
+            py: fmt(a.opening_balance || 0),
           });
-        // Fold in PY-only manual annexures
-        for (const r of pyAnnexures[item.code] || []) {
-          const name = String(r.ledger_name || "").trim();
-          if (!name) continue;
-          const key = name.toLowerCase();
-          if (tbLedgerNames.has(key)) {
-            const ex = noteRows.find(l => l.ledger.toLowerCase().trim() === key);
+        }
+        for (const r of pyAnnexures[code] || []) {
+          const nm = String(r.ledger_name || "").trim();
+          if (!nm) continue;
+          const key = nm.toLowerCase();
+          if (seen.has(key)) {
+            const ex = out.find(l => l.name.toLowerCase().trim() === key);
             if (ex) ex.py = fmt(r.amount);
           } else {
-            noteRows.push({ ledger: name, cy: 0, py: fmt(r.amount) });
+            out.push({ name: nm, group: r.group || "", cy: 0, py: fmt(r.amount) });
           }
         }
+        return out;
+      };
 
-        const totalCy = noteRows.length > 0
-          ? noteRows.reduce((s, l) => s + l.cy, 0)
-          : fmt(computedAmounts[item.code] || 0);
-        const totalPy = noteRows.length > 0
-          ? noteRows.reduce((s, l) => s + l.py, 0)
-          : fmt(mergedPY[item.code] || 0);
+      const matches = (l: LedgerLine, patterns: RegExp[]): boolean => {
+        const hay = `${l.name} ${l.group}`.toLowerCase();
+        return patterns.some(p => p.test(hay));
+      };
 
-        if (Math.abs(totalCy) < 0.005 && Math.abs(totalPy) < 0.005 && noteRows.length === 0) continue;
+      // Bucket definition: label + regex patterns. Ledgers match first bucket
+      // whose patterns hit. Unmatched ledgers fall into an Others bucket.
+      type Bucket = { label: string; indent?: number; patterns?: RegExp[]; isHeader?: boolean };
+      const allocate = (ledgers: LedgerLine[], buckets: Bucket[], othersLabel = "Others (specify nature)") => {
+        const sums: Record<number, { cy: number; py: number }> = {};
+        const leftover: LedgerLine[] = [];
+        for (const l of ledgers) {
+          let placed = false;
+          for (let i = 0; i < buckets.length; i++) {
+            const b = buckets[i];
+            if (b.isHeader || !b.patterns || b.patterns.length === 0) continue;
+            if (matches(l, b.patterns)) {
+              sums[i] = sums[i] || { cy: 0, py: 0 };
+              sums[i].cy += l.cy;
+              sums[i].py += l.py;
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) leftover.push(l);
+        }
+        const othersSum = leftover.reduce((s, l) => ({ cy: s.cy + l.cy, py: s.py + l.py }), { cy: 0, py: 0 });
+        return { sums, leftover, othersSum, othersLabel };
+      };
 
-        // Note section heading (shaded row)
-        na.getCell(`B${nar}`).value = `Note ${item.noteRef} — ${item.name}`;
+      // ── Template definition (single source of truth for scaffold) ───────
+      // columns: 'LS'    → parallel Long-Term (F/G) & Short-Term (H/I) columns
+      //          'single' → single pair in H/I  (F/G left blank)
+      type NoteRow = {
+        label: string;
+        indent?: number;        // 0-3 visual indent
+        bold?: boolean;
+        // value: explicit CY/PY to render; otherwise 'auto' rolls up bucketed ledgers
+        cyLT?: number; pyLT?: number; cyST?: number; pyST?: number;
+        isBlank?: boolean;
+      };
+
+      // Sign normaliser — BS liabilities sum to negative TB closings; we show
+      // positive values in notes to match the BS display convention.
+      const disp = (n: number) => Math.round((n || 0) * 100) / 100;
+
+      // Build scaffolded rows for one L/S-parallel note (Borrowings / Provisions /
+      // Investments / Loans & Advances). `buckets` must include the category
+      // label rows; each non-header bucket is filled from ledger allocation.
+      const buildLSNote = (
+        ltCode: string,
+        stCode: string,
+        buckets: Bucket[],
+      ): NoteRow[] => {
+        const ltLed = getLedgersForCode(ltCode);
+        const stLed = getLedgersForCode(stCode);
+        const altLT = allocate(ltLed, buckets);
+        const altST = allocate(stLed, buckets);
+        const rows: NoteRow[] = [];
+        for (let i = 0; i < buckets.length; i++) {
+          const b = buckets[i];
+          if (b.isHeader) {
+            rows.push({ label: b.label, indent: b.indent ?? 0, bold: true });
+            continue;
+          }
+          const lt = altLT.sums[i] || { cy: 0, py: 0 };
+          const st = altST.sums[i] || { cy: 0, py: 0 };
+          rows.push({
+            label: b.label,
+            indent: b.indent ?? 1,
+            cyLT: disp(lt.cy), pyLT: disp(lt.py),
+            cyST: disp(st.cy), pyST: disp(st.py),
+          });
+        }
+        // Others (unclassified leftovers)
+        if (altLT.leftover.length || altST.leftover.length) {
+          rows.push({
+            label: "Others (specify nature)",
+            indent: 1,
+            cyLT: disp(altLT.othersSum.cy), pyLT: disp(altLT.othersSum.py),
+            cyST: disp(altST.othersSum.cy), pyST: disp(altST.othersSum.py),
+          });
+        }
+        return rows;
+      };
+
+      // Build scaffolded rows for a single-column note — all ledgers under one
+      // FS code are allocated to the listed buckets, leftovers into "Others".
+      const buildSingleNote = (code: string, buckets: Bucket[]): NoteRow[] => {
+        const ledgers = getLedgersForCode(code);
+        const al = allocate(ledgers, buckets);
+        const rows: NoteRow[] = [];
+        for (let i = 0; i < buckets.length; i++) {
+          const b = buckets[i];
+          if (b.isHeader) {
+            rows.push({ label: b.label, indent: b.indent ?? 0, bold: true });
+            continue;
+          }
+          const v = al.sums[i] || { cy: 0, py: 0 };
+          rows.push({
+            label: b.label,
+            indent: b.indent ?? 1,
+            cyST: disp(v.cy), pyST: disp(v.py),
+          });
+        }
+        if (al.leftover.length) {
+          rows.push({
+            label: "Others (specify nature)",
+            indent: 1,
+            cyST: disp(al.othersSum.cy), pyST: disp(al.othersSum.py),
+          });
+        }
+        return rows;
+      };
+
+      // Classification keyword tables (compiled once) ──────────────────────
+      const rx = (s: string) => new RegExp(s, "i");
+
+      // Note 3+6 Borrowings: Secured / Unsecured × (term loans / on-demand / deferred / related / others)
+      const BORROW_BUCKETS: Bucket[] = [
+        { label: "Secured", isHeader: true, indent: 0 },
+        { label: "(a) Term loans — Bank",                 indent: 1, patterns: [rx("\\bsecur.*term\\b|\\bsecur.*bank loan|\\bterm loan.*bank")] },
+        { label: "(a) Term loans — Financial Institution",indent: 1, patterns: [rx("financial institution|\\bnbfc\\b")] },
+        { label: "(a) Term loans — Others",               indent: 1, patterns: [rx("term loan")] },
+        { label: "(b) Loans repayable on demand — Bank",  indent: 1, patterns: [rx("cash credit|\\bcc\\b|overdraft|\\bod\\b|working capital")] },
+        { label: "(b) Loans repayable on demand — Others",indent: 1, patterns: [rx("repayable on demand")] },
+        { label: "(c) Deferred payment liabilities",      indent: 1, patterns: [rx("deferred payment")] },
+        { label: "(d) Loans from related parties",        indent: 1, patterns: [rx("related part|directors? loan|partners? loan|from partner|from director")] },
+        { label: "(e) Other loans and advances",          indent: 1, patterns: [rx("vehicle loan|machinery loan|secured loan")] },
+        { label: "Unsecured", isHeader: true, indent: 0 },
+        { label: "(a) Loans from related parties",        indent: 1, patterns: [rx("unsecur.*related|unsecured.*partner|unsecured.*director")] },
+        { label: "(b) Loans from others",                 indent: 1, patterns: [rx("unsecured loan|unsecured borrowing")] },
+      ];
+
+      // Note 5+9 Provisions
+      const PROV_BUCKETS: Bucket[] = [
+        { label: "(a) Provision for employee benefits", isHeader: true, indent: 0 },
+        { label: "Provision for gratuity",        indent: 1, patterns: [rx("gratuity")] },
+        { label: "Provision for leave encashment",indent: 1, patterns: [rx("leave encash|leave salary")] },
+        { label: "(b) Other provisions", isHeader: true, indent: 0 },
+        { label: "Provision for Income tax",      indent: 1, patterns: [rx("income tax|provision for tax")] },
+        { label: "Other Provisions",              indent: 1, patterns: [rx("provision")] },
+      ];
+
+      // Note 4 Other long-term liabilities (single column, header-less list)
+      const OLTL_BUCKETS: Bucket[] = [
+        { label: "(a) Advance from customers", indent: 1, patterns: [rx("advance.*customer|customer.*advance")] },
+      ];
+
+      // Note 7 Trade payables
+      const TP_BUCKETS: Bucket[] = [
+        { label: "(a) Total outstanding dues of micro, small and medium enterprises",
+          indent: 1, patterns: [rx("\\bmsme\\b|micro|small.*medium|\\bmsmed\\b")] },
+        { label: "(b) Total outstanding dues of creditors other than MSME",
+          indent: 1, patterns: [rx("creditor|payable|trade payable|sundry")] },
+      ];
+
+      // Note 8 Other current liabilities
+      const OCL_BUCKETS: Bucket[] = [
+        { label: "(a) Income received in advance",     indent: 1, patterns: [rx("income received in advance|advance from customer|advance received")] },
+        { label: "(b) Unearned revenue",               indent: 1, patterns: [rx("unearned")] },
+        { label: "(c) Goods and Service tax payable", indent: 1, patterns: [rx("\\bgst\\b|goods and service")] },
+        { label: "(d) TDS payable",                    indent: 1, patterns: [rx("\\btds\\b|tax deducted")] },
+        { label: "(e) Other payables", isHeader: true, indent: 0 },
+        { label: "(i) Employee related",               indent: 1, patterns: [rx("salary payable|wages payable|employee|pf payable|esi payable|bonus payable")] },
+        { label: "(ii) Tax payable",                   indent: 1, patterns: [rx("\\bvat\\b|service tax|duties|professional tax|\\bptax\\b|statutory")] },
+        { label: "(iii) Other current liabilities",    indent: 1, patterns: [rx("expenses? payable|outstanding")] },
+      ];
+
+      // Note 13+16 Investments
+      const INV_BUCKETS: Bucket[] = [
+        { label: "(a) Investments — Quoted", isHeader: true, indent: 0 },
+        { label: "Investment in Property",                   indent: 1, patterns: [rx("quoted.*property|invest.*property")] },
+        { label: "Investment in Equity Instruments",         indent: 1, patterns: [rx("quoted.*equity|equity share|shares? of")] },
+        { label: "Investment in Preference Shares",          indent: 1, patterns: [rx("preference")] },
+        { label: "Investments in government or trust securities", indent: 1, patterns: [rx("government|trust secur|\\bgsec\\b|\\bnsc\\b|kvp|post office")] },
+        { label: "Investments in debentures or bonds",       indent: 1, patterns: [rx("debenture|\\bbond\\b|\\bncd\\b")] },
+        { label: "Investments in mutual funds",              indent: 1, patterns: [rx("mutual fund|\\bmf\\b")] },
+        { label: "Investments in Partnership Firm",          indent: 1, patterns: [rx("partnership firm|capital with firm")] },
+        { label: "Other investments",                        indent: 1, patterns: [rx("investment")] },
+      ];
+
+      // Note 14+20 Loans and advances (non-current + current pair)
+      const LA_BUCKETS: Bucket[] = [
+        { label: "A. Secured", isHeader: true, indent: 0 },
+        { label: "(a) Capital advances",           indent: 1, patterns: [rx("secur.*capital advance|capital advance.*secur")] },
+        { label: "(b) Loans and advances to related parties", indent: 1, patterns: [rx("secur.*related|related.*secur")] },
+        { label: "(c) Loans and advances to others", isHeader: true, indent: 1 },
+        { label: "Prepaid expenses (Secured)",     indent: 2, patterns: [rx("secur.*prepaid")] },
+        { label: "Security Deposits (Secured)",    indent: 2, patterns: [rx("secur.*deposit")] },
+        { label: "B. Unsecured", isHeader: true, indent: 0 },
+        { label: "(a) Capital advances",           indent: 1, patterns: [rx("capital advance")] },
+        { label: "(b) Loans and advances to related parties", indent: 1, patterns: [rx("related part|advance to partner|advance to director|due from")] },
+        { label: "(c) Loans and advances to others", isHeader: true, indent: 1 },
+        { label: "Prepaid expenses",               indent: 2, patterns: [rx("prepaid")] },
+        { label: "Advance tax and tax deducted at source", indent: 2, patterns: [rx("advance tax|\\btds receivable|\\btcs receivable|tax deducted")] },
+        { label: "GST input credit receivable",    indent: 2, patterns: [rx("gst|input.*credit|input tax|\\bitc\\b")] },
+        { label: "Security Deposits",              indent: 2, patterns: [rx("deposit")] },
+        { label: "Balance with government authorities", indent: 2, patterns: [rx("government|\\bvat\\b|customs|excise|service tax|duty drawback")] },
+      ];
+
+      // Note 15 Other non-current assets / 21 Other current assets
+      const ONCA_BUCKETS: Bucket[] = [
+        { label: "(a) Security Deposits", indent: 1, patterns: [rx("security deposit|\\bdeposit\\b")] },
+        { label: "(b) Prepaid expenses",  indent: 1, patterns: [rx("prepaid")] },
+      ];
+
+      // Note 17 Inventories
+      const INV_STOCK_BUCKETS: Bucket[] = [
+        { label: "(a) Raw materials",        indent: 1, patterns: [rx("raw material")] },
+        { label: "(b) Work-in-progress",     indent: 1, patterns: [rx("work.*progress|\\bwip\\b")] },
+        { label: "(c) Finished goods",       indent: 1, patterns: [rx("finished")] },
+        { label: "(d) Stock-in-trade",       indent: 1, patterns: [rx("stock.*trade|trading stock")] },
+        { label: "(e) Stores and spares",    indent: 1, patterns: [rx("stores?|spare")] },
+        { label: "(f) Loose Tools",          indent: 1, patterns: [rx("loose tool|\\btool\\b")] },
+      ];
+
+      // Note 18 Trade receivables
+      const TR_BUCKETS: Bucket[] = [
+        { label: "A. Outstanding for a period less than 6 months", isHeader: true, indent: 0 },
+        { label: "(a) Secured Considered good",          indent: 1, patterns: [rx("secur.*good.*<6|secur.*less.*6|<6.*secur")] },
+        { label: "(b) Unsecured Considered good",        indent: 1, patterns: [rx("<6|less.*6 month|within 6")] },
+        { label: "(c) Doubtful",                         indent: 1, patterns: [rx("doubtful.*<6|<6.*doubtful")] },
+        { label: "B. Outstanding for a period exceeding 6 months", isHeader: true, indent: 0 },
+        { label: "(a) Secured Considered good",          indent: 1, patterns: [rx("secur.*>6|>6.*secur")] },
+        { label: "(b) Unsecured Considered good",        indent: 1, patterns: [rx(">6 month|exceeding 6|more than 6")] },
+        { label: "(c) Doubtful",                         indent: 1, patterns: [rx("doubtful")] },
+        { label: "Unbilled receivables",                 indent: 1, patterns: [rx("unbilled")] },
+        { label: "Trade receivables (unclassified aging)", indent: 1, patterns: [rx("debtor|receivable|sundry")] },
+      ];
+
+      // Note 19 Cash and Bank Balances
+      const CASH_BUCKETS: Bucket[] = [
+        { label: "A. Cash and cash equivalents", isHeader: true, indent: 0 },
+        { label: "(a) On current accounts",           indent: 1, patterns: [rx("current a\\/c|current account")] },
+        { label: "(b) Cash credit account (Debit balance)", indent: 1, patterns: [rx("cash credit")] },
+        { label: "(c) Fixed Deposits (original maturity < 3 months)", indent: 1, patterns: [rx("fixed deposit.*3 month|short.*deposit")] },
+        { label: "(d) Cheques, drafts on hand",       indent: 1, patterns: [rx("cheque|draft")] },
+        { label: "(e) Cash on hand",                  indent: 1, patterns: [rx("cash on hand|petty cash|cash in hand|^cash$")] },
+        { label: "B. Other bank balances", isHeader: true, indent: 0 },
+        { label: "(i) Earmarked Bank Deposits",       indent: 1, patterns: [rx("earmarked")] },
+        { label: "(ii) Deposits (maturity > 3 months)", indent: 1, patterns: [rx("fixed deposit|\\bfd\\b|term deposit")] },
+        { label: "(iii) Margin money or deposits under lien", indent: 1, patterns: [rx("margin money|lien")] },
+        { label: "Bank — Savings / Others",            indent: 1, patterns: [rx("bank|savings")] },
+      ];
+
+      // Note 22 Revenue from operations
+      const REV_BUCKETS: Bucket[] = [
+        { label: "Sale of products",         indent: 1, patterns: [rx("sale.*product|sale.*goods|sales")] },
+        { label: "Sale of services",         indent: 1, patterns: [rx("service|fee|professional")] },
+        { label: "Other operating revenue",  indent: 1, patterns: [rx("operating|turnover|revenue")] },
+      ];
+
+      // Note 23 Other income
+      const OI_BUCKETS: Bucket[] = [
+        { label: "Interest income",                   indent: 1, patterns: [rx("interest")] },
+        { label: "Dividend income",                   indent: 1, patterns: [rx("dividend")] },
+        { label: "Net gain on sale of investments",   indent: 1, patterns: [rx("gain.*invest|profit.*sale.*invest")] },
+        { label: "Other non-operating income",        indent: 1, patterns: [rx("income|misc|other")] },
+      ];
+
+      // Note 24 Cost of goods sold (aggregated — full split requires inventory detail)
+      const COGS_BUCKETS: Bucket[] = [
+        { label: "Purchases",                    indent: 1, patterns: [rx("purchase")] },
+        { label: "Raw material consumed",        indent: 1, patterns: [rx("raw material|material consum")] },
+        { label: "Direct / Manufacturing expenses", indent: 1, patterns: [rx("direct|manufactur|carriage|freight.*inward")] },
+        { label: "Changes in inventories (opening - closing)", indent: 1, patterns: [rx("change.*inventor|stock consumed")] },
+      ];
+
+      // Note 25 Employee benefits
+      const EMP_BUCKETS: Bucket[] = [
+        { label: "Salaries, wages and bonus",         indent: 1, patterns: [rx("salary|salaries|wage|bonus")] },
+        { label: "Contribution to provident and other funds", indent: 1, patterns: [rx("provident|\\bpf\\b|\\besi\\b|epfo")] },
+        { label: "Gratuity expenses",                 indent: 1, patterns: [rx("gratuity")] },
+        { label: "Staff welfare expenses",            indent: 1, patterns: [rx("welfare|staff")] },
+        { label: "Other allowances",                  indent: 1, patterns: [rx("allowance|employee|remuneration")] },
+      ];
+
+      // Note 26 Finance cost
+      const FIN_BUCKETS: Bucket[] = [
+        { label: "(a) Interest expense", isHeader: true, indent: 0 },
+        { label: "(i) On bank loan",                       indent: 1, patterns: [rx("bank.*interest|interest.*bank|interest on loan")] },
+        { label: "(ii) On assets on finance lease",        indent: 1, patterns: [rx("finance lease|lease.*interest")] },
+        { label: "(iii) Other Interest expense",           indent: 1, patterns: [rx("interest")] },
+        { label: "(b) Bank Charges",                       indent: 1, patterns: [rx("bank charge|bank comm")] },
+        { label: "(c) Finance Charges",                    indent: 1, patterns: [rx("finance charge|processing fee|discount charge")] },
+        { label: "(d) Interest on partners' capital",      indent: 1, patterns: [rx("partner.*interest|interest.*partner|interest on capital")] },
+        { label: "(e) Other borrowing costs",              indent: 1, patterns: [rx("borrow")] },
+        { label: "(f) Loss on foreign exchange",           indent: 1, patterns: [rx("foreign.*loss|forex|exchange.*loss")] },
+      ];
+
+      // Note 28 Other expenses
+      const OE_BUCKETS: Bucket[] = [
+        { label: "Consumption of stores and spare parts", indent: 1, patterns: [rx("consumption|stores|spare")] },
+        { label: "Power and fuel",                  indent: 1, patterns: [rx("power|fuel|electricity")] },
+        { label: "Rent",                            indent: 1, patterns: [rx("rent")] },
+        { label: "Repairs and maintenance",         indent: 1, patterns: [rx("repair|maintenance")] },
+        { label: "Insurance",                       indent: 1, patterns: [rx("insurance")] },
+        { label: "Rates and taxes",                 indent: 1, patterns: [rx("rates? and tax|rates|municipal")] },
+        { label: "Labour charges",                  indent: 1, patterns: [rx("labour|wages")] },
+        { label: "Travelling expenses",             indent: 1, patterns: [rx("travel|conveyance")] },
+        { label: "Auditor's remuneration",          indent: 1, patterns: [rx("audit")] },
+        { label: "Printing and stationery",         indent: 1, patterns: [rx("printing|stationery")] },
+        { label: "Communication expenses",          indent: 1, patterns: [rx("communication|telephone|internet|postage")] },
+        { label: "Legal and professional charges",  indent: 1, patterns: [rx("legal|professional")] },
+        { label: "Advertisement and publicity",     indent: 1, patterns: [rx("advertisement|publicity|marketing")] },
+        { label: "Business promotion expenses",     indent: 1, patterns: [rx("promotion")] },
+        { label: "Commission",                      indent: 1, patterns: [rx("commission|brokerage")] },
+        { label: "Clearing and forwarding charges", indent: 1, patterns: [rx("clearing|forwarding|freight")] },
+        { label: "Miscellaneous expenses",          indent: 1, patterns: [rx("misc|general|office|other expense")] },
+      ];
+
+      // ── Note definitions ────────────────────────────────────────────────
+      type NoteDef = {
+        noteNo: number;
+        name: string;
+        header: "BS" | "PL";
+        columns: "LS" | "single";
+        ltCode?: string; stCode?: string; code?: string;      // FS code(s) for the Total
+        totalLabel?: string;
+        rows: NoteRow[];
+      };
+
+      const notes: NoteDef[] = [];
+
+      // Note 3 + 6: Borrowings (L/S parallel)
+      notes.push({
+        noteNo: 3, name: "Borrowings", header: "BS", columns: "LS",
+        ltCode: "NCE_LTB", stCode: "NCE_STB",
+        rows: buildLSNote("NCE_LTB", "NCE_STB", BORROW_BUCKETS),
+      });
+
+      // Note 4: Other long-term liabilities (single)
+      notes.push({
+        noteNo: 4, name: "Other long-term liabilities", header: "BS", columns: "single",
+        code: "NCE_OLTL",
+        rows: buildSingleNote("NCE_OLTL", OLTL_BUCKETS),
+      });
+
+      // Note 5 + 9: Provisions (L/S parallel)
+      notes.push({
+        noteNo: 5, name: "Provisions", header: "BS", columns: "LS",
+        ltCode: "NCE_LTP", stCode: "NCE_STP",
+        rows: buildLSNote("NCE_LTP", "NCE_STP", PROV_BUCKETS),
+      });
+
+      // Note 7: Trade payables (single)
+      notes.push({
+        noteNo: 7, name: "Trade payables", header: "BS", columns: "single",
+        code: "NCE_TP",
+        rows: buildSingleNote("NCE_TP", TP_BUCKETS),
+      });
+
+      // Note 8: Other current liabilities (single)
+      notes.push({
+        noteNo: 8, name: "Other current liabilities", header: "BS", columns: "single",
+        code: "NCE_OCL",
+        rows: buildSingleNote("NCE_OCL", OCL_BUCKETS),
+      });
+
+      // Note 13 + 16: Investments (L/S parallel — non-current vs current)
+      notes.push({
+        noteNo: 13, name: "Investments", header: "BS", columns: "LS",
+        ltCode: "NCE_NCINV", stCode: "NCE_CINV",
+        rows: buildLSNote("NCE_NCINV", "NCE_CINV", INV_BUCKETS),
+      });
+
+      // Note 14 + 20: Loans and advances (L/S parallel)
+      notes.push({
+        noteNo: 14, name: "Loans and advances", header: "BS", columns: "LS",
+        ltCode: "NCE_LTLA", stCode: "NCE_STLA",
+        rows: buildLSNote("NCE_LTLA", "NCE_STLA", LA_BUCKETS),
+      });
+
+      // Note 15: Other non-current assets (single)
+      notes.push({
+        noteNo: 15, name: "Other non-current assets", header: "BS", columns: "single",
+        code: "NCE_ONCA",
+        rows: buildSingleNote("NCE_ONCA", ONCA_BUCKETS),
+      });
+
+      // Note 17: Inventories (single)
+      notes.push({
+        noteNo: 17, name: "Inventories", header: "BS", columns: "single",
+        code: "NCE_STCK",
+        rows: buildSingleNote("NCE_STCK", INV_STOCK_BUCKETS),
+      });
+
+      // Note 18: Trade receivables (single)
+      notes.push({
+        noteNo: 18, name: "Trade receivables", header: "BS", columns: "single",
+        code: "NCE_TR",
+        rows: buildSingleNote("NCE_TR", TR_BUCKETS),
+      });
+
+      // Note 19: Cash and Bank Balances (single)
+      notes.push({
+        noteNo: 19, name: "Cash and Bank Balances", header: "BS", columns: "single",
+        code: "NCE_CASH",
+        rows: buildSingleNote("NCE_CASH", CASH_BUCKETS),
+      });
+
+      // Note 21: Other current assets (single)
+      notes.push({
+        noteNo: 21, name: "Other current assets", header: "BS", columns: "single",
+        code: "NCE_OCA",
+        rows: buildSingleNote("NCE_OCA", ONCA_BUCKETS),
+      });
+
+      // Note 22: Revenue from operations (single, PL)
+      notes.push({
+        noteNo: 22, name: "Revenue from operations", header: "PL", columns: "single",
+        code: "NCE_REV_OPS",
+        rows: buildSingleNote("NCE_REV_OPS", REV_BUCKETS),
+      });
+
+      // Note 23: Other income (single, PL)
+      notes.push({
+        noteNo: 23, name: "Other income", header: "PL", columns: "single",
+        code: "NCE_REV_OTH",
+        rows: buildSingleNote("NCE_REV_OTH", OI_BUCKETS),
+      });
+
+      // Note 24: Cost of goods sold (single, PL)
+      notes.push({
+        noteNo: 24, name: "Cost of goods sold", header: "PL", columns: "single",
+        code: "NCE_COGS",
+        rows: buildSingleNote("NCE_COGS", COGS_BUCKETS),
+      });
+
+      // Note 25: Employee benefits expense (single, PL)
+      notes.push({
+        noteNo: 25, name: "Employee benefits expense", header: "PL", columns: "single",
+        code: "NCE_EMP_EXP",
+        rows: buildSingleNote("NCE_EMP_EXP", EMP_BUCKETS),
+      });
+
+      // Note 26: Finance cost (single, PL)
+      notes.push({
+        noteNo: 26, name: "Finance cost", header: "PL", columns: "single",
+        code: "NCE_FIN_COST",
+        rows: buildSingleNote("NCE_FIN_COST", FIN_BUCKETS),
+      });
+
+      // Note 28: Other expenses (single, PL)
+      notes.push({
+        noteNo: 28, name: "Other Expenses", header: "PL", columns: "single",
+        code: "NCE_OTH_EXP",
+        rows: buildSingleNote("NCE_OTH_EXP", OE_BUCKETS),
+      });
+
+      // Note 29: Partners' remuneration (single, PL)
+      notes.push({
+        noteNo: 29, name: "Partners' remuneration", header: "PL", columns: "single",
+        code: "NCE_PART_REM",
+        rows: buildSingleNote("NCE_PART_REM", [
+          { label: "Remuneration to partners", indent: 1, patterns: [rx("remuneration|salary.*partner")] },
+          { label: "Interest to partners on capital", indent: 1, patterns: [rx("interest.*partner|interest.*capital")] },
+        ]),
+      });
+
+      // ── Renderer ─────────────────────────────────────────────────────────
+      let nar = 2;
+      const writeHeaderBlock = (section: "BS" | "PL") => {
+        na.getCell(`B${nar}`).value = clientName;
+        na.getCell(`B${nar}`).font = { bold: true, size: 12 };
+        na.mergeCells(`B${nar}:I${nar}`);
+        na.getCell(`B${nar}`).alignment = { horizontal: "center" };
+        nar++;
+        na.getCell(`B${nar}`).value =
+          `Notes forming part of the Financial Statements for the year ended, 31st March, ${cyYear}`;
+        na.getCell(`B${nar}`).font = { italic: true, size: 10 };
+        na.mergeCells(`B${nar}:I${nar}`);
+        na.getCell(`B${nar}`).alignment = { horizontal: "center" };
+        nar++;
+        na.getCell(`B${nar}`).value = section === "BS"
+          ? `Notes to Balance Sheet as at 31st March, ${cyYear}`
+          : `Notes to Profit & Loss A/c. for Accounting year, ${cyYear}`;
+        na.getCell(`B${nar}`).font = { bold: true, size: 10 };
+        na.mergeCells(`B${nar}:I${nar}`);
+        na.getCell(`B${nar}`).alignment = { horizontal: "center" };
+        nar += 2;
+      };
+
+      const writeColHeader = (columns: "LS" | "single") => {
+        // Row 1: Particulars | Long Term | Short Term   (LS only)
+        if (columns === "LS") {
+          na.getCell(`B${nar}`).value = "Particulars";
+          na.mergeCells(`B${nar}:E${nar}`);
+          na.getCell(`F${nar}`).value = "Long Term";
+          na.mergeCells(`F${nar}:G${nar}`);
+          na.getCell(`H${nar}`).value = "Short Term";
+          na.mergeCells(`H${nar}:I${nar}`);
+          for (const col of ["B","F","H"]) {
+            na.getCell(`${col}${nar}`).font = { bold: true };
+            na.getCell(`${col}${nar}`).alignment = { horizontal: "center" };
+            na.getCell(`${col}${nar}`).border = fullBorder;
+          }
+          nar++;
+          // Row 2: blank | CY | PY | CY | PY
+          na.getCell(`B${nar}`).value = "";
+          na.mergeCells(`B${nar}:E${nar}`);
+          na.getCell(`F${nar}`).value = `As at 31 Mar ${cyYear} (Rs.)`;
+          na.getCell(`G${nar}`).value = `As at 31 Mar ${pyYear} (Rs.)`;
+          na.getCell(`H${nar}`).value = `As at 31 Mar ${cyYear} (Rs.)`;
+          na.getCell(`I${nar}`).value = `As at 31 Mar ${pyYear} (Rs.)`;
+        } else {
+          na.getCell(`B${nar}`).value = "Particulars";
+          na.mergeCells(`B${nar}:E${nar}`);
+          na.getCell(`H${nar}`).value = `As at 31 Mar ${cyYear} (Rs.)`;
+          na.getCell(`I${nar}`).value = `As at 31 Mar ${pyYear} (Rs.)`;
+        }
+        for (const col of ["B","F","G","H","I"]) {
+          const c = na.getCell(`${col}${nar}`);
+          c.font = { bold: true };
+          c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+          c.border = fullBorder;
+        }
+        nar++;
+      };
+
+      const writeNote = (def: NoteDef, isFirstOfGroup: boolean) => {
+        if (isFirstOfGroup) writeHeaderBlock(def.header);
+
+        // Note title row
+        na.getCell(`B${nar}`).value = `Note :  ${def.name}`;
         na.getCell(`B${nar}`).font = { bold: true };
-        na.mergeCells(`B${nar}:E${nar}`);
+        na.mergeCells(`B${nar}:I${nar}`);
         na.getCell(`B${nar}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F5F5" } };
         nar++;
 
-        // Sub-header row
-        na.getCell(`B${nar}`).value = "Particulars";
-        na.getCell(`D${nar}`).value = `31 March, ${cyYear} (Rs.)`;
-        na.getCell(`E${nar}`).value = `31 March, ${pyYear} (Rs.)`;
-        na.mergeCells(`B${nar}:C${nar}`);
-        for (const col of ["B","C","D","E"]) {
-          na.getCell(`${col}${nar}`).font = { bold: true };
-          na.getCell(`${col}${nar}`).border = fullBorder;
-          na.getCell(`${col}${nar}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-        }
-        nar++;
+        writeColHeader(def.columns);
 
         // Data rows
-        if (noteRows.length > 0) {
-          for (const l of noteRows) {
-            na.getCell(`B${nar}`).value = l.ledger;
-            na.mergeCells(`B${nar}:C${nar}`);
-            na.getCell(`D${nar}`).value = l.cy;
-            na.getCell(`E${nar}`).value = l.py;
-            na.getCell(`D${nar}`).numFmt = MONEY_FMT;
-            na.getCell(`E${nar}`).numFmt = MONEY_FMT;
-            nar++;
+        let sumLT_cy = 0, sumLT_py = 0, sumST_cy = 0, sumST_py = 0;
+        for (const r of def.rows) {
+          const indent = r.indent ?? 0;
+          na.getCell(`B${nar}`).value = `${"   ".repeat(indent)}${r.label}`;
+          na.mergeCells(`B${nar}:E${nar}`);
+          if (r.bold) na.getCell(`B${nar}`).font = { bold: true };
+          if (def.columns === "LS") {
+            if (r.cyLT !== undefined) { na.getCell(`F${nar}`).value = r.cyLT; na.getCell(`F${nar}`).numFmt = MONEY_FMT; sumLT_cy += r.cyLT; }
+            if (r.pyLT !== undefined) { na.getCell(`G${nar}`).value = r.pyLT; na.getCell(`G${nar}`).numFmt = MONEY_FMT; sumLT_py += r.pyLT; }
+            if (r.cyST !== undefined) { na.getCell(`H${nar}`).value = r.cyST; na.getCell(`H${nar}`).numFmt = MONEY_FMT; sumST_cy += r.cyST; }
+            if (r.pyST !== undefined) { na.getCell(`I${nar}`).value = r.pyST; na.getCell(`I${nar}`).numFmt = MONEY_FMT; sumST_py += r.pyST; }
+          } else {
+            if (r.cyST !== undefined) { na.getCell(`H${nar}`).value = r.cyST; na.getCell(`H${nar}`).numFmt = MONEY_FMT; sumST_cy += r.cyST; }
+            if (r.pyST !== undefined) { na.getCell(`I${nar}`).value = r.pyST; na.getCell(`I${nar}`).numFmt = MONEY_FMT; sumST_py += r.pyST; }
           }
-        } else {
-          na.getCell(`B${nar}`).value = item.name;
-          na.mergeCells(`B${nar}:C${nar}`);
-          na.getCell(`D${nar}`).value = totalCy;
-          na.getCell(`E${nar}`).value = totalPy;
-          na.getCell(`D${nar}`).numFmt = MONEY_FMT;
-          na.getCell(`E${nar}`).numFmt = MONEY_FMT;
           nar++;
         }
 
-        // Total row
+        // Total row — uses computedAmounts so it ties to the BS / P&L line
         na.getCell(`B${nar}`).value = "Total";
-        na.mergeCells(`B${nar}:C${nar}`);
-        na.getCell(`D${nar}`).value = fmt(totalCy);
-        na.getCell(`E${nar}`).value = fmt(totalPy);
-        na.getCell(`D${nar}`).numFmt = MONEY_FMT;
-        na.getCell(`E${nar}`).numFmt = MONEY_FMT;
-        for (const col of ["B","C","D","E"]) {
+        na.mergeCells(`B${nar}:E${nar}`);
+        if (def.columns === "LS" && def.ltCode && def.stCode) {
+          const ltCY = disp(computedAmounts[def.ltCode] || 0);
+          const ltPY = disp(mergedPY[def.ltCode]      || 0);
+          const stCY = disp(computedAmounts[def.stCode] || 0);
+          const stPY = disp(mergedPY[def.stCode]      || 0);
+          na.getCell(`F${nar}`).value = ltCY; na.getCell(`F${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`G${nar}`).value = ltPY; na.getCell(`G${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`H${nar}`).value = stCY; na.getCell(`H${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`I${nar}`).value = stPY; na.getCell(`I${nar}`).numFmt = MONEY_FMT;
+        } else if (def.code) {
+          const cy = disp(computedAmounts[def.code] || 0);
+          const py = disp(mergedPY[def.code]      || 0);
+          na.getCell(`H${nar}`).value = cy; na.getCell(`H${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`I${nar}`).value = py; na.getCell(`I${nar}`).numFmt = MONEY_FMT;
+        } else {
+          // Fallback: use scaffold sums
+          na.getCell(`H${nar}`).value = disp(sumST_cy); na.getCell(`H${nar}`).numFmt = MONEY_FMT;
+          na.getCell(`I${nar}`).value = disp(sumST_py); na.getCell(`I${nar}`).numFmt = MONEY_FMT;
+        }
+        for (const col of ["B","F","G","H","I"]) {
           na.getCell(`${col}${nar}`).font = { bold: true };
           na.getCell(`${col}${nar}`).border = { top: thin, bottom: thin };
         }
-        nar += 2; // blank spacer between notes
+        nar += 2; // spacer between notes
+      };
+
+      // Render: repeat BS header at top of first BS note; re-emit at PL switch.
+      let lastHeader: "BS" | "PL" | null = null;
+      for (const def of notes) {
+        const isFirstOfGroup = def.header !== lastHeader;
+        writeNote(def, isFirstOfGroup);
+        lastHeader = def.header;
       }
 
       // ──────────────── NOTES TO ACCOUNTS — PPE ──────────────────────────────
