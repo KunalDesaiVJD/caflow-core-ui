@@ -84,34 +84,11 @@ function buildLedgersQuery(fromDate, toDate, company = '') {
 </ENVELOPE>`;
 }
 
-/**
- * Build the XML to get the Trial Balance report — summary level.
- * This gives group-level totals (all groups, not leaf ledgers).
- */
-function buildTrialBalanceQuery(fromDate, toDate, company = '') {
-  const companyTag = company
-    ? `<SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>`
-    : '';
-  return `<?xml version="1.0" encoding="utf-8"?>
-<ENVELOPE>
-  <HEADER>
-    <TALLYREQUEST>Export Data</TALLYREQUEST>
-  </HEADER>
-  <BODY>
-    <EXPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Trial Balance</REPORTNAME>
-        <STATICVARIABLES>
-          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-          <SVFROMDATE>${fromDate}</SVFROMDATE>
-          <SVTODATE>${toDate}</SVTODATE>
-          ${companyTag}
-        </STATICVARIABLES>
-      </REQUESTDESC>
-    </EXPORTDATA>
-  </BODY>
-</ENVELOPE>`;
-}
+// NOTE: buildTrialBalanceQuery was removed. Trial Balance must NOT be fetched
+// from Tally — the "Trial Balance" REPORTNAME returns "Unknown Request" on
+// this Tally build, and any COLLECTION-based substitute using $OpeningBalance
+// freezes Tally's XML server on large companies. Derive TB from ledgers +
+// vouchers instead. See tally-sync/SOP.md.
 
 /**
  * Build the XML to fetch all Vouchers (transactions) for a ledger/date range.
@@ -191,7 +168,6 @@ function escapeXml(str) {
 module.exports = {
   buildGroupsQuery,
   buildLedgersQuery,
-  buildTrialBalanceQuery,
   buildVouchersQuery,
   buildCompanyListQuery,
   escapeXml,
