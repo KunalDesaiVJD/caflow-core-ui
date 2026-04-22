@@ -8,13 +8,13 @@ import {
   TableHeader, TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Save } from "lucide-react";
+import { AlertTriangle, Loader2, Save, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface PartnerRow {
-  partner_no: number;          // 1 – 4
+  partner_no: number;          // dynamic 1 … N
   partner_name: string;
   profit_share_pct: number;
   opening_balance_cy: number;
@@ -92,13 +92,15 @@ interface Props {
 }
 
 export function NCECapitalAccount({ engagementId }: Props) {
-  const [partners, setPartners] = useState<PartnerRow[]>(
-    [1, 2, 3, 4].map(emptyPartner)
-  );
+  // Start with a single partner by default — user adds more via "Add Partner"
+  const [partners, setPartners] = useState<PartnerRow[]>([emptyPartner(1)]);
   const [pyRow, setPyRow]   = useState<PyRow>(EMPTY_PY);
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [eng,     setEng]     = useState<any>(null);
+  // Track partner_no values that existed in DB but have been removed in the
+  // UI so `save()` can delete the stale rows.
+  const [deletedPartnerNos, setDeletedPartnerNos] = useState<number[]>([]);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const fy      = (eng?.financial_year as string) || "";
@@ -136,12 +138,12 @@ export function NCECapitalAccount({ engagementId }: Props) {
       if (error) {
         toast.error("Failed to load capital account data");
       } else if (data && data.length > 0) {
-        // Populate partner rows 1–4
-        setPartners([1, 2, 3, 4].map(num => {
-          const row = data.find(r => r.partner_no === num);
-          if (!row) return emptyPartner(num);
-          return {
-            partner_no: num,
+        // Populate partner rows (all non-sentinel rows, sorted)
+        const savedPartners = data
+          .filter(r => r.partner_no !== PY_SENTINEL)
+          .sort((a, b) => a.partner_no - b.partner_no)
+          .map(row => ({
+            partner_no:         row.partner_no,
             partner_name:       row.partner_name        ?? "",
             profit_share_pct:   row.profit_share_pct    ?? 0,
             opening_balance_cy: row.opening_balance_cy  ?? 0,
@@ -150,8 +152,8 @@ export function NCECapitalAccount({ engagementId }: Props) {
             interest_cy:        row.interest_cy         ?? 0,
             withdrawals_cy:     row.withdrawals_cy      ?? 0,
             profit_share_cy:    row.profit_share_cy     ?? 0,
-          };
-        }));
+          }));
+        if (savedPartners.length > 0) setPartners(savedPartners);
 
         // Populate PY aggregate row (sentinel = 99)
         const py = data.find(r => r.partner_no === PY_SENTINEL);
@@ -199,12 +201,43 @@ export function NCECapitalAccount({ engagementId }: Props) {
   const setPyField = (field: keyof PyRow, value: number) =>
     setPyRow(prev => ({ ...prev, [field]: value }));
 
+  const addPartner = () => {
+    setPartners(prev => {
+      // Allocate a new partner_no that is not the PY sentinel and not already
+      // used — this keeps the unique (engagement, fy, partner_no) constraint
+      // satisfied across adds.
+      const used = new Set(prev.map(p => p.partner_no));
+      let next = 1;
+      while (used.has(next) || next === PY_SENTINEL) next++;
+      return [...prev, emptyPartner(next)];
+    });
+  };
+
+  const removePartner = (idx: number) => {
+    setPartners(prev => {
+      if (prev.length <= 1) return prev; // keep at least one row
+      const removed = prev[idx];
+      setDeletedPartnerNos(d => [...d, removed.partner_no]);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
   // ── Save ─────────────────────────────────────────────────────────────────
   const save = async () => {
     setSaving(true);
     try {
+      // 1. Delete rows for partners the user removed in this session
+      if (deletedPartnerNos.length > 0) {
+        const { error: delErr } = await supabase
+          .from("nce_capital_account")
+          .delete()
+          .eq("engagement_id", engagementId)
+          .eq("financial_year", fy)
+          .in("partner_no", deletedPartnerNos);
+        if (delErr) throw delErr;
+      }
+
       const rows = [
-        // 4 partner rows
         ...partners.map(p => ({
           engagement_id:      engagementId,
           financial_year:     fy,
@@ -241,6 +274,7 @@ export function NCECapitalAccount({ engagementId }: Props) {
         });
 
       if (error) throw error;
+      setDeletedPartnerNos([]);
       toast.success("Capital Account saved");
     } catch (e: any) {
       toast.error(e.message || "Save failed");
@@ -323,17 +357,18 @@ export function NCECapitalAccount({ engagementId }: Props) {
               <TableHead className="text-right w-28 bg-primary/5 font-semibold">
                 Closing Balance
               </TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
 
           <TableBody>
-            {/* ── Partner rows 1–4 ── */}
+            {/* ── Partner rows (dynamic) ── */}
             {partners.map((p, i) => {
               const closing = calcClosing(p);
               return (
                 <TableRow key={p.partner_no} className="hover:bg-muted/20">
                   <TableCell className="text-center font-medium">
-                    {p.partner_no}
+                    {i + 1}
                   </TableCell>
 
                   {/* Name */}
@@ -343,7 +378,7 @@ export function NCECapitalAccount({ engagementId }: Props) {
                       onChange={e =>
                         setPartnerField(i, "partner_name", e.target.value)
                       }
-                      placeholder={`Partner ${p.partner_no}`}
+                      placeholder={`Partner ${i + 1}`}
                       className="h-7 text-xs w-36"
                     />
                   </TableCell>
@@ -416,6 +451,25 @@ export function NCECapitalAccount({ engagementId }: Props) {
                   >
                     {fmt(closing)}
                   </TableCell>
+
+                  {/* Delete button (disabled when only one partner remains) */}
+                  <TableCell className="text-center">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
+                      onClick={() => removePartner(i)}
+                      disabled={partners.length <= 1}
+                      title={
+                        partners.length <= 1
+                          ? "At least one partner required"
+                          : "Remove partner"
+                      }
+                    >
+                      <Trash2 size={12} />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               );
             })}
@@ -461,6 +515,7 @@ export function NCECapitalAccount({ engagementId }: Props) {
               >
                 {fmt(totals.closing)}
               </TableCell>
+              <TableCell />
             </TableRow>
 
             {/* ── Previous Year (PY) row ── */}
@@ -517,16 +572,29 @@ export function NCECapitalAccount({ engagementId }: Props) {
               >
                 {fmt(calcPyClosing(pyRow))}
               </TableCell>
+              <TableCell />
             </TableRow>
           </TableBody>
         </Table>
       </div>
 
       {/* ── Actions ── */}
-      <div className="flex items-center justify-between">
-        <p className="text-[10px] text-muted-foreground">
-          Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
-        </p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            onClick={addPartner}
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+          >
+            <Plus size={13} />
+            Add Partner
+          </Button>
+          <p className="text-[10px] text-muted-foreground">
+            Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
+          </p>
+        </div>
         <Button onClick={save} disabled={saving} size="sm" className="gap-1.5">
           {saving
             ? <Loader2 size={13} className="animate-spin" />

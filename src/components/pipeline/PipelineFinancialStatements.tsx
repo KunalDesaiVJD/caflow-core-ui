@@ -330,20 +330,27 @@ export default function PipelineFinancialStatements({
   });
 
   // ─── Firm data (NCE signature block) ─────────────────────────────────────
+  // Pulls `membership_numbers` as well so the partner's M.No. can be
+  // resolved from the engagement's `partner_name` when `partner_id` is
+  // absent (the Stage 1 form writes partner_name, not partner_id).
   const { data: firmData } = useQuery({
     queryKey: ["firm-detail-fs", engagement?.firm_id],
     queryFn: async () => {
       const { data } = await supabase
         .from("firms")
-        .select("name, icai_firm_reg_no, address")
+        .select("name, icai_firm_reg_no, address, membership_numbers")
         .eq("id", engagement.firm_id)
         .maybeSingle();
       return data as any;
     },
-    enabled: !!engagement?.firm_id && isNonCorporate,
+    enabled: !!engagement?.firm_id,
   });
 
   // ─── Partner user data (NCE signature block) ──────────────────────────────
+  // Optional fallback: some legacy engagements still store partner_id and
+  // reference a row in `users`. New engagements use partner_name + the
+  // firm's membership_numbers lookup (handled below in sigPartnerName /
+  // sigMembershipNo).
   const { data: partnerData } = useQuery({
     queryKey: ["partner-user-fs", (engagement as any)?.partner_id],
     queryFn: async () => {
@@ -354,7 +361,7 @@ export default function PipelineFinancialStatements({
         .maybeSingle();
       return data as any;
     },
-    enabled: !!(engagement as any)?.partner_id && isNonCorporate,
+    enabled: !!(engagement as any)?.partner_id,
   });
 
   // ─── Fetch NCE Capital Account rows (for Notes to Accounts-Capital sheet) ─
@@ -694,11 +701,24 @@ export default function PipelineFinancialStatements({
   const activeNetProfit   = isNonCorporate ? nceNetProfit   : netProfit;
 
   // ─── NCE Signature — derived values ─────────────────────────────────────
+  // Partner name comes from the engagement (Stage 1 form selection). The
+  // matching membership number is looked up from the firm's
+  // `membership_numbers` array — this is where the firm admin registers
+  // each partner with their ICAI M.No. Legacy engagements may still have a
+  // users-table lookup via `partnerData`, which is used as a fallback.
   const sigFirmName     = firmData?.name             || "";
   const sigFirmFRN      = firmData?.icai_firm_reg_no || "";
   const sigFirmCity     = (firmData?.address as any)?.city || "";
-  const sigPartnerName  = partnerData?.name              || "";
-  const sigMembershipNo = partnerData?.membership_number || "";
+  const engPartnerName  = ((engagement as any)?.partner_name || "").trim();
+  const firmMnoEntry    = Array.isArray(firmData?.membership_numbers)
+    ? (firmData!.membership_numbers as any[]).find(
+        (m: any) => (m?.partner_name || "").trim() === engPartnerName
+      )
+    : null;
+  const sigPartnerName  =
+    engPartnerName || partnerData?.name || "";
+  const sigMembershipNo =
+    firmMnoEntry?.membership_no || partnerData?.membership_number || "";
   const sigClientName   = engagement?.clients?.name      || "";
 
   // Pre-fill Place once firm data loads (only if user hasn't typed)
@@ -1050,6 +1070,15 @@ export default function PipelineFinancialStatements({
       }
     }
 
+    // Apply thin borders to every cell in the BS body row so the printed /
+    // exported layout matches the reference (NCE Financials.xlsx) where every
+    // data cell sits inside a gridded table.
+    const borderBsRow = (r: number) => {
+      for (const a of ["B","C","D","E","F","G","H"]) {
+        bs.getCell(`${a}${r}`).border = fullBorder;
+      }
+    };
+
     // Emit a leaf line: "  name" at B, note at F, CY at G, PY at H.
     const writeLeaf = (it: FSLineItem & { depth: number }) => {
       const cy = fmt(cyOf(it.code));
@@ -1062,6 +1091,7 @@ export default function PipelineFinancialStatements({
       bs.getCell(`H${row}`).value = py;
       bs.getCell(`G${row}`).numFmt = MONEY_FMT;
       bs.getCell(`H${row}`).numFmt = MONEY_FMT;
+      borderBsRow(row);
       row++;
     };
     const writeBlank = () => { row++; };
@@ -1069,12 +1099,14 @@ export default function PipelineFinancialStatements({
       bs.getCell(`B${row}`).value = text;
       bs.getCell(`B${row}`).font = { bold: true };
       bs.mergeCells(`B${row}:H${row}`);
+      borderBsRow(row);
       row++;
     };
     const writeGroupHeader = (text: string) => {
       bs.getCell(`B${row}`).value = text;
       bs.getCell(`B${row}`).font = { bold: true, italic: true };
       bs.mergeCells(`B${row}:E${row}`);
+      borderBsRow(row);
       row++;
     };
     const writeTotal = (text: string, cy: number, py: number) => {
@@ -1087,7 +1119,7 @@ export default function PipelineFinancialStatements({
       bs.getCell(`H${row}`).numFmt = MONEY_FMT;
       for (const a of ["B","C","D","E","F","G","H"]) {
         bs.getCell(`${a}${row}`).font = { bold: true };
-        bs.getCell(`${a}${row}`).border = { top: thin, bottom: thin };
+        bs.getCell(`${a}${row}`).border = fullBorder;
       }
       row++;
     };
@@ -1236,6 +1268,11 @@ export default function PipelineFinancialStatements({
       if (m) return [m[1], m[2]];
       return ["", full];
     };
+    const borderPlRow = (r: number) => {
+      for (const a of ["B","C","D","E","F","G"]) {
+        pl.getCell(`${a}${r}`).border = fullBorder;
+      }
+    };
     const plLeaf = (it: FSLineItem & { depth: number }, noteVisible = true) => {
       const [roman, rest] = splitRoman(it.name);
       pl.getCell(`B${pr}`).value = roman;
@@ -1248,6 +1285,7 @@ export default function PipelineFinancialStatements({
       pl.getCell(`G${pr}`).value = fmt(pyOf(it.code));
       pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
       pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+      borderPlRow(pr);
       pr++;
     };
     const plComputed = (it: FSLineItem & { depth: number }) => {
@@ -1261,7 +1299,7 @@ export default function PipelineFinancialStatements({
       pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
       for (const a of ["B","C","D","E","F","G"]) {
         pl.getCell(`${a}${pr}`).font = { bold: true };
-        pl.getCell(`${a}${pr}`).border = { top: thin };
+        pl.getCell(`${a}${pr}`).border = fullBorder;
       }
       pl.getCell(`B${pr}`).alignment = { horizontal: "center" };
       pr++;
@@ -1270,6 +1308,7 @@ export default function PipelineFinancialStatements({
       pl.getCell(`B${pr}`).value = text;
       pl.getCell(`B${pr}`).font = { bold: true };
       pl.mergeCells(`B${pr}:G${pr}`);
+      borderPlRow(pr);
       pr++;
     };
     const plBlank = () => { pr++; };
@@ -1318,6 +1357,7 @@ export default function PipelineFinancialStatements({
       pl.mergeCells(`C${pr}:D${pr}`);
       pl.getCell(`B${pr}`).font = { bold: true };
       pl.getCell(`C${pr}`).font = { bold: true };
+      borderPlRow(pr);
       pr++;
       for (const c of ["NCE_CUR_TAX","NCE_PRIOR_TAX"]) {
         const it = find(c);
@@ -1328,6 +1368,7 @@ export default function PipelineFinancialStatements({
         pl.getCell(`G${pr}`).value = fmt(pyOf(it.code));
         pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
         pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
+        borderPlRow(pr);
         pr++;
       }
       pl.getCell(`C${pr}`).value = "       Total tax expense";
@@ -1339,6 +1380,7 @@ export default function PipelineFinancialStatements({
       pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
       pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
       for (const a of ["C","D","F","G"]) pl.getCell(`${a}${pr}`).font = { bold: true };
+      borderPlRow(pr);
       pr++;
     }
     plBlank();
@@ -1494,28 +1536,37 @@ export default function PipelineFinancialStatements({
         n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
       } else {
         // Fallback: hardcoded accounting policies when no Stage-7 notes exist.
-        const policies: { num: string; text: string }[] = [
-        { num: "1.", text: "Basis of Preparation\nThe financial statements have been prepared under the historical cost convention on an accrual basis in accordance with generally accepted accounting principles applicable to Non-Corporate Entities in India." },
-        { num: "2.", text: "Revenue Recognition\nRevenue from operations is recognised when it is earned and no significant uncertainty exists as to its ultimate realisation or collection. Interest income is recognised on a time proportionate basis taking into account the principal outstanding and the applicable rate." },
-        { num: "3.", text: "Property, Plant & Equipment\nFixed assets are stated at cost less accumulated depreciation. Cost comprises the purchase price and any attributable costs of bringing the asset to its working condition for its intended use. Subsequent costs are included in the asset's carrying amount only when it is probable that future economic benefits associated with the item will flow to the entity." },
-        { num: "4.", text: "Depreciation\nDepreciation on fixed assets is provided on the Written Down Value (WDV) method at rates prescribed under the Income Tax Act, 1961 / as estimated by management to reflect the useful economic lives of the assets. Depreciation on assets acquired / disposed of during the year is charged on a pro-rata basis." },
-        { num: "5.", text: "Inventories\nInventories are valued at the lower of cost (computed on FIFO / weighted average basis) and net realisable value. Cost includes all costs of purchase and other costs incurred in bringing the inventories to their present location and condition." },
-        { num: "6.", text: "Employee Benefits\nShort-term employee benefit obligations such as salaries, wages and bonus are recognised as an expense in the period in which the related services are rendered. Gratuity and other long-term benefit liabilities are recognised on an accrual basis or as per actuarial valuation, as applicable." },
-        { num: "7.", text: "Borrowing Costs\nBorrowing costs directly attributable to acquisition or construction of qualifying assets are capitalised as part of the cost of such assets. Other borrowing costs are charged to the Statement of Profit and Loss in the period in which they are incurred." },
-        { num: "8.", text: "Provisions and Contingent Liabilities\nProvisions are recognised when the entity has a present obligation as a result of a past event, it is probable that an outflow of resources will be required to settle the obligation and a reliable estimate can be made. Contingent liabilities are disclosed unless the possibility of an outflow of resources embodying economic benefits is remote." },
-        { num: "9.", text: "Taxes on Income\nCurrent tax is determined on the basis of the taxable income computed in accordance with the Income Tax Act, 1961 using applicable tax rates and tax laws. Advance tax and tax deducted at source are shown as assets after adjustment against current tax provisions." },
-        { num: "10.", text: "Foreign Currency Transactions\nTransactions denominated in foreign currencies are recorded at the exchange rate prevailing at the date of the transaction. Monetary assets and liabilities denominated in foreign currencies are restated at the exchange rate prevailing at the balance sheet date. Any income or expense on account of exchange difference is recognised in the Statement of Profit and Loss." },
-        { num: "11.", text: "Cash and Cash Equivalents\nCash and cash equivalents for the purposes of cash flow statement comprise cash at bank, cash in hand and fixed deposits with an original maturity of three months or less that are readily convertible to known amounts of cash." },
-        { num: "12.", text: "Use of Estimates\nThe preparation of financial statements requires the management to make estimates and assumptions that affect the reported balances of assets and liabilities, disclosures relating to contingent liabilities as at the date of the financial statements and the reported amounts of income and expenses during the year. Management believes that the estimates used in the preparation of financial statements are prudent and reasonable." },
-      ];
+        // Emitted in the same `Note | Title | Particulars` three-column
+        // layout as the saved-notes branch above, so both code paths produce
+        // a bordered table that matches the reference NCE Financials format.
+        const policies: { num: string; title: string; text: string }[] = [
+          { num: "1.",  title: "Basis of Preparation",          text: "The financial statements have been prepared under the historical cost convention on an accrual basis in accordance with generally accepted accounting principles applicable to Non-Corporate Entities in India." },
+          { num: "2.",  title: "Revenue Recognition",           text: "Revenue from operations is recognised when it is earned and no significant uncertainty exists as to its ultimate realisation or collection. Interest income is recognised on a time proportionate basis taking into account the principal outstanding and the applicable rate." },
+          { num: "3.",  title: "Property, Plant & Equipment",   text: "Fixed assets are stated at cost less accumulated depreciation. Cost comprises the purchase price and any attributable costs of bringing the asset to its working condition for its intended use. Subsequent costs are included in the asset's carrying amount only when it is probable that future economic benefits associated with the item will flow to the entity." },
+          { num: "4.",  title: "Depreciation",                  text: "Depreciation on fixed assets is provided on the Written Down Value (WDV) method at rates prescribed under the Income Tax Act, 1961 / as estimated by management to reflect the useful economic lives of the assets. Depreciation on assets acquired / disposed of during the year is charged on a pro-rata basis." },
+          { num: "5.",  title: "Inventories",                   text: "Inventories are valued at the lower of cost (computed on FIFO / weighted average basis) and net realisable value. Cost includes all costs of purchase and other costs incurred in bringing the inventories to their present location and condition." },
+          { num: "6.",  title: "Employee Benefits",             text: "Short-term employee benefit obligations such as salaries, wages and bonus are recognised as an expense in the period in which the related services are rendered. Gratuity and other long-term benefit liabilities are recognised on an accrual basis or as per actuarial valuation, as applicable." },
+          { num: "7.",  title: "Borrowing Costs",               text: "Borrowing costs directly attributable to acquisition or construction of qualifying assets are capitalised as part of the cost of such assets. Other borrowing costs are charged to the Statement of Profit and Loss in the period in which they are incurred." },
+          { num: "8.",  title: "Provisions and Contingent Liabilities", text: "Provisions are recognised when the entity has a present obligation as a result of a past event, it is probable that an outflow of resources will be required to settle the obligation and a reliable estimate can be made. Contingent liabilities are disclosed unless the possibility of an outflow of resources embodying economic benefits is remote." },
+          { num: "9.",  title: "Taxes on Income",               text: "Current tax is determined on the basis of the taxable income computed in accordance with the Income Tax Act, 1961 using applicable tax rates and tax laws. Advance tax and tax deducted at source are shown as assets after adjustment against current tax provisions." },
+          { num: "10.", title: "Foreign Currency Transactions", text: "Transactions denominated in foreign currencies are recorded at the exchange rate prevailing at the date of the transaction. Monetary assets and liabilities denominated in foreign currencies are restated at the exchange rate prevailing at the balance sheet date. Any income or expense on account of exchange difference is recognised in the Statement of Profit and Loss." },
+          { num: "11.", title: "Cash and Cash Equivalents",     text: "Cash and cash equivalents for the purposes of cash flow statement comprise cash at bank, cash in hand and fixed deposits with an original maturity of three months or less that are readily convertible to known amounts of cash." },
+          { num: "12.", title: "Use of Estimates",              text: "The preparation of financial statements requires the management to make estimates and assumptions that affect the reported balances of assets and liabilities, disclosures relating to contingent liabilities as at the date of the financial statements and the reported amounts of income and expenses during the year. Management believes that the estimates used in the preparation of financial statements are prudent and reasonable." },
+        ];
 
         for (const p of policies) {
           n1.getCell(`B${n1r}`).value = p.num;
           n1.getCell(`B${n1r}`).font = { bold: true };
-          n1.getCell(`B${n1r}`).alignment = { vertical: "top" };
-          n1.getCell(`C${n1r}`).value = p.text;
-          n1.getCell(`C${n1r}`).alignment = { wrapText: true, vertical: "top" };
-          n1r += 2;
+          n1.getCell(`B${n1r}`).alignment = { vertical: "top", horizontal: "center" };
+          n1.getCell(`C${n1r}`).value = p.title;
+          n1.getCell(`C${n1r}`).font = { bold: true };
+          n1.getCell(`C${n1r}`).alignment = { vertical: "top", wrapText: true };
+          n1.getCell(`D${n1r}`).value = p.text;
+          n1.getCell(`D${n1r}`).alignment = { wrapText: true, vertical: "top" };
+          for (const a of ["B","C","D"]) n1.getCell(`${a}${n1r}`).border = fullBorder;
+          const lines = Math.max(1, Math.ceil((p.text.length || 0) / 80));
+          n1.getRow(n1r).height = Math.max(32, lines * 15);
+          n1r++;
         }
 
         // Signature block
@@ -1626,6 +1677,10 @@ export default function PipelineFinancialStatements({
         for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
         nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
         nc.getCell(`D${ncr}`).alignment = { horizontal: "center" };
+        // Thin borders on every data cell — matches the NCE reference.
+        for (const col of ["B","C","D","E","F","G","H","I","J","K"]) {
+          nc.getCell(`${col}${ncr}`).border = fullBorder;
+        }
         ncr++;
       };
 
@@ -1647,7 +1702,7 @@ export default function PipelineFinancialStatements({
       nc.getCell(`K${ncr}`).value = fmt(capTotCl);
       for (const col of ["B","C","D","E","F","G","H","I","J","K"]) {
         nc.getCell(`${col}${ncr}`).font = { bold: true };
-        nc.getCell(`${col}${ncr}`).border = { top: thin, bottom: thin };
+        nc.getCell(`${col}${ncr}`).border = fullBorder;
       }
       for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
       ncr += 2;
@@ -1680,6 +1735,9 @@ export default function PipelineFinancialStatements({
           for (const col of ["E","F","G","H","I","J","K"]) nc.getCell(`${col}${ncr}`).numFmt = MONEY_FMT;
           nc.getCell(`B${ncr}`).alignment = { horizontal: "center" };
           nc.getCell(`D${ncr}`).alignment = { horizontal: "center" };
+          for (const col of ["B","C","D","E","F","G","H","I","J","K"]) {
+            nc.getCell(`${col}${ncr}`).border = fullBorder;
+          }
           ncr++;
         }
         nc.getCell(`B${ncr}`).value = "Total";
