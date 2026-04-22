@@ -352,37 +352,50 @@ export function buildClauseValues(
   // clauseNo '21' → DB col 'cl_21' (flat; all sub-data nested within this object)
   const cl21 = dig(cl, "cl_21");
 
-  // 21(a) — 9 specific categories of P&L debits → J66–J74
-  // Write actual particulars + amount inline (e.g. "Donation – ₹22,000")
-  // instead of "As Per Annexure", so the user's data appears in the form
-  // directly rather than only in a separate annexure block.
+  // 21(a) — 9 specific categories of P&L debits → rows 66–74
+  // Each row in Form_3CD has 3 sub-columns inside the answer area:
+  //   J = S.No.   K = Particulars (merged K:L)   M = Amount (merged M:N)
+  // Previously we wrote the whole "Donation – ₹22000" string into J, which
+  // got truncated into the narrow S.No column. Now write each field to its
+  // own column so the data is fully visible.
   const cl21a = dig(cl21, "cl_21a");
   const lineRows21a = [66, 67, 68, 69, 70, 71, 72, 73, 74] as const;
-  const fmtAmt = (a: unknown): string => {
-    if (a === undefined || a === null || a === "") return "";
-    const n = Number(a);
-    if (isNaN(n)) return String(a);
-    // Indian-format thousands separator
-    return `₹${n.toLocaleString("en-IN")}`;
-  };
   for (let idx = 1; idx <= lineRows21a.length; idx++) {
     const sub = dig(cl21a, `cl_21a_${idx}`);
     const r = rows(sub);
-    let disp = "";
-    if (r.length > 0) {
-      disp = r
-        .map((row) => {
+    const rowNum = lineRows21a[idx - 1];
+    if (r.length === 1) {
+      // Single entry: fill S.No, Particulars and Amount inline.
+      const row = r[0];
+      const p = String(row.particulars || row.nature || row.description || "").trim();
+      const a = row.amount;
+      setN(f3, `J${rowNum}`, 1);
+      if (p) setV(f3, `K${rowNum}`, p);
+      if (a !== undefined && a !== null && a !== "") setN(f3, `M${rowNum}`, a);
+    } else if (r.length > 1) {
+      // Multiple entries: concatenate into Particulars cell + sum amounts.
+      const partsList = r
+        .map((row, i) => {
           const p = String(row.particulars || row.nature || row.description || "").trim();
-          const a = fmtAmt(row.amount);
-          return [p, a].filter(Boolean).join(" – ");
+          const a = row.amount;
+          const aStr =
+            a !== undefined && a !== null && a !== ""
+              ? ` – ₹${Number(a).toLocaleString("en-IN")}`
+              : "";
+          return p ? `${i + 1}. ${p}${aStr}` : "";
         })
         .filter(Boolean)
         .join("; ");
-      if (!disp) disp = "As Per Annexure";
+      const total = r.reduce((s, row) => s + (Number(row.amount) || 0), 0);
+      setN(f3, `J${rowNum}`, r.length);
+      if (partsList) setV(f3, `K${rowNum}`, partsList);
+      if (total > 0) setN(f3, `M${rowNum}`, total);
     } else {
-      disp = naSummary(sub);
+      // No rows — write Not Applicable / status into Particulars column
+      // (J is the narrow S.No column; K is the wider Particulars column).
+      const disp = naSummary(sub);
+      if (disp) setV(f3, `K${rowNum}`, disp);
     }
-    if (disp) setV(f3, `J${lineRows21a[idx - 1]}`, disp);
   }
 
   // 21(b) — sec 40(a) inadmissible
