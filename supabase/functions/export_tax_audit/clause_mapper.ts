@@ -644,66 +644,27 @@ export function buildClauseValues(
   const cl34a = dig(cl34, "cl_34a");
   const cl34b = dig(cl34, "cl_34b");
   const cl34c = dig(cl34, "cl_34c");
-  const fmtINR = (a: unknown): string => {
-    if (a === undefined || a === null || a === "") return "";
-    const n = Number(a);
-    if (isNaN(n)) return String(a);
-    return `₹${n.toLocaleString("en-IN")}`;
-  };
-
-  // 34(a): inline summary — "194J – Professional/Technical – ₹41,000"
+  // Form 3CD answer cells: short "As Per Annexure" reference. The detailed
+  // table goes into the "3CD ANNEX Clause 34" sheet (handled below).
   const rows34a = rows(cl34a);
-  if (rows34a.length > 0) {
-    const summary = rows34a
-      .map((r) => {
-        const parts = [
-          String(r.section || "").trim(),
-          String(r.nature_of_payment || "").trim(),
-          fmtINR(r.total_payment),
-        ].filter(Boolean);
-        return parts.join(" – ");
-      })
-      .filter(Boolean)
-      .join("; ");
-    setV(f3, "J227", summary || "As Per Annexure");
-  } else {
-    setV(f3, "J227", naSummary(cl34a) || "Not Applicable");
-  }
-
-  // 34(b): inline summary — "26Q (31/07/2024); 27EQ (15/07/2024); 24Q (31/07/2024)"
   const rows34b = rows(cl34b);
-  if (rows34b.length > 0) {
-    const summary = rows34b
-      .map((r) => {
-        const f = String(r.form_type || "").trim();
-        const d = String(r.due_date || "").trim();
-        return f && d ? `${f} (${d})` : f || d;
-      })
-      .filter(Boolean)
-      .join("; ");
-    setV(f3, "J228", summary || "As Per Annexure");
-  } else {
-    setV(f3, "J228", naSummary(cl34b) || "Not Applicable");
-  }
-
-  // 34(c): inline summary — interest payable / amount paid
   const rows34c = rows(cl34c);
-  if (rows34c.length > 0) {
-    const summary = rows34c
-      .map((r) => {
-        const ip = fmtINR(r.interest_payable);
-        const ap = fmtINR(r.amount_paid);
-        const dp = String(r.date_of_payment || "").trim();
-        return [ip ? `Payable ${ip}` : "", ap ? `Paid ${ap}` : "", dp ? `on ${dp}` : ""]
-          .filter(Boolean)
-          .join(", ");
-      })
-      .filter(Boolean)
-      .join("; ");
-    setV(f3, "J229", summary || "As Per Annexure");
-  } else {
-    setV(f3, "J229", naSummary(cl34c) || "Not Applicable");
-  }
+
+  setV(
+    f3,
+    "J227",
+    rows34a.length > 0 ? "As Per Annexure" : (naSummary(cl34a) || "Not Applicable"),
+  );
+  setV(
+    f3,
+    "J228",
+    rows34b.length > 0 ? "As Per Annexure" : (naSummary(cl34b) || "Not Applicable"),
+  );
+  setV(
+    f3,
+    "J229",
+    rows34c.length > 0 ? "As Per Annexure" : (naSummary(cl34c) || "Not Applicable"),
+  );
 
   // Mirror the data into the TDS annexure sheet (best-effort; sheet name varies).
   if (td) {
