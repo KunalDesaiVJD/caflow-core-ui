@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuditContext } from "@/hooks/useAuditContext";
@@ -164,6 +164,77 @@ export default function TallySyncPage() {
   const [syncing, setSyncing]       = useState(false);
   const [pendingRequest, setPendingRequest] = useState(false);
   const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
+
+  // ── COA auto-map after sync ────────────────────────────────────────────────
+  // After a sync completes, we poll until completion then wait 60 s before
+  // invoking coa-auto-mapper (only for new/unmapped ledgers; confirmed rows
+  // are untouched by the edge function).
+  const [coaCountdown, setCoaCountdown] = useState<number | null>(null);
+  const coaPollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const coaCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncQueuedAtRef = useRef<string | null>(null);
+
+  // Clean up timers on unmount
+  useEffect(() => () => {
+    if (coaPollRef.current)      clearInterval(coaPollRef.current);
+    if (coaCountdownRef.current) clearInterval(coaCountdownRef.current);
+  }, []);
+
+  const startCoaCountdown = useCallback(async () => {
+    if (!selectedEngagementId) return;
+    // 60-second visual countdown
+    setCoaCountdown(60);
+    coaCountdownRef.current = setInterval(() => {
+      setCoaCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(coaCountdownRef.current!);
+          coaCountdownRef.current = null;
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Wait 60 s, then invoke auto-mapper
+    await new Promise(r => setTimeout(r, 60_000));
+    try {
+      const { data, error } = await supabase.functions.invoke("coa-auto-mapper", {
+        body: { engagement_id: selectedEngagementId },
+      });
+      if (error) throw error;
+      const r = data as any;
+      toast({
+        title: "COA auto-mapping done",
+        description: `${r.intelligence ?? 0} intelligence · ${r.heuristic ?? 0} heuristic · ${r.ai ?? 0} AI · ${r.total ?? 0} ledgers`,
+      });
+    } catch (e: any) {
+      toast({ title: "COA auto-mapping failed", description: e.message, variant: "destructive" });
+    }
+  }, [selectedEngagementId, toast]);
+
+  const startCoapoll = useCallback(() => {
+    if (coaPollRef.current) clearInterval(coaPollRef.current);
+    const queuedAt = syncQueuedAtRef.current;
+    coaPollRef.current = setInterval(async () => {
+      if (!tallyEngId) return;
+      const { data } = await supabase
+        .from("sync_batches" as any)
+        .select("status, completed_at, started_at")
+        .eq("engagement_id", tallyEngId)
+        .in("status", ["complete", "complete_with_warnings"])
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!data) return;
+      // Only react to a batch that started AFTER we queued the sync
+      if (queuedAt && (data as any).started_at < queuedAt) return;
+      // Sync is done — stop polling, start countdown
+      clearInterval(coaPollRef.current!);
+      coaPollRef.current = null;
+      startCoaCountdown();
+    }, 10_000); // check every 10 s
+  }, [tallyEngId, startCoaCountdown]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const [ledgerSearch, setLedgerSearch]   = useState("");
   const [groupSearch, setGroupSearch]     = useState("");
@@ -485,9 +556,12 @@ export default function TallySyncPage() {
     if (error) {
       toast({ title: "Failed to queue sync request", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Sync queued", description: "Run node auto-sync.js to trigger immediately." });
+      syncQueuedAtRef.current = new Date().toISOString();
+      toast({ title: "Sync queued", description: "Run node auto-sync.js to trigger immediately. COA mapping will auto-update 60 s after sync completes." });
       setPendingRequest(true);
       await loadData();
+      // Begin polling sync_batches for completion, then auto-trigger COA mapper
+      startCoapoll();
     }
     setSyncing(false);
   }
@@ -909,6 +983,12 @@ export default function TallySyncPage() {
             <RefreshCw className={cn("h-4 w-4 mr-2", syncing && "animate-spin")} />
             {pendingRequest ? "Sync Queued…" : "Sync Now"}
           </Button>
+          {coaCountdown !== null && (
+            <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              COA auto-mapping in <span className="font-bold tabular-nums">{coaCountdown}s</span>
+            </div>
+          )}
         </div>
       </div>
 

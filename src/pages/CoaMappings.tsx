@@ -34,8 +34,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
   ArrowLeft, Sparkles, Loader2, Check, Pencil, AlertCircle,
-  BrainCircuit, Zap, Search, RefreshCw, BadgeCheck, Shield,
+  BrainCircuit, Zap, Search, RefreshCw, BadgeCheck, Shield, Trash2,
 } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Engagement {
@@ -118,6 +123,7 @@ export default function CoaMappings() {
 
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [search, setSearch] = useState("");
 
   // ── Load engagements ───────────────────────────────────────────────────────
@@ -235,6 +241,38 @@ export default function CoaMappings() {
       toast({ title: "Auto-mapping failed", description: e.message, variant: "destructive" });
     } finally {
       setRunning(false);
+    }
+  };
+
+  // ── Reset all mappings for this engagement, then re-run AI auto-mapper ─────
+  const resetAndRemap = async () => {
+    if (!selectedEng) return;
+    setResetting(true);
+    try {
+      // Delete all coa_mappings rows for this engagement
+      const { error } = await supabase
+        .from("coa_mappings")
+        .delete()
+        .eq("engagement_id", selectedEng);
+      if (error) throw error;
+      // Reload local state to empty (UI shows all ledgers as unmapped)
+      setMappings([]);
+      toast({ title: "Mappings cleared", description: "Running AI auto-mapper from scratch…" });
+      // Immediately invoke the auto-mapper
+      const { data, error: mapErr } = await supabase.functions.invoke("coa-auto-mapper", {
+        body: { engagement_id: selectedEng },
+      });
+      if (mapErr) throw mapErr;
+      const r = data as any;
+      toast({
+        title: "Re-mapping complete",
+        description: `${r.intelligence ?? 0} intelligence · ${r.heuristic ?? 0} heuristic · ${r.ai ?? 0} AI · ${r.total ?? 0} ledgers`,
+      });
+      await loadEngagementData();
+    } catch (e: any) {
+      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -386,6 +424,38 @@ export default function CoaMappings() {
           <Button variant="outline" size="icon" onClick={loadEngagementData} disabled={loading}>
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
           </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={resetting || running || !selectedEng}
+                className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+              >
+                {resetting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                Reset & Re-map
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reset all COA mappings?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will <strong>delete every mapping</strong> for this engagement (including manually confirmed ones) and immediately run the AI auto-mapper from scratch using fresh Tally data.
+                  <br /><br />
+                  Cross-client intelligence (learned from other engagements) is preserved and will be used during re-mapping.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={resetAndRemap}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Yes, reset & re-map
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <Button onClick={runAutoMap} disabled={running || !selectedEng} className="gap-2">
             {running ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
