@@ -415,7 +415,6 @@ export default function TallySyncPage() {
           balance_type = derived.type;
         }
       }
-      if (closing_balance <= 0 && r.opening_balance <= 0) continue;
       // Prefer the DB-persisted turnover (written by sync-step.js from the FULL
       // voucher set with a reconciliation guard). Fall back to UI-side
       // voucher aggregation only if the DB column is empty — that fallback
@@ -425,6 +424,11 @@ export default function TallySyncPage() {
       const dbCredit = r.credit_amount ?? 0;
       const debit_amount  = dbDebit  > 0 || dbCredit > 0 ? dbDebit  : (computed?.debit  ?? 0);
       const credit_amount = dbDebit  > 0 || dbCredit > 0 ? dbCredit : (computed?.credit ?? 0);
+      // Keep the row if it has ANY period activity — opening, closing, or
+      // turnover. Dropping on (opening=0 & closing=0) silently excludes
+      // fully-settled suppliers/customers whose Dr/Cr cancels within the FY
+      // (Ambica: 1,044 such ledgers carrying ₹4.22 Cr of real turnover).
+      if (closing_balance <= 0 && r.opening_balance <= 0 && debit_amount <= 0 && credit_amount <= 0) continue;
       tbSeen.set(r.ledger_name, {
         ...r,
         closing_balance,
