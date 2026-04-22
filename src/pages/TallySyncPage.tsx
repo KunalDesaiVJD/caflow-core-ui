@@ -1817,7 +1817,7 @@ node sync-step.js all`}
 {`node sync-step.js groups     # fast
 node sync-step.js ledgers    # medium (name + parent only)
 node sync-step.js vouchers   # chunked monthly — safest
-node sync-step.js tb         # DB-derivation only (no Tally call)`}
+node sync-step.js tb         # Openings+closings via custom TDL REPORT; turnover from DB vouchers`}
                 </pre>
               </div>
               <div>
