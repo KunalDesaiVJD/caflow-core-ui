@@ -881,6 +881,86 @@ export default function PipelineFinancialStatements({
     const plItems = activeFlatItems.filter(i => i.section.startsWith(plPrefix));
     const fmt = (n: number) => Math.round((n || 0) * 100) / 100;
 
+    // ─── Build self-contained CY / PY lookup tables for BS + P&L ─────────────
+    // Rebuild amounts inline from tbAccounts + coaMapping so BS/PL export never
+    // shows "-" placeholders when the component-level memo is stale or empty
+    // at the moment the user clicks Export. Mirrors the logic in
+    // `computedAmounts` / `computedAmountsPY` / `mergedPY` but is recomputed
+    // fresh each time exportToExcel runs.
+    const exportCy: Record<string, number> = {};
+    const exportPy: Record<string, number> = {};
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
+      const opening = acct.opening_balance ?? 0;
+      if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+    }
+    // Manual overrides (CY only)
+    for (const [code, override] of Object.entries(manualOverrides)) {
+      exportCy[code] = override.amount;
+    }
+    // Recurse tree to compute parent totals
+    const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
+      if (!item.children || item.children.length === 0) return table[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computeTotalLocal(c, table), 0);
+      table[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) {
+      computeTotalLocal(item, exportCy);
+      computeTotalLocal(item, exportPy);
+    }
+    // Prior-engagement P&L PY values win over opening-balance-derived BS PY
+    // for codes where a prior engagement row exists.
+    for (const [code, val] of Object.entries(pyAmounts || {})) {
+      if (Number.isFinite(val as number)) exportPy[code] = val as number;
+    }
+    if (noPriorEngagement) {
+      for (const [code, val] of Object.entries(pyManualAmounts || {})) {
+        if (Number.isFinite(val)) {
+          if (exportPy[code] === undefined || exportPy[code] === 0) exportPy[code] = val;
+        }
+      }
+    }
+    // Recompute P&L parent totals from leaves (so manual PY flows up)
+    const computePlLocal = (item: FSLineItem): number => {
+      const sec = String(item.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (!isPL) return 0;
+      if (!item.children || item.children.length === 0) return exportPy[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computePlLocal(c), 0);
+      exportPy[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computePlLocal(item);
+    // NCE profit chain (V/VII/IX/XI/Net)
+    if (isNonCorporate) {
+      const chain = (table: Record<string, number>) => {
+        const inc = table["NCE_PL_INC"] || 0;
+        const exp = table["NCE_PL_EXP"] || 0;
+        table["NCE_PROF_V"]   = Math.round((inc - exp) * 100) / 100;
+        table["NCE_PROF_VII"] = Math.round((table["NCE_PROF_V"]   - (table["NCE_EXCEP"]    || 0)) * 100) / 100;
+        table["NCE_PROF_IX"]  = Math.round((table["NCE_PROF_VII"] - (table["NCE_EXTORD"]   || 0)) * 100) / 100;
+        table["NCE_PROF_XI"]  = Math.round((table["NCE_PROF_IX"]  - (table["NCE_PART_REM"] || 0)) * 100) / 100;
+        table["NCE_NET_PROF"] = Math.round((table["NCE_PROF_XI"]  - (table["NCE_TAX"]      || 0)) * 100) / 100;
+      };
+      chain(exportCy);
+      chain(exportPy);
+    }
+    // Final fallback: if a code is still zero but the component memo has a
+    // value (e.g. race on first render), prefer the memo value.
+    const cyOf = (code: string): number => {
+      const v = exportCy[code];
+      if (v !== undefined && v !== 0) return v;
+      return computedAmounts[code] || v || 0;
+    };
+    const pyOf = (code: string): number => {
+      const v = exportPy[code];
+      if (v !== undefined && v !== 0) return v;
+      return mergedPY[code] || v || 0;
+    };
+
     const clientName = engagement?.clients?.name || "—";
     const fy = engagement?.financial_year || "—";
     const cyLabel = `As at 31 March, ${cyYear}`;
@@ -956,8 +1036,8 @@ export default function PipelineFinancialStatements({
 
     // Emit a leaf line: "  name" at B, note at F, CY at G, PY at H.
     const writeLeaf = (it: FSLineItem & { depth: number }) => {
-      const cy = fmt(computedAmounts[it.code] || 0);
-      const py = fmt(mergedPY[it.code] || 0);
+      const cy = fmt(cyOf(it.code));
+      const py = fmt(pyOf(it.code));
       bs.getCell(`B${row}`).value = "  ".repeat(Math.max(0, it.depth - 1)) + it.name;
       bs.mergeCells(`B${row}:E${row}`);
       bs.getCell(`F${row}`).value = it.noteRef ? it.noteRef : "";
@@ -1001,8 +1081,8 @@ export default function PipelineFinancialStatements({
       const item = activeFlatItems.find(i => i.code === code);
       if (!item) return { cy: 0, py: 0 };
       return {
-        cy: fmt(computedAmounts[code] || 0),
-        py: fmt(mergedPY[code] || 0),
+        cy: fmt(cyOf(code)),
+        py: fmt(pyOf(code)),
       };
     };
 
@@ -1148,8 +1228,8 @@ export default function PipelineFinancialStatements({
       pl.mergeCells(`C${pr}:D${pr}`);
       pl.getCell(`E${pr}`).value = noteVisible && it.noteRef ? it.noteRef : "";
       pl.getCell(`E${pr}`).alignment = { horizontal: "center" };
-      pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
-      pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+      pl.getCell(`F${pr}`).value = fmt(cyOf(it.code));
+      pl.getCell(`G${pr}`).value = fmt(pyOf(it.code));
       pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
       pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
       pr++;
@@ -1159,8 +1239,8 @@ export default function PipelineFinancialStatements({
       pl.getCell(`B${pr}`).value = roman;
       pl.getCell(`C${pr}`).value = rest;
       pl.mergeCells(`C${pr}:D${pr}`);
-      pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
-      pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+      pl.getCell(`F${pr}`).value = fmt(cyOf(it.code));
+      pl.getCell(`G${pr}`).value = fmt(pyOf(it.code));
       pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
       pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
       for (const a of ["B","C","D","E","F","G"]) {
@@ -1228,16 +1308,16 @@ export default function PipelineFinancialStatements({
         if (!it) continue;
         pl.getCell(`C${pr}`).value = "       " + it.name;
         pl.mergeCells(`C${pr}:D${pr}`);
-        pl.getCell(`F${pr}`).value = fmt(computedAmounts[it.code] || 0);
-        pl.getCell(`G${pr}`).value = fmt(mergedPY[it.code] || 0);
+        pl.getCell(`F${pr}`).value = fmt(cyOf(it.code));
+        pl.getCell(`G${pr}`).value = fmt(pyOf(it.code));
         pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
         pl.getCell(`G${pr}`).numFmt = MONEY_FMT;
         pr++;
       }
       pl.getCell(`C${pr}`).value = "       Total tax expense";
       pl.mergeCells(`C${pr}:D${pr}`);
-      const taxCy = fmt(computedAmounts["NCE_TAX"] || 0);
-      const taxPy = fmt(mergedPY["NCE_TAX"] || 0);
+      const taxCy = fmt(cyOf("NCE_TAX"));
+      const taxPy = fmt(pyOf("NCE_TAX"));
       pl.getCell(`F${pr}`).value = taxCy;
       pl.getCell(`G${pr}`).value = taxPy;
       pl.getCell(`F${pr}`).numFmt = MONEY_FMT;
