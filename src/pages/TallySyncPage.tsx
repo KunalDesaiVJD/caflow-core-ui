@@ -1815,9 +1815,9 @@ node sync-step.js all`}
                 <div className="text-xs font-semibold mb-1">Run one phase at a time (when Tally is slow)</div>
                 <pre className="bg-muted text-xs rounded p-3 overflow-x-auto">
 {`node sync-step.js groups     # fast
-node sync-step.js ledgers    # medium
-node sync-step.js tb         # heavy (COMPUTE query)
-node sync-step.js vouchers   # chunked monthly — safest`}
+node sync-step.js ledgers    # medium (name + parent only)
+node sync-step.js vouchers   # chunked monthly — safest
+node sync-step.js tb         # DB-derivation only (no Tally call)`}
                 </pre>
               </div>
               <div>
