@@ -615,10 +615,24 @@ export function buildClauseValues(
   setV(f3, "J222", ynSummary(cl32d, "No"));
   setV(f3, "J223", ynSummary(cl32e, "Not Applicable"));
 
-  // ── Clause 33 — Chapter VIA deductions ───────────────────────────────────
+  // ── Clause 33 — Chapter VIA / Chapter III deductions ─────────────────────
   // clauseNo '33' → DB col 'cl_33' (flat)
+  // Header row J224 = main answer ("As Per Annexure" / "Not Applicable")
+  // Sub-row  J225 = 33(i)  Section under which deduction is claimed
+  // Sub-row  J226 = 33(ii) Amounts admissible
   const cl33 = dig(cl, "cl_33");
+  const rows33 = rows(cl33);
   setV(f3, "J224", naSummary(cl33) || ynSummary(cl33, "Not Applicable"));
+  if (rows33.length > 0) {
+    // Combine sections (comma-separated) and sum amounts
+    const sections = rows33
+      .map((r) => String(r.section || r.section_code || "").trim())
+      .filter(Boolean)
+      .join(", ");
+    const totalAmt = rows33.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    if (sections) setV(f3, "J225", sections);
+    if (totalAmt > 0) setN(f3, "J226", totalAmt);
+  }
 
   // ── Clause 34 — TDS/TCS ──────────────────────────────────────────────────
   if (td) {
