@@ -353,12 +353,35 @@ export function buildClauseValues(
   const cl21 = dig(cl, "cl_21");
 
   // 21(a) — 9 specific categories of P&L debits → J66–J74
+  // Write actual particulars + amount inline (e.g. "Donation – ₹22,000")
+  // instead of "As Per Annexure", so the user's data appears in the form
+  // directly rather than only in a separate annexure block.
   const cl21a = dig(cl21, "cl_21a");
   const lineRows21a = [66, 67, 68, 69, 70, 71, 72, 73, 74] as const;
+  const fmtAmt = (a: unknown): string => {
+    if (a === undefined || a === null || a === "") return "";
+    const n = Number(a);
+    if (isNaN(n)) return String(a);
+    // Indian-format thousands separator
+    return `₹${n.toLocaleString("en-IN")}`;
+  };
   for (let idx = 1; idx <= lineRows21a.length; idx++) {
     const sub = dig(cl21a, `cl_21a_${idx}`);
     const r = rows(sub);
-    const disp = r.length > 0 ? "As Per Annexure" : naSummary(sub);
+    let disp = "";
+    if (r.length > 0) {
+      disp = r
+        .map((row) => {
+          const p = String(row.particulars || row.nature || row.description || "").trim();
+          const a = fmtAmt(row.amount);
+          return [p, a].filter(Boolean).join(" – ");
+        })
+        .filter(Boolean)
+        .join("; ");
+      if (!disp) disp = "As Per Annexure";
+    } else {
+      disp = naSummary(sub);
+    }
     if (disp) setV(f3, `J${lineRows21a[idx - 1]}`, disp);
   }
 
