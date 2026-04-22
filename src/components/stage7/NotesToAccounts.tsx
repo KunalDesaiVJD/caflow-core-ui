@@ -29,7 +29,7 @@ import {
   FileText, FileDown, ChevronUp, ChevronDown, Trash2, Plus, Check, X,
 } from "lucide-react";
 import { getAuditYear } from "@/utils/entityUtils";
-import { exportToPdf } from "@/lib/exportUtils";
+import ExcelJS from "exceljs";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -625,11 +625,142 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const assesseePlace    = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
   const selectedCount    = notes.filter((n) => n.selected).length;
 
-  const handleExportPdf = async () => {
-    if (!contentRef.current) return;
+  const handleExportExcel = async () => {
     const fySlug   = (engagement?.financial_year ?? "FY").replace("/", "-");
     const nameSlug = displayEntityName.replace(/\s+/g, "_").slice(0, 30);
-    await exportToPdf(contentRef.current, `Notes_${nameSlug}_${fySlug}.pdf`);
+
+    // Resolve inline tokens in each note's text with the live header overrides
+    // so the exported workbook mirrors what the user sees on screen.
+    const resolveTokens = (text: string): string => {
+      return (text || "")
+        .replace(/\[CASH_AMOUNT\]/g,   header.cashAmount   || "")
+        .replace(/\[CLOSING_STOCK\]/g, header.closingStock || "")
+        .replace(/\[FA_NOTE\]/g,       header.faNoteNum    || "")
+        .replace(/\[DEP_NOTE\]/g,      header.depNoteNum   || "")
+        .replace(/\[LAST_NOTE\]/g,     header.lastNoteOverride || String(lastNote));
+    };
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "CAFlow";
+    wb.created = new Date();
+
+    const ws = wb.addWorksheet("Notes to Accounts", {
+      views: [{ showGridLines: false }],
+    });
+    ws.columns = [
+      { width: 2 },    // A spacer
+      { width: 10 },   // B  "Note N"
+      { width: 32 },   // C  title
+      { width: 80 },   // D  body text
+    ];
+
+    let r = 2;
+    ws.getCell(`B${r}`).value = header.entityNameOverride || displayEntityName;
+    ws.getCell(`B${r}`).font = { bold: true, size: 13 };
+    ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center" };
+    r++;
+    ws.getCell(`B${r}`).value =
+      `Notes forming part of the Financial Statements for the year ended 31st March, ${auditYear}`;
+    ws.getCell(`B${r}`).font = { bold: true, size: 11 };
+    ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center" };
+    r++;
+    ws.getCell(`B${r}`).value = "Note: Summary of Significant Accounting Policies";
+    ws.getCell(`B${r}`).font = { italic: true, size: 10 };
+    ws.mergeCells(`B${r}:D${r}`);
+    r += 2;
+
+    // Column header row
+    ws.getCell(`B${r}`).value = "Note";
+    ws.getCell(`C${r}`).value = "Title";
+    ws.getCell(`D${r}`).value = "Particulars";
+    for (const a of ["B", "C", "D"]) {
+      ws.getCell(`${a}${r}`).font = { bold: true };
+      ws.getCell(`${a}${r}`).alignment = { horizontal: "center", vertical: "middle" };
+      ws.getCell(`${a}${r}`).border = {
+        top:    { style: "thin" }, bottom: { style: "thin" },
+        left:   { style: "thin" }, right:  { style: "thin" },
+      };
+    }
+    r++;
+
+    const selectedNotes = notes.filter(n => n.selected);
+    selectedNotes.forEach((note, idx) => {
+      const num = idx + 1;
+      let body = resolveTokens(note.text);
+
+      // Note 1 optional "new entity" paragraph
+      if (note.id === "note-1" && note1NewEntity && note1NewEntityText) {
+        body += "\n\n" + resolveTokens(note1NewEntityText);
+      }
+      // Note 3 optional business-type paragraph
+      if (note.id === "note-3" && note3Variant !== "none" && header.note3VariantText) {
+        body += "\n\n" + resolveTokens(header.note3VariantText);
+      }
+
+      ws.getCell(`B${r}`).value = `Note ${num}`;
+      ws.getCell(`B${r}`).font = { bold: true };
+      ws.getCell(`B${r}`).alignment = { vertical: "top", horizontal: "center" };
+      ws.getCell(`C${r}`).value = note.title;
+      ws.getCell(`C${r}`).font = { bold: true };
+      ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
+      ws.getCell(`D${r}`).value = body;
+      ws.getCell(`D${r}`).alignment = { vertical: "top", wrapText: true };
+      for (const a of ["B", "C", "D"]) {
+        ws.getCell(`${a}${r}`).border = {
+          top:    { style: "thin" }, bottom: { style: "thin" },
+          left:   { style: "thin" }, right:  { style: "thin" },
+        };
+      }
+      // Auto-ish row height — Excel wraps on 80-char col D, so estimate lines
+      const lines = Math.max(
+        1,
+        Math.ceil(body.length / 90) + (body.match(/\n/g)?.length ?? 0),
+      );
+      ws.getRow(r).height = Math.max(18, lines * 15);
+      r++;
+    });
+
+    r += 2;
+    // Signature block
+    ws.getCell(`B${r}`).value = "For,";
+    ws.getCell(`C${r}`).value = firmName;
+    ws.getCell(`C${r}`).font = { bold: true };
+    r++;
+    ws.getCell(`B${r}`).value = "Chartered Accountants";
+    ws.getCell(`B${r}`).font = { italic: true };
+    r++;
+    ws.getCell(`B${r}`).value = "FRN:";
+    ws.getCell(`C${r}`).value = firmFRN;
+    r += 2;
+    ws.getCell(`B${r}`).value = sig.partnerNameOverride || partnerDetails?.name || "[Partner Name]";
+    ws.getCell(`B${r}`).font = { bold: true };
+    r++;
+    ws.getCell(`B${r}`).value = "Partner";
+    r++;
+    ws.getCell(`B${r}`).value = "Membership No.";
+    ws.getCell(`C${r}`).value = partnerMembership;
+    r++;
+    ws.getCell(`B${r}`).value = "Place:";
+    ws.getCell(`C${r}`).value = firmCity;
+    r++;
+    ws.getCell(`B${r}`).value = "Date:";
+    ws.getCell(`C${r}`).value = sig.sigDate || "";
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Notes_${nameSlug}_${fySlug}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success("Notes to Accounts exported to Excel");
   };
 
   // ── Per-note main content (special rendering by id, generic otherwise) ──
@@ -855,8 +986,8 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
             <Plus className="w-4 h-4" /> Add Note
           </Button>
           <Separator orientation="vertical" className="h-8" />
-          <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
-            <FileDown className="w-4 h-4" /> Export PDF
+          <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1">
+            <FileDown className="w-4 h-4" /> Export Excel
           </Button>
           <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1">
             <Printer className="w-4 h-4" /> Print

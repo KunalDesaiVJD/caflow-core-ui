@@ -436,6 +436,22 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && !!engagement?.financial_year && isNonCorporate,
   });
 
+  // ─── Fetch NCE Stage-7 "Notes to Accounts" (Balance Confirmation, etc.) ──
+  // The Note 1 sheet in the Excel export must reflect what the user has
+  // typed / toggled / reordered in the Note 1 tab of Stage 7, not a hardcoded
+  // boilerplate list of accounting policies.
+  const { data: notesToAccountsData } = useQuery({
+    queryKey: ["notes-to-accounts-data", engagementId],
+    queryFn: async () => {
+      const { data } = await (supabase.from as any)("notes_to_accounts_data")
+        .select("*")
+        .eq("engagement_id", engagementId)
+        .maybeSingle();
+      return data as any;
+    },
+    enabled: !!engagementId && isNonCorporate,
+  });
+
   // ─── TB accounts ───
   // Includes opening_balance (signed; Cr → negative) so Stage 7 can derive PY
   // from the same coa_mapping as Stage 6. Opening = PY closing for BS items.
@@ -1366,31 +1382,119 @@ export default function PipelineFinancialStatements({
     // ══════════════════════════════════════════════════════════════════════
 
     if (isNonCorporate) {
-      // ─────────────────────── NOTE 1: Accounting Policies ───────────────────
+      // ─────────────────────── NOTE 1: Notes to Accounts ─────────────────────
+      // Source: user-edited rows in `notes_to_accounts_data` (Stage 7 →
+      // "Note 1" tab). Each selected note becomes a numbered paragraph, with
+      // inline tokens (cash amount, closing stock, FA note refs, last note)
+      // substituted from the same header_overrides the user filled in on-screen.
       const n1 = wb.addWorksheet("Note 1", { views: [{ showGridLines: false }] });
       n1.columns = [
-        { width: 2 },   // A spacer
-        { width: 6 },   // B point number
-        { width: 86 },  // C content (wide for wrapped text)
+        { width: 2 },    // A spacer
+        { width: 10 },   // B  "Note N"
+        { width: 32 },   // C  Title
+        { width: 70 },   // D  Body
       ];
       let n1r = 2;
-      n1.getCell(`B${n1r}`).value = clientName;
+      const n1EntityName = notesToAccountsData?.header_overrides?.entityNameOverride
+        || clientName;
+      n1.getCell(`B${n1r}`).value = n1EntityName;
       n1.getCell(`B${n1r}`).font = { bold: true, size: 13 };
-      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1.mergeCells(`B${n1r}:D${n1r}`);
       n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
       n1r++;
-      n1.getCell(`B${n1r}`).value = "Note 1 — Summary of Significant Accounting Policies";
+      n1.getCell(`B${n1r}`).value =
+        `Notes forming part of the Financial Statements for the year ended 31st March, ${cyYear}`;
       n1.getCell(`B${n1r}`).font = { bold: true, size: 11 };
-      n1.mergeCells(`B${n1r}:C${n1r}`);
+      n1.mergeCells(`B${n1r}:D${n1r}`);
       n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
       n1r++;
-      n1.getCell(`B${n1r}`).value = `For the year ended 31 March, ${cyYear}`;
-      n1.getCell(`B${n1r}`).font = { italic: true, size: 9 };
-      n1.mergeCells(`B${n1r}:C${n1r}`);
-      n1.getCell(`B${n1r}`).alignment = { horizontal: "right" };
+      n1.getCell(`B${n1r}`).value = "Note: Summary of Significant Accounting Policies";
+      n1.getCell(`B${n1r}`).font = { italic: true, size: 10 };
+      n1.mergeCells(`B${n1r}:D${n1r}`);
+      n1.getCell(`B${n1r}`).alignment = { horizontal: "center" };
       n1r += 2;
 
-      const policies: { num: string; text: string }[] = [
+      // Table header
+      n1.getCell(`B${n1r}`).value = "Note";
+      n1.getCell(`C${n1r}`).value = "Title";
+      n1.getCell(`D${n1r}`).value = "Particulars";
+      for (const a of ["B","C","D"]) {
+        n1.getCell(`${a}${n1r}`).font = { bold: true };
+        n1.getCell(`${a}${n1r}`).alignment = { horizontal: "center", vertical: "middle" };
+        n1.getCell(`${a}${n1r}`).border = fullBorder;
+      }
+      n1r++;
+
+      // Resolve saved notes (or fall back to the built-in template so the
+      // sheet is never empty on a fresh engagement where the user hasn't
+      // visited Stage 7 yet).
+      const stage7Notes: any[] = Array.isArray(notesToAccountsData?.notes_json)
+        ? notesToAccountsData.notes_json
+        : [];
+      const header = (notesToAccountsData?.header_overrides || {}) as any;
+      const note1NewEntityEnabled = !!notesToAccountsData?.note1_new_entity_enabled;
+      const note1NewEntityText    = notesToAccountsData?.note1_new_entity_text || "";
+      const note3Variant          = notesToAccountsData?.note3_variant || "none";
+
+      const resolveTokens = (text: string, lastNote: number): string =>
+        (text || "")
+          .replace(/\[CASH_AMOUNT\]/g,   String(header.cashAmount   || ""))
+          .replace(/\[CLOSING_STOCK\]/g, String(header.closingStock || ""))
+          .replace(/\[FA_NOTE\]/g,       String(header.faNoteNum    || ""))
+          .replace(/\[DEP_NOTE\]/g,      String(header.depNoteNum   || ""))
+          .replace(/\[LAST_NOTE\]/g,     String(header.lastNoteOverride || lastNote));
+
+      const selectedNotes = stage7Notes.filter((n: any) => n.selected !== false);
+
+      if (selectedNotes.length > 0) {
+        selectedNotes.forEach((note: any, idx: number) => {
+          const num = idx + 1;
+          let body = resolveTokens(note.text || "", selectedNotes.length);
+          if (note.id === "note-1" && note1NewEntityEnabled && note1NewEntityText) {
+            body += "\n\n" + resolveTokens(note1NewEntityText, selectedNotes.length);
+          }
+          if (note.id === "note-3" && note3Variant !== "none" && header.note3VariantText) {
+            body += "\n\n" + resolveTokens(header.note3VariantText, selectedNotes.length);
+          }
+          n1.getCell(`B${n1r}`).value = `Note ${num}`;
+          n1.getCell(`B${n1r}`).font = { bold: true };
+          n1.getCell(`B${n1r}`).alignment = { vertical: "top", horizontal: "center" };
+          n1.getCell(`C${n1r}`).value = note.title || "";
+          n1.getCell(`C${n1r}`).font = { bold: true };
+          n1.getCell(`C${n1r}`).alignment = { vertical: "top", wrapText: true };
+          n1.getCell(`D${n1r}`).value = body;
+          n1.getCell(`D${n1r}`).alignment = { vertical: "top", wrapText: true };
+          for (const a of ["B","C","D"]) n1.getCell(`${a}${n1r}`).border = fullBorder;
+          const lines = Math.max(1,
+            Math.ceil((body.length || 0) / 80) + (body.match(/\n/g)?.length ?? 0),
+          );
+          n1.getRow(n1r).height = Math.max(18, lines * 15);
+          n1r++;
+        });
+
+        // Signature block after the notes
+        n1r += 2;
+        n1.getCell(`B${n1r}`).value = "For,";
+        n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
+        n1.getCell(`C${n1r}`).font = { bold: true };
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Chartered Accountants";
+        n1.getCell(`B${n1r}`).font = { italic: true };
+        n1.mergeCells(`B${n1r}:C${n1r}`);
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "FRN:";
+        n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
+        n1r += 3;
+        n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
+        n1.getCell(`B${n1r}`).font = { bold: true };
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Partner";
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Membership No.";
+        n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+      } else {
+        // Fallback: hardcoded accounting policies when no Stage-7 notes exist.
+        const policies: { num: string; text: string }[] = [
         { num: "1.", text: "Basis of Preparation\nThe financial statements have been prepared under the historical cost convention on an accrual basis in accordance with generally accepted accounting principles applicable to Non-Corporate Entities in India." },
         { num: "2.", text: "Revenue Recognition\nRevenue from operations is recognised when it is earned and no significant uncertainty exists as to its ultimate realisation or collection. Interest income is recognised on a time proportionate basis taking into account the principal outstanding and the applicable rate." },
         { num: "3.", text: "Property, Plant & Equipment\nFixed assets are stated at cost less accumulated depreciation. Cost comprises the purchase price and any attributable costs of bringing the asset to its working condition for its intended use. Subsequent costs are included in the asset's carrying amount only when it is probable that future economic benefits associated with the item will flow to the entity." },
@@ -1405,35 +1509,36 @@ export default function PipelineFinancialStatements({
         { num: "12.", text: "Use of Estimates\nThe preparation of financial statements requires the management to make estimates and assumptions that affect the reported balances of assets and liabilities, disclosures relating to contingent liabilities as at the date of the financial statements and the reported amounts of income and expenses during the year. Management believes that the estimates used in the preparation of financial statements are prudent and reasonable." },
       ];
 
-      for (const p of policies) {
-        n1.getCell(`B${n1r}`).value = p.num;
-        n1.getCell(`B${n1r}`).font = { bold: true };
-        n1.getCell(`B${n1r}`).alignment = { vertical: "top" };
-        n1.getCell(`C${n1r}`).value = p.text;
-        n1.getCell(`C${n1r}`).alignment = { wrapText: true, vertical: "top" };
-        n1r += 2;
-      }
+        for (const p of policies) {
+          n1.getCell(`B${n1r}`).value = p.num;
+          n1.getCell(`B${n1r}`).font = { bold: true };
+          n1.getCell(`B${n1r}`).alignment = { vertical: "top" };
+          n1.getCell(`C${n1r}`).value = p.text;
+          n1.getCell(`C${n1r}`).alignment = { wrapText: true, vertical: "top" };
+          n1r += 2;
+        }
 
-      // Signature block
-      n1r += 1;
-      n1.getCell(`B${n1r}`).value = "For,";
-      n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
-      n1.getCell(`C${n1r}`).font = { bold: true };
-      n1r++;
-      n1.getCell(`B${n1r}`).value = "Chartered Accountants";
-      n1.getCell(`B${n1r}`).font = { italic: true };
-      n1.mergeCells(`B${n1r}:C${n1r}`);
-      n1r++;
-      n1.getCell(`B${n1r}`).value = "FRN:";
-      n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
-      n1r += 3;
-      n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
-      n1.getCell(`B${n1r}`).font = { bold: true };
-      n1r++;
-      n1.getCell(`B${n1r}`).value = "Partner";
-      n1r++;
-      n1.getCell(`B${n1r}`).value = "Membership No.";
-      n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+        // Signature block
+        n1r += 1;
+        n1.getCell(`B${n1r}`).value = "For,";
+        n1.getCell(`C${n1r}`).value = sigFirmName || "[CA FIRM NAME]";
+        n1.getCell(`C${n1r}`).font = { bold: true };
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Chartered Accountants";
+        n1.getCell(`B${n1r}`).font = { italic: true };
+        n1.mergeCells(`B${n1r}:C${n1r}`);
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "FRN:";
+        n1.getCell(`C${n1r}`).value = sigFirmFRN || "[FRN]";
+        n1r += 3;
+        n1.getCell(`B${n1r}`).value = sigPartnerName || "[Partner Name]";
+        n1.getCell(`B${n1r}`).font = { bold: true };
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Partner";
+        n1r++;
+        n1.getCell(`B${n1r}`).value = "Membership No.";
+        n1.getCell(`C${n1r}`).value = sigMembershipNo || "";
+      }
 
       // ─────────────────── NOTES TO ACCOUNTS — CAPITAL ───────────────────────
       const nc = wb.addWorksheet("Notes to Accounts-Capital", { views: [{ showGridLines: false }] });
