@@ -557,9 +557,20 @@ export function buildClauseValues(
     writeSrNos(ax, ANX_27B_START, Math.min(rows27b.length, 3));
     rows27b.slice(0, 3).forEach((r, i) => writeRow(ax, ANX_27B_START + i, r, colMap27b));
   }
-  // J171: ITC summary; J172: prior-period summary
-  setV(f3, "J171", (cl27a.opening_balance || cl27a.credit_availed) ? "As Per Annexure" : "Not Applicable");
-  setV(f3, "J172", rows27b.length > 0 ? "As Per Annexure" : "Not Applicable");
+  // J171: ITC summary — honor the Yes/No radio first, then check ITC balance fields.
+  // J172: prior-period summary — show row data summary or naSummary fallback.
+  const cl27aHasBal = cl27a.opening_balance || cl27a.credit_availed;
+  const cl27aValRaw = extractValue(cl27a);
+  if (cl27aValRaw === true || cl27aValRaw === "yes") {
+    setV(f3, "J171", cl27aHasBal ? "Yes – As Per Annexure" : "Yes");
+  } else if (cl27aValRaw === false || cl27aValRaw === "no") {
+    setV(f3, "J171", "No");
+  } else if (cl27aHasBal) {
+    setV(f3, "J171", "As Per Annexure");
+  } else {
+    setV(f3, "J171", naSummary(cl27a) || "Not Applicable");
+  }
+  setV(f3, "J172", rows27b.length > 0 ? "As Per Annexure" : (naSummary(cl27b) || "Not Applicable"));
 
   // ── Clause 30 — Hundi ────────────────────────────────────────────────────
   // clauseNos '30','30A' share DB col 'cl_30' (nested under "30" / "30A")
