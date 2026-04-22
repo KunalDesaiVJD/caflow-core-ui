@@ -469,6 +469,10 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
 
   // ── Load saved data ──
   const loadData = useCallback(async () => {
+    // Skip the query when no engagement is selected (e.g. user opened Stage 7
+    // via the sidebar without picking an engagement first). Otherwise Supabase
+    // throws "invalid input syntax for type uuid: \"\"".
+    if (!engagementId) { setLoading(false); return; }
     setLoading(true);
     const { data, error } = await (supabase as any)
       .from("notes_to_accounts_data")

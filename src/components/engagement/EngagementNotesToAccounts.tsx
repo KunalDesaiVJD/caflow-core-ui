@@ -352,6 +352,21 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
     </div>
   ); // end noteEditorBody
 
+  // ── Empty-state guard ─────────────────────────────────────────────────────
+  // If no engagement is selected (e.g. user opened Stage 7 via the sidebar
+  // before picking one), every child query below would fire with
+  // engagement_id="" and Postgres rejects it as an invalid UUID. Show a
+  // placeholder instead of mounting the tab tree.
+  if (!engagementId) {
+    return (
+      <div className="flex items-center justify-center py-20 border rounded-lg bg-muted/30">
+        <p className="text-sm text-muted-foreground">
+          Select an engagement from Engagement Setup to begin Notes to Accounts.
+        </p>
+      </div>
+    );
+  }
+
   // ── NCE: wrap in 6-tab structure ──────────────────────────────────────────
   if (isNonCorporate) {
     return (
