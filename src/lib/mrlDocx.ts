@@ -244,17 +244,19 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     const lines = clauseText.split("\n").filter((l) => l.trim() !== "");
     if (lines.length === 0) { clauseNum++; continue; }
 
-    // First line: "N.  [text]" — number bold, rest normal
+    // First line: "N.  [text]" — number bold, rest normal.
+    // spaceAfter 120 twips = 6pt matches the template's tiny blank-line gap between clauses.
+    // No spaceBefore so consecutive clauses don't double-space (matches template MsoNormal margin:0).
     paras.push(wPara(
       [{ text: `${clauseNum}.  `, bold: true }, { text: lines[0] }],
-      { spaceBefore: 80, spaceAfter: lines.length > 1 ? 20 : 80 }
+      { spaceAfter: lines.length > 1 ? 20 : 120 }
     ));
 
-    // Remaining lines (sub-clauses) — indented
+    // Remaining lines (sub-clauses like (a),(b),(c)) — indented
     for (let i = 1; i < lines.length; i++) {
       paras.push(wPara(
         [{ text: lines[i] }],
-        { leftIndentTwips: 360, spaceAfter: i === lines.length - 1 ? 80 : 20 }
+        { leftIndentTwips: 360, spaceAfter: i === lines.length - 1 ? 120 : 20 }
       ));
     }
 
@@ -288,10 +290,7 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     const din2 = director2Din ? `(DIN- ${director2Din})` : "";
     paras.push(sigRow(din1, din2, { bold: true }));
   }
-  if (sigPlace || sigDate) {
-    paras.push(blank());
-    paras.push(wPara([{ text: `Place: ${sigPlace || ""}     Date: ${fmtDate(sigDate)}` }], { leftAlign: true }));
-  }
+  // Place/Date intentionally omitted — not present in MRL template
 
   // ── Build document.xml ────────────────────────────────────────────────────
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
