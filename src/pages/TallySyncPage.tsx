@@ -416,12 +416,21 @@ export default function TallySyncPage() {
         }
       }
       if (closing_balance <= 0 && r.opening_balance <= 0) continue;
+      // Prefer the DB-persisted turnover (written by sync-step.js from the FULL
+      // voucher set with a reconciliation guard). Fall back to UI-side
+      // voucher aggregation only if the DB column is empty — that fallback
+      // under-reports on large companies because `vouchers` is capped at
+      // 5000 rows.
+      const dbDebit  = r.debit_amount  ?? 0;
+      const dbCredit = r.credit_amount ?? 0;
+      const debit_amount  = dbDebit  > 0 || dbCredit > 0 ? dbDebit  : (computed?.debit  ?? 0);
+      const credit_amount = dbDebit  > 0 || dbCredit > 0 ? dbCredit : (computed?.credit ?? 0);
       tbSeen.set(r.ledger_name, {
         ...r,
         closing_balance,
         balance_type,
-        debit_amount: computed?.debit ?? r.debit_amount ?? 0,
-        credit_amount: computed?.credit ?? r.credit_amount ?? 0,
+        debit_amount,
+        credit_amount,
       });
     }
     setTbRows(Array.from(tbSeen.values()));
