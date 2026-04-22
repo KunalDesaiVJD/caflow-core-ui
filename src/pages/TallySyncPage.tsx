@@ -557,17 +557,20 @@ export default function TallySyncPage() {
     return m;
   }, [vouchers]);
 
-  // Return effective debit/credit for a TB row. The sync agent's
-  // tally_trial_balance.debit_amount/credit_amount comes from a separate TDL
-  // pull that only sees a subset of voucher types, so it under-reports turnover
-  // (e.g. Krishna Buildspace: TB says Cr 6,558 while voucher-derived is
-  // Dr 60,903 / Cr 52,929). Voucher-aggregated turnover is the accurate
-  // figure — prefer it, and only fall back to the DB column when there are
-  // no vouchers at all for the ledger.
+  // Return effective debit/credit for a TB row. tally_trial_balance.debit_amount
+  // /credit_amount is now populated by sync-step.js from the FULL voucher set
+  // (with a reconciliation guard ensuring Dr=Cr to within ₹500), so it is the
+  // authoritative per-ledger turnover. The UI-side vouchers state is capped at
+  // 5000 rows, which under-reports turnover on companies with larger voucher
+  // books, so we only fall back to voucher-derived numbers when the DB column
+  // is missing/zero.
   const getTurnover = useCallback((r: TallyTB): { debit: number; credit: number } => {
+    const dbDebit  = r.debit_amount  ?? 0;
+    const dbCredit = r.credit_amount ?? 0;
+    if (dbDebit > 0 || dbCredit > 0) return { debit: dbDebit, credit: dbCredit };
     const t = ledgerTurnover.get(decodeHtml(r.ledger_name).trim().toLowerCase());
     if (t && (t.debit > 0 || t.credit > 0)) return t;
-    return { debit: r.debit_amount ?? 0, credit: r.credit_amount ?? 0 };
+    return { debit: 0, credit: 0 };
   }, [ledgerTurnover]);
 
   // TB totals (for footer, now using effective turnover)
