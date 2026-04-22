@@ -182,6 +182,7 @@ const ItReturns = () => {
   const [filterPreparedBy, setFilterPreparedBy] = useState("");
   const [filterCheckedBy, setFilterCheckedBy] = useState("");
   const [filterResponsiblePerson, setFilterResponsiblePerson] = useState("");
+  const [filterFiled, setFilterFiled] = useState<"" | "filed" | "not_filed">("");
 
   // ─── Responsible Persons (distinct across clients in firm) ───
   const { data: responsiblePersons = [] } = useQuery({
@@ -475,15 +476,39 @@ const ItReturns = () => {
       if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
       if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
       if (filterResponsiblePerson && p.client_responsible_person_id !== filterResponsiblePerson) return false;
+      if (filterFiled === "filed" && (p.filing_status || "") !== "Filed") return false;
+      if (filterFiled === "not_filed" && (p.filing_status || "") === "Filed") return false;
       return true;
     });
-  }, [profiles, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterResponsiblePerson]);
+  }, [profiles, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterResponsiblePerson, filterFiled]);
 
   // ─── Status counts ───
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     FILING_STATUSES.forEach(s => { counts[s] = 0; });
     profiles.forEach(p => { const s = p.filing_status || "Data Pending"; counts[s] = (counts[s] || 0) + 1; });
+    return counts;
+  }, [profiles]);
+
+  // ─── Filed / Not Filed counts ───
+  const filedCounts = useMemo(() => {
+    let filed = 0, notFiled = 0;
+    profiles.forEach(p => {
+      if ((p.filing_status || "") === "Filed") filed++;
+      else notFiled++;
+    });
+    return { filed, notFiled };
+  }, [profiles]);
+
+  // ─── Group-wise counts (by work_group / group_name) ───
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, { total: number; filed: number }> = {};
+    profiles.forEach(p => {
+      const g = (p.group_name || p.work_group_name || "").trim() || "Ungrouped";
+      if (!counts[g]) counts[g] = { total: 0, filed: 0 };
+      counts[g].total++;
+      if ((p.filing_status || "") === "Filed") counts[g].filed++;
+    });
     return counts;
   }, [profiles]);
 
@@ -553,6 +578,28 @@ const ItReturns = () => {
           <p className="text-muted-foreground text-sm">Income tax return filing, tracking & compliance</p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Badge
+              className={cn(
+                "cursor-pointer text-xs px-3 py-1 bg-teal-500/15 text-teal-700 hover:bg-teal-500/25",
+                filterFiled === "filed" && "ring-2 ring-primary"
+              )}
+              onClick={() => setFilterFiled(filterFiled === "filed" ? "" : "filed")}
+              title="Click to filter by Filed"
+            >
+              Filed: {filedCounts.filed}
+            </Badge>
+            <Badge
+              className={cn(
+                "cursor-pointer text-xs px-3 py-1 bg-amber-500/15 text-amber-700 hover:bg-amber-500/25",
+                filterFiled === "not_filed" && "ring-2 ring-primary"
+              )}
+              onClick={() => setFilterFiled(filterFiled === "not_filed" ? "" : "not_filed")}
+              title="Click to filter by Not Filed"
+            >
+              Not Filed: {filedCounts.notFiled}
+            </Badge>
+          </div>
           <Select value={selectedAY} onValueChange={setSelectedAY}>
             <SelectTrigger className="w-[140px]">
               <SelectValue />
@@ -602,6 +649,9 @@ const ItReturns = () => {
             setFilterCheckedBy={setFilterCheckedBy}
             filterResponsiblePerson={filterResponsiblePerson}
             setFilterResponsiblePerson={setFilterResponsiblePerson}
+            filterFiled={filterFiled}
+            setFilterFiled={setFilterFiled}
+            groupCounts={groupCounts}
             responsiblePersons={responsiblePersons}
             isLoading={isLoading}
             onInlineUpdate={handleInlineUpdate}
@@ -634,6 +684,8 @@ function FilingTab({
   filterPreparedBy, setFilterPreparedBy,
   filterCheckedBy, setFilterCheckedBy,
   filterResponsiblePerson, setFilterResponsiblePerson,
+  filterFiled, setFilterFiled,
+  groupCounts,
   responsiblePersons,
   isLoading, onInlineUpdate, onExport, navigate, selectedAY,
   firmId, user,
@@ -780,8 +832,39 @@ function FilingTab({
             ))}
           </SelectContent>
         </Select>
-        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterResponsiblePerson) && (
-          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterResponsiblePerson(""); }}>
+        <Select
+          value={filterWorkGroup || "__all__"}
+          onValueChange={v => setFilterWorkGroup(v === "__all__" ? "" : v)}
+        >
+          <SelectTrigger className="w-[180px] h-9">
+            <SelectValue placeholder="Work Group" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Groups</SelectItem>
+            {Object.entries(groupCounts || {})
+              .sort((a, b) => a[0].localeCompare(b[0]))
+              .map(([g, c]: any) => (
+                <SelectItem key={g} value={g}>
+                  {g} — Filed {c.filed}/{c.total}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={filterFiled || "__all__"}
+          onValueChange={v => setFilterFiled(v === "__all__" ? "" : v as any)}
+        >
+          <SelectTrigger className="w-[140px] h-9">
+            <SelectValue placeholder="Filing" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Filings</SelectItem>
+            <SelectItem value="filed">Filed</SelectItem>
+            <SelectItem value="not_filed">Not Filed</SelectItem>
+          </SelectContent>
+        </Select>
+        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterResponsiblePerson || filterFiled) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterResponsiblePerson(""); setFilterFiled(""); }}>
             <X size={14} className="mr-1" /> Clear Filters
           </Button>
         )}
