@@ -384,6 +384,22 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && isNonCorporate,
   });
 
+  // ─── Fetch NCE letters (Client Certificate + Management Letter) ─────────
+  // Stage 8 tabs 5 & 6 save to `nce_letters` (letter_type discriminator).
+  // Pulled here so the Excel export can emit each letter as its own sheet.
+  const { data: nceLettersData } = useQuery({
+    queryKey: ["nce-letters", engagementId, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.financial_year) return [] as any[];
+      const { data } = await (supabase.from as any)("nce_letters")
+        .select("letter_type, letter_date, cash_on_hand, closing_stock, closing_stock_date")
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", engagement.financial_year);
+      return (data || []) as any[];
+    },
+    enabled: !!engagementId && !!engagement?.financial_year && isNonCorporate,
+  });
+
   // ─── Fetch NCE Detailed Notes data (user-entered in Stage 8) ─────────────
   // Source of truth for every "Notes to Accounts" schedule except Capital
   // and PPE. The Excel exporter MUST use this — NOT a keyword heuristic over
@@ -1770,6 +1786,172 @@ export default function PipelineFinancialStatements({
         np.getCell(`B${npr}`).value = "(No PPE data entered — please complete Stage 8)";
         np.getCell(`B${npr}`).font = { italic: true, color: { argb: "FF888888" } };
         np.mergeCells(`B${npr}:J${npr}`);
+      }
+
+      // ──────────────── CLIENT CERTIFICATE & MANAGEMENT LETTER ─────────────
+      // Both tabs in Stage 8 persist to `nce_letters` (letter_type column).
+      // Render each as its own worksheet, laid out like printed letter paper.
+      const lettersByType: Record<string, any> = {};
+      for (const row of (nceLettersData || []) as any[]) {
+        if (row?.letter_type) lettersByType[row.letter_type] = row;
+      }
+
+      // Client address: `clients.address` is plain text in the schema.
+      const clientAddress = String((engagement as any)?.clients?.address || "").trim();
+      // Firm address: `firms.address` is JSON — reuse the same flattening
+      // rule as the Stage 8 components for parity with the on-screen letter.
+      const flattenFirmAddr = (addr: unknown): string => {
+        if (!addr) return "";
+        if (typeof addr === "string") return addr;
+        const a = addr as Record<string, unknown>;
+        return [a.line1, a.line2, a.street, a.city || a.district, a.state, a.pincode]
+          .filter(Boolean).join(", ");
+      };
+      const firmAddress = flattenFirmAddr((firmData as any)?.address);
+      const firmFRN     = sigFirmFRN;
+      const firmName    = sigFirmName;
+      const letterClientName = sigClientName || clientName;
+
+      // Format ISO date "YYYY-MM-DD" → "DD/MM/YYYY"; blank if absent
+      const fmtLetterDate = (iso?: string | null): string => {
+        if (!iso) return "";
+        const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso);
+      };
+
+      // "2025-26" → "31st March, 2026"  (matches NCEManagementLetter helper)
+      const fyEndDate = (fy: string): string => {
+        const part = (fy || "").split("-")[1];
+        if (!part) return "";
+        const yr = parseInt(part) + 2000;
+        return `31st March, ${yr}`;
+      };
+
+      // Shared letter-sheet scaffold — writes sender / recipient / date block
+      // and returns a cursor + helpers for the body paragraphs.
+      const buildLetterSheet = (sheetName: string) => {
+        const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] });
+        ws.columns = [
+          { width: 3  },  // A spacer
+          { width: 6  },  // B list number
+          { width: 92 },  // C body
+        ];
+        let r = 2;
+
+        // Sender — entity name + address
+        ws.getCell(`B${r}`).value = letterClientName || "[Entity Name]";
+        ws.getCell(`B${r}`).font = { bold: true, size: 12 };
+        ws.mergeCells(`B${r}:C${r}`);
+        r++;
+        if (clientAddress) {
+          ws.getCell(`B${r}`).value = clientAddress;
+          ws.getCell(`B${r}`).alignment = { wrapText: true };
+          ws.mergeCells(`B${r}:C${r}`);
+          r++;
+        }
+        // Date
+        ws.getCell(`B${r}`).value =
+          `Date : ${fmtLetterDate(lettersByType[sheetName === "Client Certificate" ? "client_certificate" : "management_letter"]?.letter_date)}`;
+        ws.mergeCells(`B${r}:C${r}`);
+        r += 2;
+
+        // Recipient — "To," + firm name + address + FRN
+        ws.getCell(`B${r}`).value = "To,"; ws.mergeCells(`B${r}:C${r}`); r++;
+        ws.getCell(`B${r}`).value = firmName || "[Audit Firm Name]";
+        ws.getCell(`B${r}`).font = { bold: true };
+        ws.mergeCells(`B${r}:C${r}`); r++;
+        if (firmAddress) {
+          ws.getCell(`B${r}`).value = firmAddress;
+          ws.getCell(`B${r}`).alignment = { wrapText: true };
+          ws.mergeCells(`B${r}:C${r}`); r++;
+        }
+        if (firmFRN) {
+          ws.getCell(`B${r}`).value = `FRN: ${firmFRN}`;
+          ws.mergeCells(`B${r}:C${r}`); r++;
+        }
+        r++;
+
+        return {
+          ws,
+          cursor: () => r,
+          bump: (n = 1) => { r += n; },
+          // Write a full-width paragraph across B:C
+          writePara: (text: string, opts: { bold?: boolean; italic?: boolean } = {}) => {
+            ws.getCell(`B${r}`).value = text;
+            ws.mergeCells(`B${r}:C${r}`);
+            const c = ws.getCell(`B${r}`);
+            c.alignment = { wrapText: true, vertical: "top" };
+            if (opts.bold)   c.font = { ...(c.font || {}), bold: true };
+            if (opts.italic) c.font = { ...(c.font || {}), italic: true };
+            r++;
+          },
+          // Write a numbered list item: B=number, C=body
+          writeListItem: (num: number, text: string) => {
+            ws.getCell(`B${r}`).value = `${num}.`;
+            ws.getCell(`B${r}`).alignment = { vertical: "top", horizontal: "right" };
+            ws.getCell(`C${r}`).value = text;
+            ws.getCell(`C${r}`).alignment = { wrapText: true, vertical: "top" };
+            r++;
+          },
+        };
+      };
+
+      // ── Client Certificate ──────────────────────────────────────────────
+      {
+        const cert = lettersByType["client_certificate"] || {};
+        const L = buildLetterSheet("Client Certificate");
+
+        L.writePara("Dear Sir,");
+        L.bump();
+        L.writePara(
+          `In connection with the Tax Audits for the financial year ${fyStr || "[FY]"} u/s. 44AB, we herewith certify as under :`,
+        );
+        L.bump();
+
+        const cash = cert.cash_on_hand != null
+          ? Number(cert.cash_on_hand).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : "_______";
+        const stock = cert.closing_stock != null
+          ? Number(cert.closing_stock).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : "_______";
+        const stockDate = fmtLetterDate(cert.closing_stock_date) || "____________";
+
+        L.writeListItem(1, `Cash on hand Rs. ${cash} was with the firm and same was tallied with the cash book.`);
+        L.writeListItem(2, `Approxi. Value of the Closing stock is Rs. ${stock} as on ${stockDate} and same was physically verified.`);
+        L.writeListItem(3, "Method of valuation is cost or market whichever is less. Quantitive detailes are maintained.");
+        L.writeListItem(4, "Method accounting is mercantile, which is same method which was employed in immediately preceding year.");
+        L.writeListItem(5, "We certify that there is no person/s to whom payments made to persons specified in section 40A(2)(b) except as shown in Form-3CD.");
+        L.writeListItem(6, "We certify that Fixed Assets are stated at cost as stated in books of accounts.");
+        L.writeListItem(7, "I have made every payments exceeding Rs.10000 relating to any expenditure covered under section 40A(3) by an a/c. payee cheque drawn on a bank or an a/c. payee bank draft only.");
+        L.writeListItem(8, "We here with inform and certify that the loan or deposit or specified advance taken or accepted or repaid for an amount of Rs.10000/- or more, during the year or earlier year/s was taken or accepted or repaid through account payee cheque or bank draft or ECS only.");
+        L.writeListItem(9, "We have accounted the entries in the books of accounts whenever the supporting proof are not available, we have prepared vouchers and we authenticate the same that all are for the business of the firm");
+        L.bump();
+        L.writePara("You are requested to note the same.");
+        L.bump(2);
+        L.writePara("Yours faithfully,");
+        L.bump(2);
+        L.writePara("x_____________");
+        L.writePara("(Signature & stamp)");
+      }
+
+      // ── Management Letter ──────────────────────────────────────────────
+      {
+        const L = buildLetterSheet("Management Letter");
+        L.writePara(`Subject : Appointment as Tax Auditors for Financial year ${fyStr || "[FY]"}`, { bold: true });
+        L.bump();
+        L.writePara("Dear Sir,");
+        L.bump();
+        L.writePara(
+          `We are pleased to informed you that our firm has appointed you to carried out Tax Audit u/s. 44AB books of accounts of my/our business for the financial year ending on ${fyEndDate(fyStr)}.`,
+        );
+        L.bump();
+        L.writePara("You are requested to confirm the same.");
+        L.bump(2);
+        L.writePara("Thank You.");
+        L.writePara("Yours faithfully,");
+        L.bump(2);
+        L.writePara("x_____________");
+        L.writePara("(Signature & stamp)");
       }
 
     } else {
