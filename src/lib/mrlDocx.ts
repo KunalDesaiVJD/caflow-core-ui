@@ -50,6 +50,7 @@ interface ParaOpts extends RunOpts {
   centered?:        boolean;
   leftAlign?:       boolean; // explicit left (skips default justify)
   leftIndentTwips?: number;  // 720 = 0.5 inch
+  hangingTwips?:    number;  // hanging indent (first line hangs left of leftIndentTwips)
   spaceBefore?:     number;  // twips
   spaceAfter?:      number;  // twips
   keepNext?:        boolean;
@@ -97,7 +98,15 @@ function wPara(
     pPrParts.push('<w:jc w:val="both"/>');
   }
 
-  if (opts.leftIndentTwips) pPrParts.push(`<w:ind w:left="${opts.leftIndentTwips}"/>`);
+  if (opts.leftIndentTwips || opts.hangingTwips) {
+    const left    = opts.leftIndentTwips ?? 0;
+    const hanging = opts.hangingTwips    ?? 0;
+    pPrParts.push(
+      hanging
+        ? `<w:ind w:left="${left}" w:hanging="${hanging}"/>`
+        : `<w:ind w:left="${left}"/>`
+    );
+  }
   if (opts.spaceBefore !== undefined || opts.spaceAfter !== undefined) {
     pPrParts.push(
       `<w:spacing${opts.spaceBefore !== undefined ? ` w:before="${opts.spaceBefore}"` : ""}` +
@@ -138,6 +147,46 @@ function sigRow(left: string, right: string, opts: RunOpts = {}): string {
   const tabRun   = wTab();
   const rightRun = wRun(right, opts);
   return `<w:p>${tabStop}${leftRun}${tabRun}${rightRun}</w:p>`;
+}
+
+/**
+ * Numbered clause paragraph with hanging indent — matches template's
+ *   margin-left:36pt; text-indent:-18pt; tab-stops:list 36.0pt
+ *
+ * OOXML layout:
+ *   w:left="720"    → wrapped lines start at 36 pt
+ *   w:hanging="360" → first line (the number) is at 36 pt − 18 pt = 18 pt
+ *   tab stop @720   → tab after "N." jumps text to the 36 pt indent
+ */
+function clausePara(num: number, text: string, spaceAfterTwips: number): string {
+  const indLeft = 720;  // 36 pt
+  const indHang = 360;  // 18 pt
+  const pPr = `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
+    `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
+    `<w:spacing w:after="${spaceAfterTwips}" w:line="276" w:lineRule="auto"/>` +
+    `</w:pPr>`;
+  return `<w:p>${pPr}${wRun(`${num}.`, { bold: true })}${wTab()}${wRun(text)}</w:p>`;
+}
+
+/**
+ * Sub-clause paragraph (lines (a),(b),(c)…) with hanging indent — matches template's
+ *   margin-left:63pt; text-indent:-18pt
+ *
+ * OOXML layout:
+ *   w:left="1260"   → wrapped lines start at 63 pt
+ *   w:hanging="360" → first line label "(a)" is at 63 pt − 18 pt = 45 pt
+ */
+function subClausePara(text: string, spaceAfterTwips: number): string {
+  const indLeft = 1260; // 63 pt
+  const indHang = 360;  // 18 pt
+  const pPr = `<w:pPr>` +
+    `<w:jc w:val="both"/>` +
+    `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
+    `<w:spacing w:after="${spaceAfterTwips}" w:line="276" w:lineRule="auto"/>` +
+    `</w:pPr>`;
+  return `<w:p>${pPr}${wRun(text)}</w:p>`;
 }
 
 // ── Main export function ─────────────────────────────────────────────────────
@@ -244,20 +293,15 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     const lines = clauseText.split("\n").filter((l) => l.trim() !== "");
     if (lines.length === 0) { clauseNum++; continue; }
 
-    // First line: "N.  [text]" — number bold, rest normal.
-    // spaceAfter 120 twips = 6pt matches the template's tiny blank-line gap between clauses.
-    // No spaceBefore so consecutive clauses don't double-space (matches template MsoNormal margin:0).
-    paras.push(wPara(
-      [{ text: `${clauseNum}.  `, bold: true }, { text: lines[0] }],
-      { spaceAfter: lines.length > 1 ? 20 : 120 }
-    ));
+    // First line: numbered clause with hanging indent matching template's
+    // ol>li margin-left:36pt; text-indent:-18pt; tab-stops:list 36.0pt
+    // spaceAfter 140 twips ≈ 7pt blank paragraph gap used between clauses in template.
+    paras.push(clausePara(clauseNum, lines[0], lines.length > 1 ? 20 : 140));
 
-    // Remaining lines (sub-clauses like (a),(b),(c)) — indented
+    // Remaining lines (sub-clauses like (a),(b),(c)) — hanging indent matching
+    // template's margin-left:63pt; text-indent:-18pt
     for (let i = 1; i < lines.length; i++) {
-      paras.push(wPara(
-        [{ text: lines[i] }],
-        { leftIndentTwips: 360, spaceAfter: i === lines.length - 1 ? 120 : 20 }
-      ));
+      paras.push(subClausePara(lines[i], i === lines.length - 1 ? 140 : 20));
     }
 
     clauseNum++;
