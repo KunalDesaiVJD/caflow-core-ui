@@ -105,6 +105,8 @@ interface ItrProfile {
   client_mobile?: string;
   client_responsible_name?: string;
   client_responsible_person_id?: string | null;
+  client_group_id?: string | null;
+  client_group_name?: string;
 }
 
 interface StaffUser { id: string; name: string | null; role: string | null; }
@@ -183,6 +185,7 @@ const ItReturns = () => {
   const [filterCheckedBy, setFilterCheckedBy] = useState("");
   const [filterResponsiblePerson, setFilterResponsiblePerson] = useState("");
   const [filterFiled, setFilterFiled] = useState<"" | "filed" | "not_filed">("");
+  const [filterClientGroup, setFilterClientGroup] = useState("");
 
   // ─── Responsible Persons (distinct across clients in firm) ───
   const { data: responsiblePersons = [] } = useQuery({
@@ -289,6 +292,41 @@ const ItReturns = () => {
       const { data } = await q;
       return (data || []) as any[];
     },
+  });
+
+  // ─── Fetch client groups + memberships ───
+  const { data: clientGroups = [] } = useQuery({
+    queryKey: ["client_groups", firmId],
+    queryFn: async () => {
+      let q = supabase.from("client_groups").select("id, name").order("name");
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      return (data || []) as { id: string; name: string }[];
+    },
+    enabled: !!user?.id,
+  });
+
+  // client_id → { group_id, group_name } (one client can be in at most one group in practice)
+  const { data: clientGroupMap = new Map<string, { id: string; name: string }>() } = useQuery({
+    queryKey: ["client_group_memberships", firmId],
+    queryFn: async () => {
+      const { data: memberships } = await supabase
+        .from("client_group_memberships")
+        .select("client_id, group_id");
+      const { data: groups } = await supabase
+        .from("client_groups")
+        .select("id, name")
+        .order("name");
+      const groupNameMap = new Map<string, string>((groups || []).map(g => [g.id, g.name]));
+      const map = new Map<string, { id: string; name: string }>();
+      for (const m of (memberships || [])) {
+        if (m.client_id && m.group_id && groupNameMap.has(m.group_id)) {
+          map.set(m.client_id, { id: m.group_id, name: groupNameMap.get(m.group_id)! });
+        }
+      }
+      return map;
+    },
+    enabled: !!user?.id,
   });
 
   // ─── Fetch profiles with enrichment ───
@@ -472,6 +510,7 @@ const ItReturns = () => {
       if (filterStaff && p.assigned_to !== filterStaff) return false;
       if (filterConstitution && (p.entity_type || "") !== filterConstitution) return false;
       if (filterWorkGroup && (p.group_name || p.work_group_name || "") !== filterWorkGroup) return false;
+      if (filterClientGroup && clientGroupMap.get(p.client_id || "")?.id !== filterClientGroup) return false;
       if (filterUploadBy && (p as any).upload_by !== filterUploadBy) return false;
       if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
       if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
@@ -480,7 +519,7 @@ const ItReturns = () => {
       if (filterFiled === "not_filed" && (p.filing_status || "") === "Filed") return false;
       return true;
     });
-  }, [profiles, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterResponsiblePerson, filterFiled]);
+  }, [profiles, clientGroupMap, search, filterStatus, filterForm, filterStaff, filterConstitution, filterWorkGroup, filterClientGroup, filterUploadBy, filterPreparedBy, filterCheckedBy, filterResponsiblePerson, filterFiled]);
 
   // ─── Status counts ───
   const statusCounts = useMemo(() => {
@@ -500,17 +539,19 @@ const ItReturns = () => {
     return { filed, notFiled };
   }, [profiles]);
 
-  // ─── Group-wise counts (by work_group / group_name) ───
+  // ─── Client-group-wise counts ───
   const groupCounts = useMemo(() => {
-    const counts: Record<string, { total: number; filed: number }> = {};
+    const counts: Record<string, { id: string; total: number; filed: number }> = {};
     profiles.forEach(p => {
-      const g = (p.group_name || p.work_group_name || "").trim() || "Ungrouped";
-      if (!counts[g]) counts[g] = { total: 0, filed: 0 };
-      counts[g].total++;
-      if ((p.filing_status || "") === "Filed") counts[g].filed++;
+      const grp = clientGroupMap.get(p.client_id || "");
+      const gName = grp?.name || "Ungrouped";
+      const gId   = grp?.id   || "";
+      if (!counts[gName]) counts[gName] = { id: gId, total: 0, filed: 0 };
+      counts[gName].total++;
+      if ((p.filing_status || "") === "Filed") counts[gName].filed++;
     });
     return counts;
-  }, [profiles]);
+  }, [profiles, clientGroupMap]);
 
   // ─── Inline update handler ───
   const handleInlineUpdate = async (profile: ItrProfile, field: string, value: any) => {
@@ -651,6 +692,9 @@ const ItReturns = () => {
             setFilterResponsiblePerson={setFilterResponsiblePerson}
             filterFiled={filterFiled}
             setFilterFiled={setFilterFiled}
+            filterClientGroup={filterClientGroup}
+            setFilterClientGroup={setFilterClientGroup}
+            clientGroups={clientGroups}
             groupCounts={groupCounts}
             responsiblePersons={responsiblePersons}
             isLoading={isLoading}
@@ -685,6 +729,8 @@ function FilingTab({
   filterCheckedBy, setFilterCheckedBy,
   filterResponsiblePerson, setFilterResponsiblePerson,
   filterFiled, setFilterFiled,
+  filterClientGroup, setFilterClientGroup,
+  clientGroups,
   groupCounts,
   responsiblePersons,
   isLoading, onInlineUpdate, onExport, navigate, selectedAY,
@@ -833,18 +879,19 @@ function FilingTab({
           </SelectContent>
         </Select>
         <Select
-          value={filterWorkGroup || "__all__"}
-          onValueChange={v => setFilterWorkGroup(v === "__all__" ? "" : v)}
+          value={filterClientGroup || "__all__"}
+          onValueChange={v => setFilterClientGroup(v === "__all__" ? "" : v)}
         >
-          <SelectTrigger className="w-[180px] h-9">
-            <SelectValue placeholder="Work Group" />
+          <SelectTrigger className="w-[200px] h-9">
+            <SelectValue placeholder="Client Group" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All Groups</SelectItem>
+            <SelectItem value="__all__">All Client Groups</SelectItem>
             {Object.entries(groupCounts || {})
+              .filter(([g]) => g !== "Ungrouped")
               .sort((a, b) => a[0].localeCompare(b[0]))
               .map(([g, c]: any) => (
-                <SelectItem key={g} value={g}>
+                <SelectItem key={c.id} value={c.id}>
                   {g} — Filed {c.filed}/{c.total}
                 </SelectItem>
               ))}
@@ -863,8 +910,8 @@ function FilingTab({
             <SelectItem value="not_filed">Not Filed</SelectItem>
           </SelectContent>
         </Select>
-        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterResponsiblePerson || filterFiled) && (
-          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterResponsiblePerson(""); setFilterFiled(""); }}>
+        {(search || filterStatus || filterForm || filterConstitution || filterWorkGroup || filterClientGroup || filterUploadBy || filterPreparedBy || filterCheckedBy || filterResponsiblePerson || filterFiled) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setFilterStatus(""); setFilterForm(""); setFilterConstitution(""); setFilterWorkGroup(""); setFilterClientGroup(""); setFilterUploadBy(""); setFilterPreparedBy(""); setFilterCheckedBy(""); setFilterResponsiblePerson(""); setFilterFiled(""); }}>
             <X size={14} className="mr-1" /> Clear Filters
           </Button>
         )}
