@@ -94,7 +94,7 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         .then(({ data }) => setHasTB((data?.length || 0) > 0));
     }
 
-    const saved = engagement.notes_to_accounts as Record<string, any> | null;
+    const saved = engagement?.notes_to_accounts as Record<string, any> | null;
     // Fix (Issue 4): filter out corporate-only notes for non-corporate entities
     const visibleNotes = STANDARD_NOTES.filter(n => isCorporate || !n.corporateOnly);
     const initial: NoteData[] = visibleNotes.map(n => {
@@ -108,7 +108,7 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
       };
     });
     setNotes(initial);
-  }, [engagement.notes_to_accounts, client?.id]);
+  }, [engagement?.notes_to_accounts, client?.id]);
 
   // Mark auto-available based on TB data.
   // Fix (Issue 12): notes 3-8, 11-12 are NOT in STANDARD_NOTES (they jump from 2 → 29).

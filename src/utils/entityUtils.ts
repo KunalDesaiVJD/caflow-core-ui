@@ -3,21 +3,26 @@
  * Import from here rather than duplicating the list across components.
  */
 
-/** Returns true for company entities that require CARO + MRL (Private Ltd, Public Ltd, OPC). */
+/** Returns true for company entities that require CARO + MRL (Private Ltd, Public Ltd, OPC).
+ *  Matches case-insensitively on normalised substrings so DB variants like
+ *  "Private Limited Company", "pvt. ltd.", "private_ltd", "PVT LTD", "OPC" all resolve correctly.
+ */
 export function isCompanyEntity(entityType: string | null | undefined): boolean {
   if (!entityType) return false;
-  return [
-    "company",
-    "Company",
-    "Private Ltd",
-    "Private Limited",
-    "pvt_ltd",
-    "Public Ltd",
-    "Public Limited",
-    "public_ltd",
-    "OPC",
-    "opc",
-  ].includes(entityType);
+  // Collapse separators (spaces, dots, underscores, hyphens) and lower-case to
+  // compare against canonical keywords.
+  const n = String(entityType).toLowerCase().replace(/[\s._\-]+/g, "");
+  // Match any of: company / privateltd / privatelimited / pvtltd / pvtlimited
+  //               publicltd / publiclimited / opc
+  if (n === "company" || n === "opc") return true;
+  if (n.includes("privateltd") || n.includes("privatelimited")) return true;
+  if (n.includes("pvtltd")    || n.includes("pvtlimited"))     return true;
+  if (n.includes("publicltd") || n.includes("publiclimited"))  return true;
+  if (n.includes("onepersoncompany")) return true;
+  // Generic "company" keyword check — any entity whose type contains "company"
+  // (e.g. "Private Limited Company", "Public Company") is treated as corporate.
+  if (n.includes("company")) return true;
+  return false;
 }
 
 /** Derives the balance-sheet date from a financial year string.
