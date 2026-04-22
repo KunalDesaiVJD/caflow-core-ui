@@ -10,7 +10,7 @@
  * the engagement can progress to the next pipeline stage.
  * Zero queries = gate is open (no pending corrections).
  */
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
 import { Button }   from "@/components/ui/button";
@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/table";
 import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, Download, Upload, FileSpreadsheet,
+  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -158,6 +158,36 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
   // Delete confirmation state: tracks which row is awaiting confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  // ── Search + Filter state ────────────────────────────────────────────────────
+  // statusFilter: null = show all; "corrected" = Yes only; "pending" = not Yes
+  const [searchText,   setSearchText]   = useState("");
+  const [statusFilter, setStatusFilter] = useState<null | "corrected" | "pending">(null);
+
+  const displayedQueries = useMemo(() => {
+    return queries.filter((q) => {
+      // Status filter
+      if (statusFilter === "corrected" && q.correction_status !== "Yes") return false;
+      if (statusFilter === "pending"   && q.correction_status === "Yes") return false;
+      // Search filter (across group, ledger, description, documents, remark)
+      if (searchText) {
+        const s = searchText.toLowerCase();
+        const hit =
+          q.head?.toLowerCase().includes(s) ||
+          q.particulars?.toLowerCase().includes(s) ||
+          q.query_description?.toLowerCase().includes(s) ||
+          q.required_documents?.toLowerCase().includes(s) ||
+          q.remark?.toLowerCase().includes(s);
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }, [queries, statusFilter, searchText]);
+
+  // Toggle status filter chip — clicking same chip again clears the filter
+  const toggleFilter = (f: "corrected" | "pending") => {
+    setStatusFilter((prev) => (prev === f ? null : f));
+  };
+
   // ── Import state ────────────────────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importPreview, setImportPreview] = useState<Array<Omit<QueryRow, "id">> | null>(null);
@@ -206,7 +236,7 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
         </p>
       </div>
 
-      {/* ══════════ SUB-HEADER (Add + counts + Save) ══════════ */}
+      {/* ══════════ SUB-HEADER (Add + counts + search + Save) ══════════ */}
       <div className="border-b bg-muted/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 flex-wrap">
           <Button
@@ -225,15 +255,74 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
           </span>
           {queries.length > 0 && (
             <>
-              <Badge className="bg-green-100 text-green-700 text-[10px]">
+              {/* ── Clickable filter badges ── */}
+              <button
+                type="button"
+                title="Click to filter corrected queries"
+                onClick={() => toggleFilter("corrected")}
+                className={cn(
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer select-none",
+                  statusFilter === "corrected"
+                    ? "bg-green-600 text-white ring-2 ring-green-500 ring-offset-1"
+                    : "bg-green-100 text-green-700 hover:bg-green-200"
+                )}
+              >
                 {queries.filter(q => q.correction_status === "Yes").length} corrected
-              </Badge>
+              </button>
               {pendingCount > 0 && (
-                <Badge className="bg-red-100 text-red-700 text-[10px]">
+                <button
+                  type="button"
+                  title="Click to filter pending queries"
+                  onClick={() => toggleFilter("pending")}
+                  className={cn(
+                    "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer select-none",
+                    statusFilter === "pending"
+                      ? "bg-red-600 text-white ring-2 ring-red-500 ring-offset-1"
+                      : "bg-red-100 text-red-700 hover:bg-red-200"
+                  )}
+                >
                   {pendingCount} pending
-                </Badge>
+                </button>
+              )}
+              {/* Clear filter chip */}
+              {statusFilter && (
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter(null)}
+                  className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                  title="Clear filter"
+                >
+                  <X size={10} /> clear filter
+                </button>
               )}
             </>
+          )}
+
+          {/* ── Search input ── */}
+          <div className="relative">
+            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={searchText}
+              onChange={e => setSearchText(e.target.value)}
+              placeholder="Search queries…"
+              className="h-7 pl-6 pr-6 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring w-44"
+            />
+            {searchText && (
+              <button
+                type="button"
+                onClick={() => setSearchText("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X size={10} />
+              </button>
+            )}
+          </div>
+          {/* Active filter indicator */}
+          {(statusFilter || searchText) && (
+            <span className="text-[10px] text-muted-foreground">
+              {displayedQueries.length} of {queries.length} shown
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
@@ -335,8 +424,23 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
                   </div>
                 </td>
               </tr>
+            ) : displayedQueries.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="border border-border py-8 text-center text-muted-foreground text-sm">
+                  No queries match the current filter
+                  {(statusFilter || searchText) && (
+                    <button
+                      type="button"
+                      onClick={() => { setStatusFilter(null); setSearchText(""); }}
+                      className="ml-2 text-primary underline text-xs"
+                    >
+                      clear filters
+                    </button>
+                  )}
+                </td>
+              </tr>
             ) : (
-              queries.map((row, idx) => {
+              displayedQueries.map((row, idx) => {
                 const isDone = row.correction_status === "Yes";
 
                 return (

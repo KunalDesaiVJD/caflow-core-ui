@@ -16,11 +16,12 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
   Save, Loader2, CheckSquare, Square, ClipboardList,
-  Printer, FileDown,
+  FileDown, FileText,
 } from "lucide-react";
 import { MRL_CLAUSES_TEMPLATE, MRL_OPENING_PARA_TEMPLATE, type MRLClause } from "@/constants/mrlClauses";
 import { getBSDate, getAuditYear } from "@/utils/entityUtils";
 import { exportToPdf } from "@/lib/exportUtils";
+import { exportMrlToDocx } from "@/lib/mrlDocx";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -282,15 +283,41 @@ export function MRLTab({ engagementId, engagement }: Props) {
 
   const selectedCount = clauses.filter((c) => c.selected).length;
 
-  // ─── Print / Export PDF ──────────────────────────────────────────────────
-
-  const handlePrint = () => window.print();
+  // ─── Export PDF ──────────────────────────────────────────────────────────
 
   const handleExportPdf = async () => {
     if (!contentRef.current) return;
     const fySlug = (engagement?.financial_year ?? "FY").replace("/", "-");
     const nameSlug = displayCompanyName.replace(/\s+/g, "_").slice(0, 30);
     await exportToPdf(contentRef.current, `MRL_${nameSlug}_${fySlug}.pdf`);
+  };
+
+  // ─── Export Word (.docx) ─────────────────────────────────────────────────
+
+  const handleExportWord = async () => {
+    const fySlug = (engagement?.financial_year ?? "FY").replace(/[^a-zA-Z0-9-]/g, "-");
+    const nameSlug = displayCompanyName.replace(/\s+/g, "_").slice(0, 30);
+    await exportMrlToDocx(
+      {
+        companyName:    displayCompanyName,
+        cin:            header.cinOverride || clientDetails?.cin || "",
+        address:        header.addressOverride || clientDetails?.registered_office || clientDetails?.address || "",
+        date:           header.date,
+        firmName,
+        firmCity,
+        auditYear,
+        openingPara:    header.openingPara,
+        clauses,
+        cashAmount:     header.cashAmount,
+        director1Name:  header.director1Name,
+        director1Din:   header.director1Din,
+        director2Name:  header.director2Name,
+        director2Din:   header.director2Din,
+        sigPlace:       header.sigPlace || clientDetails?.registered_state || "",
+        sigDate:        header.sigDate,
+      },
+      `MRL_${nameSlug}_${fySlug}.docx`
+    );
   };
 
   if (loading) {
@@ -324,8 +351,8 @@ export function MRLTab({ engagementId, engagement }: Props) {
           <Button variant="outline" size="sm" onClick={handleExportPdf} className="gap-1">
             <FileDown className="w-4 h-4" /> Export PDF
           </Button>
-          <Button variant="outline" size="sm" onClick={handlePrint} className="gap-1">
-            <Printer className="w-4 h-4" /> Print
+          <Button variant="outline" size="sm" onClick={handleExportWord} className="gap-1">
+            <FileText className="w-4 h-4" /> Export Word
           </Button>
           <Button size="sm" onClick={saveAll} disabled={saving} className="gap-1">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
