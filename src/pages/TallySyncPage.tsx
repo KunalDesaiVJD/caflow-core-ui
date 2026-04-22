@@ -173,6 +173,10 @@ export default function TallySyncPage() {
   const coaPollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const coaCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const syncQueuedAtRef = useRef<string | null>(null);
+  // Guard: prevents a second auto-map from firing if one is already in-flight
+  // (e.g. user clicks "Run AI Auto-Map" manually while countdown is running,
+  // or two syncs complete back-to-back before the 2-minute window expires).
+  const isCoaRunningRef = useRef(false);
 
   // Clean up timers on unmount
   useEffect(() => () => {
@@ -182,8 +186,14 @@ export default function TallySyncPage() {
 
   const startCoaCountdown = useCallback(async () => {
     if (!selectedEngagementId) return;
-    // 60-second visual countdown
-    setCoaCountdown(60);
+    // Bail out if a COA mapping run is already in-flight
+    if (isCoaRunningRef.current) {
+      toast({ title: "COA mapping already running", description: "Skipping duplicate auto-trigger." });
+      return;
+    }
+    // 120-second (2 min) visual countdown
+    const DELAY = 120;
+    setCoaCountdown(DELAY);
     coaCountdownRef.current = setInterval(() => {
       setCoaCountdown(prev => {
         if (prev === null || prev <= 1) {
@@ -195,8 +205,15 @@ export default function TallySyncPage() {
       });
     }, 1000);
 
-    // Wait 60 s, then invoke auto-mapper
-    await new Promise(r => setTimeout(r, 60_000));
+    // Wait 2 minutes, then invoke auto-mapper
+    await new Promise(r => setTimeout(r, DELAY * 1000));
+
+    // Re-check guard after the wait (user may have started a manual run during countdown)
+    if (isCoaRunningRef.current) {
+      toast({ title: "COA auto-map skipped", description: "A mapping run was already in progress." });
+      return;
+    }
+    isCoaRunningRef.current = true;
     try {
       const { data, error } = await supabase.functions.invoke("coa-auto-mapper", {
         body: { engagement_id: selectedEngagementId },
@@ -209,10 +226,13 @@ export default function TallySyncPage() {
       });
     } catch (e: any) {
       toast({ title: "COA auto-mapping failed", description: e.message, variant: "destructive" });
+    } finally {
+      isCoaRunningRef.current = false;
     }
   }, [selectedEngagementId, toast]);
 
   const startCoapoll = useCallback(() => {
+    // Cancel any existing poll first (prevents duplicate polls if user clicks Sync Now twice)
     if (coaPollRef.current) clearInterval(coaPollRef.current);
     const queuedAt = syncQueuedAtRef.current;
     coaPollRef.current = setInterval(async () => {
@@ -228,7 +248,7 @@ export default function TallySyncPage() {
       if (!data) return;
       // Only react to a batch that started AFTER we queued the sync
       if (queuedAt && (data as any).started_at < queuedAt) return;
-      // Sync is done — stop polling, start countdown
+      // Sync is done — stop polling, start 2-minute countdown
       clearInterval(coaPollRef.current!);
       coaPollRef.current = null;
       startCoaCountdown();
@@ -984,9 +1004,12 @@ export default function TallySyncPage() {
             {pendingRequest ? "Sync Queued…" : "Sync Now"}
           </Button>
           {coaCountdown !== null && (
-            <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5">
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              COA auto-mapping in <span className="font-bold tabular-nums">{coaCountdown}s</span>
+            <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5 whitespace-nowrap">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
+              COA auto-map in{" "}
+              <span className="font-bold tabular-nums">
+                {Math.floor(coaCountdown / 60)}:{String(coaCountdown % 60).padStart(2, "0")}
+              </span>
             </div>
           )}
         </div>
