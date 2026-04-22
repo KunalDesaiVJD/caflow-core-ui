@@ -53,10 +53,11 @@ interface TBRow {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Tally's sync agent currently emits inverted Dr/Cr — flip at read time.
-function flipDrCr(t: string | null | undefined): string {
-  return t === "Dr" ? "Cr" : "Dr";
-}
+// Sync agent stores dr_cr in correct Tally convention (verified: the custom
+// TDL REPORT's $IsDr branch and the voucher fetcher's ISDEEMEDPOSITIVE
+// mapping both produce Dr/Cr matching Tally Prime's Ledger Vouchers display).
+// Earlier assumption that storage was inverted led to double-flip bugs —
+// do NOT introduce client-side Dr/Cr flipping in this file.
 
 function decodeHtml(str: string | null | undefined): string {
   if (!str) return "";
@@ -134,10 +135,7 @@ export default function LedgerVouchersView() {
         .eq("engagement_id", engId!)
         .eq("ledger_name", ledgerName)
         .maybeSingle();
-      const flippedTb = tb
-        ? { ...(tb as TBRow), opening_type: flipDrCr((tb as TBRow).opening_type), balance_type: flipDrCr((tb as TBRow).balance_type) }
-        : null;
-      setTbRow(flippedTb);
+      setTbRow(tb as TBRow | null);
 
       // Fetch vouchers via RPC — the new RPC returns `this_amount` / `this_dr_cr`
       // already aggregated server-side (sums ALL line_items matching the ledger,
@@ -150,7 +148,7 @@ export default function LedgerVouchersView() {
       if (!error && vchData) {
         const processed: LedgerVoucher[] = (vchData as any[]).map(v => {
           const rawItems: LineItem[] = Array.isArray(v.line_items) ? v.line_items : [];
-          let items: LineItem[] = rawItems.map(i => ({ ...i, dr_cr: flipDrCr(i.dr_cr) }));
+          let items: LineItem[] = rawItems;
 
           // Fallback legs for display when line_items was empty
           if (items.length === 0 && v.amount != null && v.party_ledger) {
@@ -158,7 +156,7 @@ export default function LedgerVouchersView() {
             const side: LineItem = {
               ledger_name: ledgerName,
               amount: Number(v.amount) || 0,
-              dr_cr: thisIsParty ? flipDrCr(v.dr_cr) : v.dr_cr === "Dr" ? "Cr" : "Dr",
+              dr_cr: thisIsParty ? v.dr_cr : v.dr_cr === "Dr" ? "Cr" : "Dr",
             };
             const contra: LineItem = {
               ledger_name: thisIsParty ? decodeHtml(v.voucher_type) || "(contra)" : v.party_ledger,
@@ -169,10 +167,10 @@ export default function LedgerVouchersView() {
           }
 
           // Prefer server-computed this_amount / this_dr_cr, fall back to
-          // aggregating all matching legs client-side.
+          // aggregating all matching legs client-side. Dr/Cr from the RPC
+          // is already in Tally convention (no client-side flip).
           let thisAmount = Number(v.this_amount ?? 0);
-          // Sync agent emits inverted Dr/Cr — flip RPC result to match Tally's convention
-          let thisDrCr: string = flipDrCr(String(v.this_dr_cr ?? "Dr"));
+          let thisDrCr: string = String(v.this_dr_cr ?? "Dr");
           if (!thisAmount) {
             const matched = items.filter(i => i.ledger_name === ledgerName);
             const dr = matched.filter(i => i.dr_cr === "Dr").reduce((s, i) => s + i.amount, 0);
@@ -196,24 +194,13 @@ export default function LedgerVouchersView() {
         p_ledger_name:   ledgerName,
       });
       if (Array.isArray(rec) && rec.length > 0) {
-        // RPC rolls up raw voucher legs whose dr/cr is inverted vs Tally —
-        // swap debit_total and credit_total so the Dr/Cr columns match.
-        // opening_type and tally_closing_type come from the TB row (not from
-        // voucher legs) and are already in Tally's convention — don't flip.
-        const raw = rec[0] as Reconciliation;
-        const flipped: Reconciliation = {
-          ...raw,
-          debit_total:  raw.credit_total,
-          credit_total: raw.debit_total,
-        };
-        const openingSigned = flipped.opening_balance * (flipped.opening_type === "Dr" ? 1 : -1);
-        const derivedSigned = openingSigned + flipped.debit_total - flipped.credit_total;
-        flipped.derived_closing      = Math.abs(derivedSigned);
-        flipped.derived_closing_type = derivedSigned >= 0 ? "Dr" : "Cr";
-        const tallySigned = flipped.tally_closing * (flipped.tally_closing_type === "Dr" ? 1 : -1);
-        flipped.variance   = derivedSigned - tallySigned;
-        flipped.reconciled = Math.abs(flipped.variance) < 0.01;
-        setRecon(flipped);
+        // RPC returns values in Tally convention (post-migration
+        // 20260422120000 that removed the spurious _tally_flip). The server
+        // already computes derived_closing, tally_closing, and variance;
+        // only recompute `reconciled` locally with a tighter tolerance.
+        const r = { ...(rec[0] as Reconciliation) };
+        r.reconciled = Math.abs(r.variance) < 0.01;
+        setRecon(r);
       }
 
       setLoading(false);

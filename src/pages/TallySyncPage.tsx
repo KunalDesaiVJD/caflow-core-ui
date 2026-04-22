@@ -102,10 +102,7 @@ interface RowCounts {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Tally's sync agent currently emits inverted Dr/Cr — flip at read time.
-function flipDrCr(t: string | null | undefined): string {
-  return t === "Dr" ? "Cr" : "Dr";
-}
+// Sync agent stores Dr/Cr in Tally's correct convention; no client-side flip.
 
 function decodeHtml(str: string | null | undefined): string {
   if (!str) return "";
@@ -346,17 +343,13 @@ export default function TallySyncPage() {
     // deployments see TB come through with zeros too). Every voucher
     // line_item has a real amount + dr_cr, so Σ Dr − Σ Cr per ledger gives
     // the closing balance for the synced period.
-    const flippedVouchers: TallyVoucher[] = vchData.data
-      ? (vchData.data as TallyVoucher[]).map(v => ({
-          ...v,
-          dr_cr: flipDrCr(v.dr_cr),
-          line_items: (v.line_items ?? []).map((li: any) => ({ ...li, dr_cr: flipDrCr(li.dr_cr) })),
-        }))
+    const voucherRows: TallyVoucher[] = vchData.data
+      ? (vchData.data as TallyVoucher[])
       : [];
-    setVouchers(flippedVouchers);
+    setVouchers(voucherRows);
 
     const periodTotals = new Map<string, { debit: number; credit: number }>();
-    for (const v of flippedVouchers) {
+    for (const v of voucherRows) {
       for (const li of v.line_items ?? []) {
         const key = li.ledger_name;
         if (!periodTotals.has(key)) periodTotals.set(key, { debit: 0, credit: 0 });
@@ -375,13 +368,13 @@ export default function TallySyncPage() {
       return { balance: Math.abs(net), type: net > 0 ? "Dr" : "Cr" };
     };
 
-    // Dedupe, flip Dr/Cr, and fall back to voucher-derived closing when DB=0
+    // Dedupe, fall back to voucher-derived closing when DB=0
     if (ledData.data) {
       const seen = new Map<string, TallyLedger>();
       for (const l of ledData.data as TallyLedger[]) {
         if (seen.has(l.ledger_name)) continue;
         let closing_balance = l.closing_balance;
-        let closing_type = flipDrCr(l.closing_type);
+        let closing_type = l.closing_type;
         if (closing_balance <= 0) {
           const derived = deriveClosing(l.ledger_name);
           if (derived) {
@@ -389,12 +382,7 @@ export default function TallySyncPage() {
             closing_type = derived.type;
           }
         }
-        seen.set(l.ledger_name, {
-          ...l,
-          closing_balance,
-          closing_type,
-          opening_type: flipDrCr(l.opening_type),
-        });
+        seen.set(l.ledger_name, { ...l, closing_balance, closing_type });
       }
       setLedgers(Array.from(seen.values()));
     }
@@ -419,7 +407,7 @@ export default function TallySyncPage() {
       if (tbSeen.has(r.ledger_name)) continue;
       const computed = periodTotals.get(r.ledger_name);
       let closing_balance = r.closing_balance;
-      let balance_type = flipDrCr(r.balance_type);
+      let balance_type = r.balance_type;
       if (closing_balance <= 0) {
         const derived = deriveClosing(r.ledger_name);
         if (derived) {
@@ -432,7 +420,6 @@ export default function TallySyncPage() {
         ...r,
         closing_balance,
         balance_type,
-        opening_type: flipDrCr(r.opening_type),
         debit_amount: computed?.debit ?? r.debit_amount ?? 0,
         credit_amount: computed?.credit ?? r.credit_amount ?? 0,
       });
