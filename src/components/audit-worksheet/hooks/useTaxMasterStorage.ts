@@ -147,6 +147,12 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   const [loaded, setLoaded]   = useState(false);
   const [saving, setSaving]   = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // User-interaction sentinel — once the user edits a field, the async
+  // Supabase load must NOT overwrite their work. Without this guard, a
+  // slow DB roundtrip that resolves after the first keystroke wipes the
+  // accountant name / mobile no / etc. the user just typed.
+  const userEditedRef = useRef(false);
+  const dataRef       = useRef<TaxMasterData>(BLANK_TAX_MASTER);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -154,11 +160,16 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
     setLoaded(true);
     const cached = awLoad<Partial<TaxMasterData>>(engagementId, "tax_master_json");
     if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
-      setData({ ...BLANK_TAX_MASTER, ...cached });
+      const merged = { ...BLANK_TAX_MASTER, ...cached };
+      setData(merged);
+      dataRef.current = merged;
     }
     awLoadFromDB<Partial<TaxMasterData>>(engagementId, "tax_master_json").then(remote => {
+      if (userEditedRef.current) return;                // user already typed — do not clobber
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
-        setData({ ...BLANK_TAX_MASTER, ...remote });
+        const merged = { ...BLANK_TAX_MASTER, ...remote };
+        setData(merged);
+        dataRef.current = merged;
       }
     });
   }, [engagementId, loaded]);
@@ -182,8 +193,10 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // ── Set a single field + debounced auto-save ──────────────────────────────
   const setField = useCallback(
     <K extends keyof TaxMasterData>(field: K, value: TaxMasterData[K]) => {
+      userEditedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
+        dataRef.current = next;
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
@@ -195,8 +208,10 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   // ── Patch multiple fields at once + debounced auto-save ───────────────────
   const patchFields = useCallback(
     (patch: Partial<TaxMasterData>) => {
+      userEditedRef.current = true;
       setData(prev => {
         const next = { ...prev, ...patch };
+        dataRef.current = next;
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
@@ -206,10 +221,13 @@ export function useTaxMasterStorage(engagementId: string, firmId?: string | null
   );
 
   // ── Manual save (explicit button) ─────────────────────────────────────────
+  // Reads from dataRef so it always persists the latest user input even when
+  // invoked in the same tick as a trailing setField call (React state update
+  // hasn't flushed into closure yet).
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    return persist(data, false);
-  }, [data, persist]);
+    return persist(dataRef.current, false);
+  }, [persist]);
 
   return { data, setField, patchFields, manualSave, saving, loaded };
 }

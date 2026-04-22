@@ -130,6 +130,10 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // See note in useTaxMasterStorage — prevents the async DB load from
+  // clobbering user input when it resolves after the user starts typing.
+  const userEditedRef = useRef(false);
+  const dataRef       = useRef<StatutoryMasterData>(BLANK_STATUTORY_MASTER);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -137,11 +141,16 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     setLoaded(true);
     const cached = awLoad<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json");
     if (cached && typeof cached === "object" && Object.keys(cached).length > 0) {
-      setData({ ...BLANK_STATUTORY_MASTER, ...cached });
+      const merged = { ...BLANK_STATUTORY_MASTER, ...cached };
+      setData(merged);
+      dataRef.current = merged;
     }
     awLoadFromDB<Partial<StatutoryMasterData>>(engagementId, "statutory_master_json").then(remote => {
+      if (userEditedRef.current) return;
       if (remote && typeof remote === "object" && Object.keys(remote).length > 0) {
-        setData({ ...BLANK_STATUTORY_MASTER, ...remote });
+        const merged = { ...BLANK_STATUTORY_MASTER, ...remote };
+        setData(merged);
+        dataRef.current = merged;
       }
     });
   }, [engagementId, loaded]);
@@ -165,8 +174,10 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
   // ── Set a single field + debounced auto-save ──────────────────────────────
   const setField = useCallback(
     <K extends keyof StatutoryMasterData>(field: K, value: StatutoryMasterData[K]) => {
+      userEditedRef.current = true;
       setData(prev => {
         const next = { ...prev, [field]: value };
+        dataRef.current = next;
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
@@ -177,8 +188,10 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
 
   const patchFields = useCallback(
     (patch: Partial<StatutoryMasterData>) => {
+      userEditedRef.current = true;
       setData(prev => {
         const next = { ...prev, ...patch };
+        dataRef.current = next;
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => persist(next, true), 1000);
         return next;
@@ -187,10 +200,12 @@ export function useStatutoryMasterStorage(engagementId: string, firmId?: string 
     [persist]
   );
 
+  // Use dataRef so clicking Save while a debounced edit is still in flight
+  // persists the freshest data, not a stale closure copy.
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    return persist(data, false);
-  }, [data, persist]);
+    return persist(dataRef.current, false);
+  }, [persist]);
 
   return { data, setField, patchFields, manualSave, saving, loaded };
 }
