@@ -224,15 +224,9 @@ export function buildClauseValues(
   const cl11c = dig(cl, "cl_11", "11c");
   const books11 = rows(dig(cl11a, "cl_11a_books"));
   if (books11.length > 0) {
-    // Build inline numbered list: "1. Sales Register 2. Purchase Register …"
-    const booksInline = books11
-      .map((r, i) => {
-        const name = [r.book, r.specify].filter(Boolean).join(" – ");
-        return `${i + 1}. ${name}`;
-      })
-      .join(" ");
-    setV(f3, "J21", cl11a._value === false ? "No" : `Yes – ${booksInline}`);
-    // Also mirror into the annexure block (rows 15-17 → 0-idx 14-16) for reference
+    // Form 3CD answer cell: short reference. Detailed books table goes into
+    // "3CD ANNEX" → "Clause 11(a) List of books prescribed u/s 44AA".
+    setV(f3, "J21", cl11a._value === false ? "No" : "Yes – As Per Annexure");
     if (ax) {
       const ANX_CL11A_START = 14;
       writeSrNos(ax, ANX_CL11A_START, Math.min(books11.length, 3));
