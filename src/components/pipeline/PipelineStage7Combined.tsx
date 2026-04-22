@@ -137,7 +137,8 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
       { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
       // Cash Flow applies to corporate only; NCE entities use Receipts & Payments format.
-      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) && isCorporate },
+      // This component only mounts when isCorporate === true (see parent), so no extra guard needed.
+      { id: 'cashflow', label: 'Cash Flow Notes',   icon: Droplets,      show: visible(engagement?.cash_flow_applicable) },
       { id: 'mrl',      label: 'MRL',               icon: ClipboardList, show: true },
     ];
     return all.filter(t => t.show);
