@@ -223,16 +223,26 @@ export function buildClauseValues(
   const cl11b = dig(cl, "cl_11", "11b");
   const cl11c = dig(cl, "cl_11", "11c");
   const books11 = rows(dig(cl11a, "cl_11a_books"));
-  if (ax && books11.length > 0) {
-    const ANX_CL11A_START = 14; // display row 15 → 0-idx 14
-    writeSrNos(ax, ANX_CL11A_START, Math.min(books11.length, 3));
-    books11.slice(0, 3).forEach((r, i) => {
-      const bookName = [r.book, r.specify].filter(Boolean).join(" – ");
-      setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 1 }), bookName);
-    });
-    setV(f3, "J21", "As Per Annexure");
+  if (books11.length > 0) {
+    // Build inline numbered list: "1. Sales Register 2. Purchase Register …"
+    const booksInline = books11
+      .map((r, i) => {
+        const name = [r.book, r.specify].filter(Boolean).join(" – ");
+        return `${i + 1}. ${name}`;
+      })
+      .join(" ");
+    setV(f3, "J21", cl11a._value === false ? "No" : `Yes – ${booksInline}`);
+    // Also mirror into the annexure block (rows 15-17 → 0-idx 14-16) for reference
+    if (ax) {
+      const ANX_CL11A_START = 14;
+      writeSrNos(ax, ANX_CL11A_START, Math.min(books11.length, 3));
+      books11.slice(0, 3).forEach((r, i) => {
+        const bookName = [r.book, r.specify].filter(Boolean).join(" – ");
+        setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 1 }), bookName);
+      });
+    }
   } else if (cl11a._value === true) {
-    setV(f3, "J21", "Yes – As Per Annexure");
+    setV(f3, "J21", "Yes");
   } else if (cl11a._value === false) {
     setV(f3, "J21", "No");
   }
@@ -242,9 +252,10 @@ export function buildClauseValues(
   } else if (cl11b._value) {
     setV(f3, "J22", String(cl11b._value));
   }
-  // 11(c) — books & documents examined. _sameAs=true → "Same as 11(a)"; else free text in _value
+  // 11(c) — books & documents examined.
+  // "Same as Above" on 11c semantically refers to 11(b) (previous row), not 11(a).
   if (cl11c._sameAs === true) {
-    setV(f3, "J23", "Same as 11(a)");
+    setV(f3, "J23", "Same as 11(b)");
   } else if (cl11c._value) {
     setV(f3, "J23", String(cl11c._value));
   }
