@@ -195,25 +195,30 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   paras.push(blank());
 
   // ── 8. Clauses ────────────────────────────────────────────────────────────
+  // Format: "N.  [first line of text]" inline (no separate bold title),
+  // with any additional lines indented below — matching the MRL template format.
   let clauseNum = 1;
   for (const clause of selectedClauses) {
     // Replace [CASH_AMOUNT] token with actual amount (fallback to blank field)
     const clauseText = clause.text.replace(/\[CASH_AMOUNT\]/g, cashAmount || "______");
 
-    // Clause heading: bold "1.  Title"
+    const lines = clauseText.split("\n").filter((l) => l.trim() !== "");
+    if (lines.length === 0) { clauseNum++; continue; }
+
+    // First line: "N.  [text]" — number bold, rest normal weight
     paras.push(wPara(
-      [{ text: `${clauseNum}.`, bold: true }, { text: `  ${clause.title}`, bold: true }],
-      { spaceBefore: 80, spaceAfter: 40 }
+      [{ text: `${clauseNum}.  `, bold: true }, { text: lines[0] }],
+      { spaceBefore: 80, spaceAfter: lines.length > 1 ? 20 : 80 }
     ));
 
-    // Clause body lines (indented)
-    const lines = clauseText.split("\n");
-    for (const line of lines) {
-      if (line.trim()) {
-        paras.push(wPara([{ text: line }], { leftIndentTwips: 360, spaceAfter: 20 }));
-      }
+    // Remaining lines (sub-clauses like (a), (b), (c)) — indented
+    for (let i = 1; i < lines.length; i++) {
+      paras.push(wPara(
+        [{ text: lines[i] }],
+        { leftIndentTwips: 360, spaceAfter: i === lines.length - 1 ? 80 : 20 }
+      ));
     }
-    paras.push(blank(4));
+
     clauseNum++;
   }
 
@@ -227,9 +232,17 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   paras.push(blank());
 
   // ── 10. Signature Block (two-column via tab stops) ────────────────────────
-  const d1 = director1Name || "Director";
-  const d2 = director2Name || "Director";
-  paras.push(sigRow(d1, d2, { bold: false }));
+  // Format matches template:
+  //   Director               Director
+  //   [Name1]                [Name2]
+  //   (DIN- xxx)             (DIN- xxx)
+  //   Place: xxx   Date: xxx
+  paras.push(sigRow("Director", "Director"));
+  const d1 = director1Name || "";
+  const d2 = director2Name || "";
+  if (d1 || d2) {
+    paras.push(sigRow(d1, d2, { bold: false }));
+  }
   if (director1Din || director2Din) {
     const din1 = director1Din ? `(DIN- ${director1Din})` : "";
     const din2 = director2Din ? `(DIN- ${director2Din})` : "";
