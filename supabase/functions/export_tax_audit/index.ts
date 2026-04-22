@@ -954,12 +954,44 @@ serve(async (req) => {
         });
       }
 
-      // Mock workbook — only Sheets and SheetNames are accessed by buildClauseValues
+      // Resolve actual annexure sheet names from the workbook so writes land
+      // on the right sheet even when the template uses different tab names
+      // ("3CD ANNEX", "3CD ANNEX Clause 34", "ANX_14_TDS", etc.).
+      const allSheetNames = [...sheetPaths.keys()];
+      const findSheet = (patterns: RegExp[]): string | null => {
+        for (const pat of patterns) {
+          const hit = allSheetNames.find((n) => pat.test(n));
+          if (hit) return hit;
+        }
+        return null;
+      };
+      const annexMainName =
+        findSheet([
+          /^ANX[_ ]?3CD[_ ]?Main$/i,
+          /^3CD\s*ANNEX$/i,
+          /^3CD\s*ANNEX(?!.*Clause\s*34)/i,
+          /^ANX[_ ]?3CD/i,
+        ]) ?? "ANX_3CD_Main";
+      const annexCl34Name =
+        findSheet([
+          /^ANX[_ ]?3CD[_ ]?Cl34[_ ]?TDS$/i,
+          /3CD\s*ANNEX.*Clause\s*34/i,
+          /Clause\s*34/i,
+          /ANX[_ ]?14[_ ]?TDS/i,
+          /TDS$/i,
+        ]) ?? "ANX_3CD_Cl34_TDS";
+      console.log(
+        `[Sheet alias] Form_3CD -> Form_3CD | ANX_3CD_Main -> ${annexMainName} | ANX_3CD_Cl34_TDS -> ${annexCl34Name}`,
+      );
+
+      // Mock workbook — only Sheets and SheetNames are accessed by buildClauseValues.
+      // Each proxy reports its writes to addUpdate() under the RESOLVED sheet name,
+      // so the final XML pass can locate the right sheet path.
       const mockWb = {
         Sheets: {
           Form_3CD:           makeProxyWS("Form_3CD"),
-          ANX_3CD_Main:       makeProxyWS("ANX_3CD_Main"),
-          ANX_3CD_Cl34_TDS:   makeProxyWS("ANX_3CD_Cl34_TDS"),
+          ANX_3CD_Main:       makeProxyWS(annexMainName),
+          ANX_3CD_Cl34_TDS:   makeProxyWS(annexCl34Name),
         },
         SheetNames: ["Form_3CD", "ANX_3CD_Main", "ANX_3CD_Cl34_TDS"],
       } as any;
