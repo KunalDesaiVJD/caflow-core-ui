@@ -406,15 +406,13 @@ export default function TallySyncPage() {
     for (const r of tbSource) {
       if (tbSeen.has(r.ledger_name)) continue;
       const computed = periodTotals.get(r.ledger_name);
-      let closing_balance = r.closing_balance;
-      let balance_type = r.balance_type;
-      if (closing_balance <= 0) {
-        const derived = deriveClosing(r.ledger_name);
-        if (derived) {
-          closing_balance = derived.balance;
-          balance_type = derived.type;
-        }
-      }
+      // Trust the DB closing — sync-step.js now writes closing = opening +
+      // Dr − Cr from the reconciled full-voucher turnover, so a DB zero is a
+      // real zero, not a missing value. The old `deriveClosing` fallback was
+      // inventing closings from partial voucher nets and corrupting the
+      // Grand Total (e.g. fully-settled suppliers picked up phantom residuals).
+      const closing_balance = r.closing_balance;
+      const balance_type = r.balance_type;
       // Prefer the DB-persisted turnover (written by sync-step.js from the FULL
       // voucher set with a reconciliation guard). Fall back to UI-side
       // voucher aggregation only if the DB column is empty — that fallback
