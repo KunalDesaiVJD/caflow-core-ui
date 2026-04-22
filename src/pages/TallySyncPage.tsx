@@ -281,6 +281,36 @@ export default function TallySyncPage() {
       return { data: all };
     }
 
+    // Same PostgREST pagination needed for ledgers + TB — .limit(2000) gets
+    // silently capped at 1,000 so large engagements were missing rows.
+    async function fetchAllFrom(table: string, select: string, orderCol: string) {
+      const pageSize = 1000;
+      const all: any[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from(table as any)
+          .select(select)
+          .eq("engagement_id", engId)
+          .order(orderCol)
+          .range(from, from + pageSize - 1);
+        if (error || !data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < pageSize) break;
+      }
+      return { data: all };
+    }
+
+    // Clean zombie batches: anything still "running" with no update for 10 min
+    // is almost certainly a crashed agent. Without this the UI shows a stale
+    // "Sync Queued…" pill forever.
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    await supabase
+      .from("sync_batches" as any)
+      .update({ status: "failed", completed_at: new Date().toISOString(), warnings: [{ message: "Auto-failed: no progress for 10 min (agent likely crashed)" }] })
+      .eq("engagement_id", engId)
+      .in("status", ["running", "processing"])
+      .lt("started_at", tenMinAgo);
+
     const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData, vchData] = await Promise.all([
       supabase.from("sync_batches" as any).select("*").eq("engagement_id", engId).order("started_at", { ascending: false }).limit(20),
       supabase.from("tally_groups" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
@@ -288,8 +318,8 @@ export default function TallySyncPage() {
       supabase.from("tally_trial_balance" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_vouchers" as any).select("id", { count: "exact", head: true }).eq("engagement_id", engId),
       supabase.from("tally_groups" as any).select("id,group_name,parent_group,primary_group,is_revenue,is_primary").eq("engagement_id", engId).order("group_name"),
-      supabase.from("tally_ledgers" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type").eq("engagement_id", engId).order("ledger_name").limit(2000),
-      supabase.from("tally_trial_balance" as any).select("id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount").eq("engagement_id", engId).order("parent_group,ledger_name").limit(2000),
+      fetchAllFrom("tally_ledgers", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,closing_type", "ledger_name"),
+      fetchAllFrom("tally_trial_balance", "id,ledger_name,parent_group,opening_balance,opening_type,closing_balance,balance_type,debit_amount,credit_amount", "parent_group"),
       fetchAllVouchers(),
     ]);
 
@@ -313,7 +343,6 @@ export default function TallySyncPage() {
     if (ledData.data) {
       const seen = new Map<string, TallyLedger>();
       for (const l of ledData.data as TallyLedger[]) {
-        if (l.closing_balance <= 0 && l.opening_balance <= 0) continue;
         if (seen.has(l.ledger_name)) continue;
         seen.set(l.ledger_name, {
           ...l,
