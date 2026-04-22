@@ -223,16 +223,33 @@ export function buildClauseValues(
   const cl11b = dig(cl, "cl_11", "11b");
   const cl11c = dig(cl, "cl_11", "11c");
   const books11 = rows(dig(cl11a, "cl_11a_books"));
+  // Convert raw dropdown keys like "sales_register" → display "Sales Register"
+  const prettyBook = (raw: unknown): string => {
+    if (!raw) return "";
+    const s = String(raw).trim();
+    return s
+      .replace(/[_-]+/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  };
   if (books11.length > 0) {
-    // Form 3CD answer cell: short reference. Detailed books table goes into
-    // "3CD ANNEX" → "Clause 11(a) List of books prescribed u/s 44AA".
-    setV(f3, "J21", cl11a._value === false ? "No" : "Yes – As Per Annexure");
+    // Form 3CD answer cell: short reference incl. annexure section number.
+    setV(
+      f3,
+      "J21",
+      cl11a._value === false ? "No" : "Yes – As Per Annexure (ANX_01)",
+    );
     if (ax) {
-      const ANX_CL11A_START = 14;
+      // Annex layout: row 7 (1-idx) = column headers, row 8 onward = data rows
+      // → first data row is 0-indexed 7.
+      const ANX_CL11A_START = 7;
       writeSrNos(ax, ANX_CL11A_START, Math.min(books11.length, 3));
       books11.slice(0, 3).forEach((r, i) => {
-        const bookName = [r.book, r.specify].filter(Boolean).join(" – ");
+        const bookName = prettyBook(r.book);
+        const specify = String(r.specify || "").trim();
         setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 1 }), bookName);
+        if (specify) {
+          setV(ax, XLSX.utils.encode_cell({ r: ANX_CL11A_START + i, c: 3 }), specify);
+        }
       });
     }
   } else if (cl11a._value === true) {
