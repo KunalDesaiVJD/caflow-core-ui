@@ -339,36 +339,13 @@ export default function TallySyncPage() {
       setGroups(Array.from(seen.values()));
     }
 
-    // Filter zeros, dedupe, flip Dr/Cr on ledgers
-    if (ledData.data) {
-      const seen = new Map<string, TallyLedger>();
-      for (const l of ledData.data as TallyLedger[]) {
-        if (seen.has(l.ledger_name)) continue;
-        seen.set(l.ledger_name, {
-          ...l,
-          opening_type: flipDrCr(l.opening_type),
-          closing_type: flipDrCr(l.closing_type),
-        });
-      }
-      setLedgers(Array.from(seen.values()));
-    }
-
-    // Build TB source (fallback to ledgers) then dedupe + flip Dr/Cr
-    const tbSource: TallyTB[] = (tbData.data && tbData.data.length > 0)
-      ? (tbData.data as TallyTB[])
-      : (ledData.data
-          ? (ledData.data as TallyLedger[]).map(l => ({
-              id: l.id,
-              ledger_name: l.ledger_name,
-              parent_group: l.parent_group,
-              opening_balance: l.opening_balance,
-              opening_type: l.opening_type,
-              closing_balance: l.closing_balance,
-              balance_type: l.closing_type,
-            } as TallyTB))
-          : []);
-
-    // Flip Dr/Cr on vouchers and aggregate period Debit/Credit per ledger
+    // Flip Dr/Cr on vouchers and aggregate period Debit/Credit per ledger.
+    // Computed BEFORE ledger/TB processing so we can derive closing balances
+    // from voucher activity when the Tally connector pushes zero-balance
+    // rows (slim sync — the connector only fills balances via TB, but many
+    // deployments see TB come through with zeros too). Every voucher
+    // line_item has a real amount + dr_cr, so Σ Dr − Σ Cr per ledger gives
+    // the closing balance for the synced period.
     const flippedVouchers: TallyVoucher[] = vchData.data
       ? (vchData.data as TallyVoucher[]).map(v => ({
           ...v,
@@ -389,15 +366,73 @@ export default function TallySyncPage() {
       }
     }
 
+    // Derive a closing balance from voucher Dr−Cr when DB has none.
+    const deriveClosing = (name: string): { balance: number; type: string } | null => {
+      const tot = periodTotals.get(name);
+      if (!tot) return null;
+      const net = tot.debit - tot.credit;
+      if (net === 0) return null;
+      return { balance: Math.abs(net), type: net > 0 ? "Dr" : "Cr" };
+    };
+
+    // Dedupe, flip Dr/Cr, and fall back to voucher-derived closing when DB=0
+    if (ledData.data) {
+      const seen = new Map<string, TallyLedger>();
+      for (const l of ledData.data as TallyLedger[]) {
+        if (seen.has(l.ledger_name)) continue;
+        let closing_balance = l.closing_balance;
+        let closing_type = flipDrCr(l.closing_type);
+        if (closing_balance <= 0) {
+          const derived = deriveClosing(l.ledger_name);
+          if (derived) {
+            closing_balance = derived.balance;
+            closing_type = derived.type;
+          }
+        }
+        seen.set(l.ledger_name, {
+          ...l,
+          closing_balance,
+          closing_type,
+          opening_type: flipDrCr(l.opening_type),
+        });
+      }
+      setLedgers(Array.from(seen.values()));
+    }
+
+    // Build TB source (fallback to ledgers) then dedupe + flip Dr/Cr
+    const tbSource: TallyTB[] = (tbData.data && tbData.data.length > 0)
+      ? (tbData.data as TallyTB[])
+      : (ledData.data
+          ? (ledData.data as TallyLedger[]).map(l => ({
+              id: l.id,
+              ledger_name: l.ledger_name,
+              parent_group: l.parent_group,
+              opening_balance: l.opening_balance,
+              opening_type: l.opening_type,
+              closing_balance: l.closing_balance,
+              balance_type: l.closing_type,
+            } as TallyTB))
+          : []);
+
     const tbSeen = new Map<string, TallyTB>();
     for (const r of tbSource) {
-      if (r.closing_balance <= 0 && r.opening_balance <= 0) continue;
       if (tbSeen.has(r.ledger_name)) continue;
       const computed = periodTotals.get(r.ledger_name);
+      let closing_balance = r.closing_balance;
+      let balance_type = flipDrCr(r.balance_type);
+      if (closing_balance <= 0) {
+        const derived = deriveClosing(r.ledger_name);
+        if (derived) {
+          closing_balance = derived.balance;
+          balance_type = derived.type;
+        }
+      }
+      if (closing_balance <= 0 && r.opening_balance <= 0) continue;
       tbSeen.set(r.ledger_name, {
         ...r,
+        closing_balance,
+        balance_type,
         opening_type: flipDrCr(r.opening_type),
-        balance_type: flipDrCr(r.balance_type),
         debit_amount: computed?.debit ?? r.debit_amount ?? 0,
         credit_amount: computed?.credit ?? r.credit_amount ?? 0,
       });
