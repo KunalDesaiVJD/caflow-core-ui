@@ -13,6 +13,11 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -21,7 +26,7 @@ import { cn } from "@/lib/utils";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
-  Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2
+  Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2, Trash2,
 } from "lucide-react";
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -304,6 +309,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [groupView, setGroupView]             = useState(true);   // group left panel by Tally parent_group
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
   const [aiRunning, setAiRunning]             = useState(false);
+  const [resetting, setResetting]             = useState(false);
+  const [pendingAiRemap, setPendingAiRemap]   = useState(false);
   // PY-first workflow mode for the left panel.
   //   "all"    — all unmapped ledgers
   //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
@@ -605,6 +612,68 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [coaMapping, engagementId]);
 
+  // ═══════ RESET & RE-MAP (clear all + auto + AI) ═══════
+  // After resetting, we need runAiMapping to run with a FRESH coaMapping closure.
+  // React's useCallback captures the current coaMapping value at render time, so
+  // we can't call runAiMapping() directly inside resetAndRemap (stale closure).
+  // Solution: set a flag that a useEffect watches. By the time the effect runs,
+  // React has re-rendered with the new coaMapping, giving runAiMapping a fresh closure.
+  useEffect(() => {
+    if (!pendingAiRemap || aiRunning) return;
+    setPendingAiRemap(false);
+    runAiMapping();
+  }, [pendingAiRemap, aiRunning, runAiMapping]);
+
+  const resetAndRemap = useCallback(async () => {
+    setResetting(true);
+    try {
+      // Step 1: Clear DB mapping
+      await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
+
+      // Step 2: Build fresh auto-mapping from scratch (no manual-override preservation)
+      const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;
+      const freshMapping: typeof coaMapping = {};
+      for (const acct of tbAccounts) {
+        let best: { code: string; confidence: string } | null = null;
+        const g = matchParentGroup(acct.account_group, groupTable);
+        if (g) best = { code: g.code, confidence: g.confidence };
+        const name = acct.account_name.toLowerCase();
+        for (const rule of activeAutoRules) {
+          if (rule.keywords.some(kw => name.includes(kw))) {
+            if (!best || confidenceRank(rule.confidence) > confidenceRank(best.confidence)) {
+              best = { code: rule.code, confidence: rule.confidence };
+            }
+          }
+        }
+        if (best) {
+          const lineItem = activeLeafItems.find(i => i.code === best!.code);
+          freshMapping[acct.account_name] = {
+            code: best.code,
+            noteRef: lineItem?.noteRef || null,
+            scheduleRef: lineItem?.scheduleRef || "",
+            confidence: best.confidence,
+          };
+        }
+      }
+
+      // Step 3: Persist fresh mapping + update React state
+      await supabase.from("audit_engagements").update({ coa_mapping: freshMapping } as any).eq("id", engagementId);
+      setCoaMapping(freshMapping);
+
+      const autoCount = Object.keys(freshMapping).length;
+      const remaining = tbAccounts.length - autoCount;
+      toast.success(`Reset done — auto-mapped ${autoCount}/${tbAccounts.length} accounts`, {
+        description: remaining > 0 ? `AI mapping ${remaining} remaining ledgers…` : "All ledgers auto-mapped.",
+      });
+
+      // Step 4: Signal AI re-map via flag — runs after React re-renders with fresh closure
+      if (remaining > 0) setPendingAiRemap(true);
+    } catch (e: any) {
+      toast.error("Reset failed: " + e.message);
+    } finally {
+      setResetting(false);
+    }
+  }, [engagementId, tbAccounts, isNonCorporate, activeAutoRules, activeLeafItems]);
   // ═══════ SMART MAP (with group propagation) ═══════
   // Whenever a user manually maps a ledger, Stage 6 learns that the Tally
   // parent_group it belongs to likely maps to the same FS code. We immediately
@@ -1374,10 +1443,40 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
               </label>
             </div>
 
-            <div className="ml-auto flex gap-1">
+            <div className="ml-auto flex gap-1 items-center">
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("low")}    className="text-amber-700 gap-1">Unmap Low</Button>
               <Button variant="ghost" size="sm" onClick={() => unmapByConfidence("medium")} className="text-amber-700 gap-1">Unmap Medium</Button>
               <Button variant="ghost" size="sm" onClick={clearAllMappings}                  className="text-destructive gap-1">Clear All</Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={resetting || aiRunning || !tbAccounts.length}
+                    className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                  >
+                    {resetting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                    Reset & Re-map
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Reset all COA mappings?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will <strong>delete every mapping</strong> for this engagement (including manually confirmed ones) and immediately re-run auto-mapping + AI from scratch using the latest Tally data.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={resetAndRemap}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Yes, reset & re-map
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           </div>
 
