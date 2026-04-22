@@ -384,6 +384,24 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && isNonCorporate,
   });
 
+  // ─── Fetch client address for NCE letter sheets ──────────────────────────
+  // The engagement prop from AuditPipeline only selects a subset of
+  // `clients` (name, entity_type, …) and does NOT include `address`, so the
+  // letter sheets need to fetch it directly. Mirrors what Stage 8's
+  // NCE*Letter components do.
+  const { data: clientDetail } = useQuery({
+    queryKey: ["client-detail-fs", engagement?.client_id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("clients")
+        .select("name, address")
+        .eq("id", engagement.client_id)
+        .maybeSingle();
+      return data as any;
+    },
+    enabled: !!engagement?.client_id && isNonCorporate,
+  });
+
   // ─── Fetch NCE letters (Client Certificate + Management Letter) ─────────
   // Stage 8 tabs 5 & 6 save to `nce_letters` (letter_type discriminator).
   // Pulled here so the Excel export can emit each letter as its own sheet.
@@ -1796,8 +1814,14 @@ export default function PipelineFinancialStatements({
         if (row?.letter_type) lettersByType[row.letter_type] = row;
       }
 
-      // Client address: `clients.address` is plain text in the schema.
-      const clientAddress = String((engagement as any)?.clients?.address || "").trim();
+      // Client address: `clients.address` is plain text in the schema. Pulled
+      // via the dedicated clientDetail query because the engagement prop from
+      // AuditPipeline doesn't select address.
+      const clientAddress = String(
+        (clientDetail as any)?.address
+          ?? (engagement as any)?.clients?.address
+          ?? ""
+      ).trim();
       // Firm address: `firms.address` is JSON — reuse the same flattening
       // rule as the Stage 8 components for parity with the on-screen letter.
       const flattenFirmAddr = (addr: unknown): string => {
@@ -1818,6 +1842,9 @@ export default function PipelineFinancialStatements({
         const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
         return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso);
       };
+      // Stage 8 UI defaults letter_date to today() when the user hasn't saved;
+      // mirror that here so the exported sheet isn't missing a date.
+      const todayIso = new Date().toISOString().slice(0, 10);
 
       // "2025-26" → "31st March, 2026"  (matches NCEManagementLetter helper)
       const fyEndDate = (fy: string): string => {
@@ -1829,45 +1856,59 @@ export default function PipelineFinancialStatements({
 
       // Shared letter-sheet scaffold — writes sender / recipient / date block
       // and returns a cursor + helpers for the body paragraphs.
-      const buildLetterSheet = (sheetName: string) => {
+      //
+      // Column layout: A spacer · B list-number · C body. Body cells are NOT
+      // merged — Excel won't auto-fit row height on merged wrapText cells, so
+      // we write paragraphs into C only (B stays empty for paragraphs) and
+      // compute an explicit row height from the text length.
+      const buildLetterSheet = (sheetName: string, letterType: "client_certificate" | "management_letter") => {
         const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] });
+        const BODY_WIDTH = 110;
         ws.columns = [
-          { width: 3  },  // A spacer
-          { width: 6  },  // B list number
-          { width: 92 },  // C body
+          { width: 3           },  // A spacer
+          { width: 5           },  // B list number
+          { width: BODY_WIDTH  },  // C body
         ];
+        // Approximate "characters per line" at our body-column width — used to
+        // set row heights for wrapped paragraphs so nothing gets cut off.
+        const CHARS_PER_LINE = 105;
+        const LINE_H         = 16;
+        const rowHeightFor = (text: string) => {
+          const lines = Math.max(1, Math.ceil((text?.length || 0) / CHARS_PER_LINE));
+          return lines * LINE_H;
+        };
+
         let r = 2;
 
         // Sender — entity name + address
-        ws.getCell(`B${r}`).value = letterClientName || "[Entity Name]";
-        ws.getCell(`B${r}`).font = { bold: true, size: 12 };
-        ws.mergeCells(`B${r}:C${r}`);
+        ws.getCell(`C${r}`).value = letterClientName || "[Entity Name]";
+        ws.getCell(`C${r}`).font = { bold: true, size: 12 };
         r++;
         if (clientAddress) {
-          ws.getCell(`B${r}`).value = clientAddress;
-          ws.getCell(`B${r}`).alignment = { wrapText: true };
-          ws.mergeCells(`B${r}:C${r}`);
+          ws.getCell(`C${r}`).value = clientAddress;
+          ws.getCell(`C${r}`).alignment = { wrapText: true, vertical: "top" };
+          ws.getRow(r).height = rowHeightFor(clientAddress);
           r++;
         }
-        // Date
-        ws.getCell(`B${r}`).value =
-          `Date : ${fmtLetterDate(lettersByType[sheetName === "Client Certificate" ? "client_certificate" : "management_letter"]?.letter_date)}`;
-        ws.mergeCells(`B${r}:C${r}`);
+        // Date — default to today (matches Stage 8 UI behaviour)
+        const rawDate = lettersByType[letterType]?.letter_date || todayIso;
+        ws.getCell(`C${r}`).value = `Date : ${fmtLetterDate(rawDate)}`;
         r += 2;
 
         // Recipient — "To," + firm name + address + FRN
-        ws.getCell(`B${r}`).value = "To,"; ws.mergeCells(`B${r}:C${r}`); r++;
-        ws.getCell(`B${r}`).value = firmName || "[Audit Firm Name]";
-        ws.getCell(`B${r}`).font = { bold: true };
-        ws.mergeCells(`B${r}:C${r}`); r++;
+        ws.getCell(`C${r}`).value = "To,"; r++;
+        ws.getCell(`C${r}`).value = firmName || "[Audit Firm Name]";
+        ws.getCell(`C${r}`).font = { bold: true };
+        r++;
         if (firmAddress) {
-          ws.getCell(`B${r}`).value = firmAddress;
-          ws.getCell(`B${r}`).alignment = { wrapText: true };
-          ws.mergeCells(`B${r}:C${r}`); r++;
+          ws.getCell(`C${r}`).value = firmAddress;
+          ws.getCell(`C${r}`).alignment = { wrapText: true, vertical: "top" };
+          ws.getRow(r).height = rowHeightFor(firmAddress);
+          r++;
         }
         if (firmFRN) {
-          ws.getCell(`B${r}`).value = `FRN: ${firmFRN}`;
-          ws.mergeCells(`B${r}:C${r}`); r++;
+          ws.getCell(`C${r}`).value = `FRN: ${firmFRN}`;
+          r++;
         }
         r++;
 
@@ -1875,14 +1916,14 @@ export default function PipelineFinancialStatements({
           ws,
           cursor: () => r,
           bump: (n = 1) => { r += n; },
-          // Write a full-width paragraph across B:C
+          // Write a full-width paragraph in column C
           writePara: (text: string, opts: { bold?: boolean; italic?: boolean } = {}) => {
-            ws.getCell(`B${r}`).value = text;
-            ws.mergeCells(`B${r}:C${r}`);
-            const c = ws.getCell(`B${r}`);
+            const c = ws.getCell(`C${r}`);
+            c.value = text;
             c.alignment = { wrapText: true, vertical: "top" };
             if (opts.bold)   c.font = { ...(c.font || {}), bold: true };
             if (opts.italic) c.font = { ...(c.font || {}), italic: true };
+            ws.getRow(r).height = rowHeightFor(text);
             r++;
           },
           // Write a numbered list item: B=number, C=body
@@ -1891,6 +1932,7 @@ export default function PipelineFinancialStatements({
             ws.getCell(`B${r}`).alignment = { vertical: "top", horizontal: "right" };
             ws.getCell(`C${r}`).value = text;
             ws.getCell(`C${r}`).alignment = { wrapText: true, vertical: "top" };
+            ws.getRow(r).height = rowHeightFor(text);
             r++;
           },
         };
@@ -1899,7 +1941,7 @@ export default function PipelineFinancialStatements({
       // ── Client Certificate ──────────────────────────────────────────────
       {
         const cert = lettersByType["client_certificate"] || {};
-        const L = buildLetterSheet("Client Certificate");
+        const L = buildLetterSheet("Client Certificate", "client_certificate");
 
         L.writePara("Dear Sir,");
         L.bump();
@@ -1936,7 +1978,7 @@ export default function PipelineFinancialStatements({
 
       // ── Management Letter ──────────────────────────────────────────────
       {
-        const L = buildLetterSheet("Management Letter");
+        const L = buildLetterSheet("Management Letter", "management_letter");
         L.writePara(`Subject : Appointment as Tax Auditors for Financial year ${fyStr || "[FY]"}`, { bold: true });
         L.bump();
         L.writePara("Dear Sir,");
