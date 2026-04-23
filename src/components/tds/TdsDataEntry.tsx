@@ -29,9 +29,10 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
-  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet,
+  CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
 import { generateGeniusExport } from "@/lib/genius-export";
+import { importGeniusXls } from "@/lib/genius-import";
 
 // ─── Types ───
 interface ClientOption { id: string; name: string | null; pan: string | null; tan_number?: string | null; }
@@ -266,6 +267,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
   const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
 
   // Challan dialog
@@ -972,6 +975,59 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     }
   };
 
+  // ─── Genius Import — reads a Genius-format .xls and populates challans + deductees ───
+  const handleGeniusImportClick = () => {
+    if (!filing || !client) {
+      toast({ title: "Select a filing first", description: "Pick Client / FY / Quarter / Form before importing.", variant: "destructive" });
+      return;
+    }
+    importFileInputRef.current?.click();
+  };
+
+  const handleGeniusImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again still triggers onChange
+    if (importFileInputRef.current) importFileInputRef.current.value = "";
+    if (!file) return;
+    if (!filing || !client) {
+      toast({ title: "Select a filing first", variant: "destructive" });
+      return;
+    }
+
+    setImportLoading(true);
+    try {
+      const firmId = await resolveFirmId();
+      const result = await importGeniusXls(
+        file,
+        filing,
+        client,
+        selForm,
+        selFy,
+        selQuarter,
+        firmId || filing.firm_id || null,
+      );
+      // Refresh the UI with newly inserted data
+      await fetchChallans(filing.id);
+      const warningText = result.warnings.length
+        ? ` (${result.warnings.length} warning${result.warnings.length > 1 ? "s" : ""} — see console)`
+        : "";
+      if (result.warnings.length) console.warn("[GeniusImport] Warnings:", result.warnings);
+      toast({
+        title: "Genius file imported successfully",
+        description: `Added ${result.challansInserted} challan(s) and ${result.deducteesInserted} deductee(s)${warningText}`,
+      });
+    } catch (err: any) {
+      console.error("[GeniusImport] Failed:", err);
+      toast({
+        title: "Import failed",
+        description: err?.message || String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   // ─── Render ───
   return (
     <div className="space-y-4">
@@ -1045,12 +1101,33 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <Lock size={10} /> Data Entry Locked — Filed
                 </Badge>
               )}
+              {/* Import Genius Excel — parses a Genius-format .xls and pre-fills challans + deductees */}
+              <input
+                ref={importFileInputRef}
+                type="file"
+                accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={handleGeniusImportFile}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto gap-1.5"
+                disabled={importLoading || exportLoading}
+                onClick={handleGeniusImportClick}
+              >
+                {importLoading
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <Upload size={14} />}
+                Import Genius Excel
+              </Button>
+
               {/* CP-05: Generate Genius Excel */}
               <Button
                 size="sm"
-                className="ml-auto gap-1.5"
+                className="gap-1.5"
                 style={{ backgroundColor: "#1A2744", color: "#C9A84C" }}
-                disabled={exportLoading}
+                disabled={exportLoading || importLoading}
                 onClick={handleGeniusExport}
               >
                 {exportLoading
