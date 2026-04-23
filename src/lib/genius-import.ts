@@ -421,8 +421,59 @@ export async function importGeniusXls(
     );
   }
 
+  // ── Duplicate detection: (BSR, Serial) must be globally unique ───────────
+  // Skip any challan whose BSR + Serial No. already exists anywhere in
+  // tds_challans. Carry-forward is the correct way to use a prior-quarter
+  // challan's unused balance — re-adding it would double-count.
+  const challanSigs = parsed.challans
+    .filter(c => c.bsrCode && c.bankChallanNo)
+    .map(c => `${c.bsrCode}|${c.bankChallanNo}`);
+  const existingSigs = new Set<string>();
+  if (challanSigs.length > 0) {
+    const bsrList = Array.from(new Set(parsed.challans.map(c => c.bsrCode).filter(Boolean)));
+    const serialList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
+    const { data: existing } = await supabase
+      .from("tds_challans")
+      .select("bsr_code, challan_serial_no, quarter, financial_year, form_type")
+      .in("bsr_code", bsrList)
+      .in("challan_serial_no", serialList);
+    (existing || []).forEach((row: any) => {
+      existingSigs.add(`${row.bsr_code}|${row.challan_serial_no}`);
+    });
+  }
+
+  const dupChallans: number[] = [];
+  const newChallans: typeof parsed.challans = [];
+  parsed.challans.forEach(c => {
+    const sig = `${c.bsrCode}|${c.bankChallanNo}`;
+    if (existingSigs.has(sig)) {
+      dupChallans.push(c.serialNo);
+    } else {
+      newChallans.push(c);
+    }
+  });
+
+  if (dupChallans.length > 0) {
+    warnings.push(
+      `Skipped ${dupChallans.length} duplicate challan(s) (already exists in another filing): ` +
+      `Serial${dupChallans.length > 1 ? "s" : ""} ${dupChallans.slice(0, 5).join(", ")}${dupChallans.length > 5 ? "…" : ""}. ` +
+      `A TDS challan can only exist in one filing — unused balance flows to later quarters via Carry-Forward.`
+    );
+  }
+  if (newChallans.length === 0) {
+    return {
+      parsed,
+      challansInserted: 0,
+      deducteesInserted: 0,
+      warnings: [
+        ...warnings,
+        "All challans in this file already exist in another filing — nothing new was imported.",
+      ],
+    };
+  }
+
   // ── Insert challans ──────────────────────────────────────────────────────
-  const challanPayloads = parsed.challans.map(c => {
+  const challanPayloads = newChallans.map(c => {
     const p: any = {
       filing_id: filing.id,
       client_id: filing.client_id,
@@ -473,16 +524,18 @@ export async function importGeniusXls(
     }
   }
 
-  if (!insertedChallans || insertedChallans.length !== parsed.challans.length) {
+  if (!insertedChallans || insertedChallans.length !== newChallans.length) {
     throw new Error(
-      `Inserted ${insertedChallans?.length ?? 0} challans but expected ${parsed.challans.length}`
+      `Inserted ${insertedChallans?.length ?? 0} challans but expected ${newChallans.length}`
     );
   }
 
   // Build map: Genius serial no (1,2,3…) → new DB UUID.
-  // Insert order matches parsed order, so index i → parsed.challans[i].serialNo.
+  // Insert order matches the FILTERED list (newChallans). Skipped duplicates
+  // are NOT in this map — deductees that reference a skipped challan will be
+  // caught as orphans below.
   const serialToId = new Map<number, string>();
-  parsed.challans.forEach((ch, i) => {
+  newChallans.forEach((ch, i) => {
     serialToId.set(ch.serialNo, insertedChallans![i].id as string);
   });
 
@@ -498,10 +551,16 @@ export async function importGeniusXls(
 
   const deducteePayloads: any[] = [];
   const orphanDeductees: number[] = [];
+  const skippedForDupChallan: number[] = [];
+  const dupChallanSet = new Set(dupChallans); // serials of challans skipped as duplicates
   parsed.deductees.forEach((d, idx) => {
     const challanId = serialToId.get(d.challanSerialNo);
     if (!challanId) {
-      orphanDeductees.push(idx + 2); // row number in Excel (1-indexed + header)
+      if (dupChallanSet.has(d.challanSerialNo)) {
+        skippedForDupChallan.push(idx + 2);
+      } else {
+        orphanDeductees.push(idx + 2); // row number in Excel (1-indexed + header)
+      }
       return;
     }
     deducteePayloads.push({
@@ -535,6 +594,12 @@ export async function importGeniusXls(
     warnings.push(
       `Skipped ${orphanDeductees.length} deductee row(s) that reference a Challan Serial No. ` +
       `not present in the Challan Details sheet (excel rows: ${orphanDeductees.slice(0, 5).join(", ")}${orphanDeductees.length > 5 ? "…" : ""}).`
+    );
+  }
+  if (skippedForDupChallan.length > 0) {
+    warnings.push(
+      `Skipped ${skippedForDupChallan.length} deductee row(s) whose challan was rejected as a duplicate — ` +
+      `those deductees already exist under the original challan in its own filing.`
     );
   }
 

@@ -573,6 +573,32 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (!challanForm.challan_serial_no || challanForm.challan_serial_no.length !== 5) {
       toast({ title: "Serial No must be 5 digits", variant: "destructive" }); return;
     }
+
+    // ── Uniqueness check: (BSR, Serial) must be globally unique ─────────────
+    // A TDS challan is a unique bank deposit — it cannot legitimately appear in
+    // two filings. Its unused balance flows to later quarters via CARRY-FORWARD,
+    // not by re-adding the challan. Skip this check when editing the same row.
+    const dupQuery = supabase
+      .from("tds_challans")
+      .select("id, filing_id, financial_year, quarter, form_type, client_id")
+      .eq("bsr_code", challanForm.bsr_code)
+      .eq("challan_serial_no", challanForm.challan_serial_no);
+    if (editingChallan?.id) dupQuery.neq("id", editingChallan.id);
+    const { data: dupRows } = await dupQuery.limit(1);
+    if (dupRows && dupRows.length > 0) {
+      const d = dupRows[0] as any;
+      const sameClient = d.client_id === filing.client_id;
+      const whereMsg = sameClient
+        ? `${d.form_type} ${d.quarter} ${d.financial_year} of this client`
+        : `another client's ${d.form_type} ${d.quarter} ${d.financial_year} filing`;
+      toast({
+        title: "Duplicate challan",
+        description: `BSR ${challanForm.bsr_code} + Serial ${challanForm.challan_serial_no} already exists in ${whereMsg}. A challan can only exist in one filing — its balance flows to later quarters via Carry-Forward.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const firmId = await resolveFirmId();
     const payload: any = {
       filing_id: filing.id, client_id: filing.client_id,
