@@ -36,6 +36,7 @@ import type { FSLineItem } from "@/config/nceLineItems";
 // ═══════════════════════════════════════
 const NON_CORPORATE = [
   "Partnership", "LLP", "Limited Liability Partnership",
+  "Firm",                                     // ← added: entity_type exactly "Firm"
   "Proprietorship", "Sole Proprietorship",
   "HUF", "Hindu Undivided Family",
   "Trust",
@@ -516,13 +517,22 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
     // Fallback: tb_hierarchy_nodes leaf nodes (modern manual upload path)
     if (tbLeafNodes?.length) {
-      return tbLeafNodes.map((n: any) => ({
-        account_name: n.name || "",
-        account_group: n.primary_group || n.group_name || "",
-        debit: n.txn_debit || 0,
-        credit: n.txn_credit || 0,
-        balance: (n.txn_debit || 0) - (n.txn_credit || 0),
-      })).filter(a => a.account_name);
+      return tbLeafNodes.map((n: any) => {
+        const debit  = Number(n.txn_debit  ?? n.opening_debit  ?? 0);
+        const credit = Number(n.txn_credit ?? n.opening_credit ?? 0);
+        // opening_balance: positive = Dr, negative = Cr (matches Tally sync convention)
+        const openingDr = Number(n.opening_debit  ?? 0);
+        const openingCr = Number(n.opening_credit ?? 0);
+        const opening   = openingDr - openingCr;
+        return {
+          account_name:   n.name || "",
+          account_group:  n.primary_group || n.group_name || "",
+          debit,
+          credit,
+          balance: debit - credit,
+          opening_balance: opening,
+        };
+      }).filter(a => a.account_name);
     }
     // Last resort: legacy trial_balance_snapshots import
     if (tbSnapshot?.normalised_data) {
@@ -911,7 +921,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       }
     }
     setCoaMapping(merged);
-    toast.success(`Imported ${imported} mappings from prior year`);
+    // Persist imported mapping to DB so it survives a page refresh
+    try {
+      await supabase.from("audit_engagements").update({ coa_mapping: merged } as any).eq("id", engagementId);
+      toast.success(`Imported ${imported} mappings from prior year`, {
+        description: "Saved to engagement — refreshing will retain these mappings.",
+      });
+    } catch (e: any) {
+      toast.error("Mappings imported locally but failed to save: " + e.message);
+    }
   };
 
   // ═══════ MAP SIMILAR ═══════
