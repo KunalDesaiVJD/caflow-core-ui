@@ -310,7 +310,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [expandedGroups, setExpandedGroups]   = useState<Record<string, boolean>>({});
   const [aiRunning, setAiRunning]             = useState(false);
   const [resetting, setResetting]             = useState(false);
-  const [pendingAiRemap, setPendingAiRemap]   = useState(false);
   // PY-first workflow mode for the left panel.
   //   "all"    — all unmapped ledgers
   //   "py"     — ledgers with opening_balance ≠ 0 (map these first; propagates to CY)
@@ -652,11 +651,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const autoCount = Object.keys(freshMapping).length;
       const remaining = tbAccounts.length - autoCount;
       toast.success(`Reset done — auto-mapped ${autoCount}/${tbAccounts.length} accounts`, {
-        description: remaining > 0 ? `AI mapping ${remaining} remaining ledgers…` : "All ledgers auto-mapped.",
+        description: remaining > 0 ? `${remaining} ledgers still unmapped — click "AI Map Remaining" to run AI.` : "All ledgers auto-mapped.",
       });
-
-      // Step 4: Signal AI re-map via flag — runs after React re-renders with fresh closure
-      if (remaining > 0) setPendingAiRemap(true);
     } catch (e: any) {
       toast.error("Reset failed: " + e.message);
     } finally {
@@ -792,13 +788,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [aiRunning, tbAccounts, hideZero, coaMapping, activeLeafItems, isNonCorporate, engagementId]);
 
-  // Trigger AI re-map after resetAndRemap clears state and React re-renders.
-  // The useEffect must live AFTER runAiMapping is defined so it has a valid closure.
-  useEffect(() => {
-    if (!pendingAiRemap || aiRunning) return;
-    setPendingAiRemap(false);
-    runAiMapping();
-  }, [pendingAiRemap, aiRunning, runAiMapping]);
 
   // ═══════ GROUP ACTIONS ═══════
   const assignGroup = useCallback(async (groupName: string, fsCode: string) => {
@@ -1037,12 +1026,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [tbAccounts, coaMapping, isNonCorporate]);
 
   // ═══════ OPENING-TB BALANCE CHECK (Task 2) ═══════
-  // Sum signed opening_balance across all ledgers — should net to zero for a
-  // balanced opening trial balance (Dr = Cr). Threshold = ₹1 to ignore rounding.
+  // Sum opening Dr vs Cr directly from tallyTb (authoritative source).
+  // Only shown when using Tally Sync data; if tbSnapshot/tbLeafNodes path is active,
+  // tallyTb is empty and we skip the banner entirely.
   const openingTbDiff = useMemo(() => {
-    const sum = tbAccounts.reduce((s, a) => s + (a.opening_balance ?? 0), 0);
-    return Math.round(sum * 100) / 100;
-  }, [tbAccounts]);
+    if (!tallyTb?.length) return 0;
+    const dr = (tallyTb as any[]).reduce((s, l) =>
+      String(l.opening_type ?? "").toUpperCase() === "DR" ? s + Math.abs(Number(l.opening_balance ?? 0)) : s, 0);
+    const cr = (tallyTb as any[]).reduce((s, l) =>
+      String(l.opening_type ?? "").toUpperCase() === "CR" ? s + Math.abs(Number(l.opening_balance ?? 0)) : s, 0);
+    return Math.round((dr - cr) * 100) / 100;
+  }, [tallyTb]);
   const openingTbImbalanced = Math.abs(openingTbDiff) >= 1;
 
   // ═══════ VARIANCE DRILL-DOWN (Task 4) ═══════
@@ -1110,16 +1104,19 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const filteredAccounts = useMemo(() => {
     const s = search.toLowerCase();
     return tbAccounts.filter(a => {
-      const opening = a.opening_balance ?? 0;
-      const closing = a.balance;
+      const opening  = a.opening_balance ?? 0;
+      const closing  = a.balance;
       const hasOpen  = Math.abs(opening) >= 0.005;
       const hasClose = Math.abs(closing) >= 0.005;
-      if (hideZero && !hasOpen && !hasClose) return false;
+      const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
+      // hideZero: hide only accounts with no balance AND no turnover
+      if (hideZero && !hasOpen && !hasClose && !hasTurnover) return false;
 
       // Workflow-mode narrowing
       if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
       if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
       if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
+      // "all" mode: include everything not excluded above (incl. turnover-only accounts)
 
       if (!s) return true;
       return (
@@ -1144,13 +1141,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const modeCounts = useMemo(() => {
     let py = 0, cy = 0, closed = 0, all = 0;
     for (const a of tbAccounts) {
-      const hasOpen  = Math.abs(a.opening_balance ?? 0) >= 0.005;
-      const hasClose = Math.abs(a.balance) >= 0.005;
-      if (!hasOpen && !hasClose) continue;               // dormant both years
+      const hasOpen     = Math.abs(a.opening_balance ?? 0) >= 0.005;
+      const hasClose    = Math.abs(a.balance) >= 0.005;
+      const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
+      if (!hasOpen && !hasClose && !hasTurnover) continue;  // truly dormant — skip
       if (!coaMapping[a.account_name]) all++;
       if (hasOpen  && !coaMapping[a.account_name]) py++;
       if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
-      if (hasOpen  && !hasClose) closed++;               // review regardless of mapped state
+      if (hasOpen  && !hasClose) closed++;                  // review regardless of mapped state
     }
     return { py, cy, closed, all };
   }, [tbAccounts, coaMapping]);
