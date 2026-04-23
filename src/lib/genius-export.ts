@@ -115,64 +115,80 @@ const fyToAY = (fy: string): string => {
 };
 
 /**
- * Save an ArrayBuffer to the user's machine.
- *
- * Prefers the File System Access API (showSaveFilePicker) on Chrome/Edge
- * because files written via this API do NOT get tagged with Windows'
- * Mark-of-the-Web (Zone.Identifier: ZoneId=3). That tag causes Office
- * 2016+ to block .xls files from opening with
- *   "Office has detected a problem with this file"
- * — which is what Genius hits when it calls Workbooks.Open on the export.
- *
- * Falling back to <a download> for browsers without File System Access API
- * (Firefox, Safari) — on those the user will still need to right-click →
- * Properties → Unblock once per download.
+ * Minimal FileSystemFileHandle shape we use — just createWritable.
  */
-const triggerDownload = async (
-  buffer: ArrayBuffer,
+type MiniFileHandle = {
+  createWritable: () => Promise<{
+    write: (data: ArrayBuffer | Blob) => Promise<void>;
+    close: () => Promise<void>;
+  }>;
+};
+
+/**
+ * Ask the user where to save the file — MUST be called synchronously after a
+ * user click, BEFORE any await of heavy async work. Chrome invalidates the
+ * "user activation" token after an await chain, which silently breaks
+ * showSaveFilePicker (it would throw SecurityError and we'd fall back to
+ * auto-download, which tags the file with Mark-of-the-Web).
+ *
+ * Returns a FileSystemFileHandle we can write to later, or null if the
+ * browser doesn't support the API (Firefox/Safari). AbortError is rethrown
+ * so the caller can exit cleanly when the user cancels.
+ */
+const acquireSaveHandle = async (
   fileName: string,
   mimeType: string,
-): Promise<void> => {
-  // Modern path: File System Access API writes direct to disk (no MOTW).
+): Promise<MiniFileHandle | null> => {
   const w = window as unknown as {
     showSaveFilePicker?: (opts: {
       suggestedName: string;
       types: Array<{ description: string; accept: Record<string, string[]> }>;
-    }) => Promise<{
-      createWritable: () => Promise<{
-        write: (data: ArrayBuffer | Blob) => Promise<void>;
-        close: () => Promise<void>;
-      }>;
-    }>;
+    }) => Promise<MiniFileHandle>;
   };
 
-  if (typeof w.showSaveFilePicker === "function") {
-    try {
-      const isXls = fileName.toLowerCase().endsWith(".xls");
-      const handle = await w.showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{
-          description: isXls ? "Excel 97-2003 Workbook (Genius-compatible)" : "Excel Workbook",
-          accept: { [mimeType]: [isXls ? ".xls" : ".xlsx"] },
-        }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(buffer);
-      await writable.close();
-      console.log("[GeniusExport] Saved via File System Access API — no Mark-of-the-Web");
-      return;
-    } catch (err: unknown) {
-      // User cancelled the save dialog — rethrow so caller sees "cancelled"
-      if (err && typeof err === "object" && (err as { name?: string }).name === "AbortError") {
-        throw err;
-      }
-      // Any other error: fall through to legacy download so we at least save SOMEWHERE
-      console.warn("[GeniusExport] showSaveFilePicker failed, falling back to legacy download:", err);
-    }
+  if (typeof w.showSaveFilePicker !== "function") {
+    console.log("[GeniusExport] File System Access API unavailable — will use legacy download");
+    return null;
   }
 
-  // Legacy fallback: <a download> — file WILL get Mark-of-the-Web on Windows
-  console.warn("[GeniusExport] Using legacy download — file may need manual Unblock on Windows");
+  try {
+    const isXls = fileName.toLowerCase().endsWith(".xls");
+    const handle = await w.showSaveFilePicker({
+      suggestedName: fileName,
+      types: [{
+        description: isXls ? "Excel 97-2003 Workbook (Genius-compatible)" : "Excel Workbook",
+        accept: { [mimeType]: [isXls ? ".xls" : ".xlsx"] },
+      }],
+    });
+    console.log("[GeniusExport] Got save handle — file will be written without Mark-of-the-Web");
+    return handle;
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && (err as { name?: string }).name === "AbortError") {
+      throw err;
+    }
+    console.warn("[GeniusExport] showSaveFilePicker failed:", err);
+    return null; // fall back to <a download>
+  }
+};
+
+/**
+ * Write the generated buffer either to the pre-acquired FileSystemFileHandle
+ * (no MOTW) or via a legacy <a download> click (MOTW applied).
+ */
+const writeToDisk = async (
+  handle: MiniFileHandle | null,
+  buffer: ArrayBuffer,
+  fileName: string,
+  mimeType: string,
+): Promise<void> => {
+  if (handle) {
+    const writable = await handle.createWritable();
+    await writable.write(buffer);
+    await writable.close();
+    console.log("[GeniusExport] Saved via File System Access API — file is clean (no MOTW)");
+    return;
+  }
+  console.warn("[GeniusExport] Using legacy download — file will get Mark-of-the-Web on Windows");
   const blob = new Blob([buffer], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -210,6 +226,16 @@ export async function generateGeniusExport(
   if (challans.length === 0) {
     throw new Error("No challan data available for export. Add challans before exporting.");
   }
+
+  // ── Acquire save handle FIRST (must happen before any other await) ────────
+  // Chrome invalidates the user-activation token after an await chain.
+  // If we call showSaveFilePicker after the Supabase/XLSX work, Chrome
+  // throws SecurityError and we'd silently fall back to auto-download —
+  // which tags the file with Mark-of-the-Web and Office would refuse to
+  // open it in Genius. Calling it here preserves the user gesture.
+  const safeClientName = (client.name || "Client").replace(/[^a-zA-Z0-9]/g, "_");
+  const suggestedFileName = `Genius_${formType}_${safeClientName}_${filing.financial_year || "FY"}_${filing.quarter || "Q1"}.xls`;
+  const saveHandle = await acquireSaveHandle(suggestedFileName, "application/vnd.ms-excel");
 
   // ── A: Load template ───────────────────────────────────────────────────────
   // Priority: Supabase Storage (user-uploaded) → public folder bundled template → error
@@ -635,14 +661,9 @@ export async function generateGeniusExport(
     console.log("[GeniusExport] ✓ Verified BIFF8 (.xls) format — Genius-compatible");
   }
 
-  const safeClientName = (client.name || "Client").replace(/[^a-zA-Z0-9]/g, "_");
-  const fileName = `Genius_${formType}_${safeClientName}_${filing.financial_year || "FY"}_${quarter}.xls`;
+  // Write to the save handle we acquired up-front (clean file, no MOTW) or
+  // fall back to legacy download if the browser doesn't support the API.
+  await writeToDisk(saveHandle, xlsArray, suggestedFileName, "application/vnd.ms-excel");
 
-  await triggerDownload(
-    xlsArray,
-    fileName,
-    "application/vnd.ms-excel"
-  );
-
-  console.log("[GeniusExport] Export complete:", fileName);
+  console.log("[GeniusExport] Export complete:", suggestedFileName);
 }
