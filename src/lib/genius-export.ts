@@ -1,12 +1,17 @@
 /**
  * Genius XLS Export — writes TDS return data into Genius-compatible Excel templates.
  *
+ * Output is BIFF8 (.xls) because Genius VBA uses Workbooks.Open which cannot
+ * read OOXML (.xlsx) — giving Genius a .xlsx produces "Unable to get the Open
+ * property of the Workbooks class" etc.
+ *
  * Architecture:
  *  1. Load .xls template (Supabase Storage → public folder fallback → error if missing)
  *  2. Convert .xls → .xlsx buffer via SheetJS (ExcelJS only supports xlsx)
  *  3. Load .xlsx into ExcelJS for structured row-by-row writing
  *  4. Rename worksheets to Genius-expected names
- *  5. Save via workbook.xlsx.writeBuffer() → Blob → browser download
+ *  5. ExcelJS → xlsx buffer → SheetJS round-trip → BIFF8 (.xls) buffer
+ *  6. Download as .xls with application/vnd.ms-excel mime type
  *
  * Template sheet names (internal → Genius import expected):
  *   DeductorDetails / EmployerDetails / CollectorDetails  → Deductor/Employer/Collector Details
