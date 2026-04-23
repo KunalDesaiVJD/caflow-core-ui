@@ -388,6 +388,39 @@ export async function importGeniusXls(
     }
   }
 
+  // ── Resolve bank names from prior challans (Genius file has no bank name col) ──
+  // For each unique BSR code in the file, check if this firm has a previous
+  // challan with the same BSR that has a bank_name filled in, and reuse it.
+  // This means: once the user fills bank_name for a BSR code anywhere in the
+  // app, all future Genius imports with that BSR auto-populate it.
+  const bankByBsr = new Map<string, string>();
+  const uniqueBsrs = Array.from(new Set(parsed.challans.map(c => c.bsrCode).filter(Boolean)));
+  if (firmId && uniqueBsrs.length > 0) {
+    try {
+      const { data: priorChallans } = await supabase
+        .from("tds_challans")
+        .select("bsr_code, bank_name")
+        .eq("firm_id", firmId)
+        .in("bsr_code", uniqueBsrs)
+        .not("bank_name", "is", null);
+      (priorChallans || []).forEach((row: any) => {
+        const bn = String(row.bank_name || "").trim();
+        if (bn && !bankByBsr.has(row.bsr_code)) {
+          bankByBsr.set(row.bsr_code, bn);
+        }
+      });
+    } catch (e) {
+      console.warn("[GeniusImport] Bank-name BSR lookup failed:", e);
+    }
+  }
+  const missingBankBsrs = uniqueBsrs.filter(b => !bankByBsr.has(b));
+  if (missingBankBsrs.length > 0) {
+    warnings.push(
+      `Bank name not set for BSR ${missingBankBsrs.slice(0, 3).join(", ")}${missingBankBsrs.length > 3 ? "…" : ""}. ` +
+      `Genius files don't carry the bank name — edit each challan once to fill it; future imports with the same BSR will auto-populate.`
+    );
+  }
+
   // ── Insert challans ──────────────────────────────────────────────────────
   const challanPayloads = parsed.challans.map(c => {
     const p: any = {
@@ -412,6 +445,7 @@ export async function importGeniusXls(
       section_code: c.sectionCode || null,
       late_fees_234e: c.lateFee234E,
       cheque_dd_no: c.chequeDdNo || null,
+      bank_name: bankByBsr.get(c.bsrCode) || null,
     };
     return p;
   });
