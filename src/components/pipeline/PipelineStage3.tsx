@@ -359,24 +359,40 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     queryKey: ["tally-tb-stage3", engagement?.client_id, engagement?.financial_year],
     queryFn: async () => {
       if (!engagement?.client_id) return [];
+      const clientId = engagement.client_id;
       let tallyEngId: string | null = null;
+
+      // Step 1: exact client_id + financial_year match
       if (engagement.financial_year) {
-        const { data: tEng } = await supabase
-          .from("engagements")
+        const { data } = await supabase
+          .from("engagements" as any)
           .select("id")
-          .eq("client_id", engagement.client_id)
+          .eq("client_id", clientId)
           .eq("financial_year", engagement.financial_year)
           .maybeSingle();
-        tallyEngId = (tEng as any)?.id ?? null;
+        tallyEngId = (data as any)?.id ?? null;
       }
+      // Step 2: any engagement for this client (most recent FY) — same as TallySyncPage
       if (!tallyEngId) {
-        const { data: tg } = await supabase
-          .from("tally_groups")
-          .select("engagement_id")
-          .eq("client_id", engagement.client_id)
+        const { data } = await supabase
+          .from("engagements" as any)
+          .select("id")
+          .eq("client_id", clientId)
+          .order("financial_year", { ascending: false })
           .limit(1)
           .maybeSingle();
-        tallyEngId = (tg as any)?.engagement_id ?? null;
+        tallyEngId = (data as any)?.id ?? null;
+      }
+      // Step 3: read engagement_id from tally_groups rows for this client
+      if (!tallyEngId) {
+        const { data } = await supabase
+          .from("tally_groups" as any)
+          .select("engagement_id")
+          .eq("client_id", clientId)
+          .order("financial_year", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        tallyEngId = (data as any)?.engagement_id ?? null;
       }
       if (!tallyEngId) return [];
       const { data } = await supabase
