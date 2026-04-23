@@ -360,13 +360,27 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     queryFn: async () => {
       const TB_COLS = "ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount";
 
-      // Step 0: direct lookup — works when auto-setup.js stored audit_engagements.id
+      // PostgREST caps a single response at 1000 rows — must paginate.
+      async function fetchAllTB(engId: string): Promise<any[]> {
+        const PAGE = 1000;
+        const all: any[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await supabase
+            .from("tally_trial_balance")
+            .select(TB_COLS)
+            .eq("engagement_id", engId)
+            .range(from, from + PAGE - 1);
+          if (error || !data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+        }
+        return all;
+      }
+
+      // Step 0: direct lookup with audit_engagements.id
       if (engagementId) {
-        const { data } = await supabase
-          .from("tally_trial_balance")
-          .select(TB_COLS)
-          .eq("engagement_id", engagementId);
-        if (data?.length) return data as any[];
+        const rows = await fetchAllTB(engagementId);
+        if (rows.length) return rows;
       }
 
       if (!engagement?.client_id) return [];
@@ -385,11 +399,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         .maybeSingle();
       const batchEngId: string | null = (batchRow as any)?.engagement_id ?? null;
       if (batchEngId && batchEngId !== engagementId) {
-        const { data } = await supabase
-          .from("tally_trial_balance")
-          .select(TB_COLS)
-          .eq("engagement_id", batchEngId);
-        if (data?.length) return data as any[];
+        const rows = await fetchAllTB(batchEngId);
+        if (rows.length) return rows;
       }
 
       // Step 2: legacy engagements table lookup by client_id + FY
@@ -415,11 +426,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         tallyEngId = (data as any)?.id ?? null;
       }
       if (!tallyEngId) return [];
-      const { data } = await supabase
-        .from("tally_trial_balance")
-        .select(TB_COLS)
-        .eq("engagement_id", tallyEngId);
-      return (data || []) as any[];
+      return fetchAllTB(tallyEngId);
     },
     enabled: !!engagementId,
   });
