@@ -573,6 +573,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (!challanForm.challan_serial_no || challanForm.challan_serial_no.length !== 5) {
       toast({ title: "Challan Number must be 5 digits", variant: "destructive" }); return;
     }
+    // Reject numeric-only Bank Name values (likely an amount typed into the wrong field)
+    if (challanForm.bank_name && /^[\d,.\s]+$/.test(challanForm.bank_name.trim())) {
+      toast({ title: "Bank Name must be a name, not a number", description: "Clear the field or enter the actual bank name (e.g. ICICI Bank).", variant: "destructive" }); return;
+    }
 
     // ── Uniqueness check: Challan Number must be globally unique ─────────────
     // BSR code can legitimately repeat (same bank branch receives many challans),
@@ -1889,7 +1893,14 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">Bank Name</Label>
-                <Input value={challanForm.bank_name || ""} onChange={e => setChallanForm(p => ({ ...p, bank_name: e.target.value }))} />
+                <Input
+                  value={challanForm.bank_name || ""}
+                  onChange={e => setChallanForm(p => ({ ...p, bank_name: e.target.value }))}
+                  placeholder="e.g. ICICI Bank"
+                />
+                {challanForm.bank_name && /^[\d,.\s]+$/.test(challanForm.bank_name.trim()) && (
+                  <p className="text-[10px] text-destructive">Bank Name should not be a number. Enter the bank's name (e.g. HDFC Bank, SBI) or leave blank.</p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Section</Label>

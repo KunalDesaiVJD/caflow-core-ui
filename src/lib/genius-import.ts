@@ -390,23 +390,47 @@ export async function importGeniusXls(
 
   // ── Resolve bank names from prior challans (Genius file has no bank name col) ──
   // For each unique BSR code in the file, check if this firm has a previous
-  // challan with the same BSR that has a bank_name filled in, and reuse it.
-  // This means: once the user fills bank_name for a BSR code anywhere in the
-  // app, all future Genius imports with that BSR auto-populate it.
+  // challan with the same BSR that has a VALID bank_name filled in, and reuse
+  // it. A valid bank name is any non-empty string that isn't purely numeric
+  // (e.g. "30,000" or "5000" — those are amounts accidentally entered in the
+  // bank field, not bank names).
+  const isValidBankName = (s: string | null | undefined): boolean => {
+    if (!s) return false;
+    const v = String(s).trim();
+    if (!v) return false;
+    // Reject values that are only digits/commas/periods/spaces (amounts)
+    if (/^[\d,.\s]+$/.test(v)) return false;
+    return true;
+  };
+
   const bankByBsr = new Map<string, string>();
   const uniqueBsrs = Array.from(new Set(parsed.challans.map(c => c.bsrCode).filter(Boolean)));
   if (firmId && uniqueBsrs.length > 0) {
     try {
       const { data: priorChallans } = await supabase
         .from("tds_challans")
-        .select("bsr_code, bank_name")
+        .select("id, bsr_code, bank_name")
         .eq("firm_id", firmId)
         .in("bsr_code", uniqueBsrs)
         .not("bank_name", "is", null);
+
+      // One-time data cleanup: any prior challans whose bank_name is purely
+      // numeric got there by mistake (amount typed into wrong field OR was
+      // propagated from a previous buggy import). Reset them to null so they
+      // don't keep propagating on every future import.
+      const badIds = (priorChallans || [])
+        .filter((r: any) => r.bank_name && !isValidBankName(r.bank_name))
+        .map((r: any) => r.id);
+      if (badIds.length > 0) {
+        await supabase.from("tds_challans")
+          .update({ bank_name: null })
+          .in("id", badIds);
+        warnings.push(`Cleared ${badIds.length} challan(s) that had a numeric value stored in Bank Name (likely an accidental amount entry). Re-enter the actual bank name via Edit Challan if needed.`);
+      }
+
       (priorChallans || []).forEach((row: any) => {
-        const bn = String(row.bank_name || "").trim();
-        if (bn && !bankByBsr.has(row.bsr_code)) {
-          bankByBsr.set(row.bsr_code, bn);
+        if (isValidBankName(row.bank_name) && !bankByBsr.has(row.bsr_code)) {
+          bankByBsr.set(row.bsr_code, String(row.bank_name).trim());
         }
       });
     } catch (e) {
