@@ -913,6 +913,61 @@ export default function TallySyncPage() {
     for (const [grp, rows] of byGroup.entries()) {
       if (!placed.has(grp)) result.push(makeGroup(grp, isRevenueGroup(grp), rows));
     }
+
+    // ── Second pass: populate ancestor-group totals ──────────────────────────
+    // Groups with no direct TB rows (rows=[]) are section headers whose totals
+    // should be the aggregate of ALL descendant ledger rows.  Without this fix
+    // they show "—" when collapsed even though sub-group rows carry real values.
+
+    // Build parent → direct-children map from groupInfoMap
+    const childrenMap = new Map<string, string[]>();
+    for (const [name, info] of groupInfoMap.entries()) {
+      if (info.parent_group) {
+        if (!childrenMap.has(info.parent_group)) childrenMap.set(info.parent_group, []);
+        childrenMap.get(info.parent_group)!.push(name);
+      }
+    }
+
+    // BFS: collect the set of all descendant group names (inclusive of start)
+    const getDescendants = (startGroup: string): Set<string> => {
+      const descendants = new Set<string>();
+      const queue = [startGroup];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        if (descendants.has(cur)) continue;
+        descendants.add(cur);
+        for (const child of (childrenMap.get(cur) ?? [])) queue.push(child);
+      }
+      return descendants;
+    };
+
+    for (const tbGroup of result) {
+      if (tbGroup.rows.length > 0) continue; // already has direct rows — totals correct
+      const descendants = getDescendants(tbGroup.groupName);
+      // Gather every TB row from byGroup whose group is a descendant
+      let netOp = 0, netCl = 0, debit = 0, credit = 0;
+      let hasAny = false;
+      for (const [grpName, rows] of byGroup.entries()) {
+        if (!descendants.has(grpName)) continue;
+        for (const r of rows) {
+          const t = getTurnover(r);
+          netOp  += r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance;
+          netCl  += r.balance_type  === "Dr" ? r.closing_balance : -r.closing_balance;
+          debit  += t.debit;
+          credit += t.credit;
+          hasAny = true;
+        }
+      }
+      if (hasAny) {
+        tbGroup.openingTotal     = Math.abs(netOp);
+        tbGroup.openingTotalType = netOp >= 0 ? "Dr" : "Cr";
+        tbGroup.debitTotal       = debit;
+        tbGroup.creditTotal      = credit;
+        tbGroup.closingTotal     = Math.abs(netCl);
+        tbGroup.closingTotalType = netCl >= 0 ? "Dr" : "Cr";
+      }
+    }
+
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTB, sortedGroups, getTurnover, groupInfoMap]);
