@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
-  Building, Bell, Shield, Users, BookOpen, CreditCard,
+  Building, Bell, Shield, Users, CreditCard,
   Plus, X, Pencil, Trash2, Loader2, ChevronRight, ExternalLink, FileSpreadsheet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -315,11 +315,10 @@ const SettingsPage = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="team" className="text-xs">Team</TabsTrigger>
           <TabsTrigger value="notifications" className="text-xs">Notifications</TabsTrigger>
           <TabsTrigger value="scrutiny-rules" className="text-xs">Scrutiny Rules</TabsTrigger>
-          <TabsTrigger value="coa" className="text-xs">COA Mappings</TabsTrigger>
           <TabsTrigger value="billing" className="text-xs">Billing</TabsTrigger>
           <TabsTrigger value="tax-audit" className="text-xs">Tax Audit</TabsTrigger>
         </TabsList>
@@ -487,30 +486,7 @@ const SettingsPage = () => {
           </Card>
         </TabsContent>
 
-        {/* ─── TAB 5: COA Mappings ─── */}
-        <TabsContent value="coa">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5" /> Chart of Account Mappings</CardTitle>
-              <CardDescription>Map raw ledger names to standardized account heads.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Link
-                to="/settings/coa-mappings"
-                className="flex items-center gap-3 p-4 border border-border rounded-lg hover:border-primary/40 transition-colors group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                  <BookOpen size={20} />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium text-foreground">Go to COA Mappings</p>
-                  <p className="text-sm text-muted-foreground">View and manage ledger-to-account mappings.</p>
-                </div>
-                <ChevronRight className="text-muted-foreground group-hover:text-primary transition-colors" size={18} />
-              </Link>
-            </CardContent>
-          </Card>
-        </TabsContent>
+
 
         {/* ─── TAB 6: Billing Settings ─── */}
         <TabsContent value="billing">

@@ -742,9 +742,6 @@ export default function ImportTrialBalance() {
               <Button size="sm" onClick={() => navigate("/audit/scrutiny")}>
                 <Zap size={14} className="mr-1" /> Run Scrutiny
               </Button>
-              <Button size="sm" variant="outline" onClick={() => navigate("/settings/coa-mappings")}>
-                <Layers size={14} className="mr-1" /> COA Mapping
-              </Button>
             </div>
           </CardContent>
         </Card>

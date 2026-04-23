@@ -74,7 +74,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const [utilitiesOpen, setUtilitiesOpen] = useState(false);
 
   useEffect(() => {
-    if (location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings" || location.pathname === "/depreciation") {
+    if (location.pathname.startsWith("/audit") || location.pathname === "/depreciation") {
       setAuditOpen(true);
     }
   }, [location.pathname]);
@@ -104,7 +104,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname === path || location.pathname.startsWith(path + "/");
 
-  const isAuditActive = location.pathname.startsWith("/audit") || location.pathname === "/settings/coa-mappings";
+  const isAuditActive = location.pathname.startsWith("/audit");
 
   return (
     <aside
@@ -390,7 +390,7 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             to={settingsItem.path}
             className={cn(
               "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
-              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/coa-mappings") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/services")
+              isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/services")
                 ? "bg-sidebar-gold/15 text-sidebar-gold"
                 : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
             )}
