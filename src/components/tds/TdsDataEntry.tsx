@@ -284,14 +284,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Rate Master ───
-  useEffect(() => {
-    const fetchRates = async () => {
-      const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
-        .eq("form_type", selForm).eq("is_active", true);
-      setRateMaster((data || []) as RateEntry[]);
-    };
-    fetchRates();
-  }, [selForm, selFy]);
+  const fetchRates = useCallback(async () => {
+    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
+      .eq("form_type", selForm).eq("is_active", true);
+    setRateMaster((data || []) as RateEntry[]);
+  }, [selForm]);
+
+  useEffect(() => { fetchRates(); }, [fetchRates, selFy]);
 
   // ─── Load Filing (Issue 6: try-catch, never crash, empty state on error) ───
   const loadFiling = useCallback(async () => {
@@ -1006,7 +1005,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         selQuarter,
         firmId || filing.firm_id || null,
       );
-      // Refresh the UI with newly inserted data
+      // Refresh the UI with newly inserted data (rate master first in case
+      // the import added new section codes like 194C, then challans/deductees)
+      await fetchRates();
       await fetchChallans(filing.id);
       const warningText = result.warnings.length
         ? ` (${result.warnings.length} warning${result.warnings.length > 1 ? "s" : ""} — see console)`

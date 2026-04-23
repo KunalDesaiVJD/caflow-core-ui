@@ -313,27 +313,77 @@ export async function importGeniusXls(
     throw new Error("No challans found in the file. Nothing to import.");
   }
 
-  // ── Auto-migration: merge legacy 194C-A / 194C-S to plain 194C ───────────
+  // ── Auto-migration: ensure plain "194C" is usable in dropdowns ───────────
   // Genius uses "194C"; older CAFlow seeds split this into 194C-A / 194C-S.
-  // If this firm still has the legacy rows, clean them up so dropdowns match.
+  // Three jobs (all idempotent):
+  //   1. Convert any existing challans/deductees with 194C-A or 194C-S to 194C
+  //   2. Delete legacy 194C-A / 194C-S rows from rate_master
+  //   3. Ensure a 194C rate_master row exists for this firm + AY + form_type
+  //      so the dropdown actually has "194C" as a selectable option after import
   const firmId = resolvedFirmId || filing.firm_id || null;
   if (firmId) {
     try {
-      const { data: legacyRates } = await supabase
-        .from("tds_rate_master")
-        .select("section_code")
+      // 1. Normalise existing challan/deductee section codes
+      await supabase.from("tds_challans")
+        .update({ section_code: "194C" })
+        .in("section_code", ["194C-A", "194C-S"]);
+      await supabase.from("tds_deductees")
+        .update({ section_code: "194C" })
+        .in("section_code", ["194C-A", "194C-S"]);
+
+      // 2. Drop legacy rate master rows for this firm
+      const { data: deletedLegacy } = await supabase.from("tds_rate_master")
+        .delete()
         .eq("firm_id", firmId)
         .in("section_code", ["194C-A", "194C-S"])
-        .limit(1);
-      if (legacyRates && legacyRates.length > 0) {
-        // Normalise existing challans and deductees on the fly
-        await supabase.from("tds_challans").update({ section_code: "194C" }).in("section_code", ["194C-A", "194C-S"]);
-        await supabase.from("tds_deductees").update({ section_code: "194C" }).in("section_code", ["194C-A", "194C-S"]);
-        // Drop legacy rate master rows for this firm
-        await supabase.from("tds_rate_master").delete().eq("firm_id", firmId).in("section_code", ["194C-A", "194C-S"]);
-        warnings.push("Migrated legacy 194C-A / 194C-S entries to 194C (Rate Master cleaned up).");
+        .select("id");
+      if (deletedLegacy && deletedLegacy.length > 0) {
+        warnings.push(`Merged ${deletedLegacy.length} legacy 194C-A/194C-S rate master row(s) into 194C.`);
       }
-    } catch (mErr) {
+
+      // 3. Ensure 194C exists for this AY + form_type. AY is derived from
+      //    the financial year: "2025-26" -> "2026-27".
+      const fyParts = (financialYear || "").split("-");
+      const ay = fyParts.length === 2
+        ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
+        : "2026-27";
+      const { data: existing194C } = await supabase
+        .from("tds_rate_master")
+        .select("id")
+        .eq("firm_id", firmId)
+        .eq("assessment_year", ay)
+        .eq("form_type", formType)
+        .eq("section_code", "194C")
+        .limit(1);
+      if (!existing194C || existing194C.length === 0) {
+        const newRow: any = {
+          assessment_year: ay,
+          financial_year: financialYear,
+          form_type: formType,
+          section_code: "194C",
+          nature_of_payment: "Contractor / Sub-contractor",
+          threshold_individual: 30000,
+          threshold_company: 30000,
+          rate_individual: 1,
+          rate_company: 2,
+          rate_no_pan: 20,
+          surcharge_applicable: false,
+          cess_applicable: false,
+          is_active: true,
+          effective_from: "2025-04-01",
+          effective_to: null,
+          notes: "1% for Ind/HUF, 2% for Others. Threshold: ₹30,000 per single transaction OR ₹1,00,000 aggregate in FY.",
+          firm_id: firmId,
+        };
+        const insertRes = await supabase.from("tds_rate_master").insert(newRow as any);
+        if (insertRes.error) {
+          console.warn("[GeniusImport] Failed to seed 194C rate master row:", insertRes.error.message);
+          warnings.push(`Could not add 194C to rate master: ${insertRes.error.message}. Add it manually in Rate Master.`);
+        } else {
+          warnings.push("Added 194C (Contractor / Sub-contractor) to Rate Master so dropdowns can match it.");
+        }
+      }
+    } catch (mErr: any) {
       console.warn("[GeniusImport] 194C auto-migration skipped:", mErr);
     }
   }
