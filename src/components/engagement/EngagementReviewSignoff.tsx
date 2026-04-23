@@ -344,6 +344,14 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
         signed_at: now,
         signed_by: user?.id,
         stage_statuses: { ...(engagement.stage_statuses || {}), "9": "complete" },
+        // ── Finalisation flag ──────────────────────────────────────────────
+        // is_finalized = true is the trigger the NEXT year's engagement uses to:
+        //   (a) classify py_source as "prior_engagement" (fully automatic PY data)
+        //   (b) auto-pull PY P&L from this engagement's fa_financial_statements
+        //   (c) lock manual PY P&L overrides in the next engagement's COA stage
+        is_finalized: true,
+        finalized_at: now,
+        finalized_by: user?.id,
       };
       const { error: engErr } = await supabase
         .from("audit_engagements").update(signOffData).eq("id", engagement.id);
