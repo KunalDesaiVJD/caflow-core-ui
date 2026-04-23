@@ -613,17 +613,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [coaMapping, engagementId]);
 
   // ═══════ RESET & RE-MAP (clear all + auto + AI) ═══════
-  // After resetting, we need runAiMapping to run with a FRESH coaMapping closure.
-  // React's useCallback captures the current coaMapping value at render time, so
-  // we can't call runAiMapping() directly inside resetAndRemap (stale closure).
-  // Solution: set a flag that a useEffect watches. By the time the effect runs,
-  // React has re-rendered with the new coaMapping, giving runAiMapping a fresh closure.
-  useEffect(() => {
-    if (!pendingAiRemap || aiRunning) return;
-    setPendingAiRemap(false);
-    runAiMapping();
-  }, [pendingAiRemap, aiRunning, runAiMapping]);
-
   const resetAndRemap = useCallback(async () => {
     setResetting(true);
     try {
@@ -802,6 +791,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       setAiRunning(false);
     }
   }, [aiRunning, tbAccounts, hideZero, coaMapping, activeLeafItems, isNonCorporate, engagementId]);
+
+  // Trigger AI re-map after resetAndRemap clears state and React re-renders.
+  // The useEffect must live AFTER runAiMapping is defined so it has a valid closure.
+  useEffect(() => {
+    if (!pendingAiRemap || aiRunning) return;
+    setPendingAiRemap(false);
+    runAiMapping();
+  }, [pendingAiRemap, aiRunning, runAiMapping]);
 
   // ═══════ GROUP ACTIONS ═══════
   const assignGroup = useCallback(async (groupName: string, fsCode: string) => {
