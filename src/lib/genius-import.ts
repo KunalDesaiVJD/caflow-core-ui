@@ -313,8 +313,32 @@ export async function importGeniusXls(
     throw new Error("No challans found in the file. Nothing to import.");
   }
 
-  // ── Insert challans ──────────────────────────────────────────────────────
+  // ── Auto-migration: merge legacy 194C-A / 194C-S to plain 194C ───────────
+  // Genius uses "194C"; older CAFlow seeds split this into 194C-A / 194C-S.
+  // If this firm still has the legacy rows, clean them up so dropdowns match.
   const firmId = resolvedFirmId || filing.firm_id || null;
+  if (firmId) {
+    try {
+      const { data: legacyRates } = await supabase
+        .from("tds_rate_master")
+        .select("section_code")
+        .eq("firm_id", firmId)
+        .in("section_code", ["194C-A", "194C-S"])
+        .limit(1);
+      if (legacyRates && legacyRates.length > 0) {
+        // Normalise existing challans and deductees on the fly
+        await supabase.from("tds_challans").update({ section_code: "194C" }).in("section_code", ["194C-A", "194C-S"]);
+        await supabase.from("tds_deductees").update({ section_code: "194C" }).in("section_code", ["194C-A", "194C-S"]);
+        // Drop legacy rate master rows for this firm
+        await supabase.from("tds_rate_master").delete().eq("firm_id", firmId).in("section_code", ["194C-A", "194C-S"]);
+        warnings.push("Migrated legacy 194C-A / 194C-S entries to 194C (Rate Master cleaned up).");
+      }
+    } catch (mErr) {
+      console.warn("[GeniusImport] 194C auto-migration skipped:", mErr);
+    }
+  }
+
+  // ── Insert challans ──────────────────────────────────────────────────────
   const challanPayloads = parsed.challans.map(c => {
     const p: any = {
       filing_id: filing.id,
