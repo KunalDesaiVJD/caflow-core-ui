@@ -356,13 +356,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // NOTE: `tally_ledgers` has all zero closing_balance values — do not use it
   // as a balance source. It is only a ledger name / group registry.
   const { data: tallyTb, isLoading: tallyTbLoading } = useQuery({
-    queryKey: ["tally-tb-stage3", engagement?.client_id, engagement?.financial_year],
+    queryKey: ["tally-tb-stage3", engagementId, engagement?.client_id, engagement?.financial_year],
     queryFn: async () => {
+      const TB_COLS = "ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount";
+
+      // Step 0: direct lookup — works when tally sync used audit_engagements.id as engagement_id
+      if (engagementId) {
+        const { data } = await supabase
+          .from("tally_trial_balance")
+          .select(TB_COLS)
+          .eq("engagement_id", engagementId);
+        if (data?.length) return data as any[];
+      }
+
       if (!engagement?.client_id) return [];
       const clientId = engagement.client_id;
       let tallyEngId: string | null = null;
 
-      // Step 1: exact client_id + financial_year match
+      // Step 1: exact client_id + financial_year in engagements (Tally sync) table
       if (engagement.financial_year) {
         const { data } = await supabase
           .from("engagements" as any)
@@ -372,7 +383,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           .maybeSingle();
         tallyEngId = (data as any)?.id ?? null;
       }
-      // Step 2: any engagement for this client (most recent FY) — same as TallySyncPage
+      // Step 2: any engagement for this client (most recent FY)
       if (!tallyEngId) {
         const { data } = await supabase
           .from("engagements" as any)
@@ -383,21 +394,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           .maybeSingle();
         tallyEngId = (data as any)?.id ?? null;
       }
-      // Step 3: read engagement_id from tally_groups rows for this client
-      if (!tallyEngId) {
-        const { data } = await supabase
-          .from("tally_groups" as any)
-          .select("engagement_id")
-          .eq("client_id", clientId)
-          .order("financial_year", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        tallyEngId = (data as any)?.engagement_id ?? null;
-      }
       if (!tallyEngId) return [];
       const { data } = await supabase
         .from("tally_trial_balance")
-        .select("ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount")
+        .select(TB_COLS)
         .eq("engagement_id", tallyEngId);
       return (data || []) as any[];
     },
