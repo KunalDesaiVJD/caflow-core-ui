@@ -535,25 +535,51 @@ export async function generateGeniusExport(
 
   // ═════════════════════════════════════════════════════════════════════════
   // SECTION 5: Save — write buffer and trigger download
+  //
+  // CRITICAL: Genius TDS software imports ONLY via legacy .xls (BIFF8) format.
+  // Its VBA macros use Workbooks.Open which cannot read OOXML (.xlsx). Giving
+  // Genius a .xlsx produces errors like:
+  //   - "Unable to get the Open property of the Workbooks class"
+  //   - "For loop not initialized"
+  //   - "Object variable or With block variable not set"
+  //
+  // So we:
+  //   1. Have ExcelJS write to .xlsx buffer (ExcelJS cannot write .xls)
+  //   2. Round-trip through SheetJS to re-encode as BIFF8 (.xls)
+  //   3. Download with .xls extension and application/vnd.ms-excel mime type
   // ═════════════════════════════════════════════════════════════════════════
-  const buffer = await workbook.xlsx.writeBuffer();
-  console.log("[GeniusExport] Buffer size:", buffer.byteLength, "bytes");
+  const xlsxBuffer = await workbook.xlsx.writeBuffer();
+  console.log("[GeniusExport] Intermediate xlsx buffer size:", xlsxBuffer.byteLength, "bytes");
 
-  if (buffer.byteLength < 1000) {
+  if (xlsxBuffer.byteLength < 1000) {
     throw new Error(
-      `Export failed: generated file is only ${buffer.byteLength} bytes (expected > 1000). ` +
+      `Export failed: generated file is only ${xlsxBuffer.byteLength} bytes (expected > 1000). ` +
       `Workbook appears empty — check template and data.`
     );
   }
 
-  // Output as .xlsx — modern Excel and Genius both support this format
+  // Round-trip: .xlsx buffer → SheetJS workbook → .xls (BIFF8) buffer
+  const finalWb = XLSX.read(xlsxBuffer, { type: "array", cellStyles: true });
+  console.log("[GeniusExport] Round-trip sheets:", finalWb.SheetNames);
+  const xlsArray = XLSX.write(finalWb, { type: "array", bookType: "biff8" }) as ArrayBuffer;
+  console.log("[GeniusExport] Final .xls buffer size:", xlsArray.byteLength, "bytes");
+
+  // Verify BIFF8 magic bytes (D0 CF 11 E0 = OLE Compound Document)
+  const header = new Uint8Array(xlsArray.slice(0, 4));
+  const magic = Array.from(header).map(b => b.toString(16).padStart(2, "0")).join("");
+  if (magic !== "d0cf11e0") {
+    console.warn("[GeniusExport] WARNING: Output is not BIFF8 format. Magic:", magic);
+  } else {
+    console.log("[GeniusExport] ✓ Verified BIFF8 (.xls) format — Genius-compatible");
+  }
+
   const safeClientName = (client.name || "Client").replace(/[^a-zA-Z0-9]/g, "_");
-  const fileName = `Genius_${formType}_${safeClientName}_${filing.financial_year || "FY"}_${quarter}.xlsx`;
+  const fileName = `Genius_${formType}_${safeClientName}_${filing.financial_year || "FY"}_${quarter}.xls`;
 
   triggerDownload(
-    buffer,
+    xlsArray,
     fileName,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "application/vnd.ms-excel"
   );
 
   console.log("[GeniusExport] Export complete:", fileName);
