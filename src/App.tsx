@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 import { AdminLayout } from "./components/AdminLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
@@ -135,6 +135,22 @@ function CAGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Route-aware ErrorBoundary wrapper.
+ * Must live INSIDE <BrowserRouter> so it can call useLocation().
+ * Passes location.pathname as resetKey — when the user navigates to a
+ * different route the ErrorBoundary automatically clears any previous error
+ * so the new page can render without requiring a full page reload.
+ */
+function RouteErrorBoundary({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  return (
+    <ErrorBoundary resetKey={location.pathname}>
+      {children}
+    </ErrorBoundary>
+  );
+}
+
 const App = () => (
   <ErrorBoundary>
     <AuthProvider>
@@ -143,6 +159,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
+            <RouteErrorBoundary>
             <PermissionsProvider>
             <Suspense fallback={<PageLoader />}>
             <Routes>
@@ -238,6 +255,7 @@ const App = () => (
             <FeedbackWidget />
             <ChatFloatingWidget />
             </PermissionsProvider>
+            </RouteErrorBoundary>
           </BrowserRouter>
         </TooltipProvider>
       </QueryClientProvider>
