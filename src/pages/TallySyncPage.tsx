@@ -886,10 +886,26 @@ export default function TallySyncPage() {
       };
     };
 
+    // Build activeGroups: every group that has direct TB rows PLUS all its ancestors.
+    // Same logic as groupedLedgers so primary groups (e.g. "Current Assets") appear
+    // as section headers even when all ledgers sit in sub-groups ("Bank Accounts" etc.).
+    const activeGroups = new Set<string>();
+    for (const grpName of byGroup.keys()) {
+      activeGroups.add(grpName);
+      let g = groupInfoMap.get(grpName);
+      const visited = new Set<string>();
+      while (g && !visited.has(g.group_name)) {
+        visited.add(g.group_name);
+        activeGroups.add(g.group_name);
+        if (!g.parent_group) break;
+        g = groupInfoMap.get(g.parent_group);
+      }
+    }
+
     const result: TBGroup[] = [];
     for (const { group: g } of sortedGroups) {
-      const rows = byGroup.get(g.group_name);
-      if (!rows || rows.length === 0) continue;
+      if (!activeGroups.has(g.group_name)) continue;   // skip groups with no rows/descendants
+      const rows = byGroup.get(g.group_name) ?? [];     // empty = ancestor header only
       result.push(makeGroup(g.group_name, g.is_revenue, rows));
     }
     // Fallback for TB rows whose group isn't in sortedGroups
@@ -899,7 +915,7 @@ export default function TallySyncPage() {
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredTB, sortedGroups, getTurnover]);
+  }, [filteredTB, sortedGroups, getTurnover, groupInfoMap]);
 
   // ── Export helpers ───────────────────────────────────────────────────────────
   const exportMeta: ExportMeta = useMemo(() => ({
