@@ -422,14 +422,20 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
 
     const challanIds = priorChallans.map(c => c.id);
+    // Fetch FULL deductee rows (not just sum fields) so we can merge them into
+    // allChallanDeductees — getChallanBreakdownAll looks up deductees from that
+    // map to compute 'Used (all Q)' for carry-forward challans.
     const { data: allDeds } = await supabase.from("tds_deductees")
-      .select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+      .select("*")
       .in("challan_id", challanIds);
 
     const appliedMap = new Map<string, number>();
+    const cfGrouped: Record<string, Deductee[]> = {};
     (allDeds || []).forEach((d: any) => {
       const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0);
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
+      if (!cfGrouped[d.challan_id]) cfGrouped[d.challan_id] = [];
+      cfGrouped[d.challan_id].push(d as Deductee);
     });
 
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
@@ -447,6 +453,9 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       }
     });
     setCarryForwardChallans(carried);
+    // Merge carry-forward deductees into allChallanDeductees so the breakdown
+    // card (Used / Available) shows correct amounts in the Q2+ list view.
+    setAllChallanDeductees(prev => ({ ...prev, ...cfGrouped }));
   };
 
   const fetchChallans = async (filingId: string) => {
