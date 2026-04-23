@@ -553,18 +553,18 @@ export async function generateGeniusExport(
   //   2. Round-trip through SheetJS to re-encode as BIFF8 (.xls)
   //   3. Download with .xls extension and application/vnd.ms-excel mime type
   // ═════════════════════════════════════════════════════════════════════════
-  const xlsxBuffer = await workbook.xlsx.writeBuffer();
-  console.log("[GeniusExport] Intermediate xlsx buffer size:", xlsxBuffer.byteLength, "bytes");
+  const writtenXlsxBuffer = await workbook.xlsx.writeBuffer();
+  console.log("[GeniusExport] Intermediate xlsx buffer size:", writtenXlsxBuffer.byteLength, "bytes");
 
-  if (xlsxBuffer.byteLength < 1000) {
+  if (writtenXlsxBuffer.byteLength < 1000) {
     throw new Error(
-      `Export failed: generated file is only ${xlsxBuffer.byteLength} bytes (expected > 1000). ` +
+      `Export failed: generated file is only ${writtenXlsxBuffer.byteLength} bytes (expected > 1000). ` +
       `Workbook appears empty — check template and data.`
     );
   }
 
   // Round-trip: .xlsx buffer → SheetJS workbook → .xls (BIFF8) buffer
-  const finalWb = XLSX.read(xlsxBuffer, { type: "array", cellStyles: true });
+  const finalWb = XLSX.read(writtenXlsxBuffer, { type: "array", cellStyles: true });
   console.log("[GeniusExport] Round-trip sheets:", finalWb.SheetNames);
   const xlsArray = XLSX.write(finalWb, { type: "array", bookType: "biff8" }) as ArrayBuffer;
   console.log("[GeniusExport] Final .xls buffer size:", xlsArray.byteLength, "bytes");
