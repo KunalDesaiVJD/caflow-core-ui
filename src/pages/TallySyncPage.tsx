@@ -857,61 +857,64 @@ export default function TallySyncPage() {
       byGroup.get(grp)!.push(r);
     }
 
+    // Build group → direct child group names map (needed for aggregate totals)
+    const childGroupsMap = new Map<string, string[]>();
+    for (const { group: g } of sortedGroups) {
+      const parent = g.parent_group ?? "";
+      if (!childGroupsMap.has(parent)) childGroupsMap.set(parent, []);
+      childGroupsMap.get(parent)!.push(g.group_name);
+    }
+
     type EnrichedRow = TallyTB & { _debit: number; _credit: number };
 
     type TBGroup = {
-      groupName: string; isRevenue: boolean; rows: EnrichedRow[];
+      groupName: string; isRevenue: boolean; depth: number; rows: EnrichedRow[];
       openingTotal: number; openingTotalType: string;
       debitTotal: number; creditTotal: number;
       closingTotal: number; closingTotalType: string;
     };
 
-    const makeGroup = (grpName: string, isRevenue: boolean, rows: TallyTB[]): TBGroup => {
-      const enriched: EnrichedRow[] = rows
+    // Collect ALL descendant TB rows (direct ledgers + through every sub-group)
+    const collectAll = (grpName: string, visited = new Set<string>()): TallyTB[] => {
+      if (visited.has(grpName)) return [];
+      visited.add(grpName);
+      const direct = byGroup.get(grpName) ?? [];
+      const children = childGroupsMap.get(grpName) ?? [];
+      return [...direct, ...children.flatMap(c => collectAll(c, visited))];
+    };
+
+    const makeGroup = (grpName: string, isRevenue: boolean, depth: number): TBGroup => {
+      // Direct-child ledger rows for display (expandable under this group header)
+      const directRows: EnrichedRow[] = (byGroup.get(grpName) ?? [])
         .slice()
         .sort((a, b) => a.ledger_name.localeCompare(b.ledger_name))
         .map(r => {
           const t = getTurnover(r);
           return { ...r, _debit: t.debit, _credit: t.credit };
         });
-      const netOp  = enriched.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
-      const netCl  = enriched.reduce((s, r) => s + (r.balance_type  === "Dr" ? r.closing_balance  : -r.closing_balance), 0);
-      const debit  = enriched.reduce((s, r) => s + r._debit,  0);
-      const credit = enriched.reduce((s, r) => s + r._credit, 0);
+      // Aggregate totals from ALL descendant ledgers (including sub-group ledgers)
+      const allRows = collectAll(grpName);
+      const netOp  = allRows.reduce((s, r) => s + (r.opening_type === "Dr" ? r.opening_balance : -r.opening_balance), 0);
+      const netCl  = allRows.reduce((s, r) => s + (r.balance_type  === "Dr" ? r.closing_balance  : -r.closing_balance), 0);
+      const debit  = allRows.reduce((s, r) => s + getTurnover(r).debit,  0);
+      const credit = allRows.reduce((s, r) => s + getTurnover(r).credit, 0);
       return {
-        groupName: grpName, isRevenue, rows: enriched,
+        groupName: grpName, isRevenue, depth, rows: directRows,
         openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
         debitTotal: debit, creditTotal: credit,
         closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
       };
     };
 
-    // Build activeGroups: every group that has direct TB rows PLUS all its ancestors.
-    // Same logic as groupedLedgers so primary groups (e.g. "Current Assets") appear
-    // as section headers even when all ledgers sit in sub-groups ("Bank Accounts" etc.).
-    const activeGroups = new Set<string>();
-    for (const grpName of byGroup.keys()) {
-      activeGroups.add(grpName);
-      let g = groupInfoMap.get(grpName);
-      const visited = new Set<string>();
-      while (g && !visited.has(g.group_name)) {
-        visited.add(g.group_name);
-        activeGroups.add(g.group_name);
-        if (!g.parent_group) break;
-        g = groupInfoMap.get(g.parent_group);
-      }
-    }
-
     const result: TBGroup[] = [];
-    for (const { group: g } of sortedGroups) {
-      if (!activeGroups.has(g.group_name)) continue;   // skip groups with no rows/descendants
-      const rows = byGroup.get(g.group_name) ?? [];     // empty = ancestor header only
-      result.push(makeGroup(g.group_name, g.is_revenue, rows));
+    for (const { group: g, depth } of sortedGroups) {
+      if (collectAll(g.group_name).length === 0) continue;
+      result.push(makeGroup(g.group_name, g.is_revenue, depth));
     }
     // Fallback for TB rows whose group isn't in sortedGroups
     const placed = new Set(result.map(r => r.groupName));
     for (const [grp, rows] of byGroup.entries()) {
-      if (!placed.has(grp)) result.push(makeGroup(grp, isRevenueGroup(grp), rows));
+      if (!placed.has(grp) && rows.length > 0) result.push(makeGroup(grp, isRevenueGroup(grp), 0));
     }
 
     // ── Second pass: populate ancestor-group totals ──────────────────────────
@@ -971,6 +974,27 @@ export default function TallySyncPage() {
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTB, sortedGroups, getTurnover, groupInfoMap]);
+
+  // Groups whose ancestor is collapsed — these rows should be hidden entirely
+  const hiddenGroupNames = useMemo(() => {
+    const hidden = new Set<string>();
+    for (const { groupName } of groupedTB) {
+      let current = groupInfoMap.get(groupName);
+      const visited = new Set<string>();
+      while (current) {
+        if (visited.has(current.group_name)) break;
+        visited.add(current.group_name);
+        if (!current.parent_group) break;
+        const cleanParent = current.parent_group.replace(/&#\d+;/g, "").trim();
+        if (cleanParent.toLowerCase() === "primary") break;
+        const parentGroup = groupInfoMap.get(current.parent_group);
+        if (!parentGroup) break;
+        if (collapsedGroups.has(parentGroup.group_name)) { hidden.add(groupName); break; }
+        current = parentGroup;
+      }
+    }
+    return hidden;
+  }, [groupedTB, groupInfoMap, collapsedGroups]);
 
   // ── Export helpers ───────────────────────────────────────────────────────────
   const exportMeta: ExportMeta = useMemo(() => ({
@@ -1261,31 +1285,30 @@ export default function TallySyncPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {groupedTB.map(({ groupName, isRevenue, rows, openingTotal, openingTotalType, debitTotal, creditTotal, closingTotal, closingTotalType }) => {
+                        {groupedTB.map(({ groupName, isRevenue, depth, rows, openingTotal, openingTotalType, debitTotal, creditTotal, closingTotal, closingTotalType }) => {
+                          if (hiddenGroupNames.has(groupName)) return null;
                           const isCollapsed = collapsedGroups.has(groupName);
+                          const indent = 12 + depth * 16;
                           return (
                             <>
-                              {/* Group header row — clickable to collapse */}
+                              {/* Group header row — clickable to collapse/expand */}
                               <TableRow
                                 key={`tb-grp-${groupName}`}
-                                className="bg-muted/60 hover:bg-muted/80 cursor-pointer select-none"
+                                className={cn("hover:bg-muted/80 cursor-pointer select-none", depth === 0 ? "bg-muted/60" : "bg-muted/30")}
                                 onClick={() => toggleGroup(groupName)}
                               >
-                                <TableCell className="py-2 px-3">
+                                <TableCell className="py-2" style={{ paddingLeft: `${indent}px` }}>
                                   <div className="flex items-center gap-1.5">
                                     {isCollapsed
                                       ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                       : <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
-                                    <span className={cn("text-[11px] font-bold tracking-wide", isRevenue ? "text-orange-700" : "text-blue-800")}>
+                                    <span className={cn("font-bold tracking-wide", depth === 0 ? "text-[11px]" : "text-[10px]", isRevenue ? "text-orange-700" : "text-blue-800")}>
                                       {decodeHtml(groupName)}
                                     </span>
-                                    <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
-                                      {isRevenue ? "P&L" : "B/S"}
-                                    </Badge>
-                                    {getParentChainLabel(groupName) && (
-                                      <span className="ml-2 text-[10px] font-normal italic text-muted-foreground">
-                                        {getParentChainLabel(groupName)}
-                                      </span>
+                                    {depth === 0 && (
+                                      <Badge variant="outline" className={cn("ml-1 text-[9px] py-0", isRevenue ? "border-orange-300 text-orange-700" : "border-blue-300 text-blue-700")}>
+                                        {isRevenue ? "P&L" : "B/S"}
+                                      </Badge>
                                     )}
                                   </div>
                                 </TableCell>
@@ -1310,10 +1333,10 @@ export default function TallySyncPage() {
                                   ) : "—"}
                                 </TableCell>
                               </TableRow>
-                              {/* Ledger rows — hidden when group is collapsed */}
+                              {/* Direct ledger rows — hidden when group is collapsed */}
                               {!isCollapsed && rows.map(r => (
                                 <TableRow key={r.id} className="text-xs hover:bg-muted/20">
-                                  <TableCell className="pl-8 text-foreground">
+                                  <TableCell className="text-foreground" style={{ paddingLeft: `${indent + 20}px` }}>
                                     <button
                                       className="text-left hover:underline hover:text-blue-700 transition-colors"
                                       onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(r.ledger_name)}`)}
