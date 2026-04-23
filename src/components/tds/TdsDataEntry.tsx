@@ -472,7 +472,11 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
         grouped[d.challan_id].push(d as Deductee);
       });
-      setAllChallanDeductees(grouped);
+      // MERGE (not replace) so any carry-forward deductee data that
+      // fetchCarryForwardChallans populated earlier for prior-quarter
+      // challans isn't wiped. Current-quarter entries (challanIds) always
+      // take precedence since they're the freshest.
+      setAllChallanDeductees(prev => ({ ...prev, ...grouped }));
       setSelectedChallan(list[0]);
       // Split first challan entries
       const firstAll = grouped[list[0].id] || [];
@@ -483,8 +487,19 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       setDeductees(firstAll.filter(d => d.filing_id === currFilingId));
     } else {
       setSelectedChallan(null); setDeductees([]); setPrevEntries([]);
-      setAllChallanDeductees({});
+      // Don't wipe allChallanDeductees — carry-forward data for this client's
+      // prior quarters is still relevant and gets populated by
+      // fetchCarryForwardChallans. Only loadFiling resets this map fully
+      // when the client/FY/quarter combo actually changes.
     }
+  };
+
+  // Helper: always refresh challans + carry-forward together after any
+  // DB mutation (new/edit/delete challan, genius import, etc.) so the
+  // Used / Available amounts on carry-forward cards stay accurate.
+  const refreshChallansAndCF = async (filingId: string) => {
+    await fetchChallans(filingId);
+    await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
   };
 
   // Issue 5: Split entries into prev (read-only) and current (editable)
@@ -643,21 +658,21 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (!error) {
         toast({ title: editingChallan ? "Challan updated" : "Challan added", description: "Note: Late Fees field will be available after database migration is applied." });
         setChallanDialogOpen(false);
-        await fetchChallans(filing.id);
+        await refreshChallansAndCF(filing.id);
         return;
       }
     }
     if (error) { toast({ title: "Error saving challan", description: error.message, variant: "destructive" }); return; }
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
-    await fetchChallans(filing.id);
+    await refreshChallansAndCF(filing.id);
   };
 
   const deleteChallan = async (id: string) => {
     const { error } = await supabase.from("tds_challans").delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
-    if (filing) fetchChallans(filing.id);
+    if (filing) await refreshChallansAndCF(filing.id);
   };
 
   // ─── Deductee CRUD ───
@@ -1045,10 +1060,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         selQuarter,
         firmId || filing.firm_id || null,
       );
-      // Refresh the UI with newly inserted data (rate master first in case
-      // the import added new section codes like 194C, then challans/deductees)
+      // Refresh the UI with newly inserted data.
+      // refreshChallansAndCF re-runs both fetchChallans AND
+      // fetchCarryForwardChallans — the latter is essential because the
+      // import may have attached deductees to prior-quarter carry-forward
+      // challans, so their "Used / Available" amounts need to be recomputed.
       await fetchRates();
-      await fetchChallans(filing.id);
+      await refreshChallansAndCF(filing.id);
       const warningText = result.warnings.length
         ? ` (${result.warnings.length} warning${result.warnings.length > 1 ? "s" : ""} — see console)`
         : "";
@@ -1336,7 +1354,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     onBlur={async e => {
                                       const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
                                       await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
-                                      if (filing) fetchChallans(filing.id);
+                                      if (filing) await refreshChallansAndCF(filing.id);
                                     }}
                                   />
                                 )}
