@@ -268,7 +268,8 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
 
 export interface ImportResult {
   parsed: ParsedGeniusFile;
-  challansInserted: number;
+  challansInserted: number;    // newly-created challans
+  challansReused: number;      // pre-existing challans whose deductees were attached as carry-forward utilisation
   deducteesInserted: number;
   warnings: string[];
 }
@@ -445,49 +446,67 @@ export async function importGeniusXls(
     );
   }
 
-  // ── Duplicate detection: Challan Number must be globally unique ──────────
+  // ── Duplicate detection: Challan Number is globally unique ───────────────
   // BSR code may legitimately repeat (same bank branch handles many deposits)
-  // but each Challan Number assigned by the bank is unique. Skip any challan
-  // whose Challan Number already exists anywhere in tds_challans. Carry-
-  // forward is the correct way to use a prior-quarter challan's unused
-  // balance — re-adding it would double-count.
-  const existingNums = new Set<string>();
+  // but each Challan Number is unique. If a Challan Number already exists in
+  // the DB we DON'T create a new challan — instead we re-use the existing one
+  // and link any deductees from this file under Serial N to the existing
+  // challan's UUID (but inserted with the CURRENT filing_id so they count as
+  // this quarter's utilisation of carry-forward balance).
+  //
+  // Build map: Challan Number (from file) -> existing challan's UUID
+  const existingChallanByNum = new Map<string, { id: string; quarter: string; financial_year: string; form_type: string }>();
   const numList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
   if (numList.length > 0) {
     const { data: existing } = await supabase
       .from("tds_challans")
-      .select("challan_serial_no, bsr_code, quarter, financial_year, form_type")
+      .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
       .in("challan_serial_no", numList);
     (existing || []).forEach((row: any) => {
-      if (row.challan_serial_no) existingNums.add(String(row.challan_serial_no));
+      if (row.challan_serial_no && !existingChallanByNum.has(row.challan_serial_no)) {
+        existingChallanByNum.set(String(row.challan_serial_no), {
+          id: String(row.id),
+          quarter: row.quarter,
+          financial_year: row.financial_year,
+          form_type: row.form_type,
+        });
+      }
     });
   }
 
-  const dupChallans: number[] = [];
+  const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];
   const newChallans: typeof parsed.challans = [];
   parsed.challans.forEach(c => {
-    if (c.bankChallanNo && existingNums.has(c.bankChallanNo)) {
-      dupChallans.push(c.serialNo);
+    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    if (existingRec) {
+      reusedChallans.push({
+        fileSerial: c.serialNo,
+        challanNum: c.bankChallanNo,
+        from: `${existingRec.form_type} ${existingRec.quarter} ${existingRec.financial_year}`,
+      });
     } else {
       newChallans.push(c);
     }
   });
 
-  if (dupChallans.length > 0) {
+  if (reusedChallans.length > 0) {
+    const sample = reusedChallans.slice(0, 3)
+      .map(r => `${r.challanNum} (from ${r.from})`)
+      .join("; ");
     warnings.push(
-      `Skipped ${dupChallans.length} duplicate challan(s) with Challan Numbers that already exist in another filing: ` +
-      `file row${dupChallans.length > 1 ? "s" : ""} ${dupChallans.slice(0, 5).join(", ")}${dupChallans.length > 5 ? "…" : ""}. ` +
-      `Each Challan Number is globally unique — unused balance flows to later quarters via Carry-Forward.`
+      `Re-using ${reusedChallans.length} existing challan(s) — their deductees in this file will be added ` +
+      `as this quarter's utilisation of carry-forward balance: ${sample}${reusedChallans.length > 3 ? "…" : ""}.`
     );
   }
-  if (newChallans.length === 0) {
+  if (newChallans.length === 0 && reusedChallans.length === 0) {
     return {
       parsed,
       challansInserted: 0,
+      challansReused: 0,
       deducteesInserted: 0,
       warnings: [
         ...warnings,
-        "All challans in this file already exist in another filing — nothing new was imported.",
+        "Nothing to import — no challans in the file.",
       ],
     };
   }
@@ -522,8 +541,8 @@ export async function importGeniusXls(
   });
 
   // Try insert WITH late_fees_234e; fall back if column missing in DB
-  let insertedChallans: any[] | null = null;
-  {
+  let insertedChallans: any[] = [];
+  if (newChallans.length > 0) {
     const { data, error } = await supabase
       .from("tds_challans")
       .insert(challanPayloads as any)
@@ -542,21 +561,26 @@ export async function importGeniusXls(
     } else {
       insertedChallans = (data as any[]) || [];
     }
+
+    if (insertedChallans.length !== newChallans.length) {
+      throw new Error(
+        `Inserted ${insertedChallans.length} challans but expected ${newChallans.length}`
+      );
+    }
   }
 
-  if (!insertedChallans || insertedChallans.length !== newChallans.length) {
-    throw new Error(
-      `Inserted ${insertedChallans?.length ?? 0} challans but expected ${newChallans.length}`
-    );
-  }
-
-  // Build map: Genius serial no (1,2,3…) → new DB UUID.
-  // Insert order matches the FILTERED list (newChallans). Skipped duplicates
-  // are NOT in this map — deductees that reference a skipped challan will be
-  // caught as orphans below.
+  // Build map: Genius serial no (1,2,3…) → challan UUID.
+  // Covers BOTH (a) newly-inserted challans and (b) pre-existing challans
+  // re-used from prior quarters (so their deductees in this file get linked
+  // to the existing UUID but inserted under the current filing_id).
   const serialToId = new Map<number, string>();
   newChallans.forEach((ch, i) => {
-    serialToId.set(ch.serialNo, insertedChallans![i].id as string);
+    serialToId.set(ch.serialNo, insertedChallans[i].id as string);
+  });
+  parsed.challans.forEach(c => {
+    if (serialToId.has(c.serialNo)) return; // already mapped as new
+    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    if (existingRec) serialToId.set(c.serialNo, existingRec.id);
   });
 
   // ── Insert deductees ─────────────────────────────────────────────────────
@@ -564,6 +588,7 @@ export async function importGeniusXls(
     return {
       parsed,
       challansInserted: insertedChallans.length,
+      challansReused: reusedChallans.length,
       deducteesInserted: 0,
       warnings,
     };
@@ -571,16 +596,10 @@ export async function importGeniusXls(
 
   const deducteePayloads: any[] = [];
   const orphanDeductees: number[] = [];
-  const skippedForDupChallan: number[] = [];
-  const dupChallanSet = new Set(dupChallans); // serials of challans skipped as duplicates
   parsed.deductees.forEach((d, idx) => {
     const challanId = serialToId.get(d.challanSerialNo);
     if (!challanId) {
-      if (dupChallanSet.has(d.challanSerialNo)) {
-        skippedForDupChallan.push(idx + 2);
-      } else {
-        orphanDeductees.push(idx + 2); // row number in Excel (1-indexed + header)
-      }
+      orphanDeductees.push(idx + 2); // row number in Excel (1-indexed + header)
       return;
     }
     deducteePayloads.push({
@@ -616,13 +635,6 @@ export async function importGeniusXls(
       `not present in the Challan Details sheet (excel rows: ${orphanDeductees.slice(0, 5).join(", ")}${orphanDeductees.length > 5 ? "…" : ""}).`
     );
   }
-  if (skippedForDupChallan.length > 0) {
-    warnings.push(
-      `Skipped ${skippedForDupChallan.length} deductee row(s) whose challan was rejected as a duplicate — ` +
-      `those deductees already exist under the original challan in its own filing.`
-    );
-  }
-
   let insertedDeductees = 0;
   if (deducteePayloads.length > 0) {
     const { data, error } = await supabase
@@ -641,6 +653,7 @@ export async function importGeniusXls(
   return {
     parsed,
     challansInserted: insertedChallans.length,
+    challansReused: reusedChallans.length,
     deducteesInserted: insertedDeductees,
     warnings,
   };

@@ -1053,9 +1053,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         ? ` (${result.warnings.length} warning${result.warnings.length > 1 ? "s" : ""} — see console)`
         : "";
       if (result.warnings.length) console.warn("[GeniusImport] Warnings:", result.warnings);
+      const reusedText = (result.challansReused ?? 0) > 0
+        ? `, re-used ${result.challansReused} carry-forward challan(s)`
+        : "";
       toast({
         title: "Genius file imported successfully",
-        description: `Added ${result.challansInserted} challan(s) and ${result.deducteesInserted} deductee(s)${warningText}`,
+        description: `Added ${result.challansInserted} challan(s)${reusedText} and ${result.deducteesInserted} deductee(s)${warningText}`,
       });
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);
