@@ -114,8 +114,65 @@ const fyToAY = (fy: string): string => {
   return fy;
 };
 
-/** Trigger a browser download from an ArrayBuffer */
-const triggerDownload = (buffer: ArrayBuffer, fileName: string, mimeType: string): void => {
+/**
+ * Save an ArrayBuffer to the user's machine.
+ *
+ * Prefers the File System Access API (showSaveFilePicker) on Chrome/Edge
+ * because files written via this API do NOT get tagged with Windows'
+ * Mark-of-the-Web (Zone.Identifier: ZoneId=3). That tag causes Office
+ * 2016+ to block .xls files from opening with
+ *   "Office has detected a problem with this file"
+ * — which is what Genius hits when it calls Workbooks.Open on the export.
+ *
+ * Falling back to <a download> for browsers without File System Access API
+ * (Firefox, Safari) — on those the user will still need to right-click →
+ * Properties → Unblock once per download.
+ */
+const triggerDownload = async (
+  buffer: ArrayBuffer,
+  fileName: string,
+  mimeType: string,
+): Promise<void> => {
+  // Modern path: File System Access API writes direct to disk (no MOTW).
+  const w = window as unknown as {
+    showSaveFilePicker?: (opts: {
+      suggestedName: string;
+      types: Array<{ description: string; accept: Record<string, string[]> }>;
+    }) => Promise<{
+      createWritable: () => Promise<{
+        write: (data: ArrayBuffer | Blob) => Promise<void>;
+        close: () => Promise<void>;
+      }>;
+    }>;
+  };
+
+  if (typeof w.showSaveFilePicker === "function") {
+    try {
+      const isXls = fileName.toLowerCase().endsWith(".xls");
+      const handle = await w.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{
+          description: isXls ? "Excel 97-2003 Workbook (Genius-compatible)" : "Excel Workbook",
+          accept: { [mimeType]: [isXls ? ".xls" : ".xlsx"] },
+        }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(buffer);
+      await writable.close();
+      console.log("[GeniusExport] Saved via File System Access API — no Mark-of-the-Web");
+      return;
+    } catch (err: unknown) {
+      // User cancelled the save dialog — rethrow so caller sees "cancelled"
+      if (err && typeof err === "object" && (err as { name?: string }).name === "AbortError") {
+        throw err;
+      }
+      // Any other error: fall through to legacy download so we at least save SOMEWHERE
+      console.warn("[GeniusExport] showSaveFilePicker failed, falling back to legacy download:", err);
+    }
+  }
+
+  // Legacy fallback: <a download> — file WILL get Mark-of-the-Web on Windows
+  console.warn("[GeniusExport] Using legacy download — file may need manual Unblock on Windows");
   const blob = new Blob([buffer], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -581,7 +638,7 @@ export async function generateGeniusExport(
   const safeClientName = (client.name || "Client").replace(/[^a-zA-Z0-9]/g, "_");
   const fileName = `Genius_${formType}_${safeClientName}_${filing.financial_year || "FY"}_${quarter}.xls`;
 
-  triggerDownload(
+  await triggerDownload(
     xlsArray,
     fileName,
     "application/vnd.ms-excel"

@@ -962,8 +962,10 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     setExportLoading(true);
     try {
       await generateGeniusExport(selForm, filing, client, challans, allDeductees);
-      toast({ title: "Genius Excel generated successfully! File downloaded." });
+      toast({ title: "Genius Excel generated successfully! File saved." });
     } catch (err: any) {
+      // User cancelled the save dialog — not an error
+      if (err?.name === "AbortError") return;
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
     } finally {
       setExportLoading(false);

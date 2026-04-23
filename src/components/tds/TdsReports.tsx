@@ -155,6 +155,8 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       await generateGeniusExport(selForm, filing, client || { id: "", name: "Unknown" }, filingChallans, filingDeductees);
       toast({ title: "Genius XLS exported successfully" });
     } catch (err: any) {
+      // User cancelled the save dialog — not an error
+      if (err?.name === "AbortError") return;
       toast({ title: "Export error", description: err.message, variant: "destructive" });
     }
   };
