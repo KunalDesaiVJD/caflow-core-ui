@@ -478,13 +478,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       // take precedence since they're the freshest.
       setAllChallanDeductees(prev => ({ ...prev, ...grouped }));
       setSelectedChallan(list[0]);
-      // Split first challan entries
+      // Split first challan entries using BOTH filing_id AND quarter/FY.
+      // Using quarter+FY makes the split resilient to legacy records where
+      // filing_id might be stale (e.g., filing was re-created after an
+      // accidental delete).
       const firstAll = grouped[list[0].id] || [];
-      const filingId2 = filingId; // current filing id
-      const filingRec = await supabase.from("tds_filings").select("id").eq("id", filingId2).maybeSingle(); // Issue 6: maybeSingle never throws
-      const currFilingId = filingRec.data?.id || filingId2;
-      setPrevEntries(firstAll.filter(d => d.filing_id !== currFilingId));
-      setDeductees(firstAll.filter(d => d.filing_id === currFilingId));
+      const isCurrent = (d: any) =>
+        d.filing_id === filingId ||
+        (d.quarter === selQuarter && d.financial_year === selFy);
+      setPrevEntries(firstAll.filter(d => !isCurrent(d)));
+      setDeductees(firstAll.filter(d => isCurrent(d)));
     } else {
       setSelectedChallan(null); setDeductees([]); setPrevEntries([]);
       // Don't wipe allChallanDeductees — carry-forward data for this client's
@@ -502,6 +505,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
   };
 
+  // Helper: is this deductee an entry FOR the currently-selected quarter?
+  // Uses both filing_id (strict UUID match) AND quarter/financial_year (stable
+  // regardless of filing UUID changes). Robust against legacy data where a
+  // deductee may have a stale filing_id but correct quarter/FY fields.
+  const isCurrentQuarterDeductee = useCallback((d: { filing_id?: string | null; quarter?: string | null; financial_year?: string | null }) => {
+    if (filing && d.filing_id === filing.id) return true;
+    if (d.quarter === selQuarter && d.financial_year === selFy) return true;
+    return false;
+  }, [filing, selQuarter, selFy]);
+
   // Issue 5: Split entries into prev (read-only) and current (editable)
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from("tds_deductees").select("*")
@@ -509,10 +522,11 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const list = (data || []) as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
-    // Split by current filing
+    // Split into prev (carry-forward from earlier quarters, read-only) and
+    // current (editable entries that belong to THIS quarter's filing).
     if (filing) {
-      setPrevEntries(list.filter(d => d.filing_id !== filing.id));
-      setDeductees(list.filter(d => d.filing_id === filing.id));
+      setPrevEntries(list.filter(d => !isCurrentQuarterDeductee(d)));
+      setDeductees(list.filter(d => isCurrentQuarterDeductee(d)));
     } else {
       setPrevEntries([]);
       setDeductees(list);
