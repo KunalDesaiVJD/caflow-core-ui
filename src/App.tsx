@@ -38,7 +38,6 @@ const AuditIntelligence        = lazy(() => import("./pages/AuditIntelligence"))
 const EngagementDetail         = lazy(() => import("./pages/EngagementDetail"));
 const Documents                = lazy(() => import("./pages/Documents"));
 const SettingsPage             = lazy(() => import("./pages/SettingsPage"));
-const CoaMappings              = lazy(() => import("./pages/CoaMappings"));
 const AuditFirms               = lazy(() => import("./pages/AuditFirms"));
 const ClientGroups             = lazy(() => import("./pages/ClientGroups"));
 const Form3CD                  = lazy(() => import("./pages/Form3CD"));
@@ -230,7 +229,6 @@ const App = () => (
               <Route path="/depreciation" element={<Depreciation />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/settings/coa-mappings" element={<CoaMappings />} />
               <Route path="/settings/users" element={<UserManagement />} />
               <Route path="/settings/audit-firms" element={<Navigate to="/settings/firm" replace />} />
             </Route>
