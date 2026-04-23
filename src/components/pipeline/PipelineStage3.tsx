@@ -360,7 +360,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     queryFn: async () => {
       const TB_COLS = "ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount";
 
-      // Step 0: direct lookup — works when tally sync used audit_engagements.id as engagement_id
+      // Step 0: direct lookup — works when auto-setup.js stored audit_engagements.id
       if (engagementId) {
         const { data } = await supabase
           .from("tally_trial_balance")
@@ -371,9 +371,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
       if (!engagement?.client_id) return [];
       const clientId = engagement.client_id;
-      let tallyEngId: string | null = null;
 
-      // Step 1: exact client_id + financial_year in engagements (Tally sync) table
+      // Step 1: find the engagement_id actually written by the sync agent via
+      // sync_batches (which stores client_id). Most reliable — works regardless
+      // of which engagements table the sync used.
+      const { data: batchRow } = await supabase
+        .from("sync_batches" as any)
+        .select("engagement_id")
+        .eq("client_id", clientId)
+        .in("status", ["complete", "success", "complete_with_warnings"])
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const batchEngId: string | null = (batchRow as any)?.engagement_id ?? null;
+      if (batchEngId && batchEngId !== engagementId) {
+        const { data } = await supabase
+          .from("tally_trial_balance")
+          .select(TB_COLS)
+          .eq("engagement_id", batchEngId);
+        if (data?.length) return data as any[];
+      }
+
+      // Step 2: legacy engagements table lookup by client_id + FY
+      let tallyEngId: string | null = null;
       if (engagement.financial_year) {
         const { data } = await supabase
           .from("engagements" as any)
@@ -383,7 +403,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           .maybeSingle();
         tallyEngId = (data as any)?.id ?? null;
       }
-      // Step 2: any engagement for this client (most recent FY)
+      // Step 3: any engagement for this client (most recent FY)
       if (!tallyEngId) {
         const { data } = await supabase
           .from("engagements" as any)
@@ -401,7 +421,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         .eq("engagement_id", tallyEngId);
       return (data || []) as any[];
     },
-    enabled: !!engagement?.client_id,
+    enabled: !!engagementId,
   });
 
   // ─── Fetch ledger aliases for this client (Task 3) ───
