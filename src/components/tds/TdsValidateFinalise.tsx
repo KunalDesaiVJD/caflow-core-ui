@@ -149,9 +149,9 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       if (c.bsr_code && !/^\d{7}$/.test(c.bsr_code)) {
         items.push({ code: "E002", severity: "error", description: `BSR Code "${c.bsr_code}" is not 7 digits`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
-      // E003: Challan serial format
+      // E003: Challan number format
       if (c.challan_serial_no && !/^\d{5}$/.test(c.challan_serial_no)) {
-        items.push({ code: "E003", severity: "error", description: `Challan Serial No "${c.challan_serial_no}" is not 5 digits`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
+        items.push({ code: "E003", severity: "error", description: `Challan Number "${c.challan_serial_no}" is not 5 digits`, affectedEntity: `Challan #${c.challan_serial_no || '?'}`, challanId: c.id });
       }
       // E004: Future deposit date
       if (c.deposit_date && new Date(c.deposit_date) > today) {
@@ -328,15 +328,14 @@ export function TdsValidateFinalise({ clients, isSuperadmin, resolveFirmId, onNa
       items.push({ code: "W006", severity: "warning", description: `No PAN deductees exceed 30% of total (${noPanCount.total}/${dList.length}) — TDSCPC may query`, affectedEntity: "Filing" });
     }
 
-    // E015: Duplicate challan serial
-    const serialSet = new Set<string>();
+    // E015: Duplicate Challan Number (globally unique; BSR can repeat but Challan Number cannot)
+    const challanNumSet = new Set<string>();
     for (const c of cList) {
       if (c.challan_serial_no) {
-        const key = `${c.bsr_code || ''}|${c.challan_serial_no}`;
-        if (serialSet.has(key)) {
-          items.push({ code: "E015", severity: "error", description: `Duplicate challan serial no "${c.challan_serial_no}" with BSR "${c.bsr_code || '?'}"`, affectedEntity: `Challan #${c.challan_serial_no}`, challanId: c.id });
+        if (challanNumSet.has(c.challan_serial_no)) {
+          items.push({ code: "E015", severity: "error", description: `Duplicate Challan Number "${c.challan_serial_no}" — each Challan Number must be unique`, affectedEntity: `Challan #${c.challan_serial_no}`, challanId: c.id });
         }
-        serialSet.add(key);
+        challanNumSet.add(c.challan_serial_no);
       }
     }
 

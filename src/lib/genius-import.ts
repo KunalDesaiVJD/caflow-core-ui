@@ -421,32 +421,28 @@ export async function importGeniusXls(
     );
   }
 
-  // ── Duplicate detection: (BSR, Serial) must be globally unique ───────────
-  // Skip any challan whose BSR + Serial No. already exists anywhere in
-  // tds_challans. Carry-forward is the correct way to use a prior-quarter
-  // challan's unused balance — re-adding it would double-count.
-  const challanSigs = parsed.challans
-    .filter(c => c.bsrCode && c.bankChallanNo)
-    .map(c => `${c.bsrCode}|${c.bankChallanNo}`);
-  const existingSigs = new Set<string>();
-  if (challanSigs.length > 0) {
-    const bsrList = Array.from(new Set(parsed.challans.map(c => c.bsrCode).filter(Boolean)));
-    const serialList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
+  // ── Duplicate detection: Challan Number must be globally unique ──────────
+  // BSR code may legitimately repeat (same bank branch handles many deposits)
+  // but each Challan Number assigned by the bank is unique. Skip any challan
+  // whose Challan Number already exists anywhere in tds_challans. Carry-
+  // forward is the correct way to use a prior-quarter challan's unused
+  // balance — re-adding it would double-count.
+  const existingNums = new Set<string>();
+  const numList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
+  if (numList.length > 0) {
     const { data: existing } = await supabase
       .from("tds_challans")
-      .select("bsr_code, challan_serial_no, quarter, financial_year, form_type")
-      .in("bsr_code", bsrList)
-      .in("challan_serial_no", serialList);
+      .select("challan_serial_no, bsr_code, quarter, financial_year, form_type")
+      .in("challan_serial_no", numList);
     (existing || []).forEach((row: any) => {
-      existingSigs.add(`${row.bsr_code}|${row.challan_serial_no}`);
+      if (row.challan_serial_no) existingNums.add(String(row.challan_serial_no));
     });
   }
 
   const dupChallans: number[] = [];
   const newChallans: typeof parsed.challans = [];
   parsed.challans.forEach(c => {
-    const sig = `${c.bsrCode}|${c.bankChallanNo}`;
-    if (existingSigs.has(sig)) {
+    if (c.bankChallanNo && existingNums.has(c.bankChallanNo)) {
       dupChallans.push(c.serialNo);
     } else {
       newChallans.push(c);
@@ -455,9 +451,9 @@ export async function importGeniusXls(
 
   if (dupChallans.length > 0) {
     warnings.push(
-      `Skipped ${dupChallans.length} duplicate challan(s) (already exists in another filing): ` +
-      `Serial${dupChallans.length > 1 ? "s" : ""} ${dupChallans.slice(0, 5).join(", ")}${dupChallans.length > 5 ? "…" : ""}. ` +
-      `A TDS challan can only exist in one filing — unused balance flows to later quarters via Carry-Forward.`
+      `Skipped ${dupChallans.length} duplicate challan(s) with Challan Numbers that already exist in another filing: ` +
+      `file row${dupChallans.length > 1 ? "s" : ""} ${dupChallans.slice(0, 5).join(", ")}${dupChallans.length > 5 ? "…" : ""}. ` +
+      `Each Challan Number is globally unique — unused balance flows to later quarters via Carry-Forward.`
     );
   }
   if (newChallans.length === 0) {

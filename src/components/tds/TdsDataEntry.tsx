@@ -571,17 +571,18 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       toast({ title: "BSR Code must be 7 digits", variant: "destructive" }); return;
     }
     if (!challanForm.challan_serial_no || challanForm.challan_serial_no.length !== 5) {
-      toast({ title: "Serial No must be 5 digits", variant: "destructive" }); return;
+      toast({ title: "Challan Number must be 5 digits", variant: "destructive" }); return;
     }
 
-    // ── Uniqueness check: (BSR, Serial) must be globally unique ─────────────
-    // A TDS challan is a unique bank deposit — it cannot legitimately appear in
-    // two filings. Its unused balance flows to later quarters via CARRY-FORWARD,
-    // not by re-adding the challan. Skip this check when editing the same row.
+    // ── Uniqueness check: Challan Number must be globally unique ─────────────
+    // BSR code can legitimately repeat (same bank branch receives many challans),
+    // but the Challan Number assigned by the bank is unique per deposit in the
+    // entire TDS system. It cannot legitimately appear in two filings — its
+    // unused balance flows to later quarters via CARRY-FORWARD, not by re-
+    // adding the challan. Skip this check when editing the same row.
     const dupQuery = supabase
       .from("tds_challans")
-      .select("id, filing_id, financial_year, quarter, form_type, client_id")
-      .eq("bsr_code", challanForm.bsr_code)
+      .select("id, filing_id, financial_year, quarter, form_type, client_id, bsr_code")
       .eq("challan_serial_no", challanForm.challan_serial_no);
     if (editingChallan?.id) dupQuery.neq("id", editingChallan.id);
     const { data: dupRows } = await dupQuery.limit(1);
@@ -592,8 +593,8 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         ? `${d.form_type} ${d.quarter} ${d.financial_year} of this client`
         : `another client's ${d.form_type} ${d.quarter} ${d.financial_year} filing`;
       toast({
-        title: "Duplicate challan",
-        description: `BSR ${challanForm.bsr_code} + Serial ${challanForm.challan_serial_no} already exists in ${whereMsg}. A challan can only exist in one filing — its balance flows to later quarters via Carry-Forward.`,
+        title: "Duplicate Challan Number",
+        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg} (BSR ${d.bsr_code}). Each Challan Number is globally unique — its balance flows to later quarters via Carry-Forward, don't re-add the challan.`,
         variant: "destructive",
       });
       return;
@@ -1288,7 +1289,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
-                            {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
+                            {c.challan_serial_no && ` • Challan No: ${c.challan_serial_no}`}
                           </p>
                           <div className="text-[10px] space-y-0.5 mt-1 border-t pt-1 border-border/50">
                             <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
@@ -1379,7 +1380,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                           {/* Row 1: BSR / Serial / Date / Bank / Section */}
                           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
                             <span><strong>BSR Code:</strong> <span className="font-mono">{selectedChallan.bsr_code || "—"}</span></span>
-                            <span><strong>Serial No:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
+                            <span><strong>Challan Number:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
                             <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
                             <span><strong>Bank:</strong> {selectedChallan.bank_name || "—"}</span>
                             <span><strong>Section:</strong> {selectedChallan.section_code || "—"}</span>
@@ -1823,7 +1824,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 <Input value={challanForm.bsr_code || ""} onChange={e => setChallanForm(p => ({ ...p, bsr_code: e.target.value.replace(/\D/g, "") }))} maxLength={7} placeholder="0000000" />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Serial No (5 digits) *</Label>
+                <Label className="text-xs">Challan Number (5 digits) *</Label>
                 <Input value={challanForm.challan_serial_no || ""} onChange={e => setChallanForm(p => ({ ...p, challan_serial_no: e.target.value.replace(/\D/g, "") }))} maxLength={5} placeholder="00000" />
               </div>
             </div>
