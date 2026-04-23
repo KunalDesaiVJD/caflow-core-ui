@@ -446,33 +446,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
-  // TB accounts — primary: tbSnapshot normalised_data; fallback: tb_hierarchy_nodes leaf nodes
+  // TB accounts — Tally Sync is authoritative when available; fall back to TB imports.
   const tbAccounts: {
     account_name: string; account_group: string;
     debit: number; credit: number; balance: number;
     opening_balance?: number; tally_debit?: number; tally_credit?: number;
   }[] = useMemo(() => {
-    // Primary path: legacy snapshot with normalised_data
-    if (tbSnapshot?.normalised_data) {
-      return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
-        account_name: r.account_name || r.ledger_name || "",
-        account_group: r.account_group || "",
-        debit: r.debit || r.closing_dr || 0,
-        credit: r.credit || r.closing_cr || 0,
-        balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
-      })).filter(a => a.account_name);
-    }
-    // Fallback path: tb_hierarchy_nodes leaf nodes (modern upload path)
-    if (tbLeafNodes?.length) {
-      return tbLeafNodes.map((n: any) => ({
-        account_name: n.name || "",
-        account_group: n.primary_group || n.group_name || "",
-        debit: n.txn_debit || 0,
-        credit: n.txn_credit || 0,
-        balance: (n.txn_debit || 0) - (n.txn_credit || 0),
-      })).filter(a => a.account_name);
-    }
-    // Last-resort fallback: Tally Trial Balance (live sync, no TB import required).
+    // Primary path: Tally Sync trial balance (verified accurate, live data).
     // closing_balance is unsigned; balance_type tells us Dr or Cr.
     if (tallyTb?.length) {
       return tallyTb.map((l: any) => {
@@ -490,6 +470,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           tally_credit: Number(l.credit_amount ?? 0),
         };
       }).filter((a: any) => a.account_name);
+    }
+    // Fallback: tb_hierarchy_nodes leaf nodes (modern manual upload path)
+    if (tbLeafNodes?.length) {
+      return tbLeafNodes.map((n: any) => ({
+        account_name: n.name || "",
+        account_group: n.primary_group || n.group_name || "",
+        debit: n.txn_debit || 0,
+        credit: n.txn_credit || 0,
+        balance: (n.txn_debit || 0) - (n.txn_credit || 0),
+      })).filter(a => a.account_name);
+    }
+    // Last resort: legacy trial_balance_snapshots import
+    if (tbSnapshot?.normalised_data) {
+      return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
+        account_name: r.account_name || r.ledger_name || "",
+        account_group: r.account_group || "",
+        debit: r.debit || r.closing_dr || 0,
+        credit: r.credit || r.closing_cr || 0,
+        balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
+      })).filter(a => a.account_name);
     }
     return [];
   }, [tbSnapshot, tbLeafNodes, tallyTb]);
