@@ -190,8 +190,13 @@ export default function TallySyncPage() {
 
   // ── Load all data ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
-    if (!selectedEngagementId || !selectedEngagement) return;
+    if (!selectedEngagementId || !selectedEngagement) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+
+    try {
 
     // Resolve the engagements.id used by the tally sync agent.
     // Strategy:
@@ -445,7 +450,9 @@ export default function TallySyncPage() {
       .limit(1);
     setPendingRequest((pending as any[])?.length > 0);
 
-    setLoading(false);
+    } finally {
+      setLoading(false);
+    }
   }, [selectedEngagementId, selectedEngagement]);
 
   useEffect(() => { loadData(); }, [loadData]);
