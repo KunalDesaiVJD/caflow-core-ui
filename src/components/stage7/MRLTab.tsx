@@ -202,19 +202,9 @@ export function MRLTab({ engagementId, engagement }: Props) {
   // ─── Clause manipulation ─────────────────────────────────────────────────
 
   const toggleClause = (id: string) => {
-    setClauses((prev) => {
-      const target = prev.find((c) => c.id === id);
-      if (!target) return prev;
-      // Radio behaviour for msme group
-      if (target.groupId) {
-        return prev.map((c) => {
-          if (c.id === id) return { ...c, selected: !c.selected };
-          if (c.groupId === target.groupId && c.id !== id) return { ...c, selected: false };
-          return c;
-        });
-      }
-      return prev.map((c) => (c.id === id ? { ...c, selected: !c.selected } : c));
-    });
+    setClauses((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, selected: !c.selected } : c))
+    );
   };
 
   const updateText = (id: string, text: string) => {
@@ -492,9 +482,6 @@ export function MRLTab({ engagementId, engagement }: Props) {
                       {String(clauseNum).padStart(2, "0")}.
                     </span>
                     <span className="text-sm font-medium">{clause.title}</span>
-                    {clause.groupId === "msme" && (
-                      <Badge variant="outline" className="ml-2 text-xs">MSME</Badge>
-                    )}
                   </span>
 
                   {!clause.selected && (

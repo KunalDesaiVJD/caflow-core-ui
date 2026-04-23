@@ -15,7 +15,7 @@ export interface MRLClause {
   title: string;
   selected: boolean;
   text: string;
-  /** Mutually-exclusive radio group (e.g. "msme") */
+  /** Optional group identifier (reserved for future use) */
   groupId?: string;
 }
 
@@ -156,14 +156,12 @@ export const MRL_CLAUSES_TEMPLATE: MRLClause[] = [
     id: "clause-23a",
     title: "MSME — Declarations Obtained & Produced (23a)",
     selected: true,
-    groupId: "msme",
     text: `We have obtained the MSME status or declaration from the respective suppliers registered under the Micro, Small & Medium Enterprises Development Act, 2006 during the year and same were produced before auditors. We confirm that the information given by the auditors as mentioned in Auditors report as well as in para 22(b) of the Form-3CD are correct.`,
   },
   {
     id: "clause-23b",
     title: "MSME — Status Obtained as on Balance Sheet Date (23b)",
-    selected: false,
-    groupId: "msme",
+    selected: true,
     text: `We have obtained the status of the suppliers registered under the Micro, Small & Medium Enterprises Development Act, 2006 as on [BS_DATE] and information given by the auditors as mentioned in para 22(b) of the Form-3CD are confirmed by us.`,
   },
   {
