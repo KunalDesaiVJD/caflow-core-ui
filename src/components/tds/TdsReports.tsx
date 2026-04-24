@@ -214,7 +214,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       return {
         "Sr": i + 1,
         "BSR Code": c.bsr_code || "—",
-        "Serial No": c.challan_serial_no || "—",
+        "Challan Number": c.challan_serial_no || "—",
         "Date": fmtDate(c.deposit_date),
         "Tax": c.total_tax_deposited || 0,
         "Surcharge": c.surcharge_deposited || 0,

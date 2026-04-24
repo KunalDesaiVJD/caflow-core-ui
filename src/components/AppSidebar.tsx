@@ -38,7 +38,7 @@ const auditStages = [
   { title: "Tally Sync",                 path: "/audit/tally-sync",     icon: RefreshCw                     },
   // ── Analysis pipeline ────────────────────────────────────────────────────
   { title: "Scrutiny Engine",            path: "/audit/pipeline",       icon: Eye,          stage: 4        },
-  { title: "Trial Balance Import",       path: "/audit/pipeline",       icon: Upload,       stage: 2        },
+  // Trial Balance Import removed — Tally Sync (above) is the only TB source
   { title: "COA Mapping",                path: "/audit/pipeline",       icon: Calculator,   stage: 3        },
   { title: "Financial Statements",       path: "/audit/pipeline",       icon: FileOutput,   stage: 10       },
   { title: "Notes to Accounts & CARO",   path: "/audit/pipeline",       icon: BookMarked,   stage: 7        },

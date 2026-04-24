@@ -21,7 +21,7 @@ import { AuthProvider, useAuth } from "./hooks/useAuth";
 // code that is actually needed for the current route.
 const Index                    = lazy(() => import("./pages/Index"));
 const Clients                  = lazy(() => import("./pages/Clients"));
-const ImportTrialBalance       = lazy(() => import("./pages/ImportTrialBalance"));
+// ImportTrialBalance removed — Tally Sync is the only TB source (Phase 2)
 const AuditScrutiny            = lazy(() => import("./pages/AuditScrutiny"));
 const ClientDetail             = lazy(() => import("./pages/ClientDetail"));
 const NewClientWizard          = lazy(() => import("./pages/NewClientWizard"));
@@ -200,10 +200,10 @@ const App = () => (
               <Route path="/audit/pipeline/:engagementId" element={<AuditPipeline />} />
 
               <Route path="/audit" element={<AuditIntelligence />} />
-              <Route path="/audit/import" element={<ImportTrialBalance />} />
+              {/* /audit/import removed — use Tally Sync (/audit/tally-sync) instead */}
               <Route path="/audit/scrutiny" element={<AuditScrutiny />} />
               <Route path="/audit/:clientId/scrutiny" element={<AuditScrutiny />} />
-              <Route path="/audit/:clientId/import-trial-balance" element={<ImportTrialBalance />} />
+              {/* /audit/:clientId/import-trial-balance removed — use Tally Sync instead */}
               <Route path="/audit/3cd" element={<Form3CD />} />
               <Route path="/audit/:clientId/3cd" element={<Form3CD />} />
               <Route path="/audit/3reports" element={<Form3Reports />} />

@@ -268,7 +268,8 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
 
 export interface ImportResult {
   parsed: ParsedGeniusFile;
-  challansInserted: number;
+  challansInserted: number;    // newly-created challans
+  challansReused: number;      // pre-existing challans whose deductees were attached as carry-forward utilisation
   deducteesInserted: number;
   warnings: string[];
 }
@@ -313,9 +314,205 @@ export async function importGeniusXls(
     throw new Error("No challans found in the file. Nothing to import.");
   }
 
-  // ── Insert challans ──────────────────────────────────────────────────────
+  // ── Auto-migration: ensure plain "194C" is usable in dropdowns ───────────
+  // Genius uses "194C"; older CAFlow seeds split this into 194C-A / 194C-S.
+  // Three jobs (all idempotent):
+  //   1. Convert any existing challans/deductees with 194C-A or 194C-S to 194C
+  //   2. Delete legacy 194C-A / 194C-S rows from rate_master
+  //   3. Ensure a 194C rate_master row exists for this firm + AY + form_type
+  //      so the dropdown actually has "194C" as a selectable option after import
   const firmId = resolvedFirmId || filing.firm_id || null;
-  const challanPayloads = parsed.challans.map(c => {
+  if (firmId) {
+    try {
+      // 1. Normalise existing challan/deductee section codes
+      await supabase.from("tds_challans")
+        .update({ section_code: "194C" })
+        .in("section_code", ["194C-A", "194C-S"]);
+      await supabase.from("tds_deductees")
+        .update({ section_code: "194C" })
+        .in("section_code", ["194C-A", "194C-S"]);
+
+      // 2. Drop legacy rate master rows for this firm
+      const { data: deletedLegacy } = await supabase.from("tds_rate_master")
+        .delete()
+        .eq("firm_id", firmId)
+        .in("section_code", ["194C-A", "194C-S"])
+        .select("id");
+      if (deletedLegacy && deletedLegacy.length > 0) {
+        warnings.push(`Merged ${deletedLegacy.length} legacy 194C-A/194C-S rate master row(s) into 194C.`);
+      }
+
+      // 3. Ensure 194C exists for this AY + form_type. AY is derived from
+      //    the financial year: "2025-26" -> "2026-27".
+      const fyParts = (financialYear || "").split("-");
+      const ay = fyParts.length === 2
+        ? `${parseInt(fyParts[0]) + 1}-${String(parseInt(fyParts[0]) + 2).slice(2)}`
+        : "2026-27";
+      const { data: existing194C } = await supabase
+        .from("tds_rate_master")
+        .select("id")
+        .eq("firm_id", firmId)
+        .eq("assessment_year", ay)
+        .eq("form_type", formType)
+        .eq("section_code", "194C")
+        .limit(1);
+      if (!existing194C || existing194C.length === 0) {
+        const newRow: any = {
+          assessment_year: ay,
+          financial_year: financialYear,
+          form_type: formType,
+          section_code: "194C",
+          nature_of_payment: "Contractor / Sub-contractor",
+          threshold_individual: 30000,
+          threshold_company: 30000,
+          rate_individual: 1,
+          rate_company: 2,
+          rate_no_pan: 20,
+          surcharge_applicable: false,
+          cess_applicable: false,
+          is_active: true,
+          effective_from: "2025-04-01",
+          effective_to: null,
+          notes: "1% for Ind/HUF, 2% for Others. Threshold: ₹30,000 per single transaction OR ₹1,00,000 aggregate in FY.",
+          firm_id: firmId,
+        };
+        const insertRes = await supabase.from("tds_rate_master").insert(newRow as any);
+        if (insertRes.error) {
+          console.warn("[GeniusImport] Failed to seed 194C rate master row:", insertRes.error.message);
+          warnings.push(`Could not add 194C to rate master: ${insertRes.error.message}. Add it manually in Rate Master.`);
+        } else {
+          warnings.push("Added 194C (Contractor / Sub-contractor) to Rate Master so dropdowns can match it.");
+        }
+      }
+    } catch (mErr: any) {
+      console.warn("[GeniusImport] 194C auto-migration skipped:", mErr);
+    }
+  }
+
+  // ── Resolve bank names from prior challans (Genius file has no bank name col) ──
+  // For each unique BSR code in the file, check if this firm has a previous
+  // challan with the same BSR that has a VALID bank_name filled in, and reuse
+  // it. A valid bank name is any non-empty string that isn't purely numeric
+  // (e.g. "30,000" or "5000" — those are amounts accidentally entered in the
+  // bank field, not bank names).
+  const isValidBankName = (s: string | null | undefined): boolean => {
+    if (!s) return false;
+    const v = String(s).trim();
+    if (!v) return false;
+    // Reject values that are only digits/commas/periods/spaces (amounts)
+    if (/^[\d,.\s]+$/.test(v)) return false;
+    return true;
+  };
+
+  const bankByBsr = new Map<string, string>();
+  const uniqueBsrs = Array.from(new Set(parsed.challans.map(c => c.bsrCode).filter(Boolean)));
+  if (firmId && uniqueBsrs.length > 0) {
+    try {
+      const { data: priorChallans } = await supabase
+        .from("tds_challans")
+        .select("id, bsr_code, bank_name")
+        .eq("firm_id", firmId)
+        .in("bsr_code", uniqueBsrs)
+        .not("bank_name", "is", null);
+
+      // One-time data cleanup: any prior challans whose bank_name is purely
+      // numeric got there by mistake (amount typed into wrong field OR was
+      // propagated from a previous buggy import). Reset them to null so they
+      // don't keep propagating on every future import.
+      const badIds = (priorChallans || [])
+        .filter((r: any) => r.bank_name && !isValidBankName(r.bank_name))
+        .map((r: any) => r.id);
+      if (badIds.length > 0) {
+        await supabase.from("tds_challans")
+          .update({ bank_name: null })
+          .in("id", badIds);
+        warnings.push(`Cleared ${badIds.length} challan(s) that had a numeric value stored in Bank Name (likely an accidental amount entry). Re-enter the actual bank name via Edit Challan if needed.`);
+      }
+
+      (priorChallans || []).forEach((row: any) => {
+        if (isValidBankName(row.bank_name) && !bankByBsr.has(row.bsr_code)) {
+          bankByBsr.set(row.bsr_code, String(row.bank_name).trim());
+        }
+      });
+    } catch (e) {
+      console.warn("[GeniusImport] Bank-name BSR lookup failed:", e);
+    }
+  }
+  const missingBankBsrs = uniqueBsrs.filter(b => !bankByBsr.has(b));
+  if (missingBankBsrs.length > 0) {
+    warnings.push(
+      `Bank name not set for BSR ${missingBankBsrs.slice(0, 3).join(", ")}${missingBankBsrs.length > 3 ? "…" : ""}. ` +
+      `Genius files don't carry the bank name — edit each challan once to fill it; future imports with the same BSR will auto-populate.`
+    );
+  }
+
+  // ── Duplicate detection: Challan Number is globally unique ───────────────
+  // BSR code may legitimately repeat (same bank branch handles many deposits)
+  // but each Challan Number is unique. If a Challan Number already exists in
+  // the DB we DON'T create a new challan — instead we re-use the existing one
+  // and link any deductees from this file under Serial N to the existing
+  // challan's UUID (but inserted with the CURRENT filing_id so they count as
+  // this quarter's utilisation of carry-forward balance).
+  //
+  // Build map: Challan Number (from file) -> existing challan's UUID
+  const existingChallanByNum = new Map<string, { id: string; quarter: string; financial_year: string; form_type: string }>();
+  const numList = Array.from(new Set(parsed.challans.map(c => c.bankChallanNo).filter(Boolean)));
+  if (numList.length > 0) {
+    const { data: existing } = await supabase
+      .from("tds_challans")
+      .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
+      .in("challan_serial_no", numList);
+    (existing || []).forEach((row: any) => {
+      if (row.challan_serial_no && !existingChallanByNum.has(row.challan_serial_no)) {
+        existingChallanByNum.set(String(row.challan_serial_no), {
+          id: String(row.id),
+          quarter: row.quarter,
+          financial_year: row.financial_year,
+          form_type: row.form_type,
+        });
+      }
+    });
+  }
+
+  const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];
+  const newChallans: typeof parsed.challans = [];
+  parsed.challans.forEach(c => {
+    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    if (existingRec) {
+      reusedChallans.push({
+        fileSerial: c.serialNo,
+        challanNum: c.bankChallanNo,
+        from: `${existingRec.form_type} ${existingRec.quarter} ${existingRec.financial_year}`,
+      });
+    } else {
+      newChallans.push(c);
+    }
+  });
+
+  if (reusedChallans.length > 0) {
+    const sample = reusedChallans.slice(0, 3)
+      .map(r => `${r.challanNum} (from ${r.from})`)
+      .join("; ");
+    warnings.push(
+      `Re-using ${reusedChallans.length} existing challan(s) — their deductees in this file will be added ` +
+      `as this quarter's utilisation of carry-forward balance: ${sample}${reusedChallans.length > 3 ? "…" : ""}.`
+    );
+  }
+  if (newChallans.length === 0 && reusedChallans.length === 0) {
+    return {
+      parsed,
+      challansInserted: 0,
+      challansReused: 0,
+      deducteesInserted: 0,
+      warnings: [
+        ...warnings,
+        "Nothing to import — no challans in the file.",
+      ],
+    };
+  }
+
+  // ── Insert challans ──────────────────────────────────────────────────────
+  const challanPayloads = newChallans.map(c => {
     const p: any = {
       filing_id: filing.id,
       client_id: filing.client_id,
@@ -338,13 +535,14 @@ export async function importGeniusXls(
       section_code: c.sectionCode || null,
       late_fees_234e: c.lateFee234E,
       cheque_dd_no: c.chequeDdNo || null,
+      bank_name: bankByBsr.get(c.bsrCode) || null,
     };
     return p;
   });
 
   // Try insert WITH late_fees_234e; fall back if column missing in DB
-  let insertedChallans: any[] | null = null;
-  {
+  let insertedChallans: any[] = [];
+  if (newChallans.length > 0) {
     const { data, error } = await supabase
       .from("tds_challans")
       .insert(challanPayloads as any)
@@ -363,19 +561,26 @@ export async function importGeniusXls(
     } else {
       insertedChallans = (data as any[]) || [];
     }
+
+    if (insertedChallans.length !== newChallans.length) {
+      throw new Error(
+        `Inserted ${insertedChallans.length} challans but expected ${newChallans.length}`
+      );
+    }
   }
 
-  if (!insertedChallans || insertedChallans.length !== parsed.challans.length) {
-    throw new Error(
-      `Inserted ${insertedChallans?.length ?? 0} challans but expected ${parsed.challans.length}`
-    );
-  }
-
-  // Build map: Genius serial no (1,2,3…) → new DB UUID.
-  // Insert order matches parsed order, so index i → parsed.challans[i].serialNo.
+  // Build map: Genius serial no (1,2,3…) → challan UUID.
+  // Covers BOTH (a) newly-inserted challans and (b) pre-existing challans
+  // re-used from prior quarters (so their deductees in this file get linked
+  // to the existing UUID but inserted under the current filing_id).
   const serialToId = new Map<number, string>();
-  parsed.challans.forEach((ch, i) => {
-    serialToId.set(ch.serialNo, insertedChallans![i].id as string);
+  newChallans.forEach((ch, i) => {
+    serialToId.set(ch.serialNo, insertedChallans[i].id as string);
+  });
+  parsed.challans.forEach(c => {
+    if (serialToId.has(c.serialNo)) return; // already mapped as new
+    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    if (existingRec) serialToId.set(c.serialNo, existingRec.id);
   });
 
   // ── Insert deductees ─────────────────────────────────────────────────────
@@ -383,6 +588,7 @@ export async function importGeniusXls(
     return {
       parsed,
       challansInserted: insertedChallans.length,
+      challansReused: reusedChallans.length,
       deducteesInserted: 0,
       warnings,
     };
@@ -429,7 +635,6 @@ export async function importGeniusXls(
       `not present in the Challan Details sheet (excel rows: ${orphanDeductees.slice(0, 5).join(", ")}${orphanDeductees.length > 5 ? "…" : ""}).`
     );
   }
-
   let insertedDeductees = 0;
   if (deducteePayloads.length > 0) {
     const { data, error } = await supabase
@@ -448,6 +653,7 @@ export async function importGeniusXls(
   return {
     parsed,
     challansInserted: insertedChallans.length,
+    challansReused: reusedChallans.length,
     deducteesInserted: insertedDeductees,
     warnings,
   };

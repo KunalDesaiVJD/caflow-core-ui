@@ -61,8 +61,8 @@ const SEED_DATA: Omit<RateRecord, "id" | "firm_id" | "created_at">[] = [
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194BB", nature_of_payment: "Horse Racing", threshold_individual: 10000, threshold_company: 10000, rate_individual: 30, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194BA", nature_of_payment: "Online Gaming Winnings", threshold_individual: 0, threshold_company: 0, rate_individual: 30, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "IT Act 2025: TDS on net winnings from online gaming platforms. No threshold limit.", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194LBC", nature_of_payment: "Securitisation Trust Income", threshold_individual: 0, threshold_company: 0, rate_individual: 25, rate_company: 30, rate_no_pan: 30, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "IT Act 2025: 25% for Ind/HUF, 30% for others (companies/firms).", section_description: null },
-  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194C-S", nature_of_payment: "Contractor (Single Transaction)", threshold_individual: 30000, threshold_company: 30000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "1% for Ind/HUF, 2% for Others", section_description: null },
-  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194C-A", nature_of_payment: "Contractor (Aggregate)", threshold_individual: 100000, threshold_company: 100000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "1% for Ind/HUF, 2% for Others", section_description: null },
+  // Merged 194C (was split into 194C-A / 194C-S) — matches what Genius Excel uses on import/export.
+  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194C", nature_of_payment: "Contractor / Sub-contractor", threshold_individual: 30000, threshold_company: 30000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "1% for Ind/HUF, 2% for Others. Threshold: ₹30,000 per single transaction OR ₹1,00,000 aggregate in FY.", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194D", nature_of_payment: "Insurance Commission", threshold_individual: 15000, threshold_company: 15000, rate_individual: 5, rate_company: 10, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194DA", nature_of_payment: "Life Insurance Payout", threshold_individual: 100000, threshold_company: 100000, rate_individual: 5, rate_company: 5, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "26Q", section_code: "194G", nature_of_payment: "Lottery Agent Commission", threshold_individual: 15000, threshold_company: 15000, rate_individual: 5, rate_company: 5, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
@@ -154,10 +154,34 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const seedRates = async () => {
     const firmId = await resolveFirmId();
     if (!firmId) { toast({ title: "No firm ID", variant: "destructive" }); return; }
+
+    // ── Migration: merge legacy 194C-A / 194C-S into a single 194C ─────────
+    // The Genius Excel format uses plain "194C"; the app previously split this
+    // into 194C-A (Aggregate) and 194C-S (Single Transaction) which broke
+    // Genius import/export round-trips. Runs idempotently — safe on every seed.
+    const legacy194C = ["194C-A", "194C-S"];
+    try {
+      // Update any existing challans with legacy codes
+      await supabase.from("tds_challans")
+        .update({ section_code: "194C" })
+        .in("section_code", legacy194C);
+      // Update any existing deductees with legacy codes
+      await supabase.from("tds_deductees")
+        .update({ section_code: "194C" })
+        .in("section_code", legacy194C);
+      // Delete old rate_master rows for this firm (for all AYs)
+      await supabase.from("tds_rate_master")
+        .delete()
+        .eq("firm_id", firmId)
+        .in("section_code", legacy194C);
+    } catch (migErr) {
+      console.warn("[TdsRateMaster] 194C migration step failed (non-fatal):", migErr);
+    }
+
     const toInsert = SEED_DATA.map(d => ({ ...d, firm_id: firmId }));
     const { error } = await supabase.from("tds_rate_master").upsert(toInsert as any[], { onConflict: "assessment_year,form_type,section_code,firm_id" });
     if (error) toast({ title: "Error seeding", description: error.message, variant: "destructive" });
-    else { toast({ title: "Rate master seeded for AY 2026-27" }); fetchRates(); }
+    else { toast({ title: "Rate master seeded for AY 2026-27", description: "Legacy 194C-A / 194C-S merged into 194C." }); fetchRates(); }
   };
 
   const importFromPrevYear = async () => {

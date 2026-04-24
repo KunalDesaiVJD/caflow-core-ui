@@ -40,7 +40,7 @@ const STAGES = [
   { num: 6,  label: "Workpapers & Audit Sheet",    icon: Shield         },
   { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
   { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
-  { num: 2,  label: "Trial Balance Import",        icon: FileText       },
+  { num: 2,  label: "Tally Sync",                  icon: FileText       },
   { num: 3,  label: "COA Mapping",                 icon: Calculator     },
   { num: 10, label: "Financial Statements",        icon: FileOutput     },
   { num: 7,  label: "Notes to Accounts & CARO",    icon: BookMarked     },

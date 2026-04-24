@@ -33,7 +33,7 @@ import { isCompanyEntity } from "@/utils/entityUtils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck,
-  Eye, BookMarked, Shield, Award,
+  Eye, BookMarked, Shield, Award, RefreshCw,
 } from "lucide-react";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
@@ -50,7 +50,7 @@ import Form3CD from "@/pages/Form3CD";
 // ─── Constants ───
 const STAGES = [
   { num: 1,  label: 'Engagement Setup',           icon: Building2   },
-  { num: 2,  label: 'Trial Balance Import',        icon: FileText    },
+  { num: 2,  label: 'Tally Sync',                  icon: RefreshCw   },
   { num: 3,  label: 'COA Mapping',                 icon: Calculator  },
   { num: 4,  label: 'Scrutiny Engine',             icon: Eye         },
   { num: 5,  label: 'Query Tracker',               icon: ClipboardCheck },
@@ -616,10 +616,56 @@ export default function AuditPipeline() {
         stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
       } as any).select("id").single();
       if (error) throw error;
-      return data;
+
+      // ── Carry-forward prior year COA mapping ─────────────────────────────
+      // After the new engagement is inserted, find the immediately preceding FY
+      // engagement for the same client and stamp every mapped ledger with
+      // confidence: "carried_forward". This lets Stage 3 surface already-proven
+      // mappings at the top with the highest confidence tier.
+      let carriedForwardCount = 0;
+      let prevFy: string | null = null;
+      try {
+        const fyParts = (form1A.financial_year || "").split("-");
+        if (fyParts.length === 2) {
+          const prevFyStart = parseInt(fyParts[0], 10) - 1;
+          const prevFyEnd   = parseInt(fyParts[0], 10);
+          prevFy = `${prevFyStart}-${String(prevFyEnd).slice(-2)}`;
+
+          const { data: priorEng } = await supabase
+            .from("audit_engagements")
+            .select("coa_mapping")
+            .eq("client_id", form1A.client_id)
+            .eq("financial_year", prevFy)
+            .eq("is_py_shell", false)
+            .maybeSingle();
+
+          if (priorEng?.coa_mapping && Object.keys(priorEng.coa_mapping as any).length > 0) {
+            const priorMap = priorEng.coa_mapping as Record<string, any>;
+            const carriedForward: Record<string, any> = {};
+            for (const [ledger, mapping] of Object.entries(priorMap)) {
+              carriedForward[ledger] = { ...mapping, confidence: "carried_forward" };
+            }
+            await supabase
+              .from("audit_engagements")
+              .update({ coa_mapping: carriedForward } as any)
+              .eq("id", data.id);
+            carriedForwardCount = Object.keys(carriedForward).length;
+          }
+        }
+      } catch (_cfErr) {
+        // Carry-forward is best-effort — never block engagement creation
+      }
+
+      return { ...data, carriedForwardCount, prevFy };
     },
-    onSuccess: (data) => {
-      toast.success("Engagement created");
+    onSuccess: (data: any) => {
+      if (data.carriedForwardCount > 0) {
+        toast.success(
+          `Engagement created — ${data.carriedForwardCount} COA mapping${data.carriedForwardCount > 1 ? "s" : ""} carried forward from FY ${data.prevFy}`,
+        );
+      } else {
+        toast.success("Engagement created");
+      }
       setSelectedEngId(data.id);
       if (auditCtx?.setSelectedEngagementId) {
         auditCtx.setSelectedEngagementId(data.id);

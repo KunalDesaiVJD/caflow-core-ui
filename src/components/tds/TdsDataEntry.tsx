@@ -284,14 +284,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Rate Master ───
-  useEffect(() => {
-    const fetchRates = async () => {
-      const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
-        .eq("form_type", selForm).eq("is_active", true);
-      setRateMaster((data || []) as RateEntry[]);
-    };
-    fetchRates();
-  }, [selForm, selFy]);
+  const fetchRates = useCallback(async () => {
+    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
+      .eq("form_type", selForm).eq("is_active", true);
+    setRateMaster((data || []) as RateEntry[]);
+  }, [selForm]);
+
+  useEffect(() => { fetchRates(); }, [fetchRates, selFy]);
 
   // ─── Load Filing (Issue 6: try-catch, never crash, empty state on error) ───
   const loadFiling = useCallback(async () => {
@@ -399,61 +398,103 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
     const currentPeriod = periodToNum(fy, quarter);
 
-    // Fetch ALL filings for this client — no FY or quarter filter.
-    const { data: allFilings } = await supabase
-      .from("tds_filings")
-      .select("id, quarter, financial_year")
-      .eq("client_id", clientId);
+    // Query challans by stable metadata (client_id + form_type) rather than
+    // walking filing_id → prior filings. A challan's filing_id can drift if
+    // its owning filing was deleted and re-created, which would cause the
+    // old filing_id→filings lookup to silently skip the challan. Querying
+    // directly on the challan's own quarter/FY columns is drift-proof.
+    const { data: priorChallansRaw } = await supabase.from("tds_challans").select("*")
+      .eq("client_id", clientId)
+      .eq("form_type", form)
+      .order("deposit_date", { ascending: true });
 
-    if (!allFilings || allFilings.length === 0) { setCarryForwardChallans([]); return; }
-
-    // Keep only filings whose period is strictly before the current one.
-    const priorFilings = allFilings.filter(
-      f => periodToNum(f.financial_year, f.quarter) < currentPeriod
+    const priorChallans = ((priorChallansRaw as unknown as Challan[]) || []).filter(c =>
+      c.quarter && c.financial_year &&
+      periodToNum(c.financial_year, c.quarter) < currentPeriod
     );
-
-    if (priorFilings.length === 0) { setCarryForwardChallans([]); return; }
-
-    const priorFilingIds = priorFilings.map(f => f.id);
-
-    // Issue 3 FIX: Do NOT filter by fully_utilized — unconsumed check below is authoritative.
-    const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
-      .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
-    const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
 
     const challanIds = priorChallans.map(c => c.id);
+    // Fetch FULL deductee rows (not just sum fields) so we can merge them into
+    // allChallanDeductees — getChallanBreakdownAll looks up deductees from that
+    // map to compute 'Used (all Q)' for carry-forward challans.
     const { data: allDeds } = await supabase.from("tds_deductees")
-      .select("challan_id, tds_amount, total_tax_deducted, interest_amount, late_fees_amount, surcharge_amount")
+      .select("*")
       .in("challan_id", challanIds);
 
+    // Track which prior challans have CURRENT-QUARTER utilisation — i.e.,
+    // deductees whose quarter+FY matches the currently-selected quarter.
+    // These challans must be shown in the Carry-Forward list even if they
+    // are "fully utilised overall", so the user can view/edit the current-
+    // quarter entries attached to them.
+    const currentQUsage = new Set<string>();
     const appliedMap = new Map<string, number>();
+    const cfGrouped: Record<string, Deductee[]> = {};
     (allDeds || []).forEach((d: any) => {
       const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0);
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
+      if (!cfGrouped[d.challan_id]) cfGrouped[d.challan_id] = [];
+      cfGrouped[d.challan_id].push(d as Deductee);
+      if (d.quarter === quarter && d.financial_year === fy) {
+        currentQUsage.add(d.challan_id);
+      }
     });
 
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
       const applied = appliedMap.get(c.id) || 0;
       const unconsumed = (c.total_challan_amount || 0) - applied - (c.late_fees_234e || 0);
-      if (unconsumed > 0.5) {
-        const filingQ = priorFilings.find(f => f.id === c.filing_id);
+      const hasCurrentQEntries = currentQUsage.has(c.id);
+      // Show this prior challan in the Carry-Forward list if it either:
+      //   (a) has remaining unused balance (the classic "still has cash left"
+      //       case), OR
+      //   (b) has current-quarter entries attached to it (the import or a
+      //       manual Add Row under a CF challan has consumed balance in THIS
+      //       quarter — user must still be able to see/edit those entries).
+      if (unconsumed > 0.5 || hasCurrentQEntries) {
         carried.push({
           challan: c as Challan,
-          fromQuarter: filingQ?.quarter || "?",
-          fromFy: filingQ?.financial_year || fy,
+          // Read origin quarter/FY directly from the challan (stable) rather
+          // than looking it up via its (possibly drifted) filing_id.
+          fromQuarter: c.quarter || "?",
+          fromFy: c.financial_year || fy,
           appliedAmount: applied,
         });
       }
     });
     setCarryForwardChallans(carried);
+    // Merge carry-forward deductees into allChallanDeductees so the breakdown
+    // card (Used / Available) shows correct amounts in the Q2+ list view.
+    setAllChallanDeductees(prev => ({ ...prev, ...cfGrouped }));
   };
 
   const fetchChallans = async (filingId: string) => {
+    // Query by the stable logical key (client+FY+quarter+form) rather than
+    // just filing_id. filing_id is a UUID that can drift if the filing row
+    // was re-created (e.g., after a prior delete) — its challans would then
+    // be orphaned and disappear from the UI while still existing in the DB.
+    // Self-heal any stale filing_id back to the current one so future queries
+    // match strictly too.
     const { data } = await supabase.from("tds_challans").select("*")
-      .eq("filing_id", filingId).order("deposit_date", { ascending: true });
+      .eq("client_id", selClient)
+      .eq("form_type", selForm)
+      .eq("financial_year", selFy)
+      .eq("quarter", selQuarter)
+      .order("deposit_date", { ascending: true });
     const list = (data as unknown as Challan[]) || [];
+
+    // Self-heal filing_id drift
+    const stale = list.filter(c => c.filing_id !== filingId);
+    if (stale.length > 0) {
+      console.log(`[TDS] Repairing filing_id on ${stale.length} challan(s) for ${selFy} ${selQuarter} ${selForm}`);
+      const { error: fixErr } = await supabase.from("tds_challans")
+        .update({ filing_id: filingId })
+        .in("id", stale.map(c => c.id));
+      if (fixErr) console.warn("[TDS] filing_id self-heal failed:", fixErr.message);
+      // Reflect the fix in the in-memory list so the UI shows correct relations
+      stale.forEach(c => { (c as any).filing_id = filingId; });
+    }
+
     setChallans(list);
     if (list.length > 0) {
       const challanIds = list.map(c => c.id);
@@ -464,20 +505,74 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
         grouped[d.challan_id].push(d as Deductee);
       });
-      setAllChallanDeductees(grouped);
+      // MERGE (not replace) so any carry-forward deductee data that
+      // fetchCarryForwardChallans populated earlier for prior-quarter
+      // challans isn't wiped. Current-quarter entries (challanIds) always
+      // take precedence since they're the freshest.
+      setAllChallanDeductees(prev => ({ ...prev, ...grouped }));
       setSelectedChallan(list[0]);
-      // Split first challan entries
+      // Split first challan entries using BOTH filing_id AND quarter/FY.
+      // Using quarter+FY makes the split resilient to legacy records where
+      // filing_id might be stale (e.g., filing was re-created after an
+      // accidental delete).
       const firstAll = grouped[list[0].id] || [];
-      const filingId2 = filingId; // current filing id
-      const filingRec = await supabase.from("tds_filings").select("id").eq("id", filingId2).maybeSingle(); // Issue 6: maybeSingle never throws
-      const currFilingId = filingRec.data?.id || filingId2;
-      setPrevEntries(firstAll.filter(d => d.filing_id !== currFilingId));
-      setDeductees(firstAll.filter(d => d.filing_id === currFilingId));
+      const periodNum = (fy: string, q: string) => {
+        const y = parseInt(fy.split("-")[0], 10);
+        const n = parseInt(q.replace("Q", ""), 10);
+        return y * 10 + n;
+      };
+      const currPeriod = periodNum(selFy, selQuarter);
+      const isCurrent = (d: any) =>
+        d.filing_id === filingId ||
+        (d.quarter === selQuarter && d.financial_year === selFy);
+      const isPrior = (d: any) =>
+        d.quarter && d.financial_year &&
+        periodNum(d.financial_year, d.quarter) < currPeriod;
+      // Future-quarter entries are excluded from this view entirely.
+      setPrevEntries(firstAll.filter(d => isPrior(d) && !isCurrent(d)));
+      setDeductees(firstAll.filter(d => isCurrent(d)));
     } else {
       setSelectedChallan(null); setDeductees([]); setPrevEntries([]);
-      setAllChallanDeductees({});
+      // Don't wipe allChallanDeductees — carry-forward data for this client's
+      // prior quarters is still relevant and gets populated by
+      // fetchCarryForwardChallans. Only loadFiling resets this map fully
+      // when the client/FY/quarter combo actually changes.
     }
   };
+
+  // Helper: always refresh challans + carry-forward together after any
+  // DB mutation (new/edit/delete challan, genius import, etc.) so the
+  // Used / Available amounts on carry-forward cards stay accurate.
+  const refreshChallansAndCF = async (filingId: string) => {
+    await fetchChallans(filingId);
+    await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+  };
+
+  // Helper: is this deductee an entry FOR the currently-selected quarter?
+  // Uses both filing_id (strict UUID match) AND quarter/financial_year (stable
+  // regardless of filing UUID changes). Robust against legacy data where a
+  // deductee may have a stale filing_id but correct quarter/FY fields.
+  const isCurrentQuarterDeductee = useCallback((d: { filing_id?: string | null; quarter?: string | null; financial_year?: string | null }) => {
+    if (filing && d.filing_id === filing.id) return true;
+    if (d.quarter === selQuarter && d.financial_year === selFy) return true;
+    return false;
+  }, [filing, selQuarter, selFy]);
+
+  // Helper: is this deductee from a PRIOR quarter (earlier FY/quarter than the
+  // currently-selected one)? These appear as read-only carry-forward entries.
+  // Future-quarter entries (belonging to a LATER quarter) are NOT prior — they
+  // should only be visible in their own quarter's view, not here.
+  const isPriorQuarterDeductee = useCallback((d: { quarter?: string | null; financial_year?: string | null }) => {
+    if (!d.quarter || !d.financial_year) return false;
+    const periodNum = (fy: string, q: string) => {
+      const y = parseInt(fy.split("-")[0], 10);
+      const n = parseInt(q.replace("Q", ""), 10);
+      return y * 10 + n;
+    };
+    const deductee = periodNum(d.financial_year, d.quarter);
+    const current = periodNum(selFy, selQuarter);
+    return deductee < current;
+  }, [selQuarter, selFy]);
 
   // Issue 5: Split entries into prev (read-only) and current (editable)
   const fetchDeductees = async (challanId: string) => {
@@ -486,10 +581,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const list = (data || []) as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
-    // Split by current filing
+    // Three-way split:
+    //   - current  → editable entries belonging to THIS quarter's filing
+    //   - prior    → read-only entries from EARLIER quarters (carry-forward IN)
+    //   - future   → entries from LATER quarters (excluded from this view
+    //                entirely; they belong to their own quarter's view only).
+    // This prevents Q2 utilisation entries from showing up as read-only rows
+    // when the user is viewing the Q1 page of the same carry-forward challan.
     if (filing) {
-      setPrevEntries(list.filter(d => d.filing_id !== filing.id));
-      setDeductees(list.filter(d => d.filing_id === filing.id));
+      setPrevEntries(list.filter(d => isPriorQuarterDeductee(d)));
+      setDeductees(list.filter(d => isCurrentQuarterDeductee(d)));
     } else {
       setPrevEntries([]);
       setDeductees(list);
@@ -563,8 +664,39 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       toast({ title: "BSR Code must be 7 digits", variant: "destructive" }); return;
     }
     if (!challanForm.challan_serial_no || challanForm.challan_serial_no.length !== 5) {
-      toast({ title: "Serial No must be 5 digits", variant: "destructive" }); return;
+      toast({ title: "Challan Number must be 5 digits", variant: "destructive" }); return;
     }
+    // Reject numeric-only Bank Name values (likely an amount typed into the wrong field)
+    if (challanForm.bank_name && /^[\d,.\s]+$/.test(challanForm.bank_name.trim())) {
+      toast({ title: "Bank Name must be a name, not a number", description: "Clear the field or enter the actual bank name (e.g. ICICI Bank).", variant: "destructive" }); return;
+    }
+
+    // ── Uniqueness check: Challan Number must be globally unique ─────────────
+    // BSR code can legitimately repeat (same bank branch receives many challans),
+    // but the Challan Number assigned by the bank is unique per deposit in the
+    // entire TDS system. It cannot legitimately appear in two filings — its
+    // unused balance flows to later quarters via CARRY-FORWARD, not by re-
+    // adding the challan. Skip this check when editing the same row.
+    const dupQuery = supabase
+      .from("tds_challans")
+      .select("id, filing_id, financial_year, quarter, form_type, client_id, bsr_code")
+      .eq("challan_serial_no", challanForm.challan_serial_no);
+    if (editingChallan?.id) dupQuery.neq("id", editingChallan.id);
+    const { data: dupRows } = await dupQuery.limit(1);
+    if (dupRows && dupRows.length > 0) {
+      const d = dupRows[0] as any;
+      const sameClient = d.client_id === filing.client_id;
+      const whereMsg = sameClient
+        ? `${d.form_type} ${d.quarter} ${d.financial_year} of this client`
+        : `another client's ${d.form_type} ${d.quarter} ${d.financial_year} filing`;
+      toast({
+        title: "Duplicate Challan Number",
+        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg} (BSR ${d.bsr_code}). Each Challan Number is globally unique — its balance flows to later quarters via Carry-Forward, don't re-add the challan.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const firmId = await resolveFirmId();
     const payload: any = {
       filing_id: filing.id, client_id: filing.client_id,
@@ -604,21 +736,21 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       if (!error) {
         toast({ title: editingChallan ? "Challan updated" : "Challan added", description: "Note: Late Fees field will be available after database migration is applied." });
         setChallanDialogOpen(false);
-        await fetchChallans(filing.id);
+        await refreshChallansAndCF(filing.id);
         return;
       }
     }
     if (error) { toast({ title: "Error saving challan", description: error.message, variant: "destructive" }); return; }
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
-    await fetchChallans(filing.id);
+    await refreshChallansAndCF(filing.id);
   };
 
   const deleteChallan = async (id: string) => {
     const { error } = await supabase.from("tds_challans").delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
-    if (filing) fetchChallans(filing.id);
+    if (filing) await refreshChallansAndCF(filing.id);
   };
 
   // ─── Deductee CRUD ───
@@ -1006,15 +1138,23 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         selQuarter,
         firmId || filing.firm_id || null,
       );
-      // Refresh the UI with newly inserted data
-      await fetchChallans(filing.id);
+      // Refresh the UI with newly inserted data.
+      // refreshChallansAndCF re-runs both fetchChallans AND
+      // fetchCarryForwardChallans — the latter is essential because the
+      // import may have attached deductees to prior-quarter carry-forward
+      // challans, so their "Used / Available" amounts need to be recomputed.
+      await fetchRates();
+      await refreshChallansAndCF(filing.id);
       const warningText = result.warnings.length
         ? ` (${result.warnings.length} warning${result.warnings.length > 1 ? "s" : ""} — see console)`
         : "";
       if (result.warnings.length) console.warn("[GeniusImport] Warnings:", result.warnings);
+      const reusedText = (result.challansReused ?? 0) > 0
+        ? `, re-used ${result.challansReused} carry-forward challan(s)`
+        : "";
       toast({
         title: "Genius file imported successfully",
-        description: `Added ${result.challansInserted} challan(s) and ${result.deducteesInserted} deductee(s)${warningText}`,
+        description: `Added ${result.challansInserted} challan(s)${reusedText} and ${result.deducteesInserted} deductee(s)${warningText}`,
       });
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);
@@ -1252,7 +1392,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
-                            {c.challan_serial_no && ` • S/N: ${c.challan_serial_no}`}
+                            {c.challan_serial_no && ` • Challan No: ${c.challan_serial_no}`}
                           </p>
                           <div className="text-[10px] space-y-0.5 mt-1 border-t pt-1 border-border/50">
                             <div className="flex justify-between"><span className="text-muted-foreground">Tax (TDS)</span><span>₹{bd.tds.toLocaleString("en-IN")}</span></div>
@@ -1292,7 +1432,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     onBlur={async e => {
                                       const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
                                       await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
-                                      if (filing) fetchChallans(filing.id);
+                                      if (filing) await refreshChallansAndCF(filing.id);
                                     }}
                                   />
                                 )}
@@ -1343,7 +1483,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                           {/* Row 1: BSR / Serial / Date / Bank / Section */}
                           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
                             <span><strong>BSR Code:</strong> <span className="font-mono">{selectedChallan.bsr_code || "—"}</span></span>
-                            <span><strong>Serial No:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
+                            <span><strong>Challan Number:</strong> <span className="font-mono">{selectedChallan.challan_serial_no || "—"}</span></span>
                             <span><strong>Date:</strong> {selectedChallan.deposit_date ? format(new Date(selectedChallan.deposit_date), "dd/MM/yyyy") : "—"}</span>
                             <span><strong>Bank:</strong> {selectedChallan.bank_name || "—"}</span>
                             <span><strong>Section:</strong> {selectedChallan.section_code || "—"}</span>
@@ -1787,7 +1927,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                 <Input value={challanForm.bsr_code || ""} onChange={e => setChallanForm(p => ({ ...p, bsr_code: e.target.value.replace(/\D/g, "") }))} maxLength={7} placeholder="0000000" />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Serial No (5 digits) *</Label>
+                <Label className="text-xs">Challan Number (5 digits) *</Label>
                 <Input value={challanForm.challan_serial_no || ""} onChange={e => setChallanForm(p => ({ ...p, challan_serial_no: e.target.value.replace(/\D/g, "") }))} maxLength={5} placeholder="00000" />
               </div>
             </div>
@@ -1852,7 +1992,14 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">Bank Name</Label>
-                <Input value={challanForm.bank_name || ""} onChange={e => setChallanForm(p => ({ ...p, bank_name: e.target.value }))} />
+                <Input
+                  value={challanForm.bank_name || ""}
+                  onChange={e => setChallanForm(p => ({ ...p, bank_name: e.target.value }))}
+                  placeholder="e.g. ICICI Bank"
+                />
+                {challanForm.bank_name && /^[\d,.\s]+$/.test(challanForm.bank_name.trim()) && (
+                  <p className="text-[10px] text-destructive">Bank Name should not be a number. Enter the bank's name (e.g. HDFC Bank, SBI) or leave blank.</p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Section</Label>

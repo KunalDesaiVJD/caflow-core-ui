@@ -134,19 +134,9 @@ export const StepImportData = ({ data, onChange, onSkip, clientId, firmId, onScr
       // Import supabase here to avoid circular deps
       const { supabase } = await import("@/integrations/supabase/client");
 
-      // First save the TB snapshot
-      await supabase.from("trial_balance_snapshots").upsert({
-        client_id: clientId,
-        financial_year: new Date().getFullYear().toString(),
-        source_format: data.filename.endsWith(".csv") ? "csv" : "excel",
-        raw_data: data.rows as any,
-        normalised_data: data.rows.map((row: any) => ({
-          account_name: row.account_name || "",
-          debit: typeof row.debit === "number" ? row.debit : 0,
-          credit: typeof row.credit === "number" ? row.credit : 0,
-          balance: typeof row.balance === "number" ? row.balance : 0,
-        })) as any,
-      }, { onConflict: "client_id,financial_year" });
+      // trial_balance_snapshots removed — Tally Sync is the only TB source.
+      // This wizard step no longer saves TB data; scrutiny runs via Tally TB.
+      // Keeping the scrutiny trigger below so the wizard flow still works.
 
       // Then run scrutiny
       const { data: result, error } = await supabase.functions.invoke("run-scrutiny", {

@@ -96,32 +96,30 @@ const BankRecon = () => {
         .single();
       setClientName(client?.name || "Client");
 
-      // Trial balance snapshots for bank accounts
-      const { data: snapshots } = await supabase
-        .from("trial_balance_snapshots")
-        .select("*")
-        .eq("client_id", clientId)
-        .order("financial_year", { ascending: false })
-        .limit(1);
+      // Bank ledger balances from Tally TB (snapshot path removed)
+      const { data: tbRows } = await supabase
+        .from("tally_trial_balance")
+        .select("ledger_name, closing_balance, balance_type, debit_amount, credit_amount")
+        .eq("client_id", clientId);
 
-      if (snapshots && snapshots.length > 0) {
-        const snapshot = snapshots[0];
-        const normalised = snapshot.normalised_data as any;
-        if (Array.isArray(normalised)) {
-          const bankEntries: LedgerEntry[] = normalised
-            .filter((row: any) => {
-              const name = (row.account_name || row.ledger_name || "").toLowerCase();
-              return name.includes("bank") || name.includes("cash at bank");
-            })
-            .map((row: any, i: number) => ({
+      if (tbRows && tbRows.length > 0) {
+        const bankEntries: LedgerEntry[] = tbRows
+          .filter((row: any) => {
+            const name = (row.ledger_name || "").toLowerCase();
+            return name.includes("bank") || name.includes("cash at bank");
+          })
+          .map((row: any, i: number) => {
+            const isCr = String(row.balance_type || "Dr").toUpperCase() === "CR";
+            const bal = Math.abs(Number(row.closing_balance || 0));
+            return {
               id: `book-${i}`,
-              date: row.date || "",
-              narration: row.narration || row.account_name || row.ledger_name || "",
-              debit: parseFloat(row.debit) || 0,
-              credit: parseFloat(row.credit) || 0,
-            }));
-          setBookEntries(bankEntries);
-        }
+              date: "",
+              narration: row.ledger_name || "",
+              debit:  isCr ? 0 : bal,
+              credit: isCr ? bal : 0,
+            };
+          });
+        setBookEntries(bankEntries);
       }
     } catch (e) {
       console.error(e);
