@@ -50,14 +50,68 @@ const TdsFilings = () => {
   }, [user?.firm_id]);
 
   const fetchClients = useCallback(async () => {
-    const { data: svcData } = await supabase.from("client_services").select("client_id, service_category_id, is_active").eq("is_active", true);
-    const { data: categories } = await supabase.from("service_categories").select("id, linked_module").eq("linked_module", "tds");
-    const tdsCatIds = new Set((categories || []).map(c => c.id));
-    const tdsClientIds = (svcData || []).filter(s => tdsCatIds.has(s.service_category_id)).map(s => s.client_id);
-    if (tdsClientIds.length === 0) { setClients([]); return; }
-    const q = supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).in("id", tdsClientIds).order("name");
-    const { data } = await q;
-    setClients((data as ClientOption[]) || []);
+    // A client is eligible for the TDS module if EITHER:
+    //   (a) they have an active client_services row whose service_category has
+    //       linked_module = "tds" (the strict/expected path), OR
+    //   (b) they have a non-empty TAN number AND at least one active service
+    //       whose category name/code contains "TDS" (fallback for firms whose
+    //       service_category rows were created without linked_module properly
+    //       wired up, or got its linked_module value overwritten).
+    //
+    // Without fallback (b), a client whose service was activated but whose
+    // service_category.linked_module isn't set to "tds" (due to earlier
+    // migration/seed quirks) would silently disappear from this dropdown
+    // even though the client-detail "Service Activation" screen shows TDS
+    // active. The fallback restores those clients.
+    const [svcResp, catResp, clientsResp] = await Promise.all([
+      supabase.from("client_services").select("client_id, service_category_id, is_active").eq("is_active", true),
+      supabase.from("service_categories").select("id, linked_module, name, category_code"),
+      supabase.from("clients").select("id, name, pan, tan_number").eq("is_draft", false).is("deleted_at", null).order("name"),
+    ]);
+
+    const allCategories = (catResp.data || []) as Array<{ id: string; linked_module: string | null; name: string | null; category_code: string | null }>;
+    const tdsStrictCatIds = new Set(allCategories.filter(c => c.linked_module === "tds").map(c => c.id));
+    const tdsNameCatIds = new Set(
+      allCategories
+        .filter(c => {
+          const n = (c.name || "").toLowerCase();
+          const cc = (c.category_code || "").toLowerCase();
+          return n.includes("tds") || cc === "tds";
+        })
+        .map(c => c.id),
+    );
+
+    const activeSvc = (svcResp.data || []) as Array<{ client_id: string; service_category_id: string; is_active: boolean }>;
+    const clientsWithStrictTds = new Set(
+      activeSvc.filter(s => tdsStrictCatIds.has(s.service_category_id)).map(s => s.client_id),
+    );
+    const clientsWithNameMatchTds = new Set(
+      activeSvc.filter(s => tdsNameCatIds.has(s.service_category_id)).map(s => s.client_id),
+    );
+
+    const allClients = (clientsResp.data || []) as ClientOption[];
+    const eligible = allClients.filter(c => {
+      if (clientsWithStrictTds.has(c.id)) return true;
+      // Fallback: TAN number + any category with "TDS" in its name/code is
+      // active → this catches categories where linked_module wasn't set.
+      if ((c.tan_number || "").trim() && clientsWithNameMatchTds.has(c.id)) return true;
+      return false;
+    });
+
+    // Self-heal hint: if any clients were only eligible via the name fallback,
+    // log once so the developer can see these categories need linked_module
+    // fixed. No silent data mutation here — the strict path still works for
+    // correctly-configured firms.
+    const fallbackOnly = eligible.filter(c => !clientsWithStrictTds.has(c.id));
+    if (fallbackOnly.length > 0) {
+      console.warn(
+        `[TDS] ${fallbackOnly.length} client(s) matched TDS only via name fallback — ` +
+        `their service_category.linked_module is missing or != 'tds'. Fix in Service Masters:`,
+        fallbackOnly.map(c => c.name).filter(Boolean),
+      );
+    }
+
+    setClients(eligible);
   }, [resolveFirmId]);
 
   const fetchUsers = useCallback(async () => {
@@ -69,6 +123,18 @@ const TdsFilings = () => {
   }, [isSuperadmin, resolveFirmId]);
 
   useEffect(() => { fetchClients(); fetchUsers(); }, [fetchClients, fetchUsers]);
+
+  // Re-fetch when the tab becomes visible again (user switches away to
+  // activate TDS on a client, then comes back — dropdown should update).
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) fetchClients(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [fetchClients]);
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
