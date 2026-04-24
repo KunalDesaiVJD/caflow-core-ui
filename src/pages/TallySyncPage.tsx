@@ -624,7 +624,12 @@ export default function TallySyncPage() {
 
   // Tally stores root groups with parent = "&#4; Primary" (control char + "Primary").
   // Strip numeric HTML entities before comparing.
+  // IMPORTANT: Tally sometimes omits <PARENT> for built-in standard sub-groups (e.g.
+  // "Loans & Advances (Asset)"), storing them with parent_group=null and is_primary=true.
+  // The PRIMARYGROUP field is reliable — if it differs from the group name, the group
+  // is NOT a root-level primary.
   function isTallyPrimary(g: TallyGroup): boolean {
+    if (g.primary_group && g.primary_group !== g.group_name) return false;
     if (g.is_primary || !g.parent_group) return true;
     const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
     return clean === "primary";
@@ -635,8 +640,10 @@ export default function TallySyncPage() {
     const visited = new Set<string>();
     while (g && !isTallyPrimary(g) && !visited.has(g.group_name)) {
       visited.add(g.group_name);
-      if (!g.parent_group) break;
-      g = groupInfoMap.get(g.parent_group);
+      // Fall back to primary_group if parent_group is missing (Tally omits PARENT for built-ins)
+      const parent = g.parent_group || g.primary_group;
+      if (!parent) break;
+      g = groupInfoMap.get(parent);
     }
     return g ?? null;
   }
@@ -664,14 +671,20 @@ export default function TallySyncPage() {
 
   // ── Sorted groups: BS primaries first, sub-groups indented under parent ──────
   const sortedGroups = useMemo(() => {
-    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing
+    // Tally stores root groups with parent = "&#4; Primary" — strip entities before comparing.
+    // Also use primary_group: if it differs from the group name, the group is a sub-group even
+    // if is_primary=true (happens for built-in Tally groups exported without a PARENT tag).
     const isPrim = (g: TallyGroup) => {
+      if (g.primary_group && g.primary_group !== g.group_name) return false;
       if (g.is_primary || !g.parent_group) return true;
       const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
       return clean === "primary";
     };
 
-    const primaries = filteredGroups.filter(isPrim);
+    // Exclude Tally's virtual root "Primary" group — it is never a display row
+    const primaries = filteredGroups
+      .filter(isPrim)
+      .filter(g => g.group_name.replace(/&#\d+;/g, "").trim().toLowerCase() !== "primary");
     const subs = filteredGroups.filter(g => !isPrim(g));
 
     // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
@@ -680,10 +693,11 @@ export default function TallySyncPage() {
       return a.group_name.localeCompare(b.group_name);
     });
 
-    // Build parent → children map from sub-groups
+    // Build parent → children map from sub-groups.
+    // Fall back to primary_group when parent_group is missing (Tally omits PARENT for built-ins).
     const childrenMap = new Map<string, TallyGroup[]>();
     for (const sub of subs) {
-      const parent = sub.parent_group ?? "";
+      const parent = sub.parent_group || sub.primary_group || "";
       if (!childrenMap.has(parent)) childrenMap.set(parent, []);
       childrenMap.get(parent)!.push(sub);
     }
@@ -729,8 +743,9 @@ export default function TallySyncPage() {
       while (g && !visited.has(g.group_name)) {
         visited.add(g.group_name);
         activeGroups.add(g.group_name);
-        if (!g.parent_group) break;
-        g = groupInfoMap.get(g.parent_group);
+        const nextParent = g.parent_group || g.primary_group;
+        if (!nextParent) break;
+        g = groupInfoMap.get(nextParent);
       }
     }
 
@@ -770,10 +785,11 @@ export default function TallySyncPage() {
       byGroup.get(grp)!.push(r);
     }
 
-    // Build group → direct child group names map (needed for aggregate totals)
+    // Build group → direct child group names map (needed for aggregate totals).
+    // Fall back to primary_group when parent_group is missing (built-in Tally groups).
     const childGroupsMap = new Map<string, string[]>();
     for (const { group: g } of sortedGroups) {
-      const parent = g.parent_group ?? "";
+      const parent = g.parent_group || g.primary_group || "";
       if (!childGroupsMap.has(parent)) childGroupsMap.set(parent, []);
       childGroupsMap.get(parent)!.push(g.group_name);
     }
@@ -835,12 +851,14 @@ export default function TallySyncPage() {
     // should be the aggregate of ALL descendant ledger rows.  Without this fix
     // they show "—" when collapsed even though sub-group rows carry real values.
 
-    // Build parent → direct-children map from groupInfoMap
+    // Build parent → direct-children map from groupInfoMap.
+    // Fall back to primary_group when parent_group is missing (built-in Tally groups).
     const childrenMap = new Map<string, string[]>();
     for (const [name, info] of groupInfoMap.entries()) {
-      if (info.parent_group) {
-        if (!childrenMap.has(info.parent_group)) childrenMap.set(info.parent_group, []);
-        childrenMap.get(info.parent_group)!.push(name);
+      const parent = info.parent_group || info.primary_group;
+      if (parent && parent !== name) {
+        if (!childrenMap.has(parent)) childrenMap.set(parent, []);
+        childrenMap.get(parent)!.push(name);
       }
     }
 
