@@ -176,11 +176,24 @@ export type PLLineItem = BSLineItem;
  * (3D expenses, 3E tax & PAT) will expand this type.
  */
 export interface PLRowData {
-  // Income
-  revFromOps:  PLLineItem;
-  otherIncome: PLLineItem;
-  // (More fields added in Phase 3D+: cogs, changes in inventories, employee
-  //  benefits, finance costs, depreciation, other expenses, tax, PAT, EPS)
+  // Income (Phase 3C)
+  revFromOps:         PLLineItem;
+  otherIncome:        PLLineItem;
+  // Expenses (Phase 3D)
+  /**
+   * Cost of materials consumed — spec emits ONLY the note number in cell F14.
+   * Row 14 is deliberately excluded from Total Expenses (row 21 sums G15:G20).
+   * If amounts are needed in future, extend writer and data shape together.
+   */
+  costMaterials:      Pick<PLLineItem, "noteNo">;
+  purchasesStock:     PLLineItem;
+  changesInventories: PLLineItem;
+  employeeBenefits:   PLLineItem;
+  financeCosts:       PLLineItem;
+  depreciation:       PLLineItem;
+  otherExpenses:      PLLineItem;
+  // (More fields added in Phase 3E+: exceptional items, tax expense lines,
+  //  PAT, EPS basic/diluted)
 }
 
 /** CFS data — still loose pending Phase 4 spec. */
@@ -913,6 +926,105 @@ function writeProfitAndLoss(
 
   // Row 12 — spacer
   sheet.getRow(12).height = 9.95;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3D — Expenses section (rows 13–22)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 13 — IV. Expenses
+  sheet.getCell("B13").value = "IV.";
+  sheet.getCell("B13").font = { bold: true, size: 10 };
+  sheet.getCell("B13").alignment = { horizontal: "center" };
+  sheet.getCell("C13").value = "Expenses";
+  sheet.getCell("C13").font = { bold: true, size: 10 };
+
+  // Row 14 — Cost of materials consumed  (only note no., no amounts per spec)
+  sheet.getCell("C14").value = "Cost of materials consumed";
+  sheet.getCell("C14").font = { bold: false, size: 9 };
+  sheet.getCell("F14").value = data.costMaterials.noteNo;
+  sheet.getCell("F14").alignment = { horizontal: "center" };
+
+  // Row 15 — Purchases of Stock-in-Trade
+  sheet.getCell("C15").value = "Purchases of Stock-in-Trade";
+  sheet.getCell("C15").font = { bold: false, size: 9 };
+  sheet.getCell("F15").value = data.purchasesStock.noteNo;
+  sheet.getCell("F15").alignment = { horizontal: "center" };
+  sheet.getCell("G15").value = data.purchasesStock.cy;
+  sheet.getCell("G15").alignment = { horizontal: "right" };
+  sheet.getCell("H15").value = data.purchasesStock.py;
+  sheet.getCell("H15").alignment = { horizontal: "right" };
+  sheet.getRow(15).height = 15.0;
+
+  // Row 16 — Changes in inventories  (C16:E16 merged, wrapText)
+  sheet.getCell("C16").value = "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade";
+  sheet.getCell("C16").font = { bold: false, size: 9 };
+  sheet.getCell("C16").alignment = { wrapText: true };
+  sheet.getCell("F16").value = data.changesInventories.noteNo;
+  sheet.getCell("F16").alignment = { horizontal: "center" };
+  sheet.getCell("G16").value = data.changesInventories.cy;
+  sheet.getCell("G16").alignment = { horizontal: "right" };
+  sheet.getCell("H16").value = data.changesInventories.py;
+  sheet.getCell("H16").alignment = { horizontal: "right" };
+  sheet.getRow(16).height = 25.5;
+
+  // Row 17 — Employee benefits expense
+  sheet.getCell("C17").value = "Employee benefits expense";
+  sheet.getCell("C17").font = { bold: false, size: 9 };
+  sheet.getCell("C17").alignment = { horizontal: "left" };
+  sheet.getCell("F17").value = data.employeeBenefits.noteNo;
+  sheet.getCell("F17").alignment = { horizontal: "center" };
+  sheet.getCell("G17").value = data.employeeBenefits.cy;
+  sheet.getCell("G17").alignment = { horizontal: "right" };
+  sheet.getCell("H17").value = data.employeeBenefits.py;
+  sheet.getCell("H17").alignment = { horizontal: "right" };
+
+  // Row 18 — Finance Costs
+  sheet.getCell("C18").value = "Finance Costs";
+  sheet.getCell("C18").font = { bold: false, size: 9 };
+  sheet.getCell("C18").alignment = { horizontal: "left" };
+  sheet.getCell("F18").value = data.financeCosts.noteNo;
+  sheet.getCell("F18").alignment = { horizontal: "center" };
+  sheet.getCell("G18").value = data.financeCosts.cy;
+  sheet.getCell("G18").alignment = { horizontal: "right" };
+  sheet.getCell("H18").value = data.financeCosts.py;
+  sheet.getCell("H18").alignment = { horizontal: "right" };
+
+  // Row 19 — Depreciation & Amortisation Expenses
+  //          CRITICAL: trailing space after "Expenses " — exact from Excel
+  sheet.getCell("C19").value = "Depreciation & Amortisation Expenses ";
+  sheet.getCell("C19").font = { bold: false, size: 10 };
+  sheet.getCell("F19").value = data.depreciation.noteNo;
+  sheet.getCell("F19").alignment = { horizontal: "center" };
+  sheet.getCell("G19").value = data.depreciation.cy;
+  sheet.getCell("G19").alignment = { horizontal: "right" };
+  sheet.getCell("H19").value = data.depreciation.py;
+  sheet.getCell("H19").alignment = { horizontal: "right" };
+
+  // Row 20 — Other expenses  (size 10)
+  sheet.getCell("C20").value = "Other expenses";
+  sheet.getCell("C20").font = { bold: false, size: 10 };
+  sheet.getCell("C20").alignment = { horizontal: "left" };
+  sheet.getCell("F20").value = data.otherExpenses.noteNo;
+  sheet.getCell("F20").alignment = { horizontal: "center" };
+  sheet.getCell("G20").value = data.otherExpenses.cy;
+  sheet.getCell("G20").alignment = { horizontal: "right" };
+  sheet.getCell("H20").value = data.otherExpenses.py;
+  sheet.getCell("H20").alignment = { horizontal: "right" };
+
+  // Row 21 — Total Expenses  bold + SUM(G15:G20) formula
+  //          Note: SUM range intentionally EXCLUDES row 14 (Cost of materials
+  //          consumed) per spec — that row shows only a note-number reference.
+  sheet.getCell("C21").value = "Total Expenses";
+  sheet.getCell("C21").font = { bold: true, size: 10 };
+  sheet.getCell("G21").value = { formula: "SUM(G15:G20)" };
+  sheet.getCell("G21").font = { bold: true, size: 10 };
+  sheet.getCell("G21").alignment = { horizontal: "right" };
+  sheet.getCell("H21").value = { formula: "SUM(H15:H20)" };
+  sheet.getCell("H21").font = { bold: true, size: 10 };
+  sheet.getCell("H21").alignment = { horizontal: "right" };
+
+  // Row 22 — spacer
+  sheet.getRow(22).height = 9.95;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
