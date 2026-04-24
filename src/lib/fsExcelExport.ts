@@ -160,7 +160,30 @@ export interface BSRowData {
   sigPolicies:      Pick<BSLineItem, "noteNo">;
 }
 
-/** P&L and CFS data — still loose pending their own sub-phase specs. */
+/**
+ * A single P&L line item — same shape as BSLineItem. Aliased for clarity at
+ * call sites so it's obvious which statement each item belongs to.
+ */
+export type PLLineItem = BSLineItem;
+
+/**
+ * Statement of Profit & Loss data shape (Phase 3 spec).
+ *
+ * Same keyed-by-line approach as BSRowData — row positions are hard-coded in
+ * the writer, caller supplies the values. Amount unit is ₹'000.
+ *
+ * Phase 3C populates the first 2 income keys below; subsequent sub-phases
+ * (3D expenses, 3E tax & PAT) will expand this type.
+ */
+export interface PLRowData {
+  // Income
+  revFromOps:  PLLineItem;
+  otherIncome: PLLineItem;
+  // (More fields added in Phase 3D+: cogs, changes in inventories, employee
+  //  benefits, finance costs, depreciation, other expenses, tax, PAT, EPS)
+}
+
+/** CFS data — still loose pending Phase 4 spec. */
 export interface FSLineItemRow {
   code:         string;
   name:         string;
@@ -172,7 +195,6 @@ export interface FSLineItemRow {
   isHeading?:   boolean;
 }
 
-export interface PLRowData  { rows: FSLineItemRow[]; }
 export interface CFSRowData { rows: FSLineItemRow[]; }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -218,9 +240,30 @@ const BS_COLUMNS: Partial<ExcelJS.Column>[] = [
 ];
 
 /**
- * Legacy common FS column layout (Phase 1 placeholder — still used by P&L
- * and CFS until their per-sheet specs arrive). Will be replaced with
- * PL_COLUMNS / CFS_COLUMNS in subsequent phase sub-steps.
+ * Statement of Profit & Loss column layout (Phase 3A spec).
+ *   A  spacer (2.3)
+ *   B  Roman numeral prefix — "I.", "II.", "III." etc. (4.3)
+ *   C  sub-label continuation (4.6) — e.g. "Revenue from operations"
+ *   D  main label text (27.4)
+ *   E  label continuation (14.4)
+ *   F  Note No. (9.3)
+ *   G  CY amount — "For the year ended 31st March, {cyYear}" (15.6)
+ *   H  PY amount — "For the year ended 31st March, {pyYear}" (15.3)
+ */
+const PL_COLUMNS: Partial<ExcelJS.Column>[] = [
+  { width: 2.3  },   // A  spacer
+  { width: 4.3  },   // B  Roman numeral prefix
+  { width: 4.6  },   // C  sub-label continuation
+  { width: 27.4 },   // D  main label text
+  { width: 14.4 },   // E  label continuation
+  { width: 9.3  },   // F  Note No.
+  { width: 15.6 },   // G  CY
+  { width: 15.3 },   // H  PY
+];
+
+/**
+ * Legacy common FS column layout (Phase 1 placeholder — still used by CFS
+ * until its per-sheet spec arrives; BS and PL now have their own).
  */
 const FS_COLUMNS: Partial<ExcelJS.Column>[] = [
   { width: 2 },   // A  spacer
@@ -753,6 +796,125 @@ function writeBalanceSheet(
   sheet.getCell("F70").value = `Date: ${signOffDate}`;
 }
 
+/**
+ * Populate the PL (Statement of Profit & Loss) worksheet.
+ *
+ * Caller must have already applied column widths (PL_COLUMNS) and attached
+ * the sheet to the workbook. This function writes:
+ *   Phase 3A — merged cells
+ *   Phase 3B — header rows 2-7 (company title, statement title, units, column headers)
+ *   Phase 3C — Income section rows 9-12 (Revenue from operations, Other income, Total Income)
+ * Phase 3D+ (Expenses, Tax, PAT, EPS, signature block) will be appended in later sub-steps.
+ */
+function writeProfitAndLoss(
+  sheet: ExcelJS.Worksheet,
+  ctx:   FsExportContext,
+  data:  PLRowData,
+): void {
+  const { cyYear, pyYear, companyName } = ctx;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3A — Merged cells (apply BEFORE writing any row data)
+  // ───────────────────────────────────────────────────────────────────────
+  sheet.mergeCells("B2:H2");    // Company name
+  sheet.mergeCells("B4:H4");    // Statement title
+  sheet.mergeCells("G5:H5");    // "(Amount in Rs. `000)" — note: G5:H5 for PL (not E5:F5 like BS)
+  sheet.mergeCells("B6:E7");    // "Particulars" header (2-row)
+  sheet.mergeCells("F6:F7");    // "Note No." header (2-row)
+  sheet.mergeCells("G6:G7");    // CY header (2-row)
+  sheet.mergeCells("H6:H7");    // PY header (2-row)
+  sheet.mergeCells("C16:E16"); // "Changes in inventories..." label (Phase 3D)
+  sheet.mergeCells("C28:E28"); // "Profit before tax (VII-VIII)" (Phase 3E)
+  sheet.mergeCells("F29:F31"); // Tax expense Note No. (3-row, Phase 3E)
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3B — Header rows (2–7)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 2 — Company name
+  sheet.getCell("B2").value = companyName;
+  sheet.getCell("B2").font = { bold: true, size: 12 };
+  sheet.getCell("B2").alignment = { horizontal: "center" };
+  sheet.getRow(2).height = 18.0;
+
+  // Row 4 — Statement title
+  sheet.getCell("B4").value = `Statement of Profit & Loss Account for the year ended as on 31st March, ${cyYear}`;
+  sheet.getCell("B4").font = { bold: true, size: 11 };
+  sheet.getCell("B4").alignment = { horizontal: "center" };
+  sheet.getRow(4).height = 15.0;
+
+  // Row 5 — "(Amount in Rs. `000)" — merge is G5:H5 (not E5:F5 like BS)
+  sheet.getCell("G5").value = "(Amount in Rs. `000)";
+  sheet.getCell("G5").font = { bold: true, size: 10 };
+  sheet.getCell("G5").alignment = { horizontal: "center" };
+  sheet.getRow(5).height = 15.75;
+
+  // Row 6 — Column headers (all 2-row merges already applied in 3A)
+  sheet.getCell("B6").value = "Particulars";
+  sheet.getCell("B6").font = { bold: true, size: 10 };
+  sheet.getCell("B6").alignment = { horizontal: "center", wrapText: true };
+  sheet.getCell("F6").value = "Note No.";
+  sheet.getCell("F6").font = { bold: true, size: 10 };
+  sheet.getCell("F6").alignment = { horizontal: "center", wrapText: true };
+  sheet.getCell("G6").value = `For the year ended 31st March, ${cyYear}`;
+  sheet.getCell("G6").font = { bold: true, size: 10 };
+  sheet.getCell("G6").alignment = { horizontal: "center", wrapText: true };
+  sheet.getCell("H6").value = `For the year ended 31st March, ${pyYear}`;
+  sheet.getCell("H6").font = { bold: true, size: 10 };
+  sheet.getCell("H6").alignment = { horizontal: "center", wrapText: true };
+  sheet.getRow(6).height = 22.15;
+  sheet.getRow(7).height = 16.5;
+  sheet.getRow(8).height = 1.5;   // tiny spacer before income section
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3C — Income section (rows 9–12)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 9 — I. Revenue from operations
+  sheet.getCell("B9").value = "I.";
+  sheet.getCell("B9").font = { bold: true, size: 9 };
+  sheet.getCell("B9").alignment = { horizontal: "center" };
+  sheet.getCell("C9").value = "Revenue from operations";
+  sheet.getCell("C9").font = { bold: false, size: 9 };
+  sheet.getCell("C9").alignment = { horizontal: "left" };
+  sheet.getCell("F9").value = data.revFromOps.noteNo;
+  sheet.getCell("F9").alignment = { horizontal: "center" };
+  sheet.getCell("G9").value = data.revFromOps.cy;
+  sheet.getCell("G9").alignment = { horizontal: "right" };
+  sheet.getCell("H9").value = data.revFromOps.py;
+  sheet.getCell("H9").alignment = { horizontal: "right" };
+
+  // Row 10 — II. Other income  (size 10)
+  sheet.getCell("B10").value = "II.";
+  sheet.getCell("B10").font = { bold: true, size: 10 };
+  sheet.getCell("B10").alignment = { horizontal: "center" };
+  sheet.getCell("C10").value = "Other income";
+  sheet.getCell("C10").font = { bold: false, size: 10 };
+  sheet.getCell("C10").alignment = { horizontal: "left" };
+  sheet.getCell("F10").value = data.otherIncome.noteNo;
+  sheet.getCell("F10").alignment = { horizontal: "center" };
+  sheet.getCell("G10").value = data.otherIncome.cy;
+  sheet.getCell("G10").alignment = { horizontal: "right" };
+  sheet.getCell("H10").value = data.otherIncome.py;
+  sheet.getCell("H10").alignment = { horizontal: "right" };
+
+  // Row 11 — III. Total Income (I+II)  bold + SUM formula
+  sheet.getCell("B11").value = "III.";
+  sheet.getCell("B11").font = { bold: true, size: 10 };
+  sheet.getCell("B11").alignment = { horizontal: "center" };
+  sheet.getCell("C11").value = "Total Income (I+II)";
+  sheet.getCell("C11").font = { bold: true, size: 10 };
+  sheet.getCell("G11").value = { formula: "SUM(G9:G10)" };
+  sheet.getCell("G11").font = { bold: true, size: 10 };
+  sheet.getCell("G11").alignment = { horizontal: "right" };
+  sheet.getCell("H11").value = { formula: "SUM(H9:H10)" };
+  sheet.getCell("H11").font = { bold: true, size: 10 };
+  sheet.getCell("H11").alignment = { horizontal: "right" };
+
+  // Row 12 — spacer
+  sheet.getRow(12).height = 9.95;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  MAIN EXPORT FUNCTION
 // ═════════════════════════════════════════════════════════════════════════════
@@ -808,20 +970,20 @@ export async function generateFinancialStatementsXLSX(
   wb.created = new Date();
   wb.company = firmName;
 
-  // ── Worksheet: BS (Balance Sheet) — Phase 2A applied ────────────────────
-  // Sheet name is "BS" per Phase 2A spec (not "Balance Sheet").
+  // ── Worksheet: BS (Balance Sheet) — Phase 2A-2F applied ─────────────────
   const bs = wb.addWorksheet("BS", { views: [{ showGridLines: false }] });
   bs.columns = BS_COLUMNS;
   writeBalanceSheet(bs, ctx, bsData);
 
-  // ── Worksheets: P&L and CFS — still on legacy layout until their specs
-  //     arrive in later sub-phases.
-  const pl  = wb.addWorksheet("Statement of Profit & Loss", { views: [{ showGridLines: false }] });
-  const cfs = wb.addWorksheet("Cash Flow Statement",        { views: [{ showGridLines: false }] });
-  for (const sheet of [pl, cfs]) {
-    sheet.columns = FS_COLUMNS;
-  }
-  void plData; void cfsData; // populated in later sub-phases
+  // ── Worksheet: PL (Statement of Profit & Loss) — Phase 3A-3C applied ────
+  const pl = wb.addWorksheet("PL", { views: [{ showGridLines: false }] });
+  pl.columns = PL_COLUMNS;
+  writeProfitAndLoss(pl, ctx, plData);
+
+  // ── Worksheet: CFS — still on legacy layout until Phase 4 spec arrives ──
+  const cfs = wb.addWorksheet("Cash Flow Statement", { views: [{ showGridLines: false }] });
+  cfs.columns = FS_COLUMNS;
+  void cfsData; // populated in Phase 4
 
   // ── Serialise to a Blob ──────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
@@ -858,12 +1020,13 @@ export interface FsExportContext {
   dir2DIN:      string;
 }
 
-// Re-exports so Phase 2 helpers can share the same formatting primitives.
+// Re-exports so Phase 2/3 helpers can share the same formatting primitives.
 export {
   MONEY_FMT,
   THIN_BLACK,
   FULL_BORDER,
   BS_COLUMNS,
+  PL_COLUMNS,
   FS_COLUMNS,
   DASH,
 };
