@@ -909,64 +909,70 @@ export default function TallySyncPage() {
       }
     }
 
-    // ── Profit & Loss A/c — always show as a standalone section ──────────────
+    // ── Profit & Loss A/c — always apply correct strategy to closing ─────────
     //
-    // Three cases handled:
+    // Strategy 1 — profit transferred (Dr balance_type on P&L ledger, e.g. Crownglobe):
+    //   Old DB: synthetic Cr opening cancelled the transfer Dr → closing=0 in DB.
+    //   Fix: zero opening, derive closing = debit_amount − credit_amount.
     //
-    // Strategy 1 — profit transferred (Dr closing on P&L ledger, e.g. Crownglobe):
-    //   P&L ledger has 0 opening (zeroed by sync) and Dr closing = transfer debit.
+    // Strategy 2 — profit not transferred (Cr balance_type, e.g. Ambica):
+    //   Keep TDL values as-is (Cr opening = accumulated profit, closing = Cr).
     //
-    // Strategy 2 — profit not transferred (Cr closing on P&L ledger, e.g. Ambica):
-    //   P&L ledger has Cr opening = accumulated prior-year profit.
+    // Strategy 3 — year in progress (no P&L ledger data, e.g. GROWQ):
+    //   Compute net from all is_revenue group closing balances.
     //
-    // Strategy 3 — year in progress (P&L ledger = 0, e.g. GROWQ):
-    //   No closing journal entry made yet. Compute the NET of all revenue/expense
-    //   account closing balances. Show as "(Current Year Net)" derived row.
-    //   The computed net = what will eventually be transferred to Capital.
+    // IMPORTANT: P&L may already be in result if "Profit & Loss A/c" exists as a
+    // GROUP in tally_groups (Crownglobe case). In that case makeGroup() used the
+    // raw DB closing=0 → closingTotal=0. We must REPLACE those totals regardless.
     {
       const plTbRow = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
-      const alreadyPlaced = result.some(g => g.rows.some(r => r.ledger_name === "Profit & Loss A/c"));
 
-      if (!alreadyPlaced) {
-        // hasLedgerBalance: true if ANY of opening/closing/turnover is non-zero.
-        // Checking debit_amount/credit_amount is critical for Strategy 1 (profit transferred):
-        // sync-engine zeros both opening and closing on P&L after transfer, but the
-        // debit/credit turnover (transfer journal) is still non-zero — we must NOT
-        // fall through to Strategy 3 (which would double-count revenue groups).
-        const hasLedgerBalance = plTbRow && (
-          plTbRow.closing_balance !== 0 ||
-          plTbRow.opening_balance !== 0 ||
-          (plTbRow.debit_amount  ?? 0) > 0 ||
-          (plTbRow.credit_amount ?? 0) > 0
+      // hasLedgerBalance: true if ANY of opening/closing/turnover is non-zero.
+      const hasLedgerBalance = plTbRow && (
+        plTbRow.closing_balance !== 0 ||
+        plTbRow.opening_balance !== 0 ||
+        (plTbRow.debit_amount  ?? 0) > 0 ||
+        (plTbRow.credit_amount ?? 0) > 0
+      );
+
+      if (hasLedgerBalance && plTbRow) {
+        const isStrategy1 = plTbRow.balance_type === "Dr";
+        const effOpenBal  = isStrategy1 ? 0 : plTbRow.opening_balance;
+        const effOpenType = isStrategy1 ? "Dr" : plTbRow.opening_type;
+        const t = getTurnover(plTbRow);
+        const net      = isStrategy1 ? (t.debit - t.credit) : 0;
+        const effClBal = isStrategy1 ? Math.abs(net) : plTbRow.closing_balance;
+        const effClType= isStrategy1 ? (net >= 0 ? "Dr" : "Cr") : plTbRow.balance_type;
+        const netOp = effOpenType === "Dr" ? effOpenBal : -effOpenBal;
+        const netCl = effClType   === "Dr" ? effClBal   : -effClBal;
+
+        const newGroup = {
+          groupName: "Profit & Loss A/c", isRevenue: false, depth: 0,
+          rows: [{ ...plTbRow, opening_balance: effOpenBal, opening_type: effOpenType,
+                               closing_balance: effClBal,   balance_type: effClType,
+                               _debit: t.debit, _credit: t.credit }],
+          openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
+          debitTotal: t.debit, creditTotal: t.credit,
+          closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
+        };
+
+        // Replace any existing P&L group (which may have wrong closing from makeGroup),
+        // or push new if not yet present.
+        const existingIdx = result.findIndex(g =>
+          g.groupName === "Profit & Loss A/c" ||
+          g.rows.some(r => r.ledger_name === "Profit & Loss A/c")
         );
+        if (existingIdx >= 0) result.splice(existingIdx, 1, newGroup);
+        else result.push(newGroup);
 
-        if (hasLedgerBalance && plTbRow) {
-          // Strategy 1 (profit transferred, Dr balance_type): sync-engine zeroes the
-          // synthetic Cr opening that TDL injects AND derives closing from debit-credit.
-          // Mirror both here so that old DB data (where closing=0 because the synthetic
-          // Cr opening cancelled the Dr transfer debit) also displays correctly.
-          const isStrategy1 = plTbRow.balance_type === "Dr";
-          const effOpenBal  = isStrategy1 ? 0 : plTbRow.opening_balance;
-          const effOpenType = isStrategy1 ? "Dr" : plTbRow.opening_type;
-          const t = getTurnover(plTbRow);
-          // For Strategy 1: closing = debit - credit (opening zeroed, so closing = net turnover)
-          // For Strategy 2: use DB closing as-is (profit not transferred, Cr balance)
-          const net         = isStrategy1 ? (t.debit - t.credit) : 0;
-          const effClBal    = isStrategy1 ? Math.abs(net) : plTbRow.closing_balance;
-          const effClType   = isStrategy1 ? (net >= 0 ? "Dr" : "Cr") : plTbRow.balance_type;
-          const netOp = effOpenType === "Dr" ? effOpenBal : -effOpenBal;
-          const netCl = effClType   === "Dr" ? effClBal   : -effClBal;
-          result.push({
-            groupName: "Profit & Loss A/c", isRevenue: false, depth: 0,
-            rows: [{ ...plTbRow, opening_balance: effOpenBal, opening_type: effOpenType,
-                                 closing_balance: effClBal,   balance_type: effClType,
-                                 _debit: t.debit, _credit: t.credit }],
-            openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
-            debitTotal: t.debit, creditTotal: t.credit,
-            closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
-          });
-        } else {
-          // Strategy 3: compute net P&L from revenue/expense accounts
+      } else {
+        // Strategy 3: year in progress — derive net from revenue/expense closing balances.
+        // Only run if P&L is not already in result (would double-count).
+        const alreadyPlaced = result.some(g =>
+          g.groupName === "Profit & Loss A/c" ||
+          g.rows.some(r => r.ledger_name === "Profit & Loss A/c")
+        );
+        if (!alreadyPlaced) {
           let netPL = 0;
           for (const r of filteredTB) {
             const grpInfo = groupInfoMap.get(r.parent_group ?? "");
@@ -974,14 +980,12 @@ export default function TallySyncPage() {
             netPL += r.balance_type === "Dr" ? r.closing_balance : -r.closing_balance;
           }
           if (netPL !== 0) {
-            const closingBal  = Math.abs(netPL);
-            const closingType = netPL >= 0 ? "Dr" : "Cr";
             result.push({
               groupName: "Profit & Loss A/c", isRevenue: false, depth: 0,
-              rows: [],  // no expandable ledger rows — this is a derived total
+              rows: [],
               openingTotal: 0, openingTotalType: "Dr",
               debitTotal: 0, creditTotal: 0,
-              closingTotal: closingBal, closingTotalType: closingType,
+              closingTotal: Math.abs(netPL), closingTotalType: netPL >= 0 ? "Dr" : "Cr",
             });
           }
         }
