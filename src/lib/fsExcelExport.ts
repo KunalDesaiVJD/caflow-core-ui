@@ -73,6 +73,8 @@ export interface Engagement {
   fy_end: string;
   /** Auditor's signing date ISO (e.g. "2026-05-12") — nullable. */
   sign_off_date?: string | null;
+  /** UDIN — 24-char Unique Document Identification Number — nullable. */
+  udin?: string | null;
   /** Engagement partner's name + ICAI membership no. */
   partner?: {
     full_name?: string | null;
@@ -822,7 +824,7 @@ function writeBalanceSheet(
   // ───────────────────────────────────────────────────────────────────────
   const {
     firmName, firmRegNo, firmCity,
-    partnerName, partnerMemNo, signOffDate,
+    partnerName, partnerMemNo, signOffDate, udinValue,
     dir1Name, dir1DIN, dir2Name, dir2DIN,
   } = ctx;
 
@@ -863,6 +865,10 @@ function writeBalanceSheet(
   sheet.getCell("B67").value = `Membership No.: ${partnerMemNo}`;
   sheet.getCell("D67").value = `DIN: ${dir1DIN}`;
   sheet.getCell("F67").value = `DIN: ${dir2DIN}`;
+
+  // Row 68 — UDIN (auditor side only)
+  sheet.getCell("B68").value = `UDIN: ${udinValue}`;
+  sheet.getCell("B68").font = { size: 9 };
 
   // Row 69 — Place
   sheet.getCell("B69").value = `Place: ${firmCity}`;
@@ -1263,7 +1269,7 @@ function writeProfitAndLoss(
   // ───────────────────────────────────────────────────────────────────────
   const {
     firmName, firmRegNo, firmCity,
-    partnerName, partnerMemNo, signOffDate,
+    partnerName, partnerMemNo, signOffDate, udinValue,
     dir1Name, dir1DIN, dir2Name, dir2DIN,
   } = ctx;
 
@@ -1310,6 +1316,10 @@ function writeProfitAndLoss(
   sheet.getCell("C58").value = `Date: ${signOffDate}`;
   sheet.getCell("F58").value = `Date: ${signOffDate}`;
   sheet.getCell("H58").value = `Date: ${signOffDate}`;
+
+  // Row 59 — UDIN (auditor side only, under the Date line)
+  sheet.getCell("C59").value = `UDIN: ${udinValue}`;
+  sheet.getCell("C59").font = { size: 9 };
 }
 
 /**
@@ -1633,7 +1643,7 @@ function writeCashFlow(
   // ───────────────────────────────────────────────────────────────────────
   const {
     firmName, firmRegNo, firmCity,
-    partnerName, partnerMemNo, signOffDate,
+    partnerName, partnerMemNo, signOffDate, udinValue,
     dir1Name, dir1DIN, dir2Name, dir2DIN,
   } = ctx;
 
@@ -1698,6 +1708,10 @@ function writeCashFlow(
   sheet.getCell("C60").value = `Date: ${signOffDate}`;
   sheet.getCell("G60").value = `Date: ${signOffDate}`;
   sheet.getCell("I60").value = `Date: ${signOffDate}`;
+
+  // Row 61 — UDIN (auditor side only, under the Date line)
+  sheet.getCell("C61").value = `UDIN: ${udinValue}`;
+  sheet.getCell("C61").font = { size: 9 };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1735,6 +1749,9 @@ export async function generateFinancialStatementsXLSX(
   const signOffDate = engagement.sign_off_date
     ? format(new Date(engagement.sign_off_date), "dd.MM.yyyy")
     : DASH;
+  const udinValue   = engagement.udin && String(engagement.udin).trim()
+    ? String(engagement.udin).trim()
+    : DASH;
   const dir1Name    = engagement.directors?.[0]?.name ?? DASH;
   const dir1DIN     = engagement.directors?.[0]?.din  ?? DASH;
   const dir2Name    = engagement.directors?.[1]?.name ?? DASH;
@@ -1745,7 +1762,7 @@ export async function generateFinancialStatementsXLSX(
   const ctx: FsExportContext = {
     cyYear, pyYear, cyDate, pyDate,
     companyName, firmName, firmRegNo, firmCity,
-    partnerName, partnerMemNo, signOffDate,
+    partnerName, partnerMemNo, signOffDate, udinValue,
     dir1Name, dir1DIN, dir2Name, dir2DIN,
   };
 
@@ -1799,6 +1816,8 @@ export interface FsExportContext {
   partnerName:  string;
   partnerMemNo: string;
   signOffDate:  string;
+  /** UDIN string; DASH when not yet generated. */
+  udinValue:    string;
   dir1Name:     string;
   dir1DIN:      string;
   dir2Name:     string;
