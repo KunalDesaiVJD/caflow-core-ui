@@ -1322,11 +1322,22 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                     const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.applied);
                     const isFullyUtilized = avail <= 0.5;
                     // Has any deductee from the currently-viewed quarter been
-                    // attached to this carry-forward challan? Those cards get a
-                    // distinct blue tint so it's easy to spot which ones have
-                    // already been consumed in THIS quarter.
+                    // attached to this carry-forward challan?
                     const hasCurrentQUsage = (allChallanDeductees[cf.challan.id] || [])
                       .some(d => d.quarter === selQuarter && d.financial_year === selFy);
+                    // Four visual states so user can spot each at a glance:
+                    //   1. Untouched + has balance           → warm tan (default)
+                    //   2. Partially used in current Q       → amber (new — still has balance here)
+                    //   3. Fully consumed via current Q      → blue  (exhausted by this quarter)
+                    //   4. Fully consumed only by prior Qs   → slate (old news)
+                    let cardTone = "bg-accent/30 border-accent";
+                    if (hasCurrentQUsage && !isFullyUtilized) {
+                      cardTone = "bg-amber-50 border-amber-300";          // partial
+                    } else if (hasCurrentQUsage && isFullyUtilized) {
+                      cardTone = "bg-blue-50 border-blue-300";            // fully consumed this Q
+                    } else if (isFullyUtilized) {
+                      cardTone = "bg-slate-100 border-slate-300 opacity-90"; // historically fully used
+                    }
                     return (
                       <TooltipProvider key={`cf-${cf.challan.id}`}>
                         <Tooltip>
@@ -1334,15 +1345,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             <Card
                               className={cn(
                                 "cursor-pointer transition-all hover:shadow-sm",
-                                // Base colour varies by state:
-                                //   - has usage this quarter → subtle blue (already consumed)
-                                //   - fully utilised overall → slightly dimmer slate
-                                //   - still has balance → warm accent (default)
-                                isFullyUtilized && !hasCurrentQUsage
-                                  ? "bg-slate-100 border-slate-300 opacity-90"
-                                  : hasCurrentQUsage
-                                    ? "bg-blue-50 border-blue-300"
-                                    : "bg-accent/30 border-accent",
+                                cardTone,
                                 selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "",
                               )}
                               onClick={() => selectChallan(cf.challan)}>
@@ -1356,7 +1359,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                     </Badge>
                                   )}
                                   <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
-                                  {hasCurrentQUsage && (
+                                  {hasCurrentQUsage && !isFullyUtilized && (
+                                    <Badge className="text-[9px] bg-amber-500 text-white border-0">
+                                      Partially Used in {selQuarter}
+                                    </Badge>
+                                  )}
+                                  {hasCurrentQUsage && isFullyUtilized && (
                                     <Badge className="text-[9px] bg-blue-600 text-white border-0">
                                       Used in {selQuarter}
                                     </Badge>
