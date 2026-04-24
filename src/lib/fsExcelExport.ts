@@ -1202,6 +1202,63 @@ function writeProfitAndLoss(
   // Row 44 — Accompanying notes
   sheet.getCell("C44").value = "The accompanying notes form an integral part of the financial statements.";
   sheet.getCell("C44").font = { bold: false, size: 9 };
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3F — PL Signature Block (rows 46–58)
+  //  3-column layout (different from BS's 3-column layout):
+  //    C — Auditor side (Firm / Partner)
+  //    F — Director 1
+  //    H — Director 2
+  // ───────────────────────────────────────────────────────────────────────
+  const {
+    firmName, firmRegNo, firmCity,
+    partnerName, partnerMemNo, signOffDate,
+    dir1Name, dir1DIN, dir2Name, dir2DIN,
+  } = ctx;
+
+  // Row 46 — "As per our Audit Report of even date " (trailing space per spec)
+  sheet.getCell("C46").value = "As per our Audit Report of even date ";
+
+  // Row 48 — Firm header / Board header
+  sheet.getCell("C48").value = `For ${firmName}`;
+  sheet.getCell("C48").font = { bold: true, size: 9 };
+  sheet.getCell("F48").value = "For and on behalf of the Board of Directors of ";
+
+  // Row 49 — Chartered Accountants / Company name
+  sheet.getCell("C49").value = "Chartered Accountants";
+  sheet.getCell("F49").value = companyName;
+  sheet.getCell("F49").font = { bold: true, size: 9 };
+
+  // Row 50 — Firm registration number
+  sheet.getCell("C50").value = `Firm's Registration No.: ${firmRegNo}`;
+
+  // Row 54 — Signatory names
+  sheet.getCell("C54").value = partnerName;
+  sheet.getCell("C54").font = { bold: true, size: 9 };
+  sheet.getCell("F54").value = dir1Name;
+  sheet.getCell("F54").font = { bold: true, size: 9 };
+  sheet.getCell("H54").value = dir2Name;
+  sheet.getCell("H54").font = { bold: true, size: 9 };
+
+  // Row 55 — Roles
+  sheet.getCell("C55").value = "Partner";
+  sheet.getCell("F55").value = "Director";
+  sheet.getCell("H55").value = "Director";
+
+  // Row 56 — Membership No. / DINs
+  sheet.getCell("C56").value = `Membership No.: ${partnerMemNo}`;
+  sheet.getCell("F56").value = `DIN: ${dir1DIN}`;
+  sheet.getCell("H56").value = `DIN: ${dir2DIN}`;
+
+  // Row 57 — Place (same value written in all three columns)
+  sheet.getCell("C57").value = `Place: ${firmCity}`;
+  sheet.getCell("F57").value = `Place: ${firmCity}`;
+  sheet.getCell("H57").value = `Place: ${firmCity}`;
+
+  // Row 58 — Date (same sign-off date in all three columns)
+  sheet.getCell("C58").value = `Date: ${signOffDate}`;
+  sheet.getCell("F58").value = `Date: ${signOffDate}`;
+  sheet.getCell("H58").value = `Date: ${signOffDate}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
