@@ -486,20 +486,22 @@ export default function AuditIntelligence() {
         {/* Resolved engagement info */}
         {uniqueFilteredEngagements.length > 1 && (
           <div className="mt-3 pt-3 border-t border-border">
-            <p className="text-xs text-muted-foreground mb-2">{uniqueFilteredEngagements.length} engagements match. Select one:</p>
-            <div className="flex flex-wrap gap-2">
-              {uniqueFilteredEngagements.map(e => (
-                <Button
-                  key={e.id}
-                  variant={e.id === selectedEngagementId ? "default" : "outline"}
-                  size="sm"
-                  className="text-xs"
-                  onClick={() => setSelectedEngagementId(e.id)}
-                >
-                  {e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}
-                </Button>
-              ))}
-            </div>
+            <p className="text-xs text-muted-foreground mb-1">{uniqueFilteredEngagements.length} engagements match. Select one:</p>
+            <Select
+              value={selectedEngagementId ?? ""}
+              onValueChange={val => setSelectedEngagementId(val)}
+            >
+              <SelectTrigger className="h-8 text-xs w-full max-w-xl">
+                <SelectValue placeholder="— choose engagement —" />
+              </SelectTrigger>
+              <SelectContent>
+                {uniqueFilteredEngagements.map((e, i) => (
+                  <SelectItem key={e.id} value={e.id} className="text-xs">
+                    [{String(i + 1).padStart(2, "0")}] {e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
         {selectedEngagement && (
