@@ -217,8 +217,14 @@ const getPreviousQuarterLabel = (currentQuarter: string, currentFY: string): str
   return `🔒 ${prevQuarter} FY ${prevFY} Entries (Read-Only)`;
 };
 
-// If prevEntries span more than one unique quarter (multi-quarter carry-forward),
-// build a list label: '🔒 Previous Quarters (Q1, Q2 FY 2025-26) — Read Only'
+// Build a section header label for read-only entries that belong to a
+// DIFFERENT quarter than the one currently being viewed. "Other" rather than
+// "Previous" because a challan can also accumulate FUTURE-quarter utilisation
+// (e.g., a Q1 challan partly used in Q2 → when viewing Q1, those Q2 entries
+// are 'future' but still read-only here).
+// Examples:
+//   Single other quarter  →  "🔒 Q2 FY 2025-26 Entries (Read-Only)"
+//   Multiple other qtrs   →  "🔒 Entries from other quarters (Q1, Q2 FY 2025-26) — Read Only"
 const buildPrevQuarterLabel = (
   prevEntries: Array<{ quarter: string; financial_year: string }>,
   selQuarter: string,
@@ -233,7 +239,7 @@ const buildPrevQuarterLabel = (
     const [first] = seen;
     return `🔒 ${first} Entries (Read-Only)`;
   }
-  // Multiple quarters — group by FY for compact display
+  // Multiple other quarters — group by FY for compact display
   const byFy: Record<string, string[]> = {};
   prevEntries.forEach(e => {
     if (!byFy[e.financial_year]) byFy[e.financial_year] = [];
@@ -242,7 +248,7 @@ const buildPrevQuarterLabel = (
   const parts = Object.entries(byFy)
     .map(([fy, qs]) => `${qs.sort().join(", ")} FY ${fy}`)
     .join("; ");
-  return `🔒 Previous Quarters (${parts}) — Read Only`;
+  return `🔒 Entries from other quarters (${parts}) — Read Only`;
 };
 
 // ═══════════════════════════════════════
@@ -516,20 +522,13 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       // filing_id might be stale (e.g., filing was re-created after an
       // accidental delete).
       const firstAll = grouped[list[0].id] || [];
-      const periodNum = (fy: string, q: string) => {
-        const y = parseInt(fy.split("-")[0], 10);
-        const n = parseInt(q.replace("Q", ""), 10);
-        return y * 10 + n;
-      };
-      const currPeriod = periodNum(selFy, selQuarter);
       const isCurrent = (d: any) =>
         d.filing_id === filingId ||
         (d.quarter === selQuarter && d.financial_year === selFy);
-      const isPrior = (d: any) =>
-        d.quarter && d.financial_year &&
-        periodNum(d.financial_year, d.quarter) < currPeriod;
-      // Future-quarter entries are excluded from this view entirely.
-      setPrevEntries(firstAll.filter(d => isPrior(d) && !isCurrent(d)));
+      // Non-current entries (both prior AND future quarters) are shown as
+      // read-only rows. Each retains its own quarter/FY so the label can
+      // correctly say e.g. "Q2 FY 2025-26 Entries (Read-Only)".
+      setPrevEntries(firstAll.filter(d => !isCurrent(d)));
       setDeductees(firstAll.filter(d => isCurrent(d)));
     } else {
       setSelectedChallan(null); setDeductees([]); setPrevEntries([]);
@@ -581,15 +580,16 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const list = (data || []) as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
-    // Three-way split:
-    //   - current  → editable entries belonging to THIS quarter's filing
-    //   - prior    → read-only entries from EARLIER quarters (carry-forward IN)
-    //   - future   → entries from LATER quarters (excluded from this view
-    //                entirely; they belong to their own quarter's view only).
-    // This prevents Q2 utilisation entries from showing up as read-only rows
-    // when the user is viewing the Q1 page of the same carry-forward challan.
+    // Two-way split:
+    //   - current   → editable entries belonging to THIS quarter's filing
+    //   - other Q   → read-only entries from a DIFFERENT quarter (earlier
+    //                 carry-forward IN or later utilisation of this challan)
+    // Both past and future entries are shown as read-only so the user sees
+    // the COMPLETE history of this challan's utilisation regardless of which
+    // quarter they're viewing. Each read-only row shows its own quarter/FY
+    // label via buildPrevQuarterLabel so it's clear which quarter owns it.
     if (filing) {
-      setPrevEntries(list.filter(d => isPriorQuarterDeductee(d)));
+      setPrevEntries(list.filter(d => !isCurrentQuarterDeductee(d)));
       setDeductees(list.filter(d => isCurrentQuarterDeductee(d)));
     } else {
       setPrevEntries([]);
@@ -1603,9 +1603,22 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                             )}
                             {prevEntries.map((d, idx) => {
                               const colSpanVal = selForm === "24Q" ? 10 : 12;
+                              // Per-row quarter badge — shows exactly which quarter/FY this
+                              // read-only entry belongs to (resolves ambiguity when a
+                              // challan has utilisation spanning multiple quarters).
+                              const qBadge = (
+                                <Badge variant="outline" className="h-4 px-1 text-[9px] font-semibold border-slate-400 text-slate-600 bg-white">
+                                  {d.quarter || "?"}
+                                </Badge>
+                              );
                               return (
                                 <TableRow key={`prev-${d.id}`} className="bg-slate-50 border-l-4 border-l-slate-300 opacity-80">
-                                  <TableCell className="text-xs text-slate-500"><Lock size={10} /></TableCell>
+                                  <TableCell className="text-xs text-slate-500">
+                                    <div className="flex items-center gap-1">
+                                      <Lock size={10} />
+                                      {qBadge}
+                                    </div>
+                                  </TableCell>
                                   {selForm === "24Q" ? (
                                     <>
                                       <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled defaultValue={d.deductee_name} /></TableCell>
@@ -1615,7 +1628,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
                                       <TableCell className="text-right text-xs font-semibold">{d.total_tax_deducted?.toLocaleString("en-IN") || "—"}</TableCell>
-                                      <TableCell><span className="text-[9px] text-slate-500">Prev Quarter</span></TableCell>
+                                      <TableCell><span className="text-[9px] text-slate-500">{d.quarter || "—"} FY {d.financial_year || "—"}</span></TableCell>
                                     </>
                                   ) : (
                                     <>
