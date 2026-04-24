@@ -422,6 +422,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       .select("*")
       .in("challan_id", challanIds);
 
+    // Track which prior challans have CURRENT-QUARTER utilisation — i.e.,
+    // deductees whose quarter+FY matches the currently-selected quarter.
+    // These challans must be shown in the Carry-Forward list even if they
+    // are "fully utilised overall", so the user can view/edit the current-
+    // quarter entries attached to them.
+    const currentQUsage = new Set<string>();
     const appliedMap = new Map<string, number>();
     const cfGrouped: Record<string, Deductee[]> = {};
     (allDeds || []).forEach((d: any) => {
@@ -429,13 +435,23 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
       if (!cfGrouped[d.challan_id]) cfGrouped[d.challan_id] = [];
       cfGrouped[d.challan_id].push(d as Deductee);
+      if (d.quarter === quarter && d.financial_year === fy) {
+        currentQUsage.add(d.challan_id);
+      }
     });
 
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
       const applied = appliedMap.get(c.id) || 0;
       const unconsumed = (c.total_challan_amount || 0) - applied - (c.late_fees_234e || 0);
-      if (unconsumed > 0.5) {
+      const hasCurrentQEntries = currentQUsage.has(c.id);
+      // Show this prior challan in the Carry-Forward list if it either:
+      //   (a) has remaining unused balance (the classic "still has cash left"
+      //       case), OR
+      //   (b) has current-quarter entries attached to it (the import or a
+      //       manual Add Row under a CF challan has consumed balance in THIS
+      //       quarter — user must still be able to see/edit those entries).
+      if (unconsumed > 0.5 || hasCurrentQEntries) {
         carried.push({
           challan: c as Challan,
           // Read origin quarter/FY directly from the challan (stable) rather
