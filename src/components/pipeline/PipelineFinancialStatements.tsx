@@ -21,7 +21,7 @@ import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
-  Pencil, Loader2, BarChart3, Droplets, Lock,
+  Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -233,6 +233,11 @@ export default function PipelineFinancialStatements({
   // ─── PY Data Source setup dialog ────────────────────────────────────────
   const [pySourceDialog,  setPySourceDialog]  = useState(false);
   const [creatingPyShell, setCreatingPyShell] = useState(false);
+
+  // ─── Fetch PY P&L from FY-1 Tally ───────────────────────────────────────
+  const [fetchingPyTally,     setFetchingPyTally]     = useState(false);
+  const [fetchPyTallyDialog,  setFetchPyTallyDialog]  = useState(false);
+  const [fetchPyTallyPreview, setFetchPyTallyPreview] = useState<Record<string, number> | null>(null);
 
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
@@ -860,6 +865,132 @@ export default function PipelineFinancialStatements({
 
   // ─── PY column lock — when prior year is_finalized, PY cells are read-only ─
   const pyLocked = !!priorEngFinalized;
+
+  // ─── Fetch PY P&L from FY-1 Tally trial balance ─────────────────────────
+  // Looks up the prior FY engagement, paginates tally_trial_balance, maps
+  // closing_balance through the current coa_mapping → P&L leaf codes, then
+  // shows a confirmation dialog before writing py_manual_amounts.
+  const fetchPyPLFromTally = useCallback(async () => {
+    if (!engagement?.client_id || !engagement?.financial_year) return;
+    setFetchingPyTally(true);
+    try {
+      const fyParts = (engagement.financial_year as string).split("-");
+      if (fyParts.length !== 2) throw new Error("Bad FY");
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
+
+      // ── Find FY-1 engagement ─────────────────────────────────────────────
+      let pyEngId: string | null = null;
+      const { data: prevEng } = await supabase
+        .from("audit_engagements")
+        .select("id")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .is("deleted_at" as any, null)
+        .maybeSingle();
+      pyEngId = (prevEng as any)?.id ?? null;
+
+      // ── Paginated TB fetcher ─────────────────────────────────────────────
+      async function fetchEngTB(engId: string): Promise<any[]> {
+        const PAGE = 1000;
+        const all: any[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await supabase
+            .from("tally_trial_balance")
+            .select("ledger_name, closing_balance, balance_type")
+            .eq("engagement_id", engId)
+            .range(from, from + PAGE - 1);
+          if (error || !data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+        }
+        return all;
+      }
+
+      let pyTbRows: any[] = [];
+      if (pyEngId) {
+        pyTbRows = await fetchEngTB(pyEngId);
+      }
+
+      // Fallback: most recent completed sync_batch for this client that is NOT the current engagement
+      if (!pyTbRows.length) {
+        const { data: batchRow } = await (supabase.from as any)("sync_batches")
+          .select("engagement_id")
+          .eq("client_id", engagement.client_id)
+          .in("status", ["complete", "completed", "success", "complete_with_warnings"])
+          .neq("engagement_id", engagementId)
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const batchEngId: string | null = (batchRow as any)?.engagement_id ?? null;
+        if (batchEngId) pyTbRows = await fetchEngTB(batchEngId);
+      }
+
+      if (!pyTbRows.length) {
+        toast("No FY-1 Tally data found. Sync the prior year first or enter PY P&L manually.");
+        return;
+      }
+
+      // ── P&L leaf codes from active FS tree ───────────────────────────────
+      const plLeafCodes = new Set<string>(
+        activeFlatItems
+          .filter(i => {
+            const sec = String(i.section || "").toLowerCase();
+            const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+            const isLeaf = !i.children || i.children.length === 0;
+            return isPL && isLeaf;
+          })
+          .map(i => i.code)
+      );
+
+      // ── Aggregate signed closing balances per FS code ────────────────────
+      // closing_balance is unsigned; balance_type DR → positive, CR → negative
+      const preview: Record<string, number> = {};
+      for (const row of pyTbRows) {
+        const mapping = (coaMapping as any)[String(row.ledger_name || "").trim()];
+        if (!mapping || !plLeafCodes.has(mapping.code)) continue;
+        const cb    = Math.abs(Number(row.closing_balance ?? 0));
+        const isDr  = String(row.balance_type ?? "").toUpperCase() === "DR";
+        const signed = isDr ? cb : -cb;
+        preview[mapping.code] = (preview[mapping.code] || 0) + signed;
+      }
+
+      if (!Object.keys(preview).length) {
+        toast("No P&L ledgers matched current COA mapping. Check Stage 3 mapping first.");
+        return;
+      }
+
+      setFetchPyTallyPreview(preview);
+      setFetchPyTallyDialog(true);
+    } catch (err) {
+      console.error("fetchPyPLFromTally", err);
+      toast("Failed to fetch FY-1 Tally data. Check console for details.");
+    } finally {
+      setFetchingPyTally(false);
+    }
+  }, [engagement, engagementId, activeFlatItems, coaMapping]);
+
+  // Apply confirmed Tally fetch → merge into pyManualAmounts and persist
+  const applyPyTallyFetch = useCallback(async () => {
+    if (!fetchPyTallyPreview) return;
+    const byName = (user as any)?.name || (user as any)?.email || "Unknown";
+    const now    = new Date().toISOString();
+    const newAmounts = { ...pyManualAmounts, ...fetchPyTallyPreview };
+    const newMeta: Record<string, { by: string; at: string }> = { ...pyManualMeta };
+    for (const code of Object.keys(fetchPyTallyPreview)) {
+      newMeta[code] = { by: `${byName} (Tally fetch)`, at: now };
+    }
+    setPyManualAmounts(newAmounts);
+    setPyManualMeta(newMeta);
+    const payload = buildPyPayload(newAmounts, newMeta);
+    await supabase
+      .from("audit_engagements")
+      .update({ py_manual_amounts: payload } as any)
+      .eq("id", engagementId);
+    queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    setFetchPyTallyDialog(false);
+    setFetchPyTallyPreview(null);
+    toast(`PY P&L populated — ${Object.keys(fetchPyTallyPreview).length} line items fetched from FY-1 Tally.`);
+  }, [fetchPyTallyPreview, pyManualAmounts, pyManualMeta, user, buildPyPayload, engagementId, queryClient]);
 
   // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
   // Writes enriched { v, by, at } shape; amounts without meta retain legacy shape.
@@ -2821,17 +2952,31 @@ export default function PipelineFinancialStatements({
                 <Pencil className="h-4 w-4" />
                 <AlertTitle className="text-xs flex items-center justify-between">
                   <span>Enter PY P&L Amounts ({pyYear})</span>
-                  <Button
-                    size="sm"
-                    variant={pyManualDirty ? "default" : "outline"}
-                    disabled={pyManualSaving || !pyManualDirty}
-                    onClick={savePyManual}
-                    className="h-7 text-xs"
-                  >
-                    {pyManualSaving ? (
-                      <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving…</>
-                    ) : pyManualDirty ? "Save PY P&L" : "Saved"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400"
+                      disabled={fetchingPyTally || pyLocked}
+                      onClick={fetchPyPLFromTally}
+                      title="Auto-populate PY P&L from the FY-1 Tally sync"
+                    >
+                      {fetchingPyTally
+                        ? <><Loader2 className="h-3 w-3 animate-spin" />Fetching…</>
+                        : <><Database className="h-3 w-3" />Fetch from FY-1 Tally</>}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={pyManualDirty ? "default" : "outline"}
+                      disabled={pyManualSaving || !pyManualDirty}
+                      onClick={savePyManual}
+                      className="h-7 text-xs"
+                    >
+                      {pyManualSaving ? (
+                        <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving…</>
+                      ) : pyManualDirty ? "Save PY P&L" : "Saved"}
+                    </Button>
+                  </div>
                 </AlertTitle>
                 <AlertDescription className="text-xs">
                   No prior-year engagement found. Enter last year's P&L figures below — they feed the PY column and flow into next year automatically.
@@ -3264,6 +3409,60 @@ export default function PipelineFinancialStatements({
             </Button>
             <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={savePyOverride}>
               Save PY Override
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Fetch PY P&L from Tally — confirmation dialog ─────────────── */}
+      <Dialog open={fetchPyTallyDialog} onOpenChange={(o) => { if (!o) { setFetchPyTallyDialog(false); setFetchPyTallyPreview(null); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <Database className="h-4 w-4 text-blue-600" />
+              Populate PY P&amp;L from FY-1 Tally
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-xs">
+            <p className="text-muted-foreground">
+              The following <strong>{Object.keys(fetchPyTallyPreview || {}).length}</strong> P&amp;L line items were matched from the FY-1 Tally trial balance using your current COA mapping. Applying will overwrite any existing manual amounts for these codes.
+            </p>
+            {fetchPyTallyPreview && Object.keys(fetchPyTallyPreview).length > 0 && (
+              <div className="rounded-md border overflow-hidden max-h-60 overflow-y-auto">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-muted/60 sticky top-0">
+                    <tr>
+                      <th className="text-left px-2 py-1.5 font-medium">FS Line Item</th>
+                      <th className="text-right px-2 py-1.5 font-medium">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(fetchPyTallyPreview).map(([code, amt]) => {
+                      const item = activeFlatItems.find(i => i.code === code);
+                      return (
+                        <tr key={code} className="border-t hover:bg-muted/30">
+                          <td className="px-2 py-1">{item?.name || code}</td>
+                          <td className="px-2 py-1 text-right font-mono tabular-nums">
+                            {Number(amt).toLocaleString("en-IN")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex items-start gap-1.5 p-2 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+              <p>Existing manually-entered PY amounts for these codes will be replaced. This cannot be undone automatically — note the current values first if needed.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => { setFetchPyTallyDialog(false); setFetchPyTallyPreview(null); }}>
+              Cancel
+            </Button>
+            <Button size="sm" className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white" onClick={applyPyTallyFetch}>
+              <CheckCircle2 className="h-3.5 w-3.5" /> Apply {Object.keys(fetchPyTallyPreview || {}).length} Items
             </Button>
           </DialogFooter>
         </DialogContent>
