@@ -152,13 +152,29 @@ const FULL_BORDER = {
 };
 
 /**
- * Common column layout for BS/PL/CFS worksheets:
- *   A  spacer (narrow)
- *   B  Particulars (the primary text column)
- *   C-E continuation for merged headings
- *   F  Note No.
- *   G  Current Year amount
- *   H  Previous Year amount
+ * Balance Sheet column layout (Phase 2A spec).
+ *   A  spacer  (2.3) — always empty
+ *   B  spacer  (2.6) — always empty in data rows
+ *   C  label   (40.6) — ALL text content (section headings, line-item names, totals)
+ *   D  Note No (7.1)
+ *   E  CY      (16.0) — "As at 31st March, {cyYear}"
+ *   F  PY      (16.0) — "As at 31st March, {pyYear}"
+ *   G  spacer  (9.1)  — always empty
+ */
+const BS_COLUMNS: Partial<ExcelJS.Column>[] = [
+  { width: 2.3  },   // A  spacer
+  { width: 2.6  },   // B  spacer
+  { width: 40.6 },   // C  Particulars
+  { width: 7.1  },   // D  Note
+  { width: 16.0 },   // E  CY
+  { width: 16.0 },   // F  PY
+  { width: 9.1  },   // G  spacer
+];
+
+/**
+ * Legacy common FS column layout (Phase 1 placeholder — still used by P&L
+ * and CFS until their per-sheet specs arrive). Will be replaced with
+ * PL_COLUMNS / CFS_COLUMNS in subsequent phase sub-steps.
  */
 const FS_COLUMNS: Partial<ExcelJS.Column>[] = [
   { width: 2 },   // A  spacer
@@ -192,6 +208,31 @@ export function fmtIndian(n: number | null | undefined): string {
 
 /** "____________" placeholder for missing signature-block fields. */
 const DASH = "____________";
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  WORKSHEET WRITERS — one per statement, populated incrementally across
+//  Phase 2 sub-steps (2A column layout, 2B header rows, 2C data rows, …)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Populate the BS (Balance Sheet) worksheet.
+ *
+ * Caller must have already applied column widths (BS_COLUMNS) and attached
+ * the sheet to the workbook. This function writes the header block + body
+ * + signature block.
+ *
+ * Phase 2A status: column widths only — row-writing code is filled in by
+ * subsequent sub-phases (2B title block, 2C data rows, 2D totals, …).
+ */
+function writeBalanceSheet(
+  sheet: ExcelJS.Worksheet,
+  ctx:   FsExportContext,
+  data:  BSRowData,
+): void {
+  // Phase 2A: column layout has been applied by caller via BS_COLUMNS.
+  // Nothing else to write until Phase 2B onwards arrives.
+  void sheet; void ctx; void data;
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  MAIN EXPORT FUNCTION
@@ -248,22 +289,20 @@ export async function generateFinancialStatementsXLSX(
   wb.created = new Date();
   wb.company = firmName;
 
-  // ── Three worksheets — populated by Phase 2+ helpers ─────────────────────
-  const bs  = wb.addWorksheet("Balance Sheet",             { views: [{ showGridLines: false }] });
-  const pl  = wb.addWorksheet("Statement of Profit & Loss", { views: [{ showGridLines: false }] });
-  const cfs = wb.addWorksheet("Cash Flow Statement",       { views: [{ showGridLines: false }] });
+  // ── Worksheet: BS (Balance Sheet) — Phase 2A applied ────────────────────
+  // Sheet name is "BS" per Phase 2A spec (not "Balance Sheet").
+  const bs = wb.addWorksheet("BS", { views: [{ showGridLines: false }] });
+  bs.columns = BS_COLUMNS;
+  writeBalanceSheet(bs, ctx, bsData);
 
-  // Common column layout across all three sheets
-  for (const sheet of [bs, pl, cfs]) {
+  // ── Worksheets: P&L and CFS — still on legacy layout until their specs
+  //     arrive in later sub-phases.
+  const pl  = wb.addWorksheet("Statement of Profit & Loss", { views: [{ showGridLines: false }] });
+  const cfs = wb.addWorksheet("Cash Flow Statement",        { views: [{ showGridLines: false }] });
+  for (const sheet of [pl, cfs]) {
     sheet.columns = FS_COLUMNS;
   }
-
-  // ── Phase 2 will populate each sheet's body here ────────────────────────
-  // Example (stub — actual bodies added in Phase 2):
-  //   writeBalanceSheet(bs,  ctx, bsData);
-  //   writeStatementOfPL(pl, ctx, plData);
-  //   writeCashFlow(cfs,    ctx, cfsData);
-  void bsData; void plData; void cfsData; void ctx; // silence unused-warning until Phase 2
+  void plData; void cfsData; // populated in later sub-phases
 
   // ── Serialise to a Blob ──────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
@@ -305,6 +344,7 @@ export {
   MONEY_FMT,
   THIN_BLACK,
   FULL_BORDER,
+  BS_COLUMNS,
   FS_COLUMNS,
   DASH,
 };
