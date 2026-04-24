@@ -398,27 +398,20 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
     const currentPeriod = periodToNum(fy, quarter);
 
-    // Fetch ALL filings for this client — no FY or quarter filter.
-    const { data: allFilings } = await supabase
-      .from("tds_filings")
-      .select("id, quarter, financial_year")
-      .eq("client_id", clientId);
+    // Query challans by stable metadata (client_id + form_type) rather than
+    // walking filing_id → prior filings. A challan's filing_id can drift if
+    // its owning filing was deleted and re-created, which would cause the
+    // old filing_id→filings lookup to silently skip the challan. Querying
+    // directly on the challan's own quarter/FY columns is drift-proof.
+    const { data: priorChallansRaw } = await supabase.from("tds_challans").select("*")
+      .eq("client_id", clientId)
+      .eq("form_type", form)
+      .order("deposit_date", { ascending: true });
 
-    if (!allFilings || allFilings.length === 0) { setCarryForwardChallans([]); return; }
-
-    // Keep only filings whose period is strictly before the current one.
-    const priorFilings = allFilings.filter(
-      f => periodToNum(f.financial_year, f.quarter) < currentPeriod
+    const priorChallans = ((priorChallansRaw as unknown as Challan[]) || []).filter(c =>
+      c.quarter && c.financial_year &&
+      periodToNum(c.financial_year, c.quarter) < currentPeriod
     );
-
-    if (priorFilings.length === 0) { setCarryForwardChallans([]); return; }
-
-    const priorFilingIds = priorFilings.map(f => f.id);
-
-    // Issue 3 FIX: Do NOT filter by fully_utilized — unconsumed check below is authoritative.
-    const { data: priorChallansRaw } = await (supabase.from("tds_challans").select("*") as any)
-      .in("filing_id", priorFilingIds).eq("form_type", form).order("deposit_date");
-    const priorChallans = (priorChallansRaw as unknown as Challan[]) || [];
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
 
     const challanIds = priorChallans.map(c => c.id);
@@ -443,11 +436,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       const applied = appliedMap.get(c.id) || 0;
       const unconsumed = (c.total_challan_amount || 0) - applied - (c.late_fees_234e || 0);
       if (unconsumed > 0.5) {
-        const filingQ = priorFilings.find(f => f.id === c.filing_id);
         carried.push({
           challan: c as Challan,
-          fromQuarter: filingQ?.quarter || "?",
-          fromFy: filingQ?.financial_year || fy,
+          // Read origin quarter/FY directly from the challan (stable) rather
+          // than looking it up via its (possibly drifted) filing_id.
+          fromQuarter: c.quarter || "?",
+          fromFy: c.financial_year || fy,
           appliedAmount: applied,
         });
       }
