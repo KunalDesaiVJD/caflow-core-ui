@@ -596,12 +596,14 @@ export default function TallySyncPage() {
   // TDL's synthetic opening cancelled the transfer journal turnover. We remove the
   // DB P&L contribution and add the effective value (debit − credit), matching
   // exactly what groupedTB shows in the P&L group row.
-  const _plFooter = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
+  const _plFooter  = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
+  // Use getTurnover (includes voucher fallback) so debit_amount=NULL rows are handled
+  const _plTurnover = _plFooter ? getTurnover(_plFooter) : { debit: 0, credit: 0 };
   const _plStrategy1 = !!(_plFooter && _plFooter.balance_type === "Dr" && (
     _plFooter.closing_balance !== 0 || _plFooter.opening_balance !== 0 ||
-    (_plFooter.debit_amount ?? 0) > 0 || (_plFooter.credit_amount ?? 0) > 0
+    _plTurnover.debit > 0 || _plTurnover.credit > 0
   ));
-  const _plNet  = _plStrategy1 ? (getTurnover(_plFooter!).debit - getTurnover(_plFooter!).credit) : 0;
+  const _plNet  = _plStrategy1 ? (_plTurnover.debit - _plTurnover.credit) : 0;
   const _plEff  = Math.abs(_plNet);
   const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
   const _plEffCr = _plStrategy1 && _plNet <  0 ? _plEff : 0;
@@ -946,11 +948,13 @@ export default function TallySyncPage() {
       const plTbRow = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
 
       // hasLedgerBalance: true if ANY of opening/closing/turnover is non-zero.
+      // Use getTurnover (includes voucher fallback) — debit_amount may be NULL in DB
+      // for older syncs, but the voucher-derived turnover is always available.
+      const _plTv = plTbRow ? getTurnover(plTbRow) : { debit: 0, credit: 0 };
       const hasLedgerBalance = plTbRow && (
         plTbRow.closing_balance !== 0 ||
         plTbRow.opening_balance !== 0 ||
-        (plTbRow.debit_amount  ?? 0) > 0 ||
-        (plTbRow.credit_amount ?? 0) > 0
+        _plTv.debit > 0 || _plTv.credit > 0
       );
 
       if (hasLedgerBalance && plTbRow) {
