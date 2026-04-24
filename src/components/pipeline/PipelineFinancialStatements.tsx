@@ -20,6 +20,14 @@ import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import {
+  generateFinancialStatementsXLSX,
+  type Engagement as FSEngagement,
+  type FirmSettings as FSFirmSettings,
+  type BSRowData,
+  type PLRowData,
+  type CFSRowData,
+} from "@/lib/fsExcelExport";
+import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
 } from "lucide-react";
@@ -1212,6 +1220,151 @@ export default function PipelineFinancialStatements({
     const fy = engagement?.financial_year || "—";
     const cyLabel = `As at 31 March, ${cyYear}`;
     const pyLabel = `As at 31 March, ${pyYear}`;
+
+    // ───────────────────────────────────────────────────────────────────────
+    //  Phase 5 — Pixel-perfect corporate export (BS / PL / CFS)
+    //  Dispatches to src/lib/fsExcelExport.ts for corporate (Schedule III)
+    //  engagements. If the new exporter throws for any reason, control falls
+    //  through to the legacy inline ExcelJS writer below so the user always
+    //  gets a file — no regression.
+    // ───────────────────────────────────────────────────────────────────────
+    if (!isNonCorporate) {
+      try {
+        // Convert "2025-26" → ISO "2026-03-31" for fsExcelExport's Engagement.fy_end.
+        const fyParts = String(engagement?.financial_year || "").split("-");
+        const fyEndIso = fyParts.length === 2
+          ? `${parseInt(fyParts[0], 10) + 1}-03-31`
+          : `${cyYear}-03-31`;
+
+        // Load up-to-2 director rows from mrl_data.header_data for this engagement.
+        // Fire-and-wait to stay in-flight with the export click; if it fails we
+        // simply proceed with empty directors (DASH renders in signature block).
+        let directors: Array<{ name?: string | null; din?: string | null }> = [];
+        try {
+          const { data: mrl } = await supabase
+            .from("mrl_data")
+            .select("header_data")
+            .eq("engagement_id", engagement.id)
+            .maybeSingle();
+          const h = (mrl as any)?.header_data || {};
+          if (h.director1Name) directors.push({ name: h.director1Name, din: h.director1Din });
+          if (h.director2Name) directors.push({ name: h.director2Name, din: h.director2Din });
+        } catch (e) {
+          console.warn("[FS Export] Could not load MRL directors:", e);
+        }
+
+        const fsEng: FSEngagement = {
+          client_name:   engagement?.clients?.name || "[Company Name]",
+          fy_end:        fyEndIso,
+          sign_off_date: (engagement as any)?.sign_off_date ?? null,
+          udin:          (engagement as any)?.udin ?? null,
+          partner: {
+            full_name:     sigPartnerName || null,
+            membership_no: sigMembershipNo || null,
+          },
+          directors,
+        };
+
+        const fsFirm: FSFirmSettings = {
+          name:            sigFirmName || "[Firm Name]",
+          registration_no: sigFirmFRN  || "[Reg No]",
+          city:            sigPlace || sigFirmCity || "[City]",
+        };
+
+        // ── BSRowData — map 16 line items from cyOf/pyOf using the SCHEDULE_III_DIV_I codes
+        const bs: BSRowData = {
+          shareCap:        { noteNo: 3,  cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
+          reserves:        { noteNo: 4,  cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
+          ltBorrowings:    { noteNo: 5,  cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
+          otherLtLiab:     { noteNo: 7,  cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
+          ltProvisions:    { noteNo: 8,  cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
+          stBorrowings:    { noteNo: 9,  cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
+          tradePayables:   { noteNo: 10 },
+          // CAFlow doesn't yet split MSME vs Others — surface all as "Others"
+          // so the total still reconciles with trial balance.
+          tradePayMSME:    { cy: 0, py: 0 },
+          tradePayOthers:  { cy: cyOf("BS_CL_TP"), py: pyOf("BS_CL_TP") },
+          otherCurrLiab:   { noteNo: 11, cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
+          stProvisions:    { noteNo: 12, cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
+          ppe:             { noteNo: 13, cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
+          ncInvestments:   { noteNo: 15, cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
+          dtAssets:        { noteNo: 16, cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
+          ltLoans:         { noteNo: 17, cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
+          otherNcAssets:   { noteNo: 18, cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
+          currInvestments: { noteNo: 19, cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
+          inventories:     { noteNo: 20, cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
+          tradeRec:        { noteNo: 21, cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
+          cashBank:        { noteNo: 22, cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
+          stLoans:         { noteNo: 23, cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
+          otherCurrAssets: { noteNo: 24, cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
+          sigPolicies:     { noteNo: 2 },
+        };
+
+        // ── PLRowData — include pre-computed PBT for CFS cross-reference
+        // PBT = (Revenue − Expenses − Exceptional) ; matches the sheet's G28 formula.
+        const expCy = cyOf("PL_EXP_MAT") + cyOf("PL_EXP_SIT") + cyOf("PL_EXP_CII")
+                    + cyOf("PL_EXP_EMP") + cyOf("PL_EXP_FIN") + cyOf("PL_EXP_DEP")
+                    + cyOf("PL_EXP_OTH");
+        const expPy = pyOf("PL_EXP_MAT") + pyOf("PL_EXP_SIT") + pyOf("PL_EXP_CII")
+                    + pyOf("PL_EXP_EMP") + pyOf("PL_EXP_FIN") + pyOf("PL_EXP_DEP")
+                    + pyOf("PL_EXP_OTH");
+        const revCy = cyOf("PL_REV_OPS") + cyOf("PL_REV_OI");
+        const revPy = pyOf("PL_REV_OPS") + pyOf("PL_REV_OI");
+        const excCy = cyOf("PL_EI");
+        const excPy = pyOf("PL_EI");
+
+        const pl: PLRowData = {
+          revFromOps:         { noteNo: 25, cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
+          otherIncome:        { noteNo: 26, cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
+          costMaterials:      { noteNo: 27 },
+          purchasesStock:     { noteNo: 27, cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
+          changesInventories: { noteNo: 27, cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
+          employeeBenefits:   { noteNo: 28, cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
+          financeCosts:       { noteNo: null, cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
+          depreciation:       { noteNo: null, cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
+          otherExpenses:      { noteNo: 29, cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
+          taxExpense:         { noteNo: null },
+          currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
+          deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
+          eps:                { noteNo: null },
+          // Share count for EPS divisor — Schedule III doesn't store a share
+          // count; pass 1 so formula evaluates to EPS = profit/1 (useful
+          // placeholder until a share-count input is added to the UI).
+          shareCap:           { noteNo: 1 },
+          pbt:                { cy: revCy - expCy - excCy, py: revPy - expPy - excPy },
+        };
+
+        // ── CFSRowData — working-capital changes derived from BS (PY − CY for
+        // assets, CY − PY for liabilities). Income tax paid is null (no UI input
+        // yet); writer defaults it to 0.
+        const cfs: CFSRowData = {
+          tradePayChange:        { cy: cyOf("BS_CL_TP")  - pyOf("BS_CL_TP")  },
+          otherCurrLiabChange:   { cy: cyOf("BS_CL_OCL") - pyOf("BS_CL_OCL") },
+          otherCurrAssetsChange: { cy: pyOf("BS_CA_OCA") - cyOf("BS_CA_OCA") },
+          incomeTaxPaid:         { cy: null },
+          // PPE purchases — increase in gross PPE approximated by (CY − PY);
+          // negative if PPE decreased. Writer negates this for row 29.
+          ppePurchases:          { cy: Math.max(0, cyOf("BS_NCA_FA") - pyOf("BS_NCA_FA")) },
+        };
+
+        const blob = await generateFinancialStatementsXLSX(fsEng, fsFirm, bs, pl, cfs);
+        const safeClientPP = (engagement?.clients?.name || "Client").replace(/[^A-Za-z0-9]/g, "_");
+        const urlPP = URL.createObjectURL(blob);
+        const aPP = document.createElement("a");
+        aPP.href = urlPP;
+        aPP.download = `FS_${safeClientPP}_${fy || "FY"}.xlsx`;
+        document.body.appendChild(aPP);
+        aPP.click();
+        document.body.removeChild(aPP);
+        URL.revokeObjectURL(urlPP);
+        toast.success("Financial Statements exported (pixel-perfect Schedule III format)");
+        return;
+      } catch (err: any) {
+        console.error("[FS Export] Pixel-perfect export failed, falling back to legacy:", err);
+        toast.warning(`Using legacy Excel format: ${err?.message || "pixel-perfect export failed"}`);
+        // Fall through to legacy ExcelJS code below
+      }
+    }
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "CAFlow";
