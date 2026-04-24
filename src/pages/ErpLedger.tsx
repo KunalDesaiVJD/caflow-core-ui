@@ -37,12 +37,11 @@ const ErpLedger = () => {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [clientsRes, tbRes] = await Promise.all([
+    const [clientsRes] = await Promise.all([
       supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null).order("name"),
-      supabase.from("trial_balance_snapshots").select("id, client_id, financial_year, source_format, normalised_data"),
     ]);
     setClients(clientsRes.data || []);
-    setSnapshots((tbRes.data || []) as any);
+    setSnapshots([]); // trial_balance_snapshots removed — ERP Ledger now reads from Tally TB
     setLoading(false);
   }, []);
 
@@ -61,16 +60,9 @@ const ErpLedger = () => {
     ? selectedTB[0].normalised_data
     : [];
 
-  const handleDeleteTB = async (snapshotId: string) => {
-    setDeleting(true);
-    const { error } = await supabase.from("trial_balance_snapshots").delete().eq("id", snapshotId);
-    setDeleting(false);
-    if (error) {
-      toast({ title: "Error", description: "Failed to delete: " + error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Deleted", description: "Trial balance snapshot removed." });
-      await loadData();
-    }
+  const handleDeleteTB = async (_snapshotId: string) => {
+    // trial_balance_snapshots removed — no-op; Tally sync data is managed via Tally Sync page
+    toast({ title: "Info", description: "Trial balance snapshots have been removed. Manage data via Tally Sync." });
   };
 
   if (loading) {
@@ -188,9 +180,9 @@ const ErpLedger = () => {
             {selectedEntries.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
                 <AlertCircle className="h-8 w-8" />
-                <p className="text-sm">No trial balance imported yet.</p>
-                <Button size="sm" variant="outline" onClick={() => navigate(`/clients/${selectedClient}/audit/import-trial-balance`)}>
-                  Import Trial Balance
+                <p className="text-sm">No Tally sync data found. Use Tally Sync to load ledger data.</p>
+                <Button size="sm" variant="outline" onClick={() => navigate("/audit/tally-sync")}>
+                  Go to Tally Sync
                 </Button>
               </div>
             ) : (

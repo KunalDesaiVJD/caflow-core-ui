@@ -88,10 +88,14 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
   const { track } = useAuditTracker(engagement?.id);
 
   useEffect(() => {
-    // Check if trial balance exists
+    // Check if Tally sync data exists (snapshot path removed)
     if (client?.id) {
-      supabase.from("trial_balance_snapshots").select("id").eq("client_id", client.id).limit(1)
-        .then(({ data }) => setHasTB((data?.length || 0) > 0));
+      (supabase.from as any)("sync_batches")
+        .select("id")
+        .eq("client_id", client.id)
+        .in("status", ["completed", "complete", "success", "complete_with_warnings"])
+        .limit(1)
+        .then(({ data }: any) => setHasTB((data?.length || 0) > 0));
     }
 
     const saved = engagement?.notes_to_accounts as Record<string, any> | null;
@@ -145,9 +149,12 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         const { data } = await supabase.from("scrutiny_findings").select("*").eq("client_id", client?.id);
         contextData.deferred_tax_findings = (data || []).filter(f => f.rule_id?.startsWith("DT"));
       } else if ([2, 3, 4, 5, 6, 7, 8].includes(note.num) && hasTB) {
-        const { data } = await supabase.from("trial_balance_snapshots").select("normalised_data")
-          .eq("client_id", client?.id).eq("financial_year", engagement.financial_year).maybeSingle();
-        if (data?.normalised_data) contextData.trial_balance = data.normalised_data;
+        // TB context for AI notes drafter — reads from tally_trial_balance via engagement_id
+        const { data: tbRows } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name, parent_group, closing_balance, balance_type, opening_balance, opening_type")
+          .eq("engagement_id", engagement.id);
+        if (tbRows?.length) contextData.trial_balance = tbRows;
       }
 
       const res = await supabase.functions.invoke("claude-gateway", {

@@ -79,11 +79,15 @@ export default function AuditScrutiny() {
   const [running, setRunning] = useState(false);
   const [auditFirmName, setAuditFirmName] = useState<string | null>(null);
 
-  // Check trial balance existence
+  // Check trial balance existence via Tally sync batches (snapshot path removed)
   useEffect(() => {
     if (!clientId) return;
-    supabase.from("trial_balance_snapshots").select("id").eq("client_id", clientId).limit(1)
-      .then(({ data }) => setHasTB(!!data && data.length > 0));
+    (supabase.from as any)("sync_batches")
+      .select("id")
+      .eq("client_id", clientId)
+      .in("status", ["completed", "complete", "success", "complete_with_warnings"])
+      .limit(1)
+      .then(({ data }: any) => setHasTB(!!data && data.length > 0));
   }, [clientId]);
 
   // Fetch findings
@@ -236,10 +240,10 @@ export default function AuditScrutiny() {
       <div className="p-6">
         <div className="flex flex-col items-center justify-center py-20 space-y-4">
           <FileSpreadsheet className="h-16 w-16 text-muted-foreground" />
-          <h2 className="text-xl font-semibold text-foreground">No trial balance imported yet</h2>
-          <p className="text-sm text-muted-foreground">Import a trial balance to run AI-powered scrutiny checks.</p>
-          <Button onClick={() => navigate(`/clients/${clientId}/audit/import-trial-balance`)}>
-            Import Trial Balance
+          <h2 className="text-xl font-semibold text-foreground">No Tally sync data found</h2>
+          <p className="text-sm text-muted-foreground">Sync Tally data to run AI-powered scrutiny checks.</p>
+          <Button onClick={() => navigate("/audit/tally-sync")}>
+            Go to Tally Sync
           </Button>
         </div>
       </div>

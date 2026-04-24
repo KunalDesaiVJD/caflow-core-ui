@@ -229,67 +229,66 @@ export default function PipelineFinancialStatements({
   const [sigPlace,         setSigPlace]         = useState("");
   const [sigDate,          setSigDate]           = useState(() => new Date().toISOString().split("T")[0]);
 
-  // ─── Fetch TB data (legacy snapshot path) ───
-  const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
-    queryKey: ["tb-snapshot-fs", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("trial_balance_snapshots")
-        .select("*")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-      return data as any;
-    },
-    enabled: !!engagementId,
-  });
-
-  // ─── Fetch TB leaf nodes (modern hierarchy path) ───
-  const { data: tbLeafNodes, isLoading: tbLeafLoading } = useQuery({
-    queryKey: ["tb-leaf-nodes-fs", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("tb_hierarchy_nodes")
-        .select("*")
-        .eq("engagement_id", engagementId)
-        .eq("is_leaf", true);
-      return (data || []) as any[];
-    },
-    enabled: !!engagementId,
-  });
-
-  // ─── Fetch Tally Trial Balance (for opening_balance = PY closing) ───
-  // Same pattern as Stage 6 (PipelineStage3.tsx) — single source for CY close + PY open
+  // ─── Fetch Tally Trial Balance (sole authoritative source) ───
+  // Uses same 3-step lookup as PipelineStage3: direct → sync_batches → legacy engagements
   const { data: tallyTb, isLoading: tallyTbLoading } = useQuery({
-    queryKey: ["tally-tb-fs", engagement?.client_id, engagement?.financial_year],
+    queryKey: ["tally-tb-fs", engagementId, engagement?.client_id, engagement?.financial_year],
     queryFn: async () => {
+      const TB_COLS = "ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount";
+
+      async function fetchAllTB(engId: string): Promise<any[]> {
+        const PAGE = 1000;
+        const all: any[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await supabase
+            .from("tally_trial_balance")
+            .select(TB_COLS)
+            .eq("engagement_id", engId)
+            .range(from, from + PAGE - 1);
+          if (error || !data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+        }
+        return all;
+      }
+
+      // Step 0: direct lookup with audit_engagements.id (primary — works for all new syncs)
+      if (engagementId) {
+        const rows = await fetchAllTB(engagementId);
+        if (rows.length) return rows;
+      }
       if (!engagement?.client_id) return [];
-      let tallyEngId: string | null = null;
+
+      // Step 1: sync_batches.client_id — most reliable for older syncs
+      const { data: batchRow } = await (supabase.from as any)("sync_batches")
+        .select("engagement_id")
+        .eq("client_id", engagement.client_id)
+        .in("status", ["complete", "completed", "success", "complete_with_warnings"])
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const batchEngId: string | null = (batchRow as any)?.engagement_id ?? null;
+      if (batchEngId && batchEngId !== engagementId) {
+        const rows = await fetchAllTB(batchEngId);
+        if (rows.length) return rows;
+      }
+
+      // Step 2: legacy engagements table
       if (engagement.financial_year) {
-        const { data: tEng } = await supabase
-          .from("engagements")
+        const { data: tEng } = await (supabase.from as any)("engagements")
           .select("id")
           .eq("client_id", engagement.client_id)
           .eq("financial_year", engagement.financial_year)
           .maybeSingle();
-        tallyEngId = (tEng as any)?.id ?? null;
+        const legacyId = (tEng as any)?.id ?? null;
+        if (legacyId) {
+          const rows = await fetchAllTB(legacyId);
+          if (rows.length) return rows;
+        }
       }
-      if (!tallyEngId) {
-        const { data: tg } = await supabase
-          .from("tally_groups")
-          .select("engagement_id")
-          .eq("client_id", engagement.client_id)
-          .limit(1)
-          .maybeSingle();
-        tallyEngId = (tg as any)?.engagement_id ?? null;
-      }
-      if (!tallyEngId) return [];
-      const { data } = await supabase
-        .from("tally_trial_balance")
-        .select("ledger_name, parent_group, opening_balance, opening_type, closing_balance, balance_type, debit_amount, credit_amount")
-        .eq("engagement_id", tallyEngId);
-      return (data || []) as any[];
+      return [];
     },
-    enabled: !!engagement?.client_id,
+    enabled: !!engagementId,
   });
 
   // ─── Fetch existing FS rows ───
@@ -459,45 +458,25 @@ export default function PipelineFinancialStatements({
     enabled: !!engagementId && isNonCorporate,
   });
 
-  // ─── TB accounts ───
-  // Includes opening_balance (signed; Cr → negative) so Stage 7 can derive PY
-  // from the same coa_mapping as Stage 6. Opening = PY closing for BS items.
+  // ─── TB accounts — Tally Sync is the sole authoritative source ───
+  // opening_balance (signed; Cr → negative) = PY closing for BS items.
   const tbAccounts: {
     account_name: string; account_group: string;
     balance: number; opening_balance: number;
   }[] = useMemo(() => {
-    if (tbSnapshot?.normalised_data) {
-      return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
-        account_name: r.account_name || r.ledger_name || "",
-        account_group: r.account_group || r.parent_group || "",
-        balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
-        opening_balance: Number(r.opening_balance ?? 0) *
-                         (String(r.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
-      })).filter(a => a.account_name);
-    }
-    if (tbLeafNodes?.length) {
-      return tbLeafNodes.map((n: any) => ({
-        account_name: n.name || "",
-        account_group: n.primary_group || n.group_name || "",
-        balance: (n.txn_debit || 0) - (n.txn_credit || 0),
-        opening_balance: Number(n.opening_balance ?? 0),
-      })).filter(a => a.account_name);
-    }
-    if (tallyTb?.length) {
-      return tallyTb.map((l: any) => {
-        const cb   = Math.abs(Number(l.closing_balance ?? 0));
-        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
-        return {
-          account_name:  String(l.ledger_name || "").trim(),
-          account_group: l.parent_group || "",
-          balance: isDr ? cb : -cb,
-          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
-        };
-      }).filter((a: any) => a.account_name);
-    }
-    return [];
-  }, [tbSnapshot, tbLeafNodes, tallyTb]);
+    if (!tallyTb?.length) return [];
+    return tallyTb.map((l: any) => {
+      const cb   = Math.abs(Number(l.closing_balance ?? 0));
+      const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+      return {
+        account_name:  String(l.ledger_name || "").trim(),
+        account_group: l.parent_group || "",
+        balance: isDr ? cb : -cb,
+        opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                         (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+      };
+    }).filter((a: any) => a.account_name);
+  }, [tallyTb]);
 
   // ─── COA mapping from engagement prop ───
   const coaMapping: Record<string, { code: string }> = useMemo(() => {
@@ -2405,26 +2384,26 @@ export default function PipelineFinancialStatements({
     );
   }
 
-  const hasTbData = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0 || (tallyTb?.length ?? 0) > 0;
+  const hasTbData = (tallyTb?.length ?? 0) > 0;
   const stage3Complete =
     (engagement?.stage_statuses as any)?.["3"] === "complete" ||
     (engagement?.pipeline_stage ?? 0) >= 4;
 
-  if (!tbSnapshotLoading && !tbLeafLoading && !tallyTbLoading && !hasTbData && !stage3Complete) {
+  if (!tallyTbLoading && !hasTbData && !stage3Complete) {
     return (
       <div className="max-w-4xl">
         <Alert>
           <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>COA Mapping Required</AlertTitle>
+          <AlertTitle>Tally Sync Required</AlertTitle>
           <AlertDescription>
-            Please complete Stage 3 (COA Mapping) before viewing Financial Statements.
+            No Tally sync data found. Please complete Stage 2 (Tally Sync) and Stage 3 (COA Mapping) before viewing Financial Statements.
           </AlertDescription>
         </Alert>
       </div>
     );
   }
 
-  const isLoading = tbSnapshotLoading || tbLeafLoading || tallyTbLoading || fsLoading;
+  const isLoading = tallyTbLoading || fsLoading;
 
   // ─── FS row renderer ───
   const renderFSRows = (items: (FSLineItem & { depth: number })[]) =>

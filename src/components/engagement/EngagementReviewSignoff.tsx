@@ -64,7 +64,7 @@ interface Gate {
 // ─── Pipeline stage map (matches STAGES in AuditPipeline.tsx) ───────────────
 const STAGE_LABELS: { key: string; label: string }[] = [
   { key: "1", label: "Engagement Setup" },
-  { key: "2", label: "Trial Balance Import" },
+  { key: "2", label: "Tally Sync" },
   { key: "3", label: "COA Mapping" },
   { key: "4", label: "Scrutiny Engine" },
   { key: "5", label: "Query Tracker" },
@@ -234,8 +234,8 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
     const ss = (engagement?.stage_statuses || {}) as Record<string, string>;
     const stageDone = (k: string) => ss[k] === "complete";
     const list: Gate[] = [
-      { key: "tb",        label: "Trial Balance Imported",       status: stageDone("2") ? "pass" : "fail",
-        blocker: true, fixLabel: "Go to Stage 2" },
+      { key: "tb",        label: "Tally Sync Completed",         status: stageDone("2") ? "pass" : "fail",
+        blocker: true, fixLabel: "Go to Tally Sync (Stage 2)" },
       { key: "coa",       label: "COA Mapping Complete",         status: stageDone("3") ? "pass" : "fail",
         blocker: true, fixLabel: "Go to Stage 3" },
       { key: "scrutiny",  label: "Scrutiny Engine Reviewed",     status: stageDone("4") ? "pass" : "warn",

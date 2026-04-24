@@ -318,37 +318,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   //   "closed" — closed accounts: opening ≠ 0, closing = 0 (PY-only impact)
   const [workMode, setWorkMode] = useState<"all" | "py" | "cy" | "closed">("py");
 
-  // ─── Fetch TB data (legacy snapshot path) ───
-  const { data: tbSnapshot, isLoading: tbSnapshotLoading } = useQuery({
-    queryKey: ["tb-snapshot-stage3", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("trial_balance_snapshots")
-        .select("*")
-        .eq("engagement_id", engagementId)
-        .maybeSingle();
-      return data as any;
-    },
-    enabled: !!engagementId,
-  });
-
-  // ─── Fetch TB leaf nodes (modern hierarchy path) ───
-  // Modern TB upload stores data in tb_hierarchy_nodes, not trial_balance_snapshots.
-  // We read leaf nodes here to (a) unlock the stage gate and (b) populate tbAccounts.
-  const { data: tbLeafNodes, isLoading: tbLeafLoading } = useQuery({
-    queryKey: ["tb-leaf-nodes-stage3", engagementId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("tb_hierarchy_nodes")
-        .select("*")
-        .eq("engagement_id", engagementId)
-        .eq("is_leaf", true);
-      return (data || []) as any[];
-    },
-    enabled: !!engagementId,
-  });
-
-  // ─── Fallback: fetch Tally Trial Balance directly if TB import hasn't populated ───
+  // ─── Fetch Tally Trial Balance (sole authoritative TB source) ───
   // `tally_trial_balance` holds the real closing balances (with balance_type
   // Dr/Cr) and is keyed to the separate `engagements` table (Tally sync), not
   // `audit_engagements`. Resolve the tally engagement id via client_id +
@@ -490,62 +460,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
-  // TB accounts — Tally Sync is authoritative when available; fall back to TB imports.
+  // TB accounts — Tally Sync is the sole authoritative source.
+  // closing_balance is unsigned; balance_type (Dr/Cr) gives the sign.
   const tbAccounts: {
     account_name: string; account_group: string;
     debit: number; credit: number; balance: number;
     opening_balance?: number; tally_debit?: number; tally_credit?: number;
   }[] = useMemo(() => {
-    // Primary path: Tally Sync trial balance (verified accurate, live data).
-    // closing_balance is unsigned; balance_type tells us Dr or Cr.
-    if (tallyTb?.length) {
-      return tallyTb.map((l: any) => {
-        const cb   = Math.abs(Number(l.closing_balance ?? 0));
-        const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
-        return {
-          account_name:  String(l.ledger_name || "").trim(),
-          account_group: l.parent_group || "",
-          debit:  isDr ? cb : 0,
-          credit: isDr ? 0  : cb,
-          balance: isDr ? cb : -cb,
-          opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
-                           (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
-          tally_debit:  Number(l.debit_amount  ?? 0),
-          tally_credit: Number(l.credit_amount ?? 0),
-        };
-      }).filter((a: any) => a.account_name);
-    }
-    // Fallback: tb_hierarchy_nodes leaf nodes (modern manual upload path)
-    if (tbLeafNodes?.length) {
-      return tbLeafNodes.map((n: any) => {
-        const debit  = Number(n.txn_debit  ?? n.opening_debit  ?? 0);
-        const credit = Number(n.txn_credit ?? n.opening_credit ?? 0);
-        // opening_balance: positive = Dr, negative = Cr (matches Tally sync convention)
-        const openingDr = Number(n.opening_debit  ?? 0);
-        const openingCr = Number(n.opening_credit ?? 0);
-        const opening   = openingDr - openingCr;
-        return {
-          account_name:   n.name || "",
-          account_group:  n.primary_group || n.group_name || "",
-          debit,
-          credit,
-          balance: debit - credit,
-          opening_balance: opening,
-        };
-      }).filter(a => a.account_name);
-    }
-    // Last resort: legacy trial_balance_snapshots import
-    if (tbSnapshot?.normalised_data) {
-      return ((tbSnapshot.normalised_data as any[]) || []).map((r: any) => ({
-        account_name: r.account_name || r.ledger_name || "",
-        account_group: r.account_group || "",
-        debit: r.debit || r.closing_dr || 0,
-        credit: r.credit || r.closing_cr || 0,
-        balance: (r.debit || r.closing_dr || 0) - (r.credit || r.closing_cr || 0),
-      })).filter(a => a.account_name);
-    }
-    return [];
-  }, [tbSnapshot, tbLeafNodes, tallyTb]);
+    if (!tallyTb?.length) return [];
+    return tallyTb.map((l: any) => {
+      const cb   = Math.abs(Number(l.closing_balance ?? 0));
+      const isDr = String(l.balance_type ?? "").toUpperCase() === "DR";
+      return {
+        account_name:  String(l.ledger_name || "").trim(),
+        account_group: l.parent_group || "",
+        debit:  isDr ? cb : 0,
+        credit: isDr ? 0  : cb,
+        balance: isDr ? cb : -cb,
+        opening_balance: Math.abs(Number(l.opening_balance ?? 0)) *
+                         (String(l.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1),
+        tally_debit:  Number(l.debit_amount  ?? 0),
+        tally_credit: Number(l.credit_amount ?? 0),
+      };
+    }).filter((a: any) => a.account_name);
+  }, [tallyTb]);
 
   // Load existing mapping from engagement
   useEffect(() => {

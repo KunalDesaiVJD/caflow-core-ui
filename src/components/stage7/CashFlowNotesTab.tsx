@@ -94,10 +94,10 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
   const [autoFilling, setAutoFilling] = useState(false);
   const [tbAvailable, setTbAvailable] = useState<boolean>(false);
 
-  // ── Detect whether a TB exists for this engagement ──
+  // ── Detect whether Tally TB exists for this engagement ──
   useEffect(() => {
     supabase
-      .from('trial_balance_snapshots')
+      .from('tally_trial_balance')
       .select('id', { count: 'exact', head: true })
       .eq('engagement_id', engagementId)
       .then(({ count }) => setTbAvailable((count || 0) > 0));
@@ -157,9 +157,10 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
   async function autoFillFromTB() {
     setAutoFilling(true);
     try {
+      // Read cash/bank ledgers from tally_trial_balance (snapshot path removed)
       const { data: rows, error } = await supabase
-        .from('trial_balance_snapshots')
-        .select('ledger_name, opening_balance, closing_balance')
+        .from('tally_trial_balance')
+        .select('ledger_name, opening_balance, opening_type, closing_balance, balance_type')
         .eq('engagement_id', engagementId);
       if (error) throw error;
 
@@ -169,8 +170,10 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
       for (const r of (rows || []) as any[]) {
         const name = String(r.ledger_name || '').toLowerCase();
         if (/\b(cash|bank)\b/.test(name)) {
-          openingSum += Number(r.opening_balance || 0);
-          closingSum += Number(r.closing_balance || 0);
+          const openSign = String(r.opening_type || "Dr").toUpperCase() === "CR" ? -1 : 1;
+          const closeSign = String(r.balance_type || "Dr").toUpperCase() === "CR" ? -1 : 1;
+          openingSum += Math.abs(Number(r.opening_balance || 0)) * openSign;
+          closingSum += Math.abs(Number(r.closing_balance || 0)) * closeSign;
           matched++;
         }
       }

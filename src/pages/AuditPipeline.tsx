@@ -33,7 +33,7 @@ import { isCompanyEntity } from "@/utils/entityUtils";
 import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck,
-  Eye, BookMarked, Shield, Award,
+  Eye, BookMarked, Shield, Award, RefreshCw,
 } from "lucide-react";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
@@ -50,7 +50,7 @@ import Form3CD from "@/pages/Form3CD";
 // ─── Constants ───
 const STAGES = [
   { num: 1,  label: 'Engagement Setup',           icon: Building2   },
-  { num: 2,  label: 'Trial Balance Import',        icon: FileText    },
+  { num: 2,  label: 'Tally Sync',                  icon: RefreshCw   },
   { num: 3,  label: 'COA Mapping',                 icon: Calculator  },
   { num: 4,  label: 'Scrutiny Engine',             icon: Eye         },
   { num: 5,  label: 'Query Tracker',               icon: ClipboardCheck },
