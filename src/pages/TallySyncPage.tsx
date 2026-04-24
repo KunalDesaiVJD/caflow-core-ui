@@ -909,6 +909,30 @@ export default function TallySyncPage() {
       }
     }
 
+    // ── Always show "Profit & Loss A/c" as a standalone section ───────────────
+    // P&L ledger has parent_group="Primary" in Tally which we filter from display.
+    // Strategy 1 (profit transferred): 0 opening, Dr closing from transfer debit.
+    // Strategy 2 (profit not transferred): Cr opening = accumulated profit, Cr closing.
+    // Both strategies require P&L to be visible so the grand total tallies.
+    const plTbRow = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
+    if (plTbRow) {
+      const alreadyPlaced = result.some(g => g.rows.some(r => r.ledger_name === "Profit & Loss A/c"));
+      if (!alreadyPlaced) {
+        const t = getTurnover(plTbRow);
+        const netOp = plTbRow.opening_type === "Dr" ? plTbRow.opening_balance : -plTbRow.opening_balance;
+        const netCl = plTbRow.balance_type  === "Dr" ? plTbRow.closing_balance : -plTbRow.closing_balance;
+        result.push({
+          groupName: "Profit & Loss A/c",
+          isRevenue: false,
+          depth: 0,
+          rows: [{ ...plTbRow, _debit: t.debit, _credit: t.credit }],
+          openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
+          debitTotal: t.debit, creditTotal: t.credit,
+          closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
+        });
+      }
+    }
+
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTB, sortedGroups, getTurnover, groupInfoMap]);
