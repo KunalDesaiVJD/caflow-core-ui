@@ -371,6 +371,25 @@ export default function PipelineFinancialStatements({
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
+  // ─── PY Shell engagement ID (for navigation back to it) ─────────────────
+  // Runs only when py_source === "py_shell" so the user can always navigate
+  // back to the shell's Tally Sync even after leaving the shell page.
+  const { data: pyShellId } = useQuery({
+    queryKey: ["py-shell-id", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      const fyParts = (engagement.financial_year as string).split("-");
+      if (fyParts.length !== 2) return null;
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
+      const { data } = await (supabase.from as any)("audit_engagements")
+        .select("id")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .maybeSingle();
+      return (data as any)?.id ?? null;
+    },
+    enabled: (engagement as any)?.py_source === "py_shell" && !!engagement?.client_id && !!engagement?.financial_year,
+  });
+
   // ─── Firm data (NCE signature block) ─────────────────────────────────────
   // Pulls `membership_numbers` as well so the partner's M.No. can be
   // resolved from the engagement's `partner_name` when `partner_id` is
@@ -2994,6 +3013,41 @@ export default function PipelineFinancialStatements({
             No prior-year engagement found. Choose how PY comparative data should be sourced:
             running Tally opening balances cover the Balance Sheet, but PY P&L needs either a
             prior engagement, a PY shell import, or manual entry.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* ── PY Shell navigation banner ───────────────────────────────────────
+          Always visible when py_source === "py_shell". Lets the user go back
+          to the PY Shell's Tally Sync at any time — even after leaving it
+          the first time — without having to re-trigger the Setup PY Data flow. */}
+      {(engagement as any)?.py_source === "py_shell" && !(engagement as any)?.is_py_shell && (
+        <Alert className="border-blue-300/50 bg-blue-50/40 dark:bg-blue-950/20">
+          <Database className="h-4 w-4 text-blue-600" />
+          <AlertTitle className="text-xs flex items-center justify-between">
+            <span className="text-blue-800 dark:text-blue-300 font-semibold">
+              PY Shell — FY {pyYear - 1}-{String(pyYear).slice(-2)}
+            </span>
+            <div className="flex items-center gap-2">
+              {noPriorEngagement
+                ? <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400">⚠ Tally sync pending</Badge>
+                : <Badge variant="outline" className="text-[10px] border-green-500 text-green-700 dark:text-green-400">✓ Tally synced</Badge>
+              }
+              {pyShellId && (
+                <Button
+                  size="sm" variant="outline"
+                  className="h-7 text-xs gap-1 border-blue-400 text-blue-700 hover:bg-blue-100 dark:border-blue-600 dark:text-blue-300"
+                  onClick={() => navigate(`/audit/pipeline/${pyShellId}?stage=2`)}
+                >
+                  <ArrowRight className="h-3 w-3" /> Open PY Shell Tally Sync
+                </Button>
+              )}
+            </div>
+          </AlertTitle>
+          <AlertDescription className="text-xs text-blue-700/80 dark:text-blue-400/80 mt-0.5">
+            {noPriorEngagement
+              ? "PY Shell created but Tally not yet synced. Click \"Open PY Shell Tally Sync\", run the sync for FY 2024-25, then return here and click \"Fetch from FY-1 Tally\" in the P&L tab."
+              : "PY Shell Tally sync is complete. Use \"Fetch from FY-1 Tally\" in the P&L tab to pull PY P&L figures into this engagement."}
           </AlertDescription>
         </Alert>
       )}
