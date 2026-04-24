@@ -457,6 +457,32 @@ export default function TallySyncPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Auto-reload while a sync is in-flight — detects completion every 5 s and
+  // calls loadData() so the TB / ledgers / vouchers tabs update automatically.
+  useEffect(() => {
+    const isInFlight =
+      pendingRequest ||
+      batches[0]?.status === "running" ||
+      batches[0]?.status === "processing";
+    if (!isInFlight || !tallyEngId) return;
+
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from("sync_batches" as any)
+        .select("status")
+        .eq("engagement_id", tallyEngId)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const status = (data as any)?.status;
+      if (status === "completed" || status === "failed") {
+        await loadData();
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [pendingRequest, batches, tallyEngId, loadData]);
+
   // ── Sync Now ─────────────────────────────────────────────────────────────────
   async function handleSyncNow() {
     if (!tallyEngId) {

@@ -96,11 +96,27 @@ const BankRecon = () => {
         .single();
       setClientName(client?.name || "Client");
 
-      // Bank ledger balances from Tally TB (snapshot path removed)
-      const { data: tbRows } = await supabase
+      // Resolve the most-recent engagement_id for this client so we filter by
+      // the correct FY (client_id alone spans all years).
+      const { data: engRow } = await supabase
+        .from("engagements" as any)
+        .select("id")
+        .eq("client_id", clientId)
+        .order("financial_year", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const engagementId = (engRow as any)?.id ?? null;
+
+      // Bank ledger balances from Tally TB
+      let tbQuery = supabase
         .from("tally_trial_balance")
-        .select("ledger_name, closing_balance, balance_type, debit_amount, credit_amount")
-        .eq("client_id", clientId);
+        .select("ledger_name, closing_balance, balance_type, debit_amount, credit_amount");
+      if (engagementId) {
+        tbQuery = tbQuery.eq("engagement_id", engagementId) as typeof tbQuery;
+      } else {
+        tbQuery = tbQuery.eq("client_id", clientId) as typeof tbQuery;
+      }
+      const { data: tbRows } = await tbQuery;
 
       if (tbRows && tbRows.length > 0) {
         const bankEntries: LedgerEntry[] = tbRows
