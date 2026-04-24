@@ -1319,26 +1319,58 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carried Forward</p>
                   {carryForwardChallans.map(cf => {
                     const bd = getChallanBreakdownAll(cf.challan.id);
-                    const avail = (cf.challan.total_challan_amount || 0) - bd.applied;
+                    const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.applied);
+                    const isFullyUtilized = avail <= 0.5;
+                    // Has any deductee from the currently-viewed quarter been
+                    // attached to this carry-forward challan? Those cards get a
+                    // distinct blue tint so it's easy to spot which ones have
+                    // already been consumed in THIS quarter.
+                    const hasCurrentQUsage = (allChallanDeductees[cf.challan.id] || [])
+                      .some(d => d.quarter === selQuarter && d.financial_year === selFy);
                     return (
                       <TooltipProvider key={`cf-${cf.challan.id}`}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Card
-                              className={cn("cursor-pointer transition-all hover:shadow-sm bg-accent/30 border-accent",
-                                selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "")}
+                              className={cn(
+                                "cursor-pointer transition-all hover:shadow-sm",
+                                // Base colour varies by state:
+                                //   - has usage this quarter → subtle blue (already consumed)
+                                //   - fully utilised overall → slightly dimmer slate
+                                //   - still has balance → warm accent (default)
+                                isFullyUtilized && !hasCurrentQUsage
+                                  ? "bg-slate-100 border-slate-300 opacity-90"
+                                  : hasCurrentQUsage
+                                    ? "bg-blue-50 border-blue-300"
+                                    : "bg-accent/30 border-accent",
+                                selectedChallan?.id === cf.challan.id ? "border-primary ring-1 ring-primary/30" : "",
+                              )}
                               onClick={() => selectChallan(cf.challan)}>
                               <CardContent className="p-3">
-                                <div className="flex items-center gap-2 mb-1">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                   <CreditCard size={14} className="text-accent-foreground" />
                                   <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
-                                  {/* Issue 7H: show exact origin quarter + FY */}
+                                  {cf.challan.challan_serial_no && (
+                                    <Badge variant="outline" className="text-[9px] font-mono bg-white">
+                                      Challan No: {cf.challan.challan_serial_no}
+                                    </Badge>
+                                  )}
                                   <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
+                                  {hasCurrentQUsage && (
+                                    <Badge className="text-[9px] bg-blue-600 text-white border-0">
+                                      Used in {selQuarter}
+                                    </Badge>
+                                  )}
+                                  {isFullyUtilized && (
+                                    <Badge className="text-[9px] bg-emerald-600 text-white border-0">
+                                      Fully Utilised
+                                    </Badge>
+                                  )}
                                 </div>
                                 <div className="grid grid-cols-3 gap-1 text-[10px]">
                                   <div><span className="text-muted-foreground">Original:</span> <span className="font-medium">₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}</span></div>
                                   <div><span className="text-muted-foreground">Used (all Q):</span> <span className="font-medium">₹{bd.applied.toLocaleString("en-IN")}</span></div>
-                                  <div><span className="text-muted-foreground">Available:</span> <span className="font-semibold text-emerald-600">₹{Math.max(0, avail).toLocaleString("en-IN")}</span></div>
+                                  <div><span className="text-muted-foreground">Available:</span> <span className={cn("font-semibold", avail > 0.5 ? "text-emerald-600" : "text-slate-500")}>₹{avail.toLocaleString("en-IN")}</span></div>
                                 </div>
                                 {/* Issue 6: Late Fees tracking on carry-forward */}
                                 {(cf.challan.late_fees_234e || 0) > 0 && (
@@ -1352,7 +1384,12 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
                               </CardContent>
                             </Card>
                           </TooltipTrigger>
-                          <TooltipContent>Carried from {cf.fromQuarter} FY {cf.fromFy} · Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")} · Used (all quarters): ₹{bd.applied.toLocaleString("en-IN")}</TooltipContent>
+                          <TooltipContent>
+                            Carried from {cf.fromQuarter} FY {cf.fromFy}
+                            {cf.challan.challan_serial_no ? ` · Challan No: ${cf.challan.challan_serial_no}` : ""}
+                            {" · "}Original: ₹{(cf.challan.total_challan_amount || 0).toLocaleString("en-IN")}
+                            {" · "}Used (all quarters): ₹{bd.applied.toLocaleString("en-IN")}
+                          </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     );
