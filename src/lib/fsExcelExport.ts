@@ -141,6 +141,23 @@ export interface BSRowData {
   tradePayOthers: Pick<BSLineItem, "cy" | "py">;
   otherCurrLiab:  BSLineItem;
   stProvisions:   BSLineItem;
+
+  // II ASSETS — (1) Non-Current Assets
+  ppe:              BSLineItem;
+  ncInvestments:    BSLineItem;
+  dtAssets:         BSLineItem;
+  ltLoans:          BSLineItem;
+  otherNcAssets:    BSLineItem;
+  // II ASSETS — (2) Current Assets
+  currInvestments:  BSLineItem;
+  inventories:      BSLineItem;
+  tradeRec:         BSLineItem;
+  cashBank:         BSLineItem;
+  stLoans:          BSLineItem;
+  otherCurrAssets:  BSLineItem;
+  // Footer
+  /** Significant accounting policies note-no reference (no amounts). */
+  sigPolicies:      Pick<BSLineItem, "noteNo">;
 }
 
 /** P&L and CFS data — still loose pending their own sub-phase specs. */
@@ -496,6 +513,244 @@ function writeBalanceSheet(
   sheet.getCell("F31").font = { bold: true, size: 10 };
   sheet.getCell("F31").alignment = { horizontal: "right" };
   sheet.getRow(31).height = 12.0;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 2E — Assets section (rows 32–55)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 32 — spacer
+  sheet.getRow(32).height = 6;
+
+  // Row 33 — "II ASSETS"
+  sheet.getCell("B33").value = "II ASSETS";
+  sheet.getCell("B33").font = { bold: true, size: 10 };
+  sheet.getCell("B33").alignment = { horizontal: "left" };
+  sheet.getRow(33).height = 12.75;
+
+  // Row 34 — spacer
+  sheet.getRow(34).height = 8.1;
+
+  // Row 35 — "(1) Non-Current Assets"
+  sheet.getCell("B35").value = "(1) Non-Current Assets";
+  sheet.getCell("B35").font = { bold: true, size: 10 };
+  sheet.getCell("B35").alignment = { horizontal: "left" };
+
+  // Row 36 — "(a) Property, Plant & Equipment and Intangible Assets"  (size 10)
+  sheet.getCell("B36").value = "(a) Property, Plant & Equipment and Intangible Assets";
+  sheet.getCell("B36").font = { bold: false, size: 10 };
+
+  // Row 37 — "(i)Property, plant and equipment and Intangible Assets"
+  //          CRITICAL: NO space between "(i)" and "Property" — exact from Excel
+  sheet.getCell("B37").value = "(i)Property, plant and equipment and Intangible Assets";
+  sheet.getCell("B37").font = { bold: false, size: 9 };
+  sheet.getCell("B37").alignment = { indent: 1, horizontal: "left" };
+  sheet.getCell("D37").value = data.ppe.noteNo;
+  sheet.getCell("D37").alignment = { horizontal: "center" };
+  sheet.getCell("E37").value = data.ppe.cy;
+  sheet.getCell("E37").alignment = { horizontal: "right" };
+  sheet.getCell("F37").value = data.ppe.py;
+  sheet.getCell("F37").alignment = { horizontal: "right" };
+
+  // Row 38 — "(ii) Intangible assets"  (indent 1)
+  sheet.getCell("B38").value = "(ii) Intangible assets";
+  sheet.getCell("B38").font = { bold: false, size: 9 };
+  sheet.getCell("B38").alignment = { indent: 1, horizontal: "left" };
+
+  // Row 39 — "(iii) Capital work-in-Progress"  (capital P in Progress)
+  sheet.getCell("B39").value = "(iii) Capital work-in-Progress";
+  sheet.getCell("B39").font = { bold: false, size: 9 };
+  sheet.getCell("B39").alignment = { indent: 1, horizontal: "left" };
+
+  // Row 40 — "(b) Non-current investments"  (size 10)
+  sheet.getCell("B40").value = "(b) Non-current investments";
+  sheet.getCell("B40").font = { bold: false, size: 10 };
+  sheet.getCell("D40").value = data.ncInvestments.noteNo;
+  sheet.getCell("D40").alignment = { horizontal: "center" };
+  sheet.getCell("E40").value = data.ncInvestments.cy;
+  sheet.getCell("E40").alignment = { horizontal: "right" };
+  sheet.getCell("F40").value = data.ncInvestments.py;
+  sheet.getCell("F40").alignment = { horizontal: "right" };
+
+  // Row 41 — "(c) Deferred tax assets (Net)"  (size 10)
+  sheet.getCell("B41").value = "(c) Deferred tax assets (Net)";
+  sheet.getCell("B41").font = { bold: false, size: 10 };
+  sheet.getCell("D41").value = data.dtAssets.noteNo;
+  sheet.getCell("D41").alignment = { horizontal: "center" };
+  sheet.getCell("E41").value = data.dtAssets.cy;
+  sheet.getCell("E41").alignment = { horizontal: "right" };
+  sheet.getCell("F41").value = data.dtAssets.py;
+  sheet.getCell("F41").alignment = { horizontal: "right" };
+
+  // Row 42 — "(d) Long-term loans and advances"
+  sheet.getCell("B42").value = "(d) Long-term loans and advances";
+  sheet.getCell("B42").font = { bold: false, size: 9 };
+  sheet.getCell("D42").value = data.ltLoans.noteNo;
+  sheet.getCell("D42").alignment = { horizontal: "center" };
+  sheet.getCell("E42").value = data.ltLoans.cy;
+  sheet.getCell("E42").alignment = { horizontal: "right" };
+  sheet.getCell("F42").value = data.ltLoans.py;
+  sheet.getCell("F42").alignment = { horizontal: "right" };
+
+  // Row 43 — "(e) Other non-current Assets"  (size 10, capital A in Assets)
+  sheet.getCell("B43").value = "(e) Other non-current Assets";
+  sheet.getCell("B43").font = { bold: false, size: 10 };
+  sheet.getCell("D43").value = data.otherNcAssets.noteNo;
+  sheet.getCell("D43").alignment = { horizontal: "center" };
+  sheet.getCell("E43").value = data.otherNcAssets.cy;
+  sheet.getCell("E43").alignment = { horizontal: "right" };
+  sheet.getCell("F43").value = data.otherNcAssets.py;
+  sheet.getCell("F43").alignment = { horizontal: "right" };
+
+  // Row 44 — spacer
+  sheet.getRow(44).height = 8.1;
+
+  // Row 45 — "(2) Current assets"
+  sheet.getCell("B45").value = "(2) Current assets";
+  sheet.getCell("B45").font = { bold: true, size: 10 };
+  sheet.getCell("B45").alignment = { horizontal: "left" };
+
+  // Row 46 — "(a) Current investments"
+  sheet.getCell("B46").value = "(a) Current investments";
+  sheet.getCell("B46").font = { bold: false, size: 9 };
+  sheet.getCell("D46").value = data.currInvestments.noteNo;
+  sheet.getCell("D46").alignment = { horizontal: "center" };
+  sheet.getCell("E46").value = data.currInvestments.cy;
+  sheet.getCell("E46").alignment = { horizontal: "right" };
+  sheet.getCell("F46").value = data.currInvestments.py;
+  sheet.getCell("F46").alignment = { horizontal: "right" };
+
+  // Row 47 — "(b) Inventories"
+  sheet.getCell("B47").value = "(b) Inventories";
+  sheet.getCell("B47").font = { bold: false, size: 9 };
+  sheet.getCell("D47").value = data.inventories.noteNo;
+  sheet.getCell("D47").alignment = { horizontal: "center" };
+  sheet.getCell("E47").value = data.inventories.cy;
+  sheet.getCell("E47").alignment = { horizontal: "right" };
+  sheet.getCell("F47").value = data.inventories.py;
+  sheet.getCell("F47").alignment = { horizontal: "right" };
+
+  // Row 48 — "(c) Trade receivables"
+  sheet.getCell("B48").value = "(c) Trade receivables";
+  sheet.getCell("B48").font = { bold: false, size: 9 };
+  sheet.getCell("D48").value = data.tradeRec.noteNo;
+  sheet.getCell("D48").alignment = { horizontal: "center" };
+  sheet.getCell("E48").value = data.tradeRec.cy;
+  sheet.getCell("E48").alignment = { horizontal: "right" };
+  sheet.getCell("F48").value = data.tradeRec.py;
+  sheet.getCell("F48").alignment = { horizontal: "right" };
+
+  // Row 49 — "(d) Cash and bank equivalents"
+  //          CRITICAL: NOT "Cash and Cash Equivalents" — exact from Excel
+  sheet.getCell("B49").value = "(d) Cash and bank equivalents";
+  sheet.getCell("B49").font = { bold: false, size: 9 };
+  sheet.getCell("D49").value = data.cashBank.noteNo;
+  sheet.getCell("D49").alignment = { horizontal: "center" };
+  sheet.getCell("E49").value = data.cashBank.cy;
+  sheet.getCell("E49").alignment = { horizontal: "right" };
+  sheet.getCell("F49").value = data.cashBank.py;
+  sheet.getCell("F49").alignment = { horizontal: "right" };
+
+  // Row 50 — "(e) Short-term loans and advances"
+  sheet.getCell("B50").value = "(e) Short-term loans and advances";
+  sheet.getCell("B50").font = { bold: false, size: 9 };
+  sheet.getCell("D50").value = data.stLoans.noteNo;
+  sheet.getCell("D50").alignment = { horizontal: "center" };
+  sheet.getCell("E50").value = data.stLoans.cy;
+  sheet.getCell("E50").alignment = { horizontal: "right" };
+  sheet.getCell("F50").value = data.stLoans.py;
+  sheet.getCell("F50").alignment = { horizontal: "right" };
+
+  // Row 51 — "(f) Other current assets"
+  sheet.getCell("B51").value = "(f) Other current assets";
+  sheet.getCell("B51").font = { bold: false, size: 9 };
+  sheet.getCell("D51").value = data.otherCurrAssets.noteNo;
+  sheet.getCell("D51").alignment = { horizontal: "center" };
+  sheet.getCell("E51").value = data.otherCurrAssets.cy;
+  sheet.getCell("E51").alignment = { horizontal: "right" };
+  sheet.getCell("F51").value = data.otherCurrAssets.py;
+  sheet.getCell("F51").alignment = { horizontal: "right" };
+
+  // Row 52 — spacer
+  sheet.getRow(52).height = 8.1;
+
+  // Row 53 — "TOTAL ASSETS" in col C + SUM formulas
+  sheet.getCell("C53").value = "TOTAL ASSETS";
+  sheet.getCell("C53").font = { bold: true, size: 10 };
+  sheet.getCell("C53").alignment = { horizontal: "center" };
+  sheet.getCell("E53").value = { formula: "SUM(E35:E52)" };
+  sheet.getCell("E53").font = { bold: true, size: 10 };
+  sheet.getCell("E53").alignment = { horizontal: "right" };
+  sheet.getCell("F53").value = { formula: "SUM(F35:F52)" };
+  sheet.getCell("F53").font = { bold: true, size: 10 };
+  sheet.getCell("F53").alignment = { horizontal: "right" };
+  sheet.getRow(53).height = 12.0;
+
+  // Row 54 — "Significant accounting policies and estimates"
+  sheet.getCell("B54").value = "Significant accounting policies and estimates";
+  sheet.getCell("B54").font = { bold: true, size: 9 };
+  sheet.getCell("D54").value = data.sigPolicies.noteNo;
+  sheet.getCell("D54").alignment = { horizontal: "center" };
+
+  // Row 55 — "The accompanying notes..."
+  sheet.getCell("B55").value = "The accompanying notes form an integral part of the financial statements.";
+  sheet.getCell("B55").font = { bold: true, size: 9 };
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 2F — BS Signature Block (rows 57–70)
+  // ───────────────────────────────────────────────────────────────────────
+  const {
+    firmName, firmRegNo, firmCity,
+    partnerName, partnerMemNo, signOffDate,
+    dir1Name, dir1DIN, dir2Name, dir2DIN,
+  } = ctx;
+
+  // Row 57
+  sheet.getCell("B57").value = "As per our Audit Report of even date ";
+  sheet.getCell("B57").font = { bold: false, size: 9 };
+
+  // Row 59
+  sheet.getCell("B59").value = `For ${firmName}`;
+  sheet.getCell("B59").font = { bold: true, size: 9 };
+  sheet.getCell("D59").value = "For and on behalf of the Board of Directors of ";
+  sheet.getCell("D59").font = { bold: false, size: 9 };
+
+  // Row 60
+  sheet.getCell("B60").value = "Chartered Accountants";
+  sheet.getCell("B60").font = { bold: false, size: 9 };
+  sheet.getCell("D60").value = ctx.companyName;
+  sheet.getCell("D60").font = { bold: true, size: 9 };
+
+  // Row 61
+  sheet.getCell("B61").value = `Firm's Registration No.: ${firmRegNo}`;
+  sheet.getCell("B61").font = { bold: false, size: 9 };
+
+  // Row 65 — signatory names
+  sheet.getCell("B65").value = partnerName;
+  sheet.getCell("B65").font = { bold: true, size: 9 };
+  sheet.getCell("D65").value = dir1Name;
+  sheet.getCell("D65").font = { bold: true, size: 9 };
+  sheet.getCell("F65").value = dir2Name;
+  sheet.getCell("F65").font = { bold: true, size: 9 };
+
+  // Row 66 — roles
+  sheet.getCell("B66").value = "Partner";
+  sheet.getCell("D66").value = "Director";
+  sheet.getCell("F66").value = "Director";
+
+  // Row 67 — membership no & DINs
+  sheet.getCell("B67").value = `Membership No.: ${partnerMemNo}`;
+  sheet.getCell("D67").value = `DIN: ${dir1DIN}`;
+  sheet.getCell("F67").value = `DIN: ${dir2DIN}`;
+
+  // Row 69 — Place
+  sheet.getCell("B69").value = `Place: ${firmCity}`;
+  sheet.getCell("D69").value = `Place: ${firmCity}`;
+  sheet.getCell("F69").value = `Place: ${firmCity}`;
+
+  // Row 70 — Date
+  sheet.getCell("B70").value = `Date: ${signOffDate}`;
+  sheet.getCell("D70").value = `Date: ${signOffDate}`;
+  sheet.getCell("F70").value = `Date: ${signOffDate}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
