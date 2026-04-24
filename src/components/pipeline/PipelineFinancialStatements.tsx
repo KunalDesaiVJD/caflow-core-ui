@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
-  Pencil, Loader2, BarChart3, Droplets,
+  Pencil, Loader2, BarChart3, Droplets, Lock,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -175,6 +176,7 @@ export default function PipelineFinancialStatements({
   onStageComplete,
   onSaveDraft,
 }: PipelineFinancialStatementsProps) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
@@ -212,6 +214,14 @@ export default function PipelineFinancialStatements({
   const [pyManualAmounts, setPyManualAmounts] = useState<Record<string, number>>({});
   const [pyManualDirty,   setPyManualDirty]   = useState(false);
   const [pyManualSaving,  setPyManualSaving]  = useState(false);
+
+  // ─── PY override meta — attribution per line-item code ───────────────────
+  // Stored alongside py_manual_amounts in DB as { v, by, at } objects.
+  const [pyManualMeta, setPyManualMeta] = useState<Record<string, { by: string; at: string }>>({});
+
+  // ─── PY override dialog ───────────────────────────────────────────────────
+  const [pyOverrideDialog, setPyOverrideDialog] = useState<{ code: string; name: string } | null>(null);
+  const [pyOverrideAmount, setPyOverrideAmount] = useState<string>("");
 
   // ─── Manual PY note-wise annexures (ledger-level breakdown per FS code) ──
   // Shape: { "<fs_code>": [{ ledger_name, amount, group? }] }
@@ -324,6 +334,26 @@ export default function PipelineFinancialStatements({
         .select("line_item_code, amount_cy")
         .eq("engagement_id", prevEng.id);
       return prevFs || [];
+    },
+    enabled: !!engagement?.client_id && !!engagement?.financial_year,
+  });
+
+  // ─── Check whether the prior year's engagement is_finalized ──────────────
+  // When finalized, PY column cells become read-only (locked).
+  const { data: priorEngFinalized } = useQuery({
+    queryKey: ["prior-eng-finalized", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.client_id || !engagement?.financial_year) return false;
+      const fyParts = (engagement.financial_year as string).split("-");
+      if (fyParts.length !== 2) return false;
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
+      const { data } = await supabase
+        .from("audit_engagements")
+        .select("is_finalized")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .maybeSingle();
+      return !!(data as any)?.is_finalized;
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
@@ -498,15 +528,27 @@ export default function PipelineFinancialStatements({
   }, [priorEngagement]);
 
   // ─── Load manual PY P&L amounts from engagement.py_manual_amounts ──────
+  // Supports both legacy plain-number shape and enriched { v, by, at } shape.
   useEffect(() => {
     const raw = (engagement as any)?.py_manual_amounts;
     if (raw && typeof raw === "object") {
       const parsed: Record<string, number> = {};
+      const meta: Record<string, { by: string; at: string }> = {};
       for (const [k, v] of Object.entries(raw)) {
-        const n = Number(v);
-        if (Number.isFinite(n)) parsed[k] = n;
+        if (typeof v === "number") {
+          // Legacy shape: plain number
+          if (Number.isFinite(v)) parsed[k] = v;
+        } else if (v !== null && typeof v === "object" && "v" in (v as any)) {
+          // Enriched shape: { v: number, by: string, at: string }
+          const n = Number((v as any).v);
+          if (Number.isFinite(n)) {
+            parsed[k] = n;
+            meta[k] = { by: String((v as any).by || ""), at: String((v as any).at || "") };
+          }
+        }
       }
       setPyManualAmounts(parsed);
+      setPyManualMeta(meta);
       setPyManualDirty(false);
     }
   }, [(engagement as any)?.py_manual_amounts]);
@@ -816,16 +858,31 @@ export default function PipelineFinancialStatements({
     }
   };
 
+  // ─── PY column lock — when prior year is_finalized, PY cells are read-only ─
+  const pyLocked = !!priorEngFinalized;
+
   // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
+  // Writes enriched { v, by, at } shape; amounts without meta retain legacy shape.
+  const buildPyPayload = useCallback(
+    (amounts: Record<string, number>, meta: Record<string, { by: string; at: string }>) => {
+      const payload: Record<string, any> = {};
+      for (const [k, v] of Object.entries(amounts)) {
+        const n = Number(v);
+        if (!Number.isFinite(n) || Math.abs(n) <= 0.005) continue;
+        const m = meta[k];
+        payload[k] = m
+          ? { v: Math.round(n * 100) / 100, by: m.by, at: m.at }
+          : Math.round(n * 100) / 100;
+      }
+      return payload;
+    },
+    []
+  );
+
   const savePyManual = async () => {
     setPyManualSaving(true);
     try {
-      // Strip zero/empty so JSONB stays tidy
-      const payload: Record<string, number> = {};
-      for (const [k, v] of Object.entries(pyManualAmounts)) {
-        const n = Number(v);
-        if (Number.isFinite(n) && Math.abs(n) > 0.005) payload[k] = Math.round(n * 100) / 100;
-      }
+      const payload = buildPyPayload(pyManualAmounts, pyManualMeta);
       const { error } = await (supabase.from as any)("audit_engagements")
         .update({ py_manual_amounts: payload })
         .eq("id", engagementId);
@@ -839,6 +896,49 @@ export default function PipelineFinancialStatements({
       setPyManualSaving(false);
     }
   };
+
+  // ─── Open / save PY override dialog ──────────────────────────────────────
+  const openPyOverride = (code: string, name: string) => {
+    setPyOverrideDialog({ code, name });
+    const existing = pyManualAmounts[code];
+    setPyOverrideAmount(existing !== undefined ? String(existing) : "");
+  };
+
+  const savePyOverride = useCallback(async () => {
+    if (!pyOverrideDialog) return;
+    const { code } = pyOverrideDialog;
+    const n = parseFloat(pyOverrideAmount);
+    const now = new Date().toISOString();
+    const byName = user?.name || user?.email || "Unknown";
+
+    const newAmounts = { ...pyManualAmounts, [code]: Number.isFinite(n) ? n : 0 };
+    const newMeta    = { ...pyManualMeta,    [code]: { by: byName, at: now } };
+
+    // Remove if user cleared the amount
+    if (!Number.isFinite(n) || pyOverrideAmount.trim() === "") {
+      delete newAmounts[code];
+      delete newMeta[code];
+    }
+
+    setPyManualAmounts(newAmounts);
+    setPyManualMeta(newMeta);
+    setPyManualDirty(true);
+
+    // Auto-persist immediately (single-cell save UX)
+    try {
+      const payload = buildPyPayload(newAmounts, newMeta);
+      await (supabase.from as any)("audit_engagements")
+        .update({ py_manual_amounts: payload })
+        .eq("id", engagementId);
+      toast.success(`PY override saved for "${pyOverrideDialog.name}"`);
+      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    } catch (err: any) {
+      toast.error("Saved locally, failed to persist: " + err.message);
+    }
+    setPyOverrideDialog(null);
+    setPyOverrideAmount("");
+    setPyManualDirty(false);
+  }, [pyOverrideDialog, pyOverrideAmount, pyManualAmounts, pyManualMeta, user, buildPyPayload, engagementId, queryClient]);
 
   // ─── Save FS rows to DB ───
   const saveFS = async () => {
@@ -2411,7 +2511,9 @@ export default function PipelineFinancialStatements({
       const isHeader = !!(item.children && item.children.length > 0);
       const amount = computedAmounts[item.code] || 0;
       const py = mergedPY[item.code] || 0;
-      const hasOverride = !!manualOverrides[item.code];
+      const hasOverride    = !!manualOverrides[item.code];
+      const hasPyOverride  = pyManualAmounts[item.code] !== undefined;
+      const pyMeta         = pyManualMeta[item.code];
 
       return (
         <TableRow
@@ -2421,6 +2523,7 @@ export default function PipelineFinancialStatements({
             !isHeader && "hover:bg-muted/20",
           )}
         >
+          {/* Particulars */}
           <TableCell
             className="text-xs"
             style={{ paddingLeft: `${item.depth * 20 + 8}px` }}
@@ -2433,24 +2536,61 @@ export default function PipelineFinancialStatements({
               <Badge className="ml-1.5 text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-200">M</Badge>
             )}
           </TableCell>
+
+          {/* CY amount + pencil */}
           <TableCell className="text-right text-xs font-mono tabular-nums">
-            {amount !== 0 ? (
-              <span className={amount < 0 ? "text-destructive" : ""}>
-                {amount < 0 ? "(" : ""}₹{Math.abs(amount).toLocaleString("en-IN")}{amount < 0 ? ")" : ""}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">—</span>
-            )}
+            <div className="flex items-center justify-end gap-1">
+              {amount !== 0 ? (
+                <span className={amount < 0 ? "text-destructive" : ""}>
+                  {amount < 0 ? "(" : ""}₹{Math.abs(amount).toLocaleString("en-IN")}{amount < 0 ? ")" : ""}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+              {!isHeader && (
+                <button
+                  className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
+                  title="Override CY amount"
+                  onClick={() => openOverride(item.code, item.name)}
+                >
+                  <Pencil size={9} className="text-muted-foreground" />
+                </button>
+              )}
+            </div>
           </TableCell>
+
+          {/* PY amount + amber badge + pencil */}
           <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
-            {py !== 0 ? (
-              <span>
-                {py < 0 ? "(" : ""}₹{Math.abs(py).toLocaleString("en-IN")}{py < 0 ? ")" : ""}
-              </span>
-            ) : (
-              <span>—</span>
-            )}
+            <div className="flex items-center justify-end gap-1">
+              {hasPyOverride && (
+                <span
+                  title={pyMeta ? `Manually overridden by ${pyMeta.by} on ${new Date(pyMeta.at).toLocaleDateString("en-IN")}` : "Manually overridden"}
+                  className="text-amber-600 cursor-help"
+                >⚠</span>
+              )}
+              {py !== 0 ? (
+                <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
+                  {py < 0 ? "(" : ""}₹{Math.abs(py).toLocaleString("en-IN")}{py < 0 ? ")" : ""}
+                </span>
+              ) : (
+                <span>—</span>
+              )}
+              {!isHeader && !pyLocked && (
+                <button
+                  className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
+                  title={hasPyOverride ? "Edit PY override" : "Override PY amount"}
+                  onClick={() => openPyOverride(item.code, item.name)}
+                >
+                  <Pencil size={9} className={hasPyOverride ? "text-amber-600" : "text-muted-foreground"} />
+                </button>
+              )}
+              {!isHeader && pyLocked && hasPyOverride && (
+                <Lock size={9} className="text-muted-foreground ml-1" title="PY finalized — locked" />
+              )}
+            </div>
           </TableCell>
+
+          {/* CY pencil (legacy action column — kept for clarity) */}
           <TableCell className="w-10 text-center">
             {!isHeader && (
               <Button
@@ -2633,10 +2773,19 @@ export default function PipelineFinancialStatements({
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/50">
+                  <TableRow className="bg-muted/50 group">
                     <TableHead className="text-xs">Particulars</TableHead>
                     <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
-                    <TableHead className="text-xs text-right">PY {pyYear} (₹)</TableHead>
+                    <TableHead className="text-xs text-right">
+                      <span className="flex items-center justify-end gap-1">
+                        PY {pyYear} (₹)
+                        {pyLocked && (
+                          <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
+                            <Lock size={7} /> Finalized
+                          </Badge>
+                        )}
+                      </span>
+                    </TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
@@ -2873,10 +3022,21 @@ export default function PipelineFinancialStatements({
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/50">
+                  <TableRow className="bg-muted/50 group">
                     <TableHead className="text-xs">Particulars</TableHead>
                     <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
-                    <TableHead className="text-xs text-right">PY {pyYear} (₹)</TableHead>
+                    <TableHead className="text-xs text-right">
+                      <span className="flex items-center justify-end gap-1">
+                        PY {pyYear} (₹)
+                        {pyLocked ? (
+                          <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
+                            <Lock size={7} /> Finalized
+                          </Badge>
+                        ) : (
+                          <span className="text-[9px] text-muted-foreground font-normal ml-1 italic">editable</span>
+                        )}
+                      </span>
+                    </TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
@@ -3043,6 +3203,67 @@ export default function PipelineFinancialStatements({
               }}
             >
               Apply Override
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── PY Override Dialog ─────────────────────────────────────────── */}
+      <Dialog open={!!pyOverrideDialog} onOpenChange={() => { setPyOverrideDialog(null); setPyOverrideAmount(""); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <span className="text-amber-600">⚠</span> PY Override — {pyOverrideDialog?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {pyOverrideDialog && pyManualMeta[pyOverrideDialog.code] && (
+              <div className="rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+                Last overridden by <strong>{pyManualMeta[pyOverrideDialog.code].by}</strong>{" "}
+                on {new Date(pyManualMeta[pyOverrideDialog.code].at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
+              </div>
+            )}
+            {pyOverrideDialog && !noPriorEngagement && (
+              <div className="text-[11px] text-muted-foreground">
+                Auto PY (from prior engagement): <span className="font-mono font-semibold text-foreground">
+                  ₹{Math.abs(mergedPY[pyOverrideDialog.code] || 0).toLocaleString("en-IN")}
+                </span>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs">Override Amount (₹) — leave blank to clear</Label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                value={pyOverrideAmount}
+                onChange={e => setPyOverrideAmount(e.target.value)}
+                placeholder="Enter PY amount (negative = Cr)"
+                className="mt-1"
+                autoFocus
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Your name ({user?.name || user?.email || "current user"}) and timestamp will be recorded automatically.
+            </p>
+          </div>
+          <DialogFooter className="gap-2">
+            {pyOverrideDialog && pyManualAmounts[pyOverrideDialog.code] !== undefined && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setPyOverrideAmount("");
+                  savePyOverride();
+                }}
+              >
+                Clear Override
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => { setPyOverrideDialog(null); setPyOverrideAmount(""); }}>
+              Cancel
+            </Button>
+            <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white" onClick={savePyOverride}>
+              Save PY Override
             </Button>
           </DialogFooter>
         </DialogContent>
