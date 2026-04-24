@@ -599,11 +599,12 @@ export default function TallySyncPage() {
   const _plFooter  = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
   // Use getTurnover (includes voucher fallback) so debit_amount=NULL rows are handled
   const _plTurnover = _plFooter ? getTurnover(_plFooter) : { debit: 0, credit: 0 };
-  const _plStrategy1 = !!(_plFooter && _plFooter.balance_type === "Dr" && (
-    _plFooter.closing_balance !== 0 || _plFooter.opening_balance !== 0 ||
+  // Strategy 1: profit/loss was transferred (P&L zeroed via journal). Detect by
+  // closing_balance===0 with net turnover activity — balance_type is unreliable
+  // across sync versions (old runs stored 0-closing as "Cr", new as "Dr").
+  const _plStrategy1 = !!(_plFooter && _plFooter.closing_balance === 0 && (
     _plTurnover.debit > 0 || _plTurnover.credit > 0
   ));
-  if (typeof window !== "undefined") (window as any).__plDebug = { bt: _plFooter?.balance_type, cl: _plFooter?.closing_balance, op: _plFooter?.opening_balance, da: _plFooter?.debit_amount, ca: _plFooter?.credit_amount, tv: _plTurnover, s1: _plStrategy1 };
   const _plNet  = _plStrategy1 ? (_plTurnover.debit - _plTurnover.credit) : 0;
   const _plEff  = Math.abs(_plNet);
   const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
@@ -959,10 +960,11 @@ export default function TallySyncPage() {
       );
 
       if (hasLedgerBalance && plTbRow) {
-        const isStrategy1 = plTbRow.balance_type === "Dr";
+        const t = getTurnover(plTbRow);
+        // Same closing=0 signal as footer: balance_type unreliable across sync versions
+        const isStrategy1 = plTbRow.closing_balance === 0 && (t.debit > 0 || t.credit > 0);
         const effOpenBal  = isStrategy1 ? 0 : plTbRow.opening_balance;
         const effOpenType = isStrategy1 ? "Dr" : plTbRow.opening_type;
-        const t = getTurnover(plTbRow);
         const net      = isStrategy1 ? (t.debit - t.credit) : 0;
         const effClBal = isStrategy1 ? Math.abs(net) : plTbRow.closing_balance;
         const effClType= isStrategy1 ? (net >= 0 ? "Dr" : "Cr") : plTbRow.balance_type;
