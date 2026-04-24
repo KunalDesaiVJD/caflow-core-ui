@@ -340,6 +340,11 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
               <FileText className="w-4 h-4" />
               Independent Auditor's Report
             </CardTitle>
+            {engagement?.financial_year && (
+              <Badge variant="outline" className="text-[10px]">
+                FY {engagement.financial_year}
+              </Badge>
+            )}
             <Badge className={cn("text-[10px] border", OPINION_STYLE[state.opinion_type])}>
               {OPINION_LABEL[state.opinion_type]}
             </Badge>

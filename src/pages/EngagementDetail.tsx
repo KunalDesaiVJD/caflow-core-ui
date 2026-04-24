@@ -13,6 +13,8 @@ import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import IARTab from "@/components/stage8/IARTab";
+import IFCReportTab from "@/components/stage7/IFCReportTab";
+import CashFlowNotesTab from "@/components/stage7/CashFlowNotesTab";
 import { CheckCircle, Circle, AlertTriangle, Pencil, ClipboardList } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
@@ -201,20 +203,14 @@ export default function EngagementDetail() {
           <TabsTrigger value="risk">Risk Assessment</TabsTrigger>
           <TabsTrigger value="programme">Audit Programme</TabsTrigger>
           <TabsTrigger value="fieldwork">Fieldwork</TabsTrigger>
-          {/* Fix (Issue 4): Show CARO tab only for corporate entities (Private/Public Ltd) */}
-          {isCorporate && (
-            <TabsTrigger value="caro">CARO 2020</TabsTrigger>
-          )}
-          {/* Fix (Issue 4): Notes to Accounts — show for corporate; non-corporate gets
-              a simplified version. Only render once client is loaded to ensure isCorporate
-              is computed correctly. */}
-          <TabsTrigger value="notes">
-            {isCorporate ? "Notes to Accounts" : "Notes to Accounts"}
-          </TabsTrigger>
-          {/* Independent Auditor's Report — corporate only (Companies Act 2013) */}
-          {isCorporate && (
-            <TabsTrigger value="iar">IAR</TabsTrigger>
-          )}
+          {/* Tab order for Stage 8 reporting:
+                Notes to Accounts → IAR → CARO 2020 → IFC Report → Cash Flow Notes
+              Notes always visible; the remaining four are corporate-only. */}
+          <TabsTrigger value="notes">Notes to Accounts</TabsTrigger>
+          {isCorporate && <TabsTrigger value="iar">IAR</TabsTrigger>}
+          {isCorporate && <TabsTrigger value="caro">CARO 2020</TabsTrigger>}
+          {isCorporate && <TabsTrigger value="ifc">IFC Report</TabsTrigger>}
+          {isCorporate && <TabsTrigger value="cashflow">Cash Flow Notes</TabsTrigger>}
           <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
 
@@ -244,7 +240,33 @@ export default function EngagementDetail() {
           />
         </TabsContent>
 
-        {/* Fix (Issue 4): CARO tab content — gated on isCorporate */}
+        {/* ── Stage 8 reporting tabs — rendered in spec order ──────────────
+              1. Notes to Accounts  (all entity types)
+              2. IAR                (corporate only)
+              3. CARO 2020          (corporate only)
+              4. IFC Report         (corporate only — component gates further on ifc_applicable)
+              5. Cash Flow Notes    (corporate only — component gates further on cash_flow_applicable)
+            Each corporate-only tab uses the same isCorporate guard as CARO.
+        */}
+        <TabsContent value="notes">
+          <EngagementNotesToAccounts
+            engagement={engagement}
+            client={client}
+            isCorporate={isCorporate}
+            onUpdate={fetchData}
+          />
+        </TabsContent>
+
+        {isCorporate && (
+          <TabsContent value="iar">
+            <IARTab
+              engagement={engagement}
+              client={client}
+              onUpdate={fetchData}
+            />
+          </TabsContent>
+        )}
+
         {isCorporate && (
           <TabsContent value="caro">
             <EngagementCARO
@@ -255,23 +277,20 @@ export default function EngagementDetail() {
           </TabsContent>
         )}
 
-        <TabsContent value="notes">
-          {/* Fix (Issue 4): Pass isCorporate so component can filter corporate-only notes */}
-          <EngagementNotesToAccounts
-            engagement={engagement}
-            client={client}
-            isCorporate={isCorporate}
-            onUpdate={fetchData}
-          />
-        </TabsContent>
-
-        {/* IAR tab content — gated on isCorporate (same as CARO) */}
         {isCorporate && (
-          <TabsContent value="iar">
-            <IARTab
+          <TabsContent value="ifc">
+            <IFCReportTab
+              engagementId={engagement?.id}
               engagement={engagement}
-              client={client}
-              onUpdate={fetchData}
+            />
+          </TabsContent>
+        )}
+
+        {isCorporate && (
+          <TabsContent value="cashflow">
+            <CashFlowNotesTab
+              engagementId={engagement?.id}
+              engagement={engagement}
             />
           </TabsContent>
         )}
