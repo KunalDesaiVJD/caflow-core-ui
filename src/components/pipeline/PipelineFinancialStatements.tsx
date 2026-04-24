@@ -726,6 +726,156 @@ export default function PipelineFinancialStatements({
     return merged;
   }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree]);
 
+  // ─── Phase UI-1: Shared FS display data ─────────────────────────────────
+  // Hoisted out of exportToExcel() so both the Export Excel button AND the
+  // in-UI BS/PL/CFS tabs (added in UI-2/3/4) consume identical computed
+  // values. This mirrors the pre-export logic that rebuilds exportCy/exportPy
+  // from tbAccounts + coaMapping, applies manual overrides, recurses parent
+  // totals, folds in prior-engagement / manual PY figures, and runs the NCE
+  // profit chain. It also emits typed BS/PL/CFS row data (null for NCE) for
+  // consumption by fsExcelExport.ts and the upcoming in-UI renderers.
+  const fsDisplayData = useMemo(() => {
+    const exportCy: Record<string, number> = {};
+    const exportPy: Record<string, number> = {};
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping) continue;
+      exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
+      const opening = acct.opening_balance ?? 0;
+      if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+    }
+    for (const [code, override] of Object.entries(manualOverrides)) {
+      exportCy[code] = override.amount;
+    }
+    const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
+      if (!item.children || item.children.length === 0) return table[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computeTotalLocal(c, table), 0);
+      table[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) {
+      computeTotalLocal(item, exportCy);
+      computeTotalLocal(item, exportPy);
+    }
+    for (const [code, val] of Object.entries(pyAmounts || {})) {
+      if (Number.isFinite(val as number)) exportPy[code] = val as number;
+    }
+    if (noPriorEngagement) {
+      for (const [code, val] of Object.entries(pyManualAmounts || {})) {
+        if (Number.isFinite(val)) {
+          if (exportPy[code] === undefined || exportPy[code] === 0) exportPy[code] = val;
+        }
+      }
+    }
+    const computePlLocal = (item: FSLineItem): number => {
+      const sec = String(item.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (!isPL) return 0;
+      if (!item.children || item.children.length === 0) return exportPy[item.code] || 0;
+      const total = item.children.reduce((s, c) => s + computePlLocal(c), 0);
+      exportPy[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computePlLocal(item);
+    if (isNonCorporate) {
+      const chain = (table: Record<string, number>) => {
+        const inc = table["NCE_PL_INC"] || 0;
+        const exp = table["NCE_PL_EXP"] || 0;
+        table["NCE_PROF_V"]   = Math.round((inc - exp) * 100) / 100;
+        table["NCE_PROF_VII"] = Math.round((table["NCE_PROF_V"]   - (table["NCE_EXCEP"]    || 0)) * 100) / 100;
+        table["NCE_PROF_IX"]  = Math.round((table["NCE_PROF_VII"] - (table["NCE_EXTORD"]   || 0)) * 100) / 100;
+        table["NCE_PROF_XI"]  = Math.round((table["NCE_PROF_IX"]  - (table["NCE_PART_REM"] || 0)) * 100) / 100;
+        table["NCE_NET_PROF"] = Math.round((table["NCE_PROF_XI"]  - (table["NCE_TAX"]      || 0)) * 100) / 100;
+      };
+      chain(exportCy);
+      chain(exportPy);
+    }
+
+    const cyOf = (code: string): number => {
+      const v = exportCy[code];
+      if (v !== undefined && v !== 0) return v;
+      return computedAmounts[code] || v || 0;
+    };
+    const pyOf = (code: string): number => {
+      const v = exportPy[code];
+      if (v !== undefined && v !== 0) return v;
+      return mergedPY[code] || v || 0;
+    };
+
+    // Typed BS/PL/CFS tables — corporate only. Non-corporate returns null
+    // for all three; NCE tabs continue to render via their own legacy path.
+    let bs: BSRowData | null = null;
+    let pl: PLRowData | null = null;
+    let cfs: CFSRowData | null = null;
+    if (!isNonCorporate) {
+      bs = {
+        shareCap:        { noteNo: 3,  cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
+        reserves:        { noteNo: 4,  cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
+        ltBorrowings:    { noteNo: 5,  cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
+        otherLtLiab:     { noteNo: 7,  cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
+        ltProvisions:    { noteNo: 8,  cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
+        stBorrowings:    { noteNo: 9,  cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
+        tradePayables:   { noteNo: 10 },
+        tradePayMSME:    { cy: 0, py: 0 },
+        tradePayOthers:  { cy: cyOf("BS_CL_TP"), py: pyOf("BS_CL_TP") },
+        otherCurrLiab:   { noteNo: 11, cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
+        stProvisions:    { noteNo: 12, cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
+        ppe:             { noteNo: 13, cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
+        ncInvestments:   { noteNo: 15, cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
+        dtAssets:        { noteNo: 16, cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
+        ltLoans:         { noteNo: 17, cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
+        otherNcAssets:   { noteNo: 18, cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
+        currInvestments: { noteNo: 19, cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
+        inventories:     { noteNo: 20, cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
+        tradeRec:        { noteNo: 21, cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
+        cashBank:        { noteNo: 22, cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
+        stLoans:         { noteNo: 23, cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
+        otherCurrAssets: { noteNo: 24, cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
+        sigPolicies:     { noteNo: 2 },
+      };
+      const expCy = cyOf("PL_EXP_MAT") + cyOf("PL_EXP_SIT") + cyOf("PL_EXP_CII")
+                  + cyOf("PL_EXP_EMP") + cyOf("PL_EXP_FIN") + cyOf("PL_EXP_DEP")
+                  + cyOf("PL_EXP_OTH");
+      const expPy = pyOf("PL_EXP_MAT") + pyOf("PL_EXP_SIT") + pyOf("PL_EXP_CII")
+                  + pyOf("PL_EXP_EMP") + pyOf("PL_EXP_FIN") + pyOf("PL_EXP_DEP")
+                  + pyOf("PL_EXP_OTH");
+      const revCy = cyOf("PL_REV_OPS") + cyOf("PL_REV_OI");
+      const revPy = pyOf("PL_REV_OPS") + pyOf("PL_REV_OI");
+      const excCy = cyOf("PL_EI");
+      const excPy = pyOf("PL_EI");
+      pl = {
+        revFromOps:         { noteNo: 25, cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
+        otherIncome:        { noteNo: 26, cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
+        costMaterials:      { noteNo: 27 },
+        purchasesStock:     { noteNo: 27, cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
+        changesInventories: { noteNo: 27, cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
+        employeeBenefits:   { noteNo: 28, cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
+        financeCosts:       { noteNo: null, cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
+        depreciation:       { noteNo: null, cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
+        otherExpenses:      { noteNo: 29, cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
+        taxExpense:         { noteNo: null },
+        currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
+        deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
+        eps:                { noteNo: null },
+        shareCap:           { noteNo: 1 },
+        pbt:                { cy: revCy - expCy - excCy, py: revPy - expPy - excPy },
+      };
+      cfs = {
+        tradePayChange:        { cy: cyOf("BS_CL_TP")  - pyOf("BS_CL_TP")  },
+        otherCurrLiabChange:   { cy: cyOf("BS_CL_OCL") - pyOf("BS_CL_OCL") },
+        otherCurrAssetsChange: { cy: pyOf("BS_CA_OCA") - cyOf("BS_CA_OCA") },
+        incomeTaxPaid:         { cy: null },
+        ppePurchases:          { cy: Math.max(0, cyOf("BS_NCA_FA") - pyOf("BS_NCA_FA")) },
+      };
+    }
+
+    return { exportCy, exportPy, cyOf, pyOf, bs, pl, cfs };
+  }, [
+    tbAccounts, coaMapping, manualOverrides, activeTree,
+    pyAmounts, pyManualAmounts, noPriorEngagement, isNonCorporate,
+    computedAmounts, mergedPY,
+  ]);
+
   // ─── Corporate BS check + P&L summary (unchanged) ───
   const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
   const totalLiabilities =
@@ -1161,79 +1311,12 @@ export default function PipelineFinancialStatements({
     // at the moment the user clicks Export. Mirrors the logic in
     // `computedAmounts` / `computedAmountsPY` / `mergedPY` but is recomputed
     // fresh each time exportToExcel runs.
-    const exportCy: Record<string, number> = {};
-    const exportPy: Record<string, number> = {};
-    for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
-      if (!mapping) continue;
-      exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
-      const opening = acct.opening_balance ?? 0;
-      if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
-    }
-    // Manual overrides (CY only)
-    for (const [code, override] of Object.entries(manualOverrides)) {
-      exportCy[code] = override.amount;
-    }
-    // Recurse tree to compute parent totals
-    const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
-      if (!item.children || item.children.length === 0) return table[item.code] || 0;
-      const total = item.children.reduce((s, c) => s + computeTotalLocal(c, table), 0);
-      table[item.code] = total;
-      return total;
-    };
-    for (const item of activeTree) {
-      computeTotalLocal(item, exportCy);
-      computeTotalLocal(item, exportPy);
-    }
-    // Prior-engagement P&L PY values win over opening-balance-derived BS PY
-    // for codes where a prior engagement row exists.
-    for (const [code, val] of Object.entries(pyAmounts || {})) {
-      if (Number.isFinite(val as number)) exportPy[code] = val as number;
-    }
-    if (noPriorEngagement) {
-      for (const [code, val] of Object.entries(pyManualAmounts || {})) {
-        if (Number.isFinite(val)) {
-          if (exportPy[code] === undefined || exportPy[code] === 0) exportPy[code] = val;
-        }
-      }
-    }
-    // Recompute P&L parent totals from leaves (so manual PY flows up)
-    const computePlLocal = (item: FSLineItem): number => {
-      const sec = String(item.section || "").toLowerCase();
-      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
-      if (!isPL) return 0;
-      if (!item.children || item.children.length === 0) return exportPy[item.code] || 0;
-      const total = item.children.reduce((s, c) => s + computePlLocal(c), 0);
-      exportPy[item.code] = total;
-      return total;
-    };
-    for (const item of activeTree) computePlLocal(item);
-    // NCE profit chain (V/VII/IX/XI/Net)
-    if (isNonCorporate) {
-      const chain = (table: Record<string, number>) => {
-        const inc = table["NCE_PL_INC"] || 0;
-        const exp = table["NCE_PL_EXP"] || 0;
-        table["NCE_PROF_V"]   = Math.round((inc - exp) * 100) / 100;
-        table["NCE_PROF_VII"] = Math.round((table["NCE_PROF_V"]   - (table["NCE_EXCEP"]    || 0)) * 100) / 100;
-        table["NCE_PROF_IX"]  = Math.round((table["NCE_PROF_VII"] - (table["NCE_EXTORD"]   || 0)) * 100) / 100;
-        table["NCE_PROF_XI"]  = Math.round((table["NCE_PROF_IX"]  - (table["NCE_PART_REM"] || 0)) * 100) / 100;
-        table["NCE_NET_PROF"] = Math.round((table["NCE_PROF_XI"]  - (table["NCE_TAX"]      || 0)) * 100) / 100;
-      };
-      chain(exportCy);
-      chain(exportPy);
-    }
-    // Final fallback: if a code is still zero but the component memo has a
-    // value (e.g. race on first render), prefer the memo value.
-    const cyOf = (code: string): number => {
-      const v = exportCy[code];
-      if (v !== undefined && v !== 0) return v;
-      return computedAmounts[code] || v || 0;
-    };
-    const pyOf = (code: string): number => {
-      const v = exportPy[code];
-      if (v !== undefined && v !== 0) return v;
-      return mergedPY[code] || v || 0;
-    };
+    // Phase UI-1: Consume the shared fsDisplayData memo rather than rebuilding
+    // exportCy/exportPy inline. The memo covers the same logic (TB aggregation,
+    // manual overrides, parent totals, prior-engagement / manual PY merge, NCE
+    // profit chain) and is invalidated by the same deps. This guarantees the
+    // Export button and the in-UI tabs (UI-2/3/4) always agree on amounts.
+    const { exportCy, exportPy, cyOf, pyOf, bs: memoBs, pl: memoPl, cfs: memoCfs } = fsDisplayData;
 
     const clientName = engagement?.clients?.name || "—";
     const fy = engagement?.financial_year || "—";
@@ -1290,83 +1373,13 @@ export default function PipelineFinancialStatements({
           city:            sigPlace || sigFirmCity || "[City]",
         };
 
-        // ── BSRowData — map 16 line items from cyOf/pyOf using the SCHEDULE_III_DIV_I codes
-        const bs: BSRowData = {
-          shareCap:        { noteNo: 3,  cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
-          reserves:        { noteNo: 4,  cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
-          ltBorrowings:    { noteNo: 5,  cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
-          otherLtLiab:     { noteNo: 7,  cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
-          ltProvisions:    { noteNo: 8,  cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
-          stBorrowings:    { noteNo: 9,  cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
-          tradePayables:   { noteNo: 10 },
-          // CAFlow doesn't yet split MSME vs Others — surface all as "Others"
-          // so the total still reconciles with trial balance.
-          tradePayMSME:    { cy: 0, py: 0 },
-          tradePayOthers:  { cy: cyOf("BS_CL_TP"), py: pyOf("BS_CL_TP") },
-          otherCurrLiab:   { noteNo: 11, cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
-          stProvisions:    { noteNo: 12, cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
-          ppe:             { noteNo: 13, cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
-          ncInvestments:   { noteNo: 15, cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
-          dtAssets:        { noteNo: 16, cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
-          ltLoans:         { noteNo: 17, cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
-          otherNcAssets:   { noteNo: 18, cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
-          currInvestments: { noteNo: 19, cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
-          inventories:     { noteNo: 20, cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
-          tradeRec:        { noteNo: 21, cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
-          cashBank:        { noteNo: 22, cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
-          stLoans:         { noteNo: 23, cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
-          otherCurrAssets: { noteNo: 24, cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
-          sigPolicies:     { noteNo: 2 },
-        };
-
-        // ── PLRowData — include pre-computed PBT for CFS cross-reference
-        // PBT = (Revenue − Expenses − Exceptional) ; matches the sheet's G28 formula.
-        const expCy = cyOf("PL_EXP_MAT") + cyOf("PL_EXP_SIT") + cyOf("PL_EXP_CII")
-                    + cyOf("PL_EXP_EMP") + cyOf("PL_EXP_FIN") + cyOf("PL_EXP_DEP")
-                    + cyOf("PL_EXP_OTH");
-        const expPy = pyOf("PL_EXP_MAT") + pyOf("PL_EXP_SIT") + pyOf("PL_EXP_CII")
-                    + pyOf("PL_EXP_EMP") + pyOf("PL_EXP_FIN") + pyOf("PL_EXP_DEP")
-                    + pyOf("PL_EXP_OTH");
-        const revCy = cyOf("PL_REV_OPS") + cyOf("PL_REV_OI");
-        const revPy = pyOf("PL_REV_OPS") + pyOf("PL_REV_OI");
-        const excCy = cyOf("PL_EI");
-        const excPy = pyOf("PL_EI");
-
-        const pl: PLRowData = {
-          revFromOps:         { noteNo: 25, cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
-          otherIncome:        { noteNo: 26, cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
-          costMaterials:      { noteNo: 27 },
-          purchasesStock:     { noteNo: 27, cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
-          changesInventories: { noteNo: 27, cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
-          employeeBenefits:   { noteNo: 28, cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
-          financeCosts:       { noteNo: null, cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
-          depreciation:       { noteNo: null, cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
-          otherExpenses:      { noteNo: 29, cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
-          taxExpense:         { noteNo: null },
-          currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
-          deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
-          eps:                { noteNo: null },
-          // Share count for EPS divisor — Schedule III doesn't store a share
-          // count; pass 1 so formula evaluates to EPS = profit/1 (useful
-          // placeholder until a share-count input is added to the UI).
-          shareCap:           { noteNo: 1 },
-          pbt:                { cy: revCy - expCy - excCy, py: revPy - expPy - excPy },
-        };
-
-        // ── CFSRowData — working-capital changes derived from BS (PY − CY for
-        // assets, CY − PY for liabilities). Income tax paid is null (no UI input
-        // yet); writer defaults it to 0.
-        const cfs: CFSRowData = {
-          tradePayChange:        { cy: cyOf("BS_CL_TP")  - pyOf("BS_CL_TP")  },
-          otherCurrLiabChange:   { cy: cyOf("BS_CL_OCL") - pyOf("BS_CL_OCL") },
-          otherCurrAssetsChange: { cy: pyOf("BS_CA_OCA") - cyOf("BS_CA_OCA") },
-          incomeTaxPaid:         { cy: null },
-          // PPE purchases — increase in gross PPE approximated by (CY − PY);
-          // negative if PPE decreased. Writer negates this for row 29.
-          ppePurchases:          { cy: Math.max(0, cyOf("BS_NCA_FA") - pyOf("BS_NCA_FA")) },
-        };
-
-        const blob = await generateFinancialStatementsXLSX(fsEng, fsFirm, bs, pl, cfs);
+        // Phase UI-1: bs/pl/cfs now come from the shared fsDisplayData memo
+        // above. If the memo returned null (shouldn't happen in the corporate
+        // branch, but guard defensively) fall through to legacy.
+        if (!memoBs || !memoPl || !memoCfs) {
+          throw new Error("fsDisplayData missing BS/PL/CFS for corporate engagement");
+        }
+        const blob = await generateFinancialStatementsXLSX(fsEng, fsFirm, memoBs, memoPl, memoCfs);
         const safeClientPP = (engagement?.clients?.name || "Client").replace(/[^A-Za-z0-9]/g, "_");
         const urlPP = URL.createObjectURL(blob);
         const aPP = document.createElement("a");
