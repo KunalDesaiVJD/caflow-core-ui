@@ -145,6 +145,11 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
   const [saving, setSaving] = useState(false);
   const [firm, setFirm] = useState<any>(null);
   const [partner, setPartner] = useState<any>(null);
+  // Set to true when Supabase reports the iar_data table doesn't exist yet
+  // (migration from supabase/migrations/20260424112223_iar_data.sql not applied).
+  // Component still renders fully — we just disable save + show a banner
+  // explaining the migration step, instead of a scary red toast.
+  const [tableMissing, setTableMissing] = useState(false);
 
   // ── Auto-linked metadata (read-only) ────────────────────────────────────
   const companyName = client?.name || "[Company Name]";
@@ -213,6 +218,21 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
       .then(({ data }) => { if (data) setPartner(data); });
   }, [engagement?.partner_id]);
 
+  // ── Detect "table not found" errors from Supabase/PostgREST ──────────────
+  // Shape varies: PostgREST returns code "PGRST205" with a message like
+  // "Could not find the table 'public.iar_data' in the schema cache". Some
+  // older setups return code "42P01" (Postgres missing_table). Match on both
+  // the code and a substring in the message to be safe.
+  const isTableMissingError = (err: any): boolean => {
+    if (!err) return false;
+    const code = String(err.code || "");
+    const msg  = String(err.message || "").toLowerCase();
+    if (code === "PGRST205" || code === "42P01") return true;
+    if (msg.includes("could not find the table")) return true;
+    if (msg.includes("does not exist") && msg.includes("iar_data")) return true;
+    return false;
+  };
+
   // ── Load iar_data row ────────────────────────────────────────────────────
   const loadIar = useCallback(async () => {
     if (!engagement?.id) return;
@@ -222,6 +242,15 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
       .select("*")
       .eq("engagement_id", engagement.id)
       .maybeSingle();
+    if (isTableMissingError(error)) {
+      // Table not yet migrated — show banner, disable save, let user see the
+      // auto-linked content. No toast (scary red flash every load is bad UX).
+      setTableMissing(true);
+      setState(DEFAULT_STATE);
+      setLoading(false);
+      return;
+    }
+    setTableMissing(false);
     if (error && (error as any).code !== "PGRST116") {
       toast({ title: "Failed to load IAR data", description: error.message, variant: "destructive" });
     }
@@ -277,9 +306,19 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
       );
     setSaving(false);
     if (error) {
-      toast({ title: "Save failed", description: error.message, variant: "destructive" });
+      if (isTableMissingError(error)) {
+        setTableMissing(true);
+        toast({
+          title: "Database migration pending",
+          description: "The iar_data table doesn't exist yet. Ask your admin to apply the migration before saving.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Save failed", description: error.message, variant: "destructive" });
+      }
       return false;
     }
+    setTableMissing(false);
     onUpdate?.();
     return true;
   }, [engagement?.id, state, toast, onUpdate]);
@@ -332,6 +371,20 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* ── Migration-pending banner (shown only when iar_data table missing) ── */}
+      {tableMissing && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs">
+          <p className="font-semibold text-amber-900 mb-1">Database migration pending — changes won't persist yet</p>
+          <p className="text-amber-800">
+            The <code className="bg-amber-100 px-1 rounded">iar_data</code> table doesn't exist in Supabase yet.
+            The IAR form below works for preview but Save is disabled. Your admin needs to apply the migration at{" "}
+            <code className="bg-amber-100 px-1 rounded">supabase/migrations/20260424112223_iar_data.sql</code>
+            {" "}(via <code className="bg-amber-100 px-1 rounded">supabase db push</code> or paste the SQL into
+            the Supabase SQL editor), then reload this page.
+          </p>
+        </div>
+      )}
+
       {/* ── Header with Opinion badge + Save ───────────────────────────── */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 py-3">
@@ -349,7 +402,13 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
               {OPINION_LABEL[state.opinion_type]}
             </Badge>
           </div>
-          <Button onClick={saveWithToast} disabled={saving} size="sm" className="gap-1">
+          <Button
+            onClick={saveWithToast}
+            disabled={saving || tableMissing}
+            size="sm"
+            className="gap-1"
+            title={tableMissing ? "Cannot save — iar_data table not yet migrated" : "Save IAR state"}
+          >
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             Save IAR
           </Button>
