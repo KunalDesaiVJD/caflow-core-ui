@@ -12,6 +12,7 @@ import { EngagementFieldwork } from "@/components/engagement/EngagementFieldwork
 import { EngagementCARO } from "@/components/engagement/EngagementCARO";
 import { EngagementNotesToAccounts } from "@/components/engagement/EngagementNotesToAccounts";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
+import IARTab from "@/components/stage8/IARTab";
 import { CheckCircle, Circle, AlertTriangle, Pencil, ClipboardList } from "lucide-react";
 
 const STEPS = ["Planning", "Risk Assessment", "Audit Programme", "Fieldwork", "CARO", "Notes", "Review", "Sign-off"];
@@ -210,6 +211,10 @@ export default function EngagementDetail() {
           <TabsTrigger value="notes">
             {isCorporate ? "Notes to Accounts" : "Notes to Accounts"}
           </TabsTrigger>
+          {/* Independent Auditor's Report — corporate only (Companies Act 2013) */}
+          {isCorporate && (
+            <TabsTrigger value="iar">IAR</TabsTrigger>
+          )}
           <TabsTrigger value="review">Review & Sign-off</TabsTrigger>
         </TabsList>
 
@@ -259,6 +264,17 @@ export default function EngagementDetail() {
             onUpdate={fetchData}
           />
         </TabsContent>
+
+        {/* IAR tab content — gated on isCorporate (same as CARO) */}
+        {isCorporate && (
+          <TabsContent value="iar">
+            <IARTab
+              engagement={engagement}
+              client={client}
+              onUpdate={fetchData}
+            />
+          </TabsContent>
+        )}
 
         <TabsContent value="review">
           <EngagementReviewSignoff
