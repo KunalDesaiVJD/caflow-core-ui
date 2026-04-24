@@ -942,18 +942,25 @@ export default function TallySyncPage() {
 
         if (hasLedgerBalance && plTbRow) {
           // Strategy 1 (profit transferred, Dr balance_type): sync-engine zeroes the
-          // synthetic Cr opening that TDL injects. Mirror that zeroing here so that
-          // old DB data (synced before the sync-engine fix) also displays correctly
-          // without requiring a re-sync.
+          // synthetic Cr opening that TDL injects AND derives closing from debit-credit.
+          // Mirror both here so that old DB data (where closing=0 because the synthetic
+          // Cr opening cancelled the Dr transfer debit) also displays correctly.
           const isStrategy1 = plTbRow.balance_type === "Dr";
           const effOpenBal  = isStrategy1 ? 0 : plTbRow.opening_balance;
           const effOpenType = isStrategy1 ? "Dr" : plTbRow.opening_type;
           const t = getTurnover(plTbRow);
+          // For Strategy 1: closing = debit - credit (opening zeroed, so closing = net turnover)
+          // For Strategy 2: use DB closing as-is (profit not transferred, Cr balance)
+          const net         = isStrategy1 ? (t.debit - t.credit) : 0;
+          const effClBal    = isStrategy1 ? Math.abs(net) : plTbRow.closing_balance;
+          const effClType   = isStrategy1 ? (net >= 0 ? "Dr" : "Cr") : plTbRow.balance_type;
           const netOp = effOpenType === "Dr" ? effOpenBal : -effOpenBal;
-          const netCl = plTbRow.balance_type  === "Dr" ? plTbRow.closing_balance : -plTbRow.closing_balance;
+          const netCl = effClType   === "Dr" ? effClBal   : -effClBal;
           result.push({
             groupName: "Profit & Loss A/c", isRevenue: false, depth: 0,
-            rows: [{ ...plTbRow, opening_balance: effOpenBal, opening_type: effOpenType, _debit: t.debit, _credit: t.credit }],
+            rows: [{ ...plTbRow, opening_balance: effOpenBal, opening_type: effOpenType,
+                                 closing_balance: effClBal,   balance_type: effClType,
+                                 _debit: t.debit, _credit: t.credit }],
             openingTotal: Math.abs(netOp), openingTotalType: netOp >= 0 ? "Dr" : "Cr",
             debitTotal: t.debit, creditTotal: t.credit,
             closingTotal: Math.abs(netCl), closingTotalType: netCl >= 0 ? "Dr" : "Cr",
