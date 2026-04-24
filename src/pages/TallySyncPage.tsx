@@ -198,52 +198,50 @@ export default function TallySyncPage() {
 
     try {
 
-    // Resolve the engagements.id used by the tally sync agent.
-    // Strategy:
-    //  1. Try engagements table (client_id + financial_year match)
-    //  2. Fallback: any engagements row for this client (most recent FY)
-    //  3. Last resort: peek at tally_groups rows for this client_id directly
+    // ── Engagement ID resolution ─────────────────────────────────────────────
+    // selectedEngagementId comes from useAuditContext → audit_engagements.id
+    // auto-setup.js writes ENGAGEMENT_ID = audit_engagements.id to .env
+    // The tally sync agent writes ALL tally_* rows with that same ID.
+    // So selectedEngagementId IS the correct filter — use it directly.
+    //
+    // Fallback chain (legacy): if this engagement has no synced tally data yet,
+    // check the engagements table and tally_groups for historic data written
+    // before auto-setup standardised on audit_engagements.id.
     const clientId = (selectedEngagement as any).client_id;
     const fy       = (selectedEngagement as any).financial_year;
-    let engId: string | null = null;
+    let engId: string | null = selectedEngagementId;  // ← primary path
     let resolvedFy: string | null = fy;
 
-    if (clientId && fy) {
-      const { data: exact } = await supabase
-        .from("engagements" as any)
-        .select("id")
-        .eq("client_id", clientId)
-        .eq("financial_year", fy)
-        .maybeSingle();
-      engId = (exact as any)?.id ?? null;
-    }
-
-    if (!engId && clientId) {
-      const { data: anyEng } = await supabase
-        .from("engagements" as any)
-        .select("id, financial_year")
-        .eq("client_id", clientId)
-        .order("financial_year", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (anyEng) {
-        engId = (anyEng as any).id;
-        resolvedFy = (anyEng as any).financial_year;
-      }
-    }
-
-    // Last resort: read engagement_id directly from tally_groups rows for this client
-    if (!engId && clientId) {
-      const { data: peek } = await supabase
+    // Legacy fallback: only run if primary ID has no tally data
+    if (engId) {
+      const { count: tbCount } = await supabase
         .from("tally_groups" as any)
-        .select("engagement_id, financial_year")
-        .eq("client_id", clientId)
-        .order("financial_year", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (peek) {
-        engId = (peek as any).engagement_id;
-        resolvedFy = (peek as any).financial_year;
+        .select("id", { count: "exact", head: true })
+        .eq("engagement_id", engId);
+      if (!tbCount || tbCount === 0) {
+        // No data for audit_engagements.id — try the legacy engagements table
+        let legacyId: string | null = null;
+        if (clientId && fy) {
+          const { data: exact } = await supabase
+            .from("engagements" as any).select("id")
+            .eq("client_id", clientId).eq("financial_year", fy).maybeSingle();
+          legacyId = (exact as any)?.id ?? null;
+        }
+        if (!legacyId && clientId) {
+          const { data: anyEng } = await supabase
+            .from("engagements" as any).select("id, financial_year")
+            .eq("client_id", clientId).order("financial_year", { ascending: false })
+            .limit(1).maybeSingle();
+          if (anyEng) { legacyId = (anyEng as any).id; resolvedFy = (anyEng as any).financial_year; }
+        }
+        if (!legacyId && clientId) {
+          const { data: peek } = await supabase
+            .from("tally_groups" as any).select("engagement_id, financial_year")
+            .eq("client_id", clientId).order("financial_year", { ascending: false })
+            .limit(1).maybeSingle();
+          if (peek) { legacyId = (peek as any).engagement_id; resolvedFy = (peek as any).financial_year; }
+        }
+        if (legacyId) engId = legacyId;
       }
     }
 
