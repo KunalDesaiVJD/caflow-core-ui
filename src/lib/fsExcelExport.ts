@@ -245,13 +245,20 @@ export interface CFSChangeNullable {
  * generated from operations", "Net cash … from operating activities (A)").
  */
 export interface CFSRowData {
-  // Section A — Operating Activities
+  // Section A — Operating Activities (Phase 4C)
   tradePayChange:         CFSChange;
   otherCurrLiabChange:    CFSChange;
   otherCurrAssetsChange:  CFSChange;
   incomeTaxPaid:          CFSChangeNullable;
-  // (More keys added in Phase 4D+: Investing activities, Financing activities,
-  //  Net increase/decrease in cash, opening & closing cash balances, AS-3 note)
+  // Section B — Investing Activities (Phase 4D)
+  /**
+   * Purchase of property, plant & equipments. Caller supplies the POSITIVE
+   * outflow amount; the writer negates it (H29 = −ppePurchases.cy) to show
+   * the cash outflow as a negative number in the CFS.
+   */
+  ppePurchases:           CFSChange;
+  // (Section C — Financing Activities rows are caller-editable in Excel
+  //  so no keys needed — rows 34-37 ship blank for the user to fill in.)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1512,6 +1519,185 @@ function writeCashFlow(
 
   // Row 27 — spacer
   sheet.getRow(27).height = 5.1;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 4D — Sections B & C + Closing Balances (rows 28–42)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 28 — B. Cash flows from investing activities
+  sheet.getCell("B28").value = "B.";
+  sheet.getCell("B28").font = { bold: true, size: 10 };
+  sheet.getCell("C28").value = "Cash flows from investing activities";
+  sheet.getCell("C28").font = { bold: true, size: 10 };
+
+  // Row 29 — Purchase of property, plant & equipments
+  //          CRITICAL: "equipments" with lowercase s — exact from Excel
+  //          H29 = −ppePurchases.cy (cash outflow rendered as negative)
+  sheet.getCell("C29").value = "Purchase of property, plant & equipments";
+  sheet.getCell("C29").font = { bold: false, size: 9 };
+  sheet.getCell("H29").value = -(data.ppePurchases.cy);
+  sheet.getCell("H29").alignment = { horizontal: "right" };
+  sheet.getCell("I29").value = 0;
+  sheet.getCell("I29").alignment = { horizontal: "right" };
+
+  // Row 30 — Interest Income  (label-only — caller fills in Excel manually)
+  sheet.getCell("C30").value = "Interest Income";
+  sheet.getCell("C30").font = { bold: false, size: 9 };
+
+  // Row 31 — Net cash used in investing activities (B)
+  sheet.getCell("C31").value = "Net cash used in investing activities (B)";
+  sheet.getCell("C31").font = { bold: true, size: 9 };
+  sheet.getCell("H31").value = { formula: "SUM(H29:H30)" };
+  sheet.getCell("H31").font = { bold: true, size: 9 };
+  sheet.getCell("H31").alignment = { horizontal: "right" };
+  sheet.getCell("I31").value = { formula: "SUM(I29:I30)" };
+  sheet.getCell("I31").font = { bold: true, size: 9 };
+  sheet.getCell("I31").alignment = { horizontal: "right" };
+
+  // Row 32 — spacer
+  sheet.getRow(32).height = 5.1;
+
+  // Row 33 — C. Cash flows from financing activities
+  sheet.getCell("B33").value = "C.";
+  sheet.getCell("B33").font = { bold: true, size: 10 };
+  sheet.getCell("C33").value = "Cash flows from financing activities";
+  sheet.getCell("C33").font = { bold: true, size: 10 };
+
+  // Row 34 — Proceeds from issue of share capital  (hardcoded 0/0, user edits)
+  sheet.getCell("C34").value = "Proceeds from issue of share capital";
+  sheet.getCell("C34").font = { bold: false, size: 9 };
+  sheet.getCell("H34").value = 0;
+  sheet.getCell("H34").alignment = { horizontal: "right" };
+  sheet.getCell("I34").value = 0;
+  sheet.getCell("I34").alignment = { horizontal: "right" };
+
+  // Row 35 — Proceeds / Repayment of long-term Borrowings  (label-only)
+  sheet.getCell("C35").value = "Proceeds / Repayment of long-term Borrowings";
+  sheet.getCell("C35").font = { bold: false, size: 9 };
+
+  // Row 36 — Payment of Other Loan term Liabilities
+  //          CRITICAL: capital O (Other), lowercase t (term), capital L (Liabilities)
+  sheet.getCell("C36").value = "Payment of Other Loan term Liabilities";
+  sheet.getCell("C36").font = { bold: false, size: 9 };
+
+  // Row 37 — Interest Paid  (label-only)
+  sheet.getCell("C37").value = "Interest Paid";
+  sheet.getCell("C37").font = { bold: false, size: 9 };
+
+  // Row 38 — Net cash used in financing activities (C)
+  sheet.getCell("C38").value = "Net cash used in financing activities (C)";
+  sheet.getCell("C38").font = { bold: true, size: 9 };
+  sheet.getCell("H38").value = { formula: "SUM(H34:H37)" };
+  sheet.getCell("H38").font = { bold: true, size: 9 };
+  sheet.getCell("H38").alignment = { horizontal: "right" };
+  sheet.getCell("I38").value = { formula: "SUM(I34:I37)" };
+  sheet.getCell("I38").font = { bold: true, size: 9 };
+  sheet.getCell("I38").alignment = { horizontal: "right" };
+
+  // Row 39 — spacer
+  sheet.getRow(39).height = 5.1;
+
+  // Row 40 — Net increase in cash (A+B+C)
+  sheet.getCell("C40").value = "Net increase in cash and cash equivalents (A+B+C)";
+  sheet.getCell("C40").font = { bold: true, size: 9 };
+  sheet.getCell("H40").value = { formula: "H26+H31+H38" };
+  sheet.getCell("H40").alignment = { horizontal: "right" };
+  sheet.getCell("I40").value = { formula: "I26+I31+I38" };
+  sheet.getCell("I40").alignment = { horizontal: "right" };
+
+  // Row 41 — Cash and cash equivalents at the beginning of period
+  //          H41 = I42 (PY closing becomes CY opening)
+  sheet.getCell("C41").value = "Cash and cash equivalents at the beginning of period";
+  sheet.getCell("C41").font = { bold: false, size: 9 };
+  sheet.getCell("H41").value = { formula: "I42" };
+  sheet.getCell("H41").alignment = { horizontal: "right" };
+  sheet.getCell("I41").value = 0;
+  sheet.getCell("I41").alignment = { horizontal: "right" };
+
+  // Row 42 — Cash and cash equivalents at the end of period
+  //          H42 MUST equal BS row 49 col E (Cash and bank equivalents CY).
+  //          Caller should validate this equality pre-export — writer emits
+  //          SUM(H40:H41) which is the logical CFS closing.
+  sheet.getCell("C42").value = "Cash and cash equivalents at the end of period";
+  sheet.getCell("C42").font = { bold: true, size: 9 };
+  sheet.getCell("H42").value = { formula: "SUM(H40:H41)" };
+  sheet.getCell("H42").font = { bold: true, size: 9 };
+  sheet.getCell("H42").alignment = { horizontal: "right" };
+  sheet.getCell("I42").value = { formula: "SUM(I40:I41)" };
+  sheet.getCell("I42").font = { bold: true, size: 9 };
+  sheet.getCell("I42").alignment = { horizontal: "right" };
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 4E — Notes & Signature Block (rows 45–60)
+  //  3-column signature layout: C (Auditor side), G (Dir 1), I (Dir 2)
+  // ───────────────────────────────────────────────────────────────────────
+  const {
+    firmName, firmRegNo, firmCity,
+    partnerName, partnerMemNo, signOffDate,
+    dir1Name, dir1DIN, dir2Name, dir2DIN,
+  } = ctx;
+
+  // Row 45 — Notes to cash flow statement
+  sheet.getCell("C45").value = "Notes to cash flow statement";
+  sheet.getCell("C45").font = { bold: true, size: 9 };
+
+  // Row 46 — AS-3 note  (C46:I46 already merged in Phase 4A)
+  //          CRITICAL: DOUBLE SPACE between "3" and "on" in the AS-3 reference
+  sheet.getCell("C46").value =
+    "The above cash flow statement has been prepared in accordance with the 'Indirect method'" +
+    " as set out in Accounting Standard - 3  on 'Cash Flow Statements'.";
+  sheet.getCell("C46").font = { bold: false, size: 9 };
+  sheet.getCell("C46").alignment = { horizontal: "justify", wrapText: true };
+  sheet.getRow(46).height = 24.0;
+
+  // Row 47 — Accompanying notes  (DOUBLE SPACE after "The")
+  sheet.getCell("C47").value = "The  accompanying notes form an integral part of the financial statements.";
+  sheet.getCell("C47").font = { bold: false, size: 9 };
+
+  // Row 49 — Audit report reference line
+  sheet.getCell("C49").value = "This is the Cash Flow Statement referred to in our report of even date";
+  sheet.getCell("C49").font = { bold: false, size: 9 };
+
+  // Row 51 — Firm header / Board header
+  sheet.getCell("C51").value = `For ${firmName}`;
+  sheet.getCell("C51").font = { bold: true, size: 9 };
+  sheet.getCell("G51").value = "For and on behalf of the Board of Directors of ";
+
+  // Row 52 — Chartered Accountants / Company name
+  sheet.getCell("C52").value = "Chartered Accountants";
+  sheet.getCell("G52").value = companyName;
+  sheet.getCell("G52").font = { bold: true, size: 9 };
+
+  // Row 53 — Firm registration number
+  sheet.getCell("C53").value = `Firm's Registration No.: ${firmRegNo}`;
+
+  // Row 56 — Signatory names
+  sheet.getCell("C56").value = partnerName;
+  sheet.getCell("C56").font = { bold: true, size: 9 };
+  sheet.getCell("G56").value = dir1Name;
+  sheet.getCell("G56").font = { bold: true, size: 9 };
+  sheet.getCell("I56").value = dir2Name;
+  sheet.getCell("I56").font = { bold: true, size: 9 };
+
+  // Row 57 — Roles
+  sheet.getCell("C57").value = "Partner";
+  sheet.getCell("G57").value = "Director";
+  sheet.getCell("I57").value = "Director";
+
+  // Row 58 — Membership No. / DINs
+  sheet.getCell("C58").value = `Membership No.: ${partnerMemNo}`;
+  sheet.getCell("G58").value = `DIN: ${dir1DIN}`;
+  sheet.getCell("I58").value = `DIN: ${dir2DIN}`;
+
+  // Row 59 — Place (same value written in all three columns)
+  sheet.getCell("C59").value = `Place: ${firmCity}`;
+  sheet.getCell("G59").value = `Place: ${firmCity}`;
+  sheet.getCell("I59").value = `Place: ${firmCity}`;
+
+  // Row 60 — Date (same sign-off date in all three columns)
+  sheet.getCell("C60").value = `Date: ${signOffDate}`;
+  sheet.getCell("G60").value = `Date: ${signOffDate}`;
+  sheet.getCell("I60").value = `Date: ${signOffDate}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
