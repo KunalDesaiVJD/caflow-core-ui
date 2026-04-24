@@ -91,25 +91,36 @@ const TdsFilings = () => {
 
     const allClients = (clientsResp.data || []) as ClientOption[];
     const eligible = allClients.filter(c => {
+      // 1. Strict — service linked_module === "tds"  (ideal)
       if (clientsWithStrictTds.has(c.id)) return true;
-      // Fallback: TAN number + any category with "TDS" in its name/code is
-      // active → this catches categories where linked_module wasn't set.
-      if ((c.tan_number || "").trim() && clientsWithNameMatchTds.has(c.id)) return true;
+      // 2. Name/code fallback — active service whose category mentions "TDS"
+      //    (catches firms where linked_module was never set or was wiped)
+      if (clientsWithNameMatchTds.has(c.id)) return true;
+      // 3. TAN fallback — client has a TAN number. TAN is only ever issued
+      //    for TDS/TCS purposes, so its presence is a strong TDS signal.
+      //    Covers edge cases where the client_services row exists but the
+      //    query path above missed it (e.g., RLS, stale cache, etc.).
+      if ((c.tan_number || "").trim()) return true;
       return false;
     });
 
-    // Self-heal hint: if any clients were only eligible via the name fallback,
-    // log once so the developer can see these categories need linked_module
-    // fixed. No silent data mutation here — the strict path still works for
-    // correctly-configured firms.
+    // Self-heal hint: log clients that matched only via a fallback path so
+    // the developer can see which service_category rows need linked_module
+    // fixed. Strict path works for correctly-configured firms and doesn't log.
     const fallbackOnly = eligible.filter(c => !clientsWithStrictTds.has(c.id));
     if (fallbackOnly.length > 0) {
       console.warn(
-        `[TDS] ${fallbackOnly.length} client(s) matched TDS only via name fallback — ` +
-        `their service_category.linked_module is missing or != 'tds'. Fix in Service Masters:`,
+        `[TDS] ${fallbackOnly.length} client(s) matched TDS only via fallback ` +
+        `(name match or TAN number). Fix their service_category.linked_module ` +
+        `in Service Masters to 'tds':`,
         fallbackOnly.map(c => c.name).filter(Boolean),
       );
     }
+    console.log(
+      `[TDS] Client dropdown: ${eligible.length} eligible | ` +
+      `${clientsWithStrictTds.size} strict | ${clientsWithNameMatchTds.size} name-match | ` +
+      `${allClients.filter(c => (c.tan_number || "").trim()).length} with TAN`
+    );
 
     setClients(eligible);
   }, [resolveFirmId]);
