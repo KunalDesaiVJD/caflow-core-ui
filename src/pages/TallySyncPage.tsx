@@ -603,6 +603,7 @@ export default function TallySyncPage() {
     _plFooter.closing_balance !== 0 || _plFooter.opening_balance !== 0 ||
     _plTurnover.debit > 0 || _plTurnover.credit > 0
   ));
+  if (typeof window !== "undefined") (window as any).__plDebug = { bt: _plFooter?.balance_type, cl: _plFooter?.closing_balance, op: _plFooter?.opening_balance, da: _plFooter?.debit_amount, ca: _plFooter?.credit_amount, tv: _plTurnover, s1: _plStrategy1 };
   const _plNet  = _plStrategy1 ? (_plTurnover.debit - _plTurnover.credit) : 0;
   const _plEff  = Math.abs(_plNet);
   const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
