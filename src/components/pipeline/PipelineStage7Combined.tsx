@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets } from 'lucide-react';
+import { ArrowRight, BookMarked, Shield, Loader2, ClipboardList, Droplets, FileText } from 'lucide-react';
 import { EngagementCARO } from '@/components/engagement/EngagementCARO';
 import { MRLTab } from '@/components/stage7/MRLTab';
 import { IFCReportTab } from '@/components/stage7/IFCReportTab';
@@ -12,6 +12,7 @@ import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
 import NotesToAccounts from '@/pages/NotesToAccounts';
 import EngagementHeader from '@/components/pipeline/EngagementHeader';
+import IARTab from '@/components/stage8/IARTab';
 
 interface Props {
   engagementId: string;
@@ -134,6 +135,11 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
     const visible = (flag: any) => flag !== false; // null/undefined → visible
     const all = [
       { id: 'notes',    label: 'Notes to Accounts', icon: BookMarked,    show: true },
+      // IAR (Independent Auditor's Report) is the PRIMARY audit report itself —
+      // not an annexure — so it is unconditionally visible for every corporate
+      // engagement. The CARO / IFC / Cash Flow tabs below are the annexures,
+      // gated by their own Block C applicability flags.
+      { id: 'iar',      label: 'IAR',               icon: FileText,      show: true },
       { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
       { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
       // Cash Flow applies to corporate only; NCE entities use Receipts & Payments format.
@@ -165,6 +171,11 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       {tabs.some(t => t.id === 'notes') && (
         <TabsContent value="notes" className="mt-4">
           <NotesToAccounts engagementIdProp={engagementId} isCorporate={true} />
+        </TabsContent>
+      )}
+      {tabs.some(t => t.id === 'iar') && (
+        <TabsContent value="iar" className="mt-4">
+          <IARTab engagement={engagement} client={engagement?.clients} onUpdate={() => {}} />
         </TabsContent>
       )}
       {tabs.some(t => t.id === 'caro') && (
