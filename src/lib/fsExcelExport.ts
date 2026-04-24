@@ -192,8 +192,23 @@ export interface PLRowData {
   financeCosts:       PLLineItem;
   depreciation:       PLLineItem;
   otherExpenses:      PLLineItem;
-  // (More fields added in Phase 3E+: exceptional items, tax expense lines,
-  //  PAT, EPS basic/diluted)
+  // Tax & PAT / EPS (Phase 3E)
+  /** Tax expense heading — note number only; F29:F31 merged. */
+  taxExpense:   Pick<PLLineItem, "noteNo">;
+  /** Current tax — amounts only (no noteNo column written — merged above). */
+  currentTax:   Pick<PLLineItem, "cy" | "py">;
+  /** Deferred tax — amounts only (no noteNo column written — merged above). */
+  deferredTax:  Pick<PLLineItem, "cy" | "py">;
+  /** Earnings Per Share — note number for the reference note. */
+  eps:          Pick<PLLineItem, "noteNo">;
+  /**
+   * Share capital reference used in the EPS formula as the DIVISOR.
+   * Semantically this should be the number of equity shares outstanding.
+   * Per spec, the writer emits the formula `IFERROR(G38/<shareCap.noteNo>,0)`
+   * so the caller must pass the share count (not a note reference) in the
+   * `noteNo` field.
+   */
+  shareCap:     Pick<PLLineItem, "noteNo">;
 }
 
 /** CFS data — still loose pending Phase 4 spec. */
@@ -1025,6 +1040,168 @@ function writeProfitAndLoss(
 
   // Row 22 — spacer
   sheet.getRow(22).height = 9.95;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 3E — PBT, Tax, PAT & EPS (rows 23–44)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 23 — V. Profit before exceptional items (G11-G21)
+  sheet.getCell("B23").value = "V.";
+  sheet.getCell("B23").font = { bold: true, size: 9 };
+  sheet.getCell("B23").alignment = { horizontal: "center" };
+  sheet.getCell("C23").value = "Profit before exceptional and extraordinary items and tax";
+  sheet.getCell("C23").font = { bold: true, size: 9 };
+  sheet.getCell("G23").value = { formula: "G11-G21" };
+  sheet.getCell("G23").alignment = { horizontal: "right" };
+  sheet.getCell("H23").value = { formula: "H11-H21" };
+  sheet.getCell("H23").alignment = { horizontal: "right" };
+
+  // Row 24 — "(III-IV)" on its own row
+  sheet.getCell("C24").value = "(III-IV)";
+  sheet.getCell("C24").font = { bold: true, size: 9 };
+
+  // Row 25 — VI. Exceptional items
+  sheet.getCell("B25").value = "VI.";
+  sheet.getCell("B25").font = { bold: true, size: 9 };
+  sheet.getCell("B25").alignment = { horizontal: "center" };
+  sheet.getCell("C25").value = "Exceptional items";
+  sheet.getCell("C25").font = { bold: false, size: 9 };
+
+  // Row 26 — VII. Profit before extraordinary items and tax (V-VI)
+  sheet.getCell("B26").value = "VII.";
+  sheet.getCell("B26").font = { bold: true, size: 9 };
+  sheet.getCell("B26").alignment = { horizontal: "center" };
+  sheet.getCell("C26").value = "Profit before extraordinary items and tax (V-VI)";
+  sheet.getCell("C26").font = { bold: true, size: 9 };
+
+  // Row 27 — VIII. Extraordinary items (hardcoded 0/0)
+  sheet.getCell("B27").value = "VIII.";
+  sheet.getCell("B27").font = { bold: true, size: 9 };
+  sheet.getCell("B27").alignment = { horizontal: "center" };
+  sheet.getCell("C27").value = "Extraordinary items";
+  sheet.getCell("C27").font = { bold: false, size: 9 };
+  sheet.getCell("G27").value = 0;
+  sheet.getCell("G27").alignment = { horizontal: "right" };
+  sheet.getCell("H27").value = 0;
+  sheet.getCell("H27").alignment = { horizontal: "right" };
+
+  // Row 28 — IX. Profit before tax (VII-VIII)  (C28:E28 merged, height 12.0)
+  sheet.getCell("B28").value = "IX.";
+  sheet.getCell("B28").font = { bold: true, size: 9 };
+  sheet.getCell("B28").alignment = { horizontal: "center" };
+  sheet.getCell("C28").value = "Profit before tax (VII-VIII)";
+  sheet.getCell("C28").font = { bold: true, size: 9 };
+  sheet.getCell("C28").alignment = { wrapText: true };
+  sheet.getCell("G28").value = { formula: "G23-G27" };
+  sheet.getCell("G28").font = { bold: true, size: 9 };
+  sheet.getCell("G28").alignment = { horizontal: "right" };
+  sheet.getCell("H28").value = { formula: "H23-H27" };
+  sheet.getCell("H28").font = { bold: true, size: 9 };
+  sheet.getCell("H28").alignment = { horizontal: "right" };
+  sheet.getRow(28).height = 12.0;
+
+  // Row 29 — X. Tax expense:  (F29:F31 merged — set noteNo on F29 only)
+  sheet.getCell("B29").value = "X.";
+  sheet.getCell("B29").font = { bold: true, size: 9 };
+  sheet.getCell("B29").alignment = { horizontal: "center" };
+  sheet.getCell("C29").value = "Tax expense:";
+  sheet.getCell("C29").font = { bold: true, size: 9 };
+  sheet.getCell("F29").value = data.taxExpense.noteNo; // covers F29:F31 via merge
+  sheet.getCell("F29").alignment = { horizontal: "center" };
+
+  // Row 30 — (1) Current tax  (3 leading spaces, size 10)
+  sheet.getCell("C30").value = "   (1) Current tax";
+  sheet.getCell("C30").font = { bold: false, size: 10 };
+  sheet.getCell("G30").value = data.currentTax.cy ?? 0;
+  sheet.getCell("G30").alignment = { horizontal: "right" };
+  sheet.getCell("H30").value = data.currentTax.py ?? 0;
+  sheet.getCell("H30").alignment = { horizontal: "right" };
+
+  // Row 31 — (2) Deferred tax  (3 leading spaces, size 9)
+  sheet.getCell("C31").value = "   (2) Deferred tax";
+  sheet.getCell("C31").font = { bold: false, size: 9 };
+  sheet.getCell("G31").value = data.deferredTax.cy ?? 0;
+  sheet.getCell("G31").alignment = { horizontal: "right" };
+  sheet.getCell("H31").value = data.deferredTax.py ?? 0;
+  sheet.getCell("H31").alignment = { horizontal: "right" };
+
+  // Row 32 — XI. Profit from continuing operations
+  //          CRITICAL: trailing space after "operations " — exact from Excel
+  sheet.getCell("B32").value = "XI.";
+  sheet.getCell("B32").font = { bold: true, size: 9 };
+  sheet.getCell("B32").alignment = { horizontal: "center" };
+  sheet.getCell("C32").value = "Profit (loss) for period from continuing operations ";
+  sheet.getCell("C32").font = { bold: true, size: 9 };
+
+  // Row 33 — "(VII-VIII)" on its own row
+  sheet.getCell("C33").value = "(VII-VIII)";
+  sheet.getCell("C33").font = { bold: true, size: 9 };
+
+  // Row 34 — XII. Discontinuing operations
+  sheet.getCell("B34").value = "XII.";
+  sheet.getCell("B34").font = { bold: true, size: 9 };
+  sheet.getCell("B34").alignment = { horizontal: "center" };
+  sheet.getCell("C34").value = "Profit (loss) for period from discontinuing operations";
+  sheet.getCell("C34").font = { bold: false, size: 9 };
+
+  // Row 35 — XIII.
+  sheet.getCell("B35").value = "XIII.";
+  sheet.getCell("B35").font = { bold: true, size: 9 };
+  sheet.getCell("B35").alignment = { horizontal: "center" };
+  sheet.getCell("C35").value = "Tax expense of discontinuing operations";
+  sheet.getCell("C35").font = { bold: false, size: 9 };
+
+  // Row 36 — XIV.
+  sheet.getCell("B36").value = "XIV.";
+  sheet.getCell("B36").font = { bold: true, size: 9 };
+  sheet.getCell("B36").alignment = { horizontal: "center" };
+  sheet.getCell("C36").value = "Profit (loss) from discontinuing operations (after tax)";
+  sheet.getCell("C36").font = { bold: true, size: 9 };
+
+  // Row 37 — "(XII-XIII)" on its own row
+  sheet.getCell("C37").value = "(XII-XIII)";
+  sheet.getCell("C37").font = { bold: true, size: 9 };
+
+  // Row 38 — XV. Profit / (Loss) for the period  (asymmetric CY vs PY formula per spec)
+  sheet.getCell("B38").value = "XV.";
+  sheet.getCell("B38").font = { bold: true, size: 9 };
+  sheet.getCell("B38").alignment = { horizontal: "center" };
+  sheet.getCell("C38").value = "Profit / (Loss) for the period (XI+XIV)";
+  sheet.getCell("C38").font = { bold: true, size: 9 };
+  sheet.getCell("G38").value = { formula: "G28-G30+G31" };
+  sheet.getCell("G38").font = { bold: true, size: 9 };
+  sheet.getCell("G38").alignment = { horizontal: "right" };
+  sheet.getCell("H38").value = { formula: "H28-SUM(H30:H31)" };
+  sheet.getCell("H38").font = { bold: true, size: 9 };
+  sheet.getCell("H38").alignment = { horizontal: "right" };
+
+  // Row 39 — spacer
+  sheet.getRow(39).height = 5.1;
+
+  // Row 40 — Earnings per  equity share ;
+  //          CRITICAL: double space in "per  equity", trailing " ;"
+  sheet.getCell("C40").value = "Earnings per  equity share ;";
+  sheet.getCell("C40").font = { bold: true, size: 9 };
+  sheet.getCell("F40").value = data.eps.noteNo;
+  sheet.getCell("F40").alignment = { horizontal: "center" };
+
+  // Row 41 — (1) Basic
+  //          EPS = G38 / shareCap.noteNo (per spec, shareCap.noteNo is the
+  //          share count used as divisor — not a note-ref here).
+  sheet.getCell("C41").value = "(1) Basic";
+  sheet.getCell("C41").font = { bold: false, size: 9 };
+  sheet.getCell("G41").value = { formula: `IFERROR(G38/${data.shareCap.noteNo},0)` };
+  sheet.getCell("G41").alignment = { horizontal: "right" };
+  sheet.getCell("H41").value = { formula: `IFERROR(H38/${data.shareCap.noteNo},0)` };
+  sheet.getCell("H41").alignment = { horizontal: "right" };
+
+  // Row 42 — (2) Diluted
+  sheet.getCell("C42").value = "(2) Diluted";
+  sheet.getCell("C42").font = { bold: false, size: 9 };
+
+  // Row 44 — Accompanying notes
+  sheet.getCell("C44").value = "The accompanying notes form an integral part of the financial statements.";
+  sheet.getCell("C44").font = { bold: false, size: 9 };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
