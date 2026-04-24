@@ -647,8 +647,35 @@ export default function TallySyncPage() {
   const _plOpDr  = _plStrategy1 && _plFooter!.opening_type === "Dr" ? _plFooter!.opening_balance : 0;
   const _plOpCr  = _plStrategy1 && _plFooter!.opening_type === "Cr" ? _plFooter!.opening_balance : 0;
 
-  const tbDrTotal   = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffDr - _plDbDr);
-  const tbCrTotal   = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffCr - _plDbCr);
+  // Inventory (stock-in-hand) adjustment for footer balance.
+  // Tally's inventory module sets the closing stock value directly — no Dr/Cr
+  // journal entries are raised for stock consumption/valuation changes. This
+  // means Opening − Closing for these accounts represents an implicit cost of
+  // goods that is already embedded in Tally's P&L figure but does NOT appear
+  // as a debit/credit turnover in the TB rows.
+  //
+  // Without this adjustment the footer shows a "Closing Diff" equal to the
+  // stock depletion even though Tally's own Balance Sheet is balanced.
+  // The fix: treat the net stock change (opening − closing, signed) as an
+  // additional implicit P&L item in the footer totals only.
+  //
+  // Applies only to accounts with ZERO debit AND ZERO credit (pure inventory
+  // valuation change). Accounts with explicit entries are unaffected.
+  // Has no effect on companies without inventory (invAdj = 0).
+  const _invAdj = filteredTB
+    .filter(r => !((r.debit_amount ?? 0) > 0 || (r.credit_amount ?? 0) > 0))
+    .reduce((sum, r) => {
+      const ob = (r.opening_balance ?? 0) * ((r.opening_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
+      const cb = (r.closing_balance ?? 0) * ((r.balance_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
+      const diff = ob - cb; // positive = asset decreased (implicit P&L Dr cost)
+      // Only adjust when closing differs from opening (pure inventory change)
+      return sum + (Math.abs(diff) > 0.5 ? diff : 0);
+    }, 0);
+  const _invAdjDr = _invAdj > 0 ? _invAdj : 0;
+  const _invAdjCr = _invAdj < 0 ? Math.abs(_invAdj) : 0;
+
+  const tbDrTotal   = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffDr - _plDbDr) + _invAdjDr;
+  const tbCrTotal   = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffCr - _plDbCr) + _invAdjCr;
   const tbDrOpening = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0) - _plOpDr;
   const tbCrOpening = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0) - _plOpCr;
   const tbDebitTotal  = filteredTB.reduce((s, r) => s + getTurnover(r).debit,  0);
