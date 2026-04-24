@@ -34,7 +34,9 @@ import {
   CheckCircle2, Circle, Lock, ChevronRight, Plus, ArrowRight,
   Building2, FileText, Calculator, ClipboardCheck,
   Eye, BookMarked, Shield, Award, RefreshCw,
+  Info, XCircle, Zap, ArrowUpRight,
 } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { EngagementReviewSignoff } from "@/components/engagement/EngagementReviewSignoff";
 import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import PipelineStage2 from "@/components/pipeline/PipelineStage2";
@@ -404,6 +406,29 @@ export default function AuditPipeline() {
       return data as any;
     },
     enabled: !!selectedEngId,
+  });
+
+  // ─── Prior-year engagement existence check (Block PY guidance) ─────────
+  // Runs whenever the selected client + FY changes so the guidance card
+  // can show a live "✓ Found / ✗ Not found" status without user action.
+  const { data: priorEngCheck } = useQuery({
+    queryKey: ["prior-eng-check-stage1", form1A.client_id, form1A.financial_year],
+    queryFn: async () => {
+      if (!form1A.client_id || !form1A.financial_year) return null;
+      const fyParts = (form1A.financial_year as string).split("-");
+      if (fyParts.length !== 2) return null;
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
+      const { data } = await supabase
+        .from("audit_engagements")
+        .select("id, financial_year, status, is_finalized, stage_statuses")
+        .eq("client_id", form1A.client_id)
+        .eq("financial_year", prevFy)
+        .neq("status", "archived")
+        .is("deleted_at" as any, null)
+        .maybeSingle();
+      return data as any;
+    },
+    enabled: !!form1A.client_id && !!form1A.financial_year,
   });
 
   useEffect(() => {
@@ -1057,62 +1082,225 @@ export default function AuditPipeline() {
                     </AccordionContent>
                   </AccordionItem>
 
-                  {/* Block PY — Prior-Year Data Source ───────────────────
-                   *  Determines how Stage 10 builds the PY comparative. Four paths:
-                   *   • prior_engagement  — an FY-1 audit engagement already exists in CAFlow
-                   *   • py_tally_running  — running Tally carries opening balances; BS auto-builds from opening, user must still source PY P&L (prior_engagement or py_shell)
-                   *   • py_shell_import   — client uses split/new Tally; we create a cut-down FY-1 engagement to import full PY TB + produce PY FS
-                   *   • manual            — no Tally/engagement exists for PY; user types amounts + annexures directly
-                   *   • none              — first-year engagement or auditor skips comparative
-                   * Stage 10 reads questionnaire.py_data_availability to guide the setup card. */}
+                  {/* Block PY — Prior-Year Data Source ────────────────────
+                   *  Determines how Stage 10 builds the PY comparative. Five paths:
+                   *   • prior_engagement  — FY-1 engagement already in CAFlow
+                   *   • py_tally_running  — running Tally; BS opens from Tally, P&L manual
+                   *   • py_shell_import   — split/new Tally; create cut-down FY-1 shell
+                   *   • manual            — no Tally; user types P&L + annexures
+                   *   • none              — first-year / skip comparative
+                   * Stage 10 reads questionnaire.py_data_availability for guidance. */}
                   <AccordionItem value="block-py" className="border rounded-lg px-4">
                     <AccordionTrigger className="text-sm font-semibold">
                       Block PY — Prior-Year Data Source
                       {questionnaire.py_data_availability && <CheckCircle2 size={14} className="ml-2 text-primary" />}
                     </AccordionTrigger>
                     <AccordionContent className="space-y-4 pt-2">
+
+                      {/* ── Dropdown ── */}
                       <div className="space-y-1.5">
                         <Label className="text-xs">How is prior-year (comparative) data available?</Label>
                         <Select
                           value={questionnaire.py_data_availability || ""}
                           onValueChange={v => setQ("py_data_availability", v)}
                         >
-                          <SelectTrigger><SelectValue placeholder="Select PY data source" /></SelectTrigger>
+                          <SelectTrigger><SelectValue placeholder="Select PY data source…" /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="prior_engagement">Prior audit engagement exists in CAFlow (FY-1)</SelectItem>
-                            <SelectItem value="py_tally_running">Running Tally — opening balances carry PY closing (BS only; P&L still needed)</SelectItem>
-                            <SelectItem value="py_shell_import">Split / new Tally — import full PY data as a PY shell engagement</SelectItem>
-                            <SelectItem value="manual">No Tally / no prior engagement — enter PY P&L + annexures manually</SelectItem>
+                            <SelectItem value="py_tally_running">Running Tally — opening balances carry PY BS; P&L still needed</SelectItem>
+                            <SelectItem value="py_shell_import">Split / new Tally — import full PY as a PY shell engagement</SelectItem>
+                            <SelectItem value="manual">No Tally / no prior engagement — enter PY amounts manually</SelectItem>
                             <SelectItem value="none">First-year engagement — no PY comparative</SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-[11px] text-muted-foreground">
-                          This drives the "PY Data Source" card in Stage 10 (Financial Statements) and determines whether a PY shell engagement needs to be created.
-                        </p>
                       </div>
+
+                      {/* ── Option 1: prior_engagement ── */}
+                      {questionnaire.py_data_availability === "prior_engagement" && (() => {
+                        const fyParts = (form1A.financial_year || "").split("-");
+                        const prevFy = fyParts.length === 2
+                          ? `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`
+                          : "prior FY";
+                        const found = !!priorEngCheck;
+                        const isFinalized = !!(priorEngCheck as any)?.is_finalized;
+                        return (
+                          <div className="rounded-lg border p-3 space-y-3 text-xs bg-green-50/50 dark:bg-green-950/10 border-green-200 dark:border-green-900">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle2 size={14} className="text-green-600 shrink-0" />
+                              <p className="font-semibold text-sm">Fully Automatic — Prior Engagement</p>
+                              {found ? (
+                                <Badge className="ml-auto text-[9px] bg-green-100 text-green-700 border-green-300 dark:bg-green-950/40 dark:text-green-400">
+                                  ✓ FY {prevFy} found
+                                </Badge>
+                              ) : (
+                                <Badge className="ml-auto text-[9px] bg-destructive/10 text-destructive border-destructive/30">
+                                  ✗ FY {prevFy} not found
+                                </Badge>
+                              )}
+                              {isFinalized && (
+                                <Badge className="text-[9px] bg-amber-100 text-amber-700 border-amber-300">
+                                  🔒 Finalized
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                              <div>
+                                <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">CAFlow handles automatically</p>
+                                <ul className="space-y-0.5 text-foreground">
+                                  <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> PY FS sourced from FY-1 Financial Statements</li>
+                                  <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> COA mapping carried forward (🔁 confidence tier)</li>
+                                  <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> BS &amp; P&amp;L comparative columns fully populated</li>
+                                  {isFinalized && <li className="flex items-start gap-1"><Lock size={10} className="text-amber-500 mt-0.5 shrink-0" /> PY column locked (prior year finalized)</li>}
+                                </ul>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">Action needed</p>
+                                {found ? (
+                                  <p className="text-green-700 dark:text-green-400">None — everything is fully automatic.</p>
+                                ) : (
+                                  <ul className="space-y-0.5 text-destructive">
+                                    <li className="flex items-start gap-1"><XCircle size={10} className="mt-0.5 shrink-0" /> Create the FY {prevFy} engagement for this client</li>
+                                    <li className="flex items-start gap-1"><XCircle size={10} className="mt-0.5 shrink-0" /> Complete Stages 2–10 for FY {prevFy} first</li>
+                                  </ul>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* ── Option 2: py_tally_running ── */}
                       {questionnaire.py_data_availability === "py_tally_running" && (
-                        <YesNo
-                          label="Do you also have access to last year's audited P&L figures (to fill the P&L comparative)?"
-                          value={questionnaire.py_pl_available || ""}
-                          onChange={v => setQ("py_pl_available", v)}
-                        />
+                        <div className="space-y-3">
+                          <div className="rounded-lg border p-3 space-y-3 text-xs bg-blue-50/40 dark:bg-blue-950/10 border-blue-200 dark:border-blue-900">
+                            <div className="flex items-center gap-2">
+                              <Zap size={14} className="text-blue-600 shrink-0" />
+                              <p className="font-semibold text-sm">Partially Automatic — Running Tally</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                              <div>
+                                <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">CAFlow handles automatically</p>
+                                <ul className="space-y-0.5">
+                                  <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> Balance Sheet PY — from Tally opening balances</li>
+                                  <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> COA mapping carried forward if FY-1 exists</li>
+                                </ul>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">Action needed</p>
+                                <ul className="space-y-0.5 text-amber-700 dark:text-amber-400">
+                                  <li className="flex items-start gap-1"><Info size={10} className="mt-0.5 shrink-0" /> P&L PY — must be entered manually in Stage 10</li>
+                                  <li className="flex items-start gap-1"><Info size={10} className="mt-0.5 shrink-0" /> Or link a prior engagement for auto P&L</li>
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
+                          <YesNo
+                            label="Do you have last year's audited P&L figures to enter manually in Stage 10?"
+                            value={questionnaire.py_pl_available || ""}
+                            onChange={v => setQ("py_pl_available", v)}
+                          />
+                          {questionnaire.py_pl_available === "yes" && (
+                            <Alert className="border-blue-200 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-950/10">
+                              <Info size={12} className="text-blue-600" />
+                              <AlertDescription className="text-[11px] text-blue-800 dark:text-blue-300">
+                                <strong>In Stage 10 (Financial Statements):</strong> click the <span className="font-mono bg-muted px-1 rounded">⚠ pencil</span> icon in the PY column for each P&amp;L line item to enter the audited figure. Your name and timestamp are recorded automatically.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          {questionnaire.py_pl_available === "no" && (
+                            <Alert className="border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/10">
+                              <Info size={12} className="text-amber-600" />
+                              <AlertDescription className="text-[11px] text-amber-800 dark:text-amber-300">
+                                P&amp;L comparative column will be blank. Consider switching to <strong>PY Shell</strong> option if you have access to the old Tally company file.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </div>
                       )}
+
+                      {/* ── Option 3: py_shell_import ── */}
                       {questionnaire.py_data_availability === "py_shell_import" && (
-                        <div className="rounded-md border border-dashed p-3 text-[11px] bg-muted/30 space-y-1">
-                          <p className="font-medium">Next step</p>
-                          <p className="text-muted-foreground">
-                            After completing Stage 1, go to Stage 10 → "PY Data Source" card → "Create PY Shell Engagement". You'll then import the PY trial balance and map it like a normal engagement; Stage 10 picks up the PY FS automatically.
-                          </p>
+                        <div className="rounded-lg border p-3 space-y-3 text-xs bg-violet-50/40 dark:bg-violet-950/10 border-violet-200 dark:border-violet-900">
+                          <div className="flex items-center gap-2">
+                            <RefreshCw size={14} className="text-violet-600 shrink-0" />
+                            <p className="font-semibold text-sm">Setup Required — PY Shell Engagement</p>
+                            <Badge className="ml-auto text-[9px] bg-violet-100 text-violet-700 border-violet-300">2–4 steps</Badge>
+                          </div>
+                          <div className="space-y-1.5 text-[11px]">
+                            <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-2">How it works</p>
+                            {[
+                              { n: 1, text: "Complete Stage 1 (this form) and save it." },
+                              { n: 2, text: "In Stage 10 → \"PY Data Source\" card → click \"Create PY Shell Engagement\"." },
+                              { n: 3, text: "In the shell: sync PY Tally → COA Mapping → Generate FS (Stages 2–5)." },
+                              { n: 4, text: "Return here — PY FS auto-populates the comparative column in Stage 10." },
+                            ].map(s => (
+                              <div key={s.n} className="flex items-start gap-2">
+                                <span className="shrink-0 w-4 h-4 rounded-full bg-violet-100 dark:bg-violet-900 text-violet-700 dark:text-violet-300 text-[9px] flex items-center justify-center font-bold">{s.n}</span>
+                                <p>{s.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="border-t pt-2 text-[11px] text-muted-foreground flex items-start gap-1">
+                            <CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" />
+                            COA mapping from the PY shell will carry forward to this engagement automatically.
+                          </div>
                         </div>
                       )}
+
+                      {/* ── Option 4: manual ── */}
                       {questionnaire.py_data_availability === "manual" && (
-                        <div className="rounded-md border border-dashed p-3 text-[11px] bg-muted/30 space-y-1">
-                          <p className="font-medium">Next step</p>
-                          <p className="text-muted-foreground">
-                            In Stage 10, use the "Manual PY P&L Entry" panel for line-item amounts, and the "PY Annexures" grid to type ledger-level detail per note. Data is saved against this engagement and auto-flows as next year's PY source.
-                          </p>
+                        <div className="rounded-lg border p-3 space-y-3 text-xs bg-amber-50/40 dark:bg-amber-950/10 border-amber-200 dark:border-amber-900">
+                          <div className="flex items-center gap-2">
+                            <FileText size={14} className="text-amber-700 shrink-0" />
+                            <p className="font-semibold text-sm">Manual Entry — No Tally / No Prior Engagement</p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                            <div>
+                              <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">CAFlow handles automatically</p>
+                              <ul className="space-y-0.5">
+                                <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> BS PY from Tally opening balances (if Tally synced)</li>
+                                <li className="flex items-start gap-1"><CheckCircle2 size={10} className="text-green-500 mt-0.5 shrink-0" /> Saves as next year's automatic PY source</li>
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground font-medium uppercase tracking-wide text-[9px] mb-1">Action needed in Stage 10</p>
+                              <ul className="space-y-0.5 text-amber-700 dark:text-amber-400">
+                                <li className="flex items-start gap-1"><ArrowUpRight size={10} className="mt-0.5 shrink-0" /> Click PY pencil on each P&L line → enter audited figure</li>
+                                <li className="flex items-start gap-1"><ArrowUpRight size={10} className="mt-0.5 shrink-0" /> Fill PY Annexures grid for ledger-level note detail</li>
+                              </ul>
+                            </div>
+                          </div>
+                          <Alert className="border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 py-2">
+                            <Info size={11} className="text-amber-600" />
+                            <AlertDescription className="text-[11px] text-amber-800 dark:text-amber-300">
+                              Attribution (your name + timestamp) is recorded for every PY cell you override in Stage 10.
+                            </AlertDescription>
+                          </Alert>
                         </div>
                       )}
+
+                      {/* ── Option 5: none ── */}
+                      {questionnaire.py_data_availability === "none" && (
+                        <div className="rounded-lg border p-3 space-y-2 text-xs bg-muted/30 border-muted">
+                          <div className="flex items-center gap-2">
+                            <Circle size={14} className="text-muted-foreground shrink-0" />
+                            <p className="font-semibold text-sm text-muted-foreground">Skipped — No PY Comparative</p>
+                          </div>
+                          <ul className="space-y-1 text-[11px] text-muted-foreground">
+                            <li className="flex items-start gap-1"><Info size={10} className="mt-0.5 shrink-0" /> PY column will be blank on Balance Sheet and P&amp;L.</li>
+                            <li className="flex items-start gap-1"><Info size={10} className="mt-0.5 shrink-0" /> COA carry-forward still runs — no prior FS data is expected.</li>
+                            <li className="flex items-start gap-1"><Info size={10} className="mt-0.5 shrink-0" /> This choice can be changed later by returning to Stage 1.</li>
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* ── No option selected yet ── */}
+                      {!questionnaire.py_data_availability && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Select an option above — contextual guidance and next steps will appear here.
+                        </p>
+                      )}
+
                     </AccordionContent>
                   </AccordionItem>
 
