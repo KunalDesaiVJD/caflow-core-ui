@@ -534,9 +534,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     let viaGroup = 0, viaKeyword = 0;
 
     for (const acct of tbAccounts) {
-      // Preserve manual overrides
+      // Preserve manual overrides and carried-forward (PY-validated) mappings
       const existing = coaMapping[acct.account_name];
-      if (existing?.confidence === "manual") {
+      if (existing?.confidence === "manual" || existing?.confidence === "carried_forward") {
         newMapping[acct.account_name] = existing;
         continue;
       }
@@ -609,10 +609,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // Step 1: Clear DB mapping
       await supabase.from("audit_engagements").update({ coa_mapping: {} } as any).eq("id", engagementId);
 
-      // Step 2: Build fresh auto-mapping from scratch (no manual-override preservation)
+      // Step 2: Build fresh auto-mapping — carry-forward mappings are always preserved
       const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;
-      const freshMapping: typeof coaMapping = {};
+      // Seed fresh map with carried-forward entries (PY-validated, never reset)
+      const freshMapping: typeof coaMapping = Object.fromEntries(
+        Object.entries(coaMapping).filter(([, v]) => v.confidence === "carried_forward")
+      );
       for (const acct of tbAccounts) {
+        if (freshMapping[acct.account_name]) continue; // already preserved (CF)
         let best: { code: string; confidence: string } | null = null;
         const g = matchParentGroup(acct.account_group, groupTable);
         if (g) best = { code: g.code, confidence: g.confidence };
@@ -712,13 +716,24 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (hideZero && Math.abs(a.balance) < 0.005 && Math.abs(a.opening_balance ?? 0) < 0.005) return false;
       const m = coaMapping[a.account_name];
       if (!m) return true;
-      if (m.confidence === "manual") return false;
+      // Never re-map confirmed or prior-year-validated ledgers via AI
+      if (m.confidence === "manual" || m.confidence === "carried_forward") return false;
       return m.confidence === "low";
     });
     if (targets.length === 0) { toast.info("Nothing left for AI to map"); return; }
 
     setAiRunning(true);
     const fsItems = activeLeafItems.map((i) => ({ code: i.code, name: i.name, section: i.section }));
+
+    // Build prior-year anchor list so Claude uses proven mappings as training signal
+    const cfAnchors = Object.entries(coaMapping)
+      .filter(([, m]) => m.confidence === "carried_forward")
+      .slice(0, 60) // cap at 60 to avoid oversized payloads
+      .map(([ledger, m]) => {
+        const li = activeLeafItems.find((i) => i.code === m.code);
+        return { ledger, fs_code: m.code, fs_name: li?.name || m.code };
+      });
+
     const batchSize = 40;
     const merged = { ...coaMapping };
     let mappedCount = 0, failedBatches = 0;
@@ -732,9 +747,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           side:            a.balance >= 0 ? "Dr" : "Cr",
         }));
         const payload = {
-          entity_type: isNonCorporate ? "nce" : "corporate",
-          fs_items:    fsItems,
-          ledgers:     batch,
+          entity_type:        isNonCorporate ? "nce" : "corporate",
+          fs_items:           fsItems,
+          ledgers:            batch,
+          ...(cfAnchors.length > 0 ? { prior_year_anchors: cfAnchors } : {}),
         };
         const { data, error } = await supabase.functions.invoke("claude-gateway", {
           body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
@@ -751,13 +767,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           if (!ledgerName || !code) continue;
           const lineItem = activeLeafItems.find((li) => li.code === code);
           if (!lineItem) continue;
-          // do not override manual mappings
-          if (merged[ledgerName]?.confidence === "manual") continue;
+          // do not override manual or carried-forward mappings
+          const existing = merged[ledgerName];
+          if (existing?.confidence === "manual" || existing?.confidence === "carried_forward") continue;
           merged[ledgerName] = {
             code,
-            noteRef:    lineItem.noteRef ?? null,
+            noteRef:     lineItem.noteRef ?? null,
             scheduleRef: lineItem.scheduleRef || "",
-            confidence: (r?.confidence as string) || "medium",
+            confidence:  "ai", // always stamp "ai" so bucket counts are precise
           };
           mappedCount++;
         }
@@ -1099,6 +1116,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const unmappedCount = tbAccounts.length - mappedCount;
   const allMapped = unmappedCount === 0 && tbAccounts.length > 0;
 
+  // ─── Confidence bucket breakdown ───
+  const bucketCounts = useMemo(() => {
+    let carriedForward = 0, confirmed = 0, aiMapped = 0, autoMapped = 0, needsReview = 0, unmapped = 0;
+    for (const acct of tbAccounts) {
+      const m = coaMapping[acct.account_name];
+      if (!m)                                                  { unmapped++;       continue; }
+      if (m.confidence === "carried_forward")                  { carriedForward++; continue; }
+      if (m.confidence === "manual")                           { confirmed++;      continue; }
+      if (m.confidence === "ai")                               { aiMapped++;       continue; }
+      if (m.confidence === "high" || m.confidence === "medium"){ autoMapped++;     continue; }
+      needsReview++; // low
+    }
+    const total = tbAccounts.length || 1;
+    const pct = (n: number) => Math.round((n / total) * 100);
+    return { carriedForward, confirmed, aiMapped, autoMapped, needsReview, unmapped, total, pct };
+  }, [tbAccounts, coaMapping]);
+
   // Filtered accounts — respect hideZero + search + workMode (PY/CY/Closed)
   const filteredAccounts = useMemo(() => {
     const s = search.toLowerCase();
@@ -1288,17 +1322,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }
 
   // Stage gate: TB data available via any path (snapshot / tb_hierarchy / tally_trial_balance) OR Stage 2 explicitly completed
-  const tbDataAvailable = !!tbSnapshot || (tbLeafNodes?.length ?? 0) > 0 || (tallyTb?.length ?? 0) > 0;
+  const tbDataAvailable = (tallyTb?.length ?? 0) > 0;
   const stage2Complete = (engagement?.pipeline_stage ?? 0) >= 3 ||
     (engagement?.stage_statuses as any)?.["2"] === "complete";
 
-  if (!tbSnapshotLoading && !tbLeafLoading && !tallyTbLoading && !tbDataAvailable && !stage2Complete) {
+  if (!tallyTbLoading && !tbDataAvailable && !stage2Complete) {
     return (
       <div className="max-w-4xl">
         <Alert>
           <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Trial Balance Required</AlertTitle>
-          <AlertDescription>Please complete Stage 2 (Data Import) before proceeding to COA Mapping.</AlertDescription>
+          <AlertTitle>Tally Sync Required</AlertTitle>
+          <AlertDescription>Please complete Stage 2 (Tally Sync) before proceeding to COA Mapping.</AlertDescription>
         </Alert>
       </div>
     );
@@ -1334,21 +1368,101 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         </Alert>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
-        <Card><CardContent className="p-3 text-center">
-          <p className="text-2xl font-bold text-foreground">{tbAccounts.length}</p>
-          <p className="text-[10px] text-muted-foreground uppercase">TB Accounts</p>
-        </CardContent></Card>
-        <Card className={allMapped ? "border-primary/30" : ""}><CardContent className="p-3 text-center">
-          <p className={cn("text-2xl font-bold", allMapped ? "text-primary" : "text-foreground")}>{mappedCount}</p>
-          <p className="text-[10px] text-muted-foreground uppercase">Mapped</p>
-        </CardContent></Card>
-        <Card className={unmappedCount > 0 ? "border-destructive/30" : ""}><CardContent className="p-3 text-center">
-          <p className={cn("text-2xl font-bold", unmappedCount > 0 ? "text-destructive" : "text-foreground")}>{unmappedCount}</p>
-          <p className="text-[10px] text-muted-foreground uppercase">Unmapped</p>
-        </CardContent></Card>
-      </div>
+      {/* Progress Breakdown Bar */}
+      <Card>
+        <CardContent className="p-3 space-y-2">
+          {/* Top row: total counts */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span><span className="font-semibold text-foreground">{tbAccounts.length}</span> ledgers</span>
+              <span><span className={cn("font-semibold", allMapped ? "text-primary" : "text-foreground")}>{mappedCount}</span> mapped</span>
+              {unmappedCount > 0 && (
+                <span><span className="font-semibold text-destructive">{unmappedCount}</span> unmapped</span>
+              )}
+              {allMapped && <Badge className="text-[9px] px-1.5 bg-primary/10 text-primary border-primary/30">✓ All mapped</Badge>}
+            </div>
+            <span className="text-xs text-muted-foreground font-mono">
+              {tbAccounts.length > 0 ? Math.round((mappedCount / tbAccounts.length) * 100) : 0}% complete
+            </span>
+          </div>
+
+          {/* Segmented progress bar */}
+          {tbAccounts.length > 0 && (
+            <div className="flex h-2.5 rounded-full overflow-hidden bg-muted/40 gap-px">
+              {bucketCounts.carriedForward > 0 && (
+                <div title={`Carried Forward: ${bucketCounts.carriedForward}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.carriedForward)}%` }}
+                  className="bg-amber-400 dark:bg-amber-500 transition-all" />
+              )}
+              {bucketCounts.confirmed > 0 && (
+                <div title={`Confirmed (manual): ${bucketCounts.confirmed}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.confirmed)}%` }}
+                  className="bg-violet-400 dark:bg-violet-500 transition-all" />
+              )}
+              {bucketCounts.aiMapped > 0 && (
+                <div title={`AI Mapped: ${bucketCounts.aiMapped}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.aiMapped)}%` }}
+                  className="bg-purple-400 dark:bg-purple-500 transition-all" />
+              )}
+              {bucketCounts.autoMapped > 0 && (
+                <div title={`Auto Mapped: ${bucketCounts.autoMapped}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.autoMapped)}%` }}
+                  className="bg-primary/70 transition-all" />
+              )}
+              {bucketCounts.needsReview > 0 && (
+                <div title={`Needs Review (low confidence): ${bucketCounts.needsReview}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.needsReview)}%` }}
+                  className="bg-amber-200 dark:bg-amber-800 transition-all" />
+              )}
+              {bucketCounts.unmapped > 0 && (
+                <div title={`Unmapped: ${bucketCounts.unmapped}`}
+                  style={{ width: `${bucketCounts.pct(bucketCounts.unmapped)}%` }}
+                  className="bg-destructive/40 transition-all" />
+              )}
+            </div>
+          )}
+
+          {/* Legend chips */}
+          <div className="flex flex-wrap gap-2 text-[10px]">
+            {bucketCounts.carriedForward > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                <span className="text-amber-700 dark:text-amber-400">🔁 Carried Forward ({bucketCounts.carriedForward})</span>
+              </span>
+            )}
+            {bucketCounts.confirmed > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-violet-400" />
+                <span className="text-violet-700 dark:text-violet-400">✎ Confirmed ({bucketCounts.confirmed})</span>
+              </span>
+            )}
+            {bucketCounts.aiMapped > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-purple-400" />
+                <span className="text-purple-700 dark:text-purple-400">🤖 AI ({bucketCounts.aiMapped})</span>
+              </span>
+            )}
+            {bucketCounts.autoMapped > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-primary/70" />
+                <span className="text-primary">⚡ Auto ({bucketCounts.autoMapped})</span>
+              </span>
+            )}
+            {bucketCounts.needsReview > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-200 dark:bg-amber-700" />
+                <span className="text-amber-600">⚠ Needs Review ({bucketCounts.needsReview})</span>
+              </span>
+            )}
+            {bucketCounts.unmapped > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-destructive/50" />
+                <span className="text-destructive">✗ Unmapped ({bucketCounts.unmapped})</span>
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* COA Mapping (Financial Statements moved to Stage 5) */}
       <Tabs defaultValue="mapping">
@@ -1540,7 +1654,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           {isOpen && g.items.map((acct) => {
                             const mapping = coaMapping[acct.account_name];
                             const isSelected = selectedAccount === acct.account_name;
-                            const isManualOverride = mapping?.confidence === "manual";
+                            const isCF = mapping?.confidence === "carried_forward";
                             const lineItem = mapping ? activeLeafItems.find((i) => i.code === mapping.code) : null;
                             return (
                               <div
@@ -1549,7 +1663,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 className={cn(
                                   "pl-6 pr-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors border-t",
                                   isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                                  !isSelected && isManualOverride && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                                  !isSelected && isCF && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                                  !isSelected && !isCF && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
                                   !mapping && "bg-destructive/5",
                                 )}
                               >
@@ -1595,15 +1710,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                 </div>
                                 {mapping ? (
                                   <div className="flex items-center gap-1 mt-1">
-                                    <Badge variant="outline" className={cn("text-[8px] px-1",
-                                      isManualOverride
-                                        ? "border-violet-400 text-violet-600 dark:text-violet-400"
-                                        : mapping.confidence === "high" ? "border-primary/40 text-primary"
-                                        : mapping.confidence === "medium" ? "border-muted-foreground/40"
-                                        : "border-destructive/40 text-destructive"
-                                    )}>
-                                      {isManualOverride ? "✎ manual" : mapping.confidence}
+                                    <Badge variant="outline" className={cn("text-[8px] px-1", confBadgeClass(mapping.confidence))}>
+                                      {confBadgeLabel(mapping.confidence)}
                                     </Badge>
+                                    {isCF && (
+                                      <span className="text-[9px] text-amber-600 dark:text-amber-400" title="Validated last year — highest confidence">⭐</span>
+                                    )}
                                     <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
                                     {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
                                   </div>
@@ -1622,7 +1734,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   {unmappedAccounts.map(acct => {
                     const mapping = coaMapping[acct.account_name];
                     const isSelected = selectedAccount === acct.account_name;
-                    const isManualOverride = mapping?.confidence === "manual";
+                    const isCFFlat = mapping?.confidence === "carried_forward";
                     const lineItem = mapping ? activeLeafItems.find(i => i.code === mapping.code) : null;
                     return (
                       <div
@@ -1631,7 +1743,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         className={cn(
                           "px-3 py-2 cursor-pointer text-xs hover:bg-muted/50 transition-colors",
                           isSelected && "bg-primary/10 border-l-2 border-l-primary",
-                          !isSelected && isManualOverride && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
+                          !isSelected && isCFFlat && "bg-amber-50 dark:bg-amber-950/10 border-l-2 border-l-amber-400",
+                          !isSelected && !isCFFlat && mapping?.confidence === "manual" && "bg-violet-50 dark:bg-violet-950/20 border-l-2 border-l-violet-400",
                           !mapping && "bg-destructive/5"
                         )}
                       >
@@ -1686,15 +1799,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                         </div>
                         {mapping ? (
                           <div className="flex items-center gap-1 mt-1">
-                            <Badge variant="outline" className={cn("text-[8px] px-1",
-                              isManualOverride
-                                ? "border-violet-400 text-violet-600 dark:text-violet-400"
-                                : mapping.confidence === "high" ? "border-primary/40 text-primary"
-                                : mapping.confidence === "medium" ? "border-muted-foreground/40"
-                                : "border-destructive/40 text-destructive"
-                            )}>
-                              {isManualOverride ? "✎ manual" : mapping.confidence}
+                            <Badge variant="outline" className={cn("text-[8px] px-1", confBadgeClass(mapping.confidence))}>
+                              {confBadgeLabel(mapping.confidence)}
                             </Badge>
+                            {isCFFlat && (
+                              <span className="text-[9px] text-amber-600 dark:text-amber-400" title="Validated last year — highest confidence">⭐</span>
+                            )}
                             <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
                             {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
                           </div>
@@ -1804,11 +1914,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                           <div className="bg-muted/20 border-l-2 border-primary/30 ml-2">
                             {mappedAccounts.map(a => {
                               const m = coaMapping[a.account_name];
-                              const confClass =
-                                m?.confidence === "manual" ? "bg-violet-100 text-violet-700 border-violet-300" :
-                                m?.confidence === "high" ? "bg-primary/10 text-primary border-primary/30" :
-                                m?.confidence === "medium" ? "bg-muted text-muted-foreground border-muted-foreground/30" :
-                                "bg-destructive/10 text-destructive border-destructive/30";
+                              const confClass = confChipClass(m?.confidence || "low");
                               const opening = a.opening_balance ?? 0;
                               const isNew    = Math.abs(opening) < 0.005 && Math.abs(a.balance) >= 0.005;
                               const isClosed = Math.abs(opening) >= 0.005 && Math.abs(a.balance) < 0.005;
@@ -1821,7 +1927,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                   <div className="flex items-center gap-1.5 min-w-0">
                                     <span className="truncate">{a.account_name}</span>
                                     <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
-                                      {m?.confidence === "manual" ? "✎" : m?.confidence}
+                                      {confBadgeLabel(m?.confidence || "low")}
                                     </Badge>
                                     {isNew && <Badge className="text-[8px] px-1 bg-primary/10 text-primary border-primary/30 shrink-0">NEW</Badge>}
                                     {isClosed && <Badge className="text-[8px] px-1 bg-slate-200 text-slate-700 border-slate-400 shrink-0">CLOSED</Badge>}
@@ -1919,8 +2025,18 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             const currentMapping = coaMapping[reclassifyDialog.accountName];
             const currentLineItem = currentMapping ? activeLeafItems.find(i => i.code === currentMapping.code) : null;
             const newLineItem = reclassifyCode ? activeLeafItems.find(i => i.code === reclassifyCode) : null;
+            const isCFReclassify = currentMapping?.confidence === "carried_forward";
             return (
               <div className="space-y-4 py-1">
+                {isCFReclassify && (
+                  <Alert className="bg-amber-50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-700">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    <AlertTitle className="text-xs text-amber-800 dark:text-amber-300">Prior-Year Validated Mapping</AlertTitle>
+                    <AlertDescription className="text-[11px] text-amber-700 dark:text-amber-400">
+                      This ledger was mapped and validated during last year's audit. Changing it will downgrade its confidence to <strong>manual</strong> and remove the carry-forward status.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">Account</p>
                   <p className="text-sm font-semibold">{reclassifyDialog.accountName}</p>
@@ -2162,5 +2278,47 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
 // ─── Helpers ───
 function confidenceRank(c: string): number {
-  return c === "high" ? 3 : c === "medium" ? 2 : 1;
+  if (c === "carried_forward") return 6;
+  if (c === "manual")          return 5;
+  if (c === "ai")              return 4;
+  if (c === "high")            return 3;
+  if (c === "medium")          return 2;
+  return 1; // low
+}
+
+// Confidence badge styling helpers (used in left panel, right panel, reclassify dialog)
+function confBadgeClass(confidence: string): string {
+  if (confidence === "carried_forward")
+    return "border-amber-400 text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400";
+  if (confidence === "manual")
+    return "border-violet-400 text-violet-600 dark:text-violet-400";
+  if (confidence === "ai")
+    return "border-purple-400 text-purple-600 bg-purple-50 dark:bg-purple-950/30 dark:text-purple-400";
+  if (confidence === "high")
+    return "border-primary/40 text-primary";
+  if (confidence === "medium")
+    return "border-muted-foreground/40 text-muted-foreground";
+  return "border-destructive/40 text-destructive"; // low
+}
+
+function confBadgeLabel(confidence: string): string {
+  if (confidence === "carried_forward") return "🔁 carried";
+  if (confidence === "manual")          return "✎ manual";
+  if (confidence === "ai")              return "🤖 ai";
+  return confidence;
+}
+
+// Right-panel inline badge class (filled variant, same tiers)
+function confChipClass(confidence: string): string {
+  if (confidence === "carried_forward")
+    return "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300";
+  if (confidence === "manual")
+    return "bg-violet-100 text-violet-700 border-violet-300";
+  if (confidence === "ai")
+    return "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-950/40 dark:text-purple-300";
+  if (confidence === "high")
+    return "bg-primary/10 text-primary border-primary/30";
+  if (confidence === "medium")
+    return "bg-muted text-muted-foreground border-muted-foreground/30";
+  return "bg-destructive/10 text-destructive border-destructive/30"; // low
 }
