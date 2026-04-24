@@ -592,10 +592,28 @@ export default function TallySyncPage() {
   }, [ledgerTurnover]);
 
   // TB totals (for footer, now using effective turnover)
-  const tbDrTotal     = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
-  const tbCrTotal     = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
-  const tbDrOpening   = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0);
-  const tbCrOpening   = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0);
+  // Strategy 1 P&L correction applied inline: DB stores P&L closing=0 because
+  // TDL's synthetic opening cancelled the transfer journal turnover. We remove the
+  // DB P&L contribution and add the effective value (debit − credit), matching
+  // exactly what groupedTB shows in the P&L group row.
+  const _plFooter = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
+  const _plStrategy1 = !!(_plFooter && _plFooter.balance_type === "Dr" && (
+    _plFooter.closing_balance !== 0 || _plFooter.opening_balance !== 0 ||
+    (_plFooter.debit_amount ?? 0) > 0 || (_plFooter.credit_amount ?? 0) > 0
+  ));
+  const _plNet  = _plStrategy1 ? (getTurnover(_plFooter!).debit - getTurnover(_plFooter!).credit) : 0;
+  const _plEff  = Math.abs(_plNet);
+  const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
+  const _plEffCr = _plStrategy1 && _plNet <  0 ? _plEff : 0;
+  const _plDbDr  = _plStrategy1 && _plFooter!.balance_type === "Dr" ? _plFooter!.closing_balance : 0;
+  const _plDbCr  = _plStrategy1 && _plFooter!.balance_type === "Cr" ? _plFooter!.closing_balance : 0;
+  const _plOpDr  = _plStrategy1 && _plFooter!.opening_type === "Dr" ? _plFooter!.opening_balance : 0;
+  const _plOpCr  = _plStrategy1 && _plFooter!.opening_type === "Cr" ? _plFooter!.opening_balance : 0;
+
+  const tbDrTotal   = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffDr - _plDbDr);
+  const tbCrTotal   = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffCr - _plDbCr);
+  const tbDrOpening = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0) - _plOpDr;
+  const tbCrOpening = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0) - _plOpCr;
   const tbDebitTotal  = filteredTB.reduce((s, r) => s + getTurnover(r).debit,  0);
   const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
   const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
