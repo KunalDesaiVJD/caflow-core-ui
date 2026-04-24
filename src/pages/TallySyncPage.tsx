@@ -628,11 +628,14 @@ export default function TallySyncPage() {
   // "Loans & Advances (Asset)"), storing them with parent_group=null and is_primary=true.
   // The PRIMARYGROUP field is reliable — if it differs from the group name, the group
   // is NOT a root-level primary.
+  // Strip HTML entities AND raw control characters (Tally embeds \u0004 in some group names)
+  const stripTallyCtrl = (s: string) =>
+    s.replace(/[\x00-\x1F\x7F]/g, "").replace(/&#\d+;/g, "").trim().toLowerCase();
+
   function isTallyPrimary(g: TallyGroup): boolean {
     if (g.primary_group && g.primary_group !== g.group_name) return false;
     if (g.is_primary || !g.parent_group) return true;
-    const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
-    return clean === "primary";
+    return stripTallyCtrl(g.parent_group) === "primary";
   }
 
   function getPrimaryGroup(groupName: string): TallyGroup | null {
@@ -677,14 +680,13 @@ export default function TallySyncPage() {
     const isPrim = (g: TallyGroup) => {
       if (g.primary_group && g.primary_group !== g.group_name) return false;
       if (g.is_primary || !g.parent_group) return true;
-      const clean = g.parent_group.replace(/&#\d+;/g, "").trim().toLowerCase();
-      return clean === "primary";
+      return stripTallyCtrl(g.parent_group) === "primary";
     };
 
     // Exclude Tally's virtual root "Primary" group — it is never a display row
     const primaries = filteredGroups
       .filter(isPrim)
-      .filter(g => g.group_name.replace(/&#\d+;/g, "").trim().toLowerCase() !== "primary");
+      .filter(g => stripTallyCtrl(g.group_name) !== "primary");
     const subs = filteredGroups.filter(g => !isPrim(g));
 
     // BS (non-revenue) primaries first, then PL (revenue), alphabetical within each
@@ -840,10 +842,15 @@ export default function TallySyncPage() {
       if (collectAll(g.group_name).length === 0) continue;
       result.push(makeGroup(g.group_name, g.is_revenue, depth));
     }
-    // Fallback for TB rows whose group isn't in sortedGroups
+    // Fallback for TB rows whose group isn't in sortedGroups.
+    // Skip "Primary" and the empty-string group — these are virtual Tally roots, never display rows.
     const placed = new Set(result.map(r => r.groupName));
     for (const [grp, rows] of byGroup.entries()) {
-      if (!placed.has(grp) && rows.length > 0) result.push(makeGroup(grp, isRevenueGroup(grp), 0));
+      if (!placed.has(grp) && rows.length > 0) {
+        const cleanGrp = stripTallyCtrl(grp);
+        if (cleanGrp === "primary" || cleanGrp === "") continue;
+        result.push(makeGroup(grp, isRevenueGroup(grp), 0));
+      }
     }
 
     // ── Second pass: populate ancestor-group totals ──────────────────────────

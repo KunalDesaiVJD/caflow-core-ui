@@ -316,16 +316,44 @@ export default function AuditIntelligence() {
     refreshEngagements();
   };
 
-  // ─── Delete Engagement ───
+  // ─── Delete Engagement (permanent cascade) ───
   const handleDelete = async () => {
     if (!selectedEngagementId) return;
+    const eid = selectedEngagementId;
     setFormSaving(true);
-    const { error } = await supabase.from("audit_engagements").update({
-      status: "archived",
-    } as any).eq("id", selectedEngagementId);
+    try {
+      // 1. Get import batch IDs first (children reference them)
+      const { data: batches } = await supabase.from("ledger_import_batches" as any).select("id").eq("engagement_id", eid);
+      const batchIds = (batches ?? []).map((b: any) => b.id);
+      if (batchIds.length > 0) {
+        await supabase.from("tb_hierarchy_nodes" as any).delete().in("import_batch_id", batchIds);
+        await supabase.from("ledger_transactions" as any).delete().in("import_batch_id", batchIds);
+        await supabase.from("ledger_import_batches" as any).delete().eq("engagement_id", eid);
+      }
+      // 2. Tally sync tables
+      await supabase.from("tally_vouchers" as any).delete().eq("engagement_id", eid);
+      await supabase.from("tally_trial_balance" as any).delete().eq("engagement_id", eid);
+      await supabase.from("tally_ledgers" as any).delete().eq("engagement_id", eid);
+      await supabase.from("tally_groups" as any).delete().eq("engagement_id", eid);
+      await supabase.from("sync_batches" as any).delete().eq("engagement_id", eid);
+      await supabase.from("trial_balance_snapshots" as any).delete().eq("engagement_id", eid);
+      // 3. Financial statements and other engagement-linked tables
+      await supabase.from("fa_financial_statements" as any).delete().eq("engagement_id", eid);
+      await supabase.from("tally_groups" as any).delete().eq("engagement_id", eid);
+      // 4. TDS filings
+      await supabase.from("tds_filings" as any).delete().eq("engagement_id", eid);
+      // 5. IT returns
+      await supabase.from("it_returns" as any).delete().eq("engagement_id", eid);
+      // 6. Delete the engagement itself
+      const { error } = await supabase.from("audit_engagements").delete().eq("id", eid);
+      if (error) throw error;
+      toast.success("Engagement permanently deleted");
+    } catch (err: any) {
+      toast.error(err.message ?? "Delete failed");
+      setFormSaving(false);
+      return;
+    }
     setFormSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success("Engagement archived");
     setShowDeleteDialog(false);
     setSelectedEngagementId("");
     refreshEngagements();
@@ -816,21 +844,20 @@ export default function AuditIntelligence() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── Delete/Archive Confirmation ─── */}
+      {/* ─── Delete Confirmation ─── */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Archive Engagement?</DialogTitle>
+            <DialogTitle>Permanently Delete Engagement?</DialogTitle>
             <DialogDescription>
-              This will archive the engagement "{selectedEngagement?.client_name} — FY {selectedEngagement?.financial_year}".
-              Archived engagements will no longer appear in the active list but data will be preserved.
+              This will <strong>permanently delete</strong> "{selectedEngagement?.client_name} — FY {selectedEngagement?.financial_year}" and all associated data (Tally sync, trial balance, financial statements, TDS, IT returns). This cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={formSaving}>
               {formSaving && <Loader2 size={16} className="mr-2 animate-spin" />}
-              Archive Engagement
+              Delete Permanently
             </Button>
           </DialogFooter>
         </DialogContent>
