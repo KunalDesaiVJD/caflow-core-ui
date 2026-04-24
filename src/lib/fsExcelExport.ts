@@ -209,21 +209,50 @@ export interface PLRowData {
    * `noteNo` field.
    */
   shareCap:     Pick<PLLineItem, "noteNo">;
+  /**
+   * Profit Before Tax — CY/PY values used by the CFS writer at row 9 as the
+   * starting point for the operating-activities reconciliation. The PL sheet
+   * itself computes PBT via formula in its own row 28; CFS needs the raw
+   * numeric value so the caller must pre-compute it.
+   */
+  pbt:          Pick<PLLineItem, "cy" | "py">;
 }
 
-/** CFS data — still loose pending Phase 4 spec. */
-export interface FSLineItemRow {
-  code:         string;
-  name:         string;
-  depth:        number;
-  noteRef?:     number | null;
-  cy:           number;
-  py:           number;
-  isSubtotal?:  boolean;
-  isHeading?:   boolean;
+/**
+ * A CFS working-capital change — CY only (PY is hardcoded to 0 in writer
+ * per spec, as comparatives aren't reconstructed for the prior year's CFS).
+ */
+export interface CFSChange {
+  cy: number;
 }
 
-export interface CFSRowData { rows: FSLineItemRow[]; }
+/** Optional CY-only amount (used for income-tax-paid which can be null). */
+export interface CFSChangeNullable {
+  cy: number | null;
+}
+
+/**
+ * Cash Flow Statement data shape (Phase 4 spec).
+ *
+ * Section A — Operating Activities needs 4 working-capital change values
+ * and an income-tax-paid figure. All other row values come from cross-
+ * references into BSRowData (inventories, trade receivables) and PLRowData
+ * (PBT, depreciation), which the CFS writer reads directly alongside its
+ * own cfsData argument.
+ *
+ * Caller still passes raw numbers; the writer emits SUM formulas for the
+ * subtotals ("Operating profit before working capital changes", "Cash
+ * generated from operations", "Net cash … from operating activities (A)").
+ */
+export interface CFSRowData {
+  // Section A — Operating Activities
+  tradePayChange:         CFSChange;
+  otherCurrLiabChange:    CFSChange;
+  otherCurrAssetsChange:  CFSChange;
+  incomeTaxPaid:          CFSChangeNullable;
+  // (More keys added in Phase 4D+: Investing activities, Financing activities,
+  //  Net increase/decrease in cash, opening & closing cash balances, AS-3 note)
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  SHARED FORMATTING CONSTANTS (re-used across all 3 worksheets)
@@ -290,18 +319,33 @@ const PL_COLUMNS: Partial<ExcelJS.Column>[] = [
 ];
 
 /**
- * Legacy common FS column layout (Phase 1 placeholder — still used by CFS
- * until its per-sheet spec arrives; BS and PL now have their own).
+ * Cash Flow Statement column layout (Phase 4A spec).
+ *   A  spacer        (3.4)
+ *   B  section letter (2.4)  — "A.", "B.", "C."
+ *   C  main label    (19.3)  — ALL text content
+ *   D  label continuation (14.7)
+ *   E  label continuation (12.7)
+ *   F  spacer        (3.3)
+ *   G  signature col — "For and on behalf of the Board of Directors of" (9.3)
+ *   H  CY amount     (14.7)
+ *   I  PY amount     (15.4)
  */
+const CFS_COLUMNS: Partial<ExcelJS.Column>[] = [
+  { width: 3.4  },   // A  spacer
+  { width: 2.4  },   // B  section letter
+  { width: 19.3 },   // C  main label
+  { width: 14.7 },   // D  label continuation
+  { width: 12.7 },   // E  label continuation
+  { width: 3.3  },   // F  spacer
+  { width: 9.3  },   // G  signature column
+  { width: 14.7 },   // H  CY
+  { width: 15.4 },   // I  PY
+];
+
+/** Legacy placeholder layout — now unused since CFS has its own. */
 const FS_COLUMNS: Partial<ExcelJS.Column>[] = [
-  { width: 2 },   // A  spacer
-  { width: 46 },  // B  Particulars
-  { width: 2 },   // C
-  { width: 2 },   // D
-  { width: 2 },   // E
-  { width: 8 },   // F  Note
-  { width: 18 },  // G  CY
-  { width: 18 },  // H  PY
+  { width: 2 }, { width: 46 }, { width: 2 }, { width: 2 },
+  { width: 2 }, { width: 8 }, { width: 18 }, { width: 18 },
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1261,6 +1305,215 @@ function writeProfitAndLoss(
   sheet.getCell("H58").value = `Date: ${signOffDate}`;
 }
 
+/**
+ * Populate the CFS (Cash Flow Statement) worksheet.
+ *
+ * The CFS is the only sheet that cross-references OTHER statements' amounts:
+ *   - Row 9  "Net profit before tax"       ← plData.pbt
+ *   - Row 11 "Depreciation expense"        ← plData.depreciation
+ *   - Row 20 "Inventories"                 ← bsData.inventories (PY − CY)
+ *   - Row 21 "Trade receivables"           ← bsData.tradeRec    (PY − CY)
+ * So this writer takes `bsData` and `plData` as additional arguments in
+ * addition to its own `cfsData`. Phase 4A-4C covers the columns, merges,
+ * header rows, and Section A (Operating activities). Phase 4D+ will append
+ * Sections B (Investing), C (Financing), and the AS-3 reconciliation note.
+ */
+function writeCashFlow(
+  sheet:   ExcelJS.Worksheet,
+  ctx:     FsExportContext,
+  data:    CFSRowData,
+  bsData:  BSRowData,
+  plData:  PLRowData,
+): void {
+  const { cyYear, pyYear, companyName } = ctx;
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 4A — Merged cells (apply BEFORE writing any row data)
+  // ───────────────────────────────────────────────────────────────────────
+  sheet.mergeCells("B1:I1");     // Company name
+  sheet.mergeCells("B3:I3");     // Statement title
+  sheet.mergeCells("H4:I4");     // "(Amount in Rs. `000)"
+  sheet.mergeCells("B5:G6");     // "Particulars" header (2-row)
+  sheet.mergeCells("H5:H6");     // CY header (2-row)
+  sheet.mergeCells("I5:I6");     // PY header (2-row)
+  sheet.mergeCells("C46:I46");   // AS-3 note text (populated in Phase 4D)
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 4B — Header rows (1–6)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 1 — Company name (B1:I1 merged)
+  sheet.getCell("B1").value = companyName;
+  sheet.getCell("B1").font = { bold: true, size: 12 };
+  sheet.getCell("B1").alignment = { horizontal: "center" };
+  sheet.getRow(1).height = 19.5;
+
+  // Row 2 — spacer
+  sheet.getRow(2).height = 6;
+
+  // Row 3 — Statement title
+  //         CRITICAL: square brackets around the date — "[31 March <cyYear>]"
+  sheet.getCell("B3").value = `Cash Flow Statement for the year ended [31 March ${cyYear}]`;
+  sheet.getCell("B3").font = { bold: true, size: 11 };
+  sheet.getCell("B3").alignment = { horizontal: "center" };
+  sheet.getRow(3).height = 15.75;
+
+  // Row 4 — "(Amount in Rs. `000)"  (H4:I4 merged — right side, not left like BS)
+  sheet.getCell("H4").value = "(Amount in Rs. `000)";
+  sheet.getCell("H4").font = { bold: true, size: 10 };
+  sheet.getCell("H4").alignment = { horizontal: "center" };
+
+  // Row 5-6 — Column headers (2-row merges applied in 4A)
+  sheet.getCell("B5").value = "Particulars";
+  sheet.getCell("B5").font = { bold: true, size: 10 };
+  sheet.getCell("B5").alignment = { horizontal: "center", wrapText: true };
+  sheet.getCell("H5").value = `As at 31st March, ${cyYear}`;
+  sheet.getCell("H5").font = { bold: true, size: 10 };
+  sheet.getCell("H5").alignment = { horizontal: "center", wrapText: true };
+  sheet.getCell("I5").value = `As at 31st March, ${pyYear}`;
+  sheet.getCell("I5").font = { bold: true, size: 10 };
+  sheet.getCell("I5").alignment = { horizontal: "center", wrapText: true };
+  sheet.getRow(5).height = 15.75;
+  sheet.getRow(6).height = 12.0;
+  sheet.getRow(7).height = 5.1;   // spacer before Section A
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Phase 4C — Section A: Operating Activities (rows 8–27)
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Row 8 — A. Cash flows from operating activities
+  sheet.getCell("B8").value = "A.";
+  sheet.getCell("B8").font = { bold: true, size: 10 };
+  sheet.getCell("C8").value = "Cash flows from operating activities";
+  sheet.getCell("C8").font = { bold: true, size: 10 };
+
+  // Row 9 — Net profit before tax  (cross-referenced from PL row 28 → plData.pbt)
+  sheet.getCell("C9").value = "Net profit before tax";
+  sheet.getCell("C9").font = { bold: true, size: 10 };
+  sheet.getCell("H9").value = plData.pbt.cy;
+  sheet.getCell("H9").font = { bold: true, size: 10 };
+  sheet.getCell("H9").alignment = { horizontal: "right" };
+  sheet.getCell("I9").value = plData.pbt.py;
+  sheet.getCell("I9").font = { bold: true, size: 10 };
+  sheet.getCell("I9").alignment = { horizontal: "right" };
+
+  // Row 10 — Adjustments for:  (label only, no amounts)
+  sheet.getCell("C10").value = "Adjustments for:";
+  sheet.getCell("C10").font = { bold: false, size: 9 };
+
+  // Row 11 — Depreciation expense  (cross-referenced from PL row 19)
+  sheet.getCell("C11").value = "Depreciation expense";
+  sheet.getCell("C11").font = { bold: false, size: 9 };
+  sheet.getCell("H11").value = plData.depreciation.cy;
+  sheet.getCell("H11").alignment = { horizontal: "right" };
+  sheet.getCell("I11").value = plData.depreciation.py;
+  sheet.getCell("I11").alignment = { horizontal: "right" };
+
+  // Row 12 — Interest income  (label-only, caller can edit the sheet manually)
+  sheet.getCell("C12").value = "Interest income";
+  sheet.getCell("C12").font = { bold: false, size: 9 };
+
+  // Row 13 — Profit on sale of assets  (label-only)
+  sheet.getCell("C13").value = "Profit on sale of assets";
+  sheet.getCell("C13").font = { bold: false, size: 9 };
+
+  // Row 14 — Interest expense  (label-only)
+  sheet.getCell("C14").value = "Interest expense";
+  sheet.getCell("C14").font = { bold: false, size: 9 };
+
+  // Row 15 — spacer
+  sheet.getRow(15).height = 3;
+
+  // Row 16 — Operating profit before working capital changes  SUM(H9:H14)
+  sheet.getCell("C16").value = "Operating profit before working capital changes";
+  sheet.getCell("C16").font = { bold: true, size: 9 };
+  sheet.getCell("H16").value = { formula: "SUM(H9:H14)" };
+  sheet.getCell("H16").font = { bold: true, size: 9 };
+  sheet.getCell("H16").alignment = { horizontal: "right" };
+  sheet.getCell("I16").value = { formula: "SUM(I9:I14)" };
+  sheet.getCell("I16").font = { bold: true, size: 9 };
+  sheet.getCell("I16").alignment = { horizontal: "right" };
+
+  // Row 17 — Changes in working capital:  (label only)
+  sheet.getCell("C17").value = "Changes in working capital:";
+  sheet.getCell("C17").font = { bold: true, size: 9 };
+
+  // Row 18 — Trade payables  (CY from cfsData; PY hardcoded 0)
+  sheet.getCell("C18").value = "Trade payables";
+  sheet.getCell("C18").font = { bold: false, size: 9 };
+  sheet.getCell("H18").value = data.tradePayChange.cy;
+  sheet.getCell("H18").alignment = { horizontal: "right" };
+  sheet.getCell("I18").value = 0;
+  sheet.getCell("I18").alignment = { horizontal: "right" };
+
+  // Row 19 — Other current liabilities  (size 10 per spec)
+  sheet.getCell("C19").value = "Other current liabilities";
+  sheet.getCell("C19").font = { bold: false, size: 10 };
+  sheet.getCell("H19").value = data.otherCurrLiabChange.cy;
+  sheet.getCell("H19").alignment = { horizontal: "right" };
+  sheet.getCell("I19").value = 0;
+  sheet.getCell("I19").alignment = { horizontal: "right" };
+
+  // Row 20 — Inventories  (PY − CY: decrease in inventory = positive cash)
+  sheet.getCell("C20").value = "Inventories";
+  sheet.getCell("C20").font = { bold: false, size: 9 };
+  sheet.getCell("H20").value = bsData.inventories.py - bsData.inventories.cy;
+  sheet.getCell("H20").alignment = { horizontal: "right" };
+  sheet.getCell("I20").value = 0;
+  sheet.getCell("I20").alignment = { horizontal: "right" };
+
+  // Row 21 — Trade receivables  (PY − CY)
+  sheet.getCell("C21").value = "Trade receivables";
+  sheet.getCell("C21").font = { bold: false, size: 9 };
+  sheet.getCell("H21").value = bsData.tradeRec.py - bsData.tradeRec.cy;
+  sheet.getCell("H21").alignment = { horizontal: "right" };
+  sheet.getCell("I21").value = 0;
+  sheet.getCell("I21").alignment = { horizontal: "right" };
+
+  // Row 22 — Short term provision  (label-only)
+  sheet.getCell("C22").value = "Short term provision";
+  sheet.getCell("C22").font = { bold: false, size: 9 };
+
+  // Row 23 — Other current assets  (size 10 per spec)
+  sheet.getCell("C23").value = "Other current assets";
+  sheet.getCell("C23").font = { bold: false, size: 10 };
+  sheet.getCell("H23").value = data.otherCurrAssetsChange.cy;
+  sheet.getCell("H23").alignment = { horizontal: "right" };
+  sheet.getCell("I23").value = 0;
+  sheet.getCell("I23").alignment = { horizontal: "right" };
+
+  // Row 24 — Cash generated from operations  SUM(H16:H23)
+  sheet.getCell("C24").value = "Cash generated from operations";
+  sheet.getCell("C24").font = { bold: true, size: 9 };
+  sheet.getCell("H24").value = { formula: "SUM(H16:H23)" };
+  sheet.getCell("H24").font = { bold: true, size: 9 };
+  sheet.getCell("H24").alignment = { horizontal: "right" };
+  sheet.getCell("I24").value = { formula: "SUM(I16:I23)" };
+  sheet.getCell("I24").font = { bold: true, size: 9 };
+  sheet.getCell("I24").alignment = { horizontal: "right" };
+
+  // Row 25 — Income tax paid  (size 10, null-coalescing per spec)
+  sheet.getCell("C25").value = "Income tax paid";
+  sheet.getCell("C25").font = { bold: false, size: 10 };
+  sheet.getCell("H25").value = data.incomeTaxPaid.cy ?? 0;
+  sheet.getCell("H25").alignment = { horizontal: "right" };
+  sheet.getCell("I25").value = 0;
+  sheet.getCell("I25").alignment = { horizontal: "right" };
+
+  // Row 26 — Net cash generated from operating activities (A)
+  sheet.getCell("C26").value = "Net cash generated from operating activities (A)";
+  sheet.getCell("C26").font = { bold: true, size: 9 };
+  sheet.getCell("H26").value = { formula: "H24+H25" };
+  sheet.getCell("H26").font = { bold: true, size: 9 };
+  sheet.getCell("H26").alignment = { horizontal: "right" };
+  sheet.getCell("I26").value = { formula: "I24+I25" };
+  sheet.getCell("I26").font = { bold: true, size: 9 };
+  sheet.getCell("I26").alignment = { horizontal: "right" };
+
+  // Row 27 — spacer
+  sheet.getRow(27).height = 5.1;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  MAIN EXPORT FUNCTION
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1326,10 +1579,10 @@ export async function generateFinancialStatementsXLSX(
   pl.columns = PL_COLUMNS;
   writeProfitAndLoss(pl, ctx, plData);
 
-  // ── Worksheet: CFS — still on legacy layout until Phase 4 spec arrives ──
-  const cfs = wb.addWorksheet("Cash Flow Statement", { views: [{ showGridLines: false }] });
-  cfs.columns = FS_COLUMNS;
-  void cfsData; // populated in Phase 4
+  // ── Worksheet: CFS (Cash Flow Statement) — Phase 4A-4C applied ──────────
+  const cfs = wb.addWorksheet("CFS", { views: [{ showGridLines: false }] });
+  cfs.columns = CFS_COLUMNS;
+  writeCashFlow(cfs, ctx, cfsData, bsData, plData);
 
   // ── Serialise to a Blob ──────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
@@ -1366,13 +1619,14 @@ export interface FsExportContext {
   dir2DIN:      string;
 }
 
-// Re-exports so Phase 2/3 helpers can share the same formatting primitives.
+// Re-exports so Phase 2/3/4 helpers can share the same formatting primitives.
 export {
   MONEY_FMT,
   THIN_BLACK,
   FULL_BORDER,
   BS_COLUMNS,
   PL_COLUMNS,
+  CFS_COLUMNS,
   FS_COLUMNS,
   DASH,
 };
