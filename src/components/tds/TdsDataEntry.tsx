@@ -506,10 +506,20 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
       // filing_id might be stale (e.g., filing was re-created after an
       // accidental delete).
       const firstAll = grouped[list[0].id] || [];
+      const periodNum = (fy: string, q: string) => {
+        const y = parseInt(fy.split("-")[0], 10);
+        const n = parseInt(q.replace("Q", ""), 10);
+        return y * 10 + n;
+      };
+      const currPeriod = periodNum(selFy, selQuarter);
       const isCurrent = (d: any) =>
         d.filing_id === filingId ||
         (d.quarter === selQuarter && d.financial_year === selFy);
-      setPrevEntries(firstAll.filter(d => !isCurrent(d)));
+      const isPrior = (d: any) =>
+        d.quarter && d.financial_year &&
+        periodNum(d.financial_year, d.quarter) < currPeriod;
+      // Future-quarter entries are excluded from this view entirely.
+      setPrevEntries(firstAll.filter(d => isPrior(d) && !isCurrent(d)));
       setDeductees(firstAll.filter(d => isCurrent(d)));
     } else {
       setSelectedChallan(null); setDeductees([]); setPrevEntries([]);
@@ -538,6 +548,22 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     return false;
   }, [filing, selQuarter, selFy]);
 
+  // Helper: is this deductee from a PRIOR quarter (earlier FY/quarter than the
+  // currently-selected one)? These appear as read-only carry-forward entries.
+  // Future-quarter entries (belonging to a LATER quarter) are NOT prior — they
+  // should only be visible in their own quarter's view, not here.
+  const isPriorQuarterDeductee = useCallback((d: { quarter?: string | null; financial_year?: string | null }) => {
+    if (!d.quarter || !d.financial_year) return false;
+    const periodNum = (fy: string, q: string) => {
+      const y = parseInt(fy.split("-")[0], 10);
+      const n = parseInt(q.replace("Q", ""), 10);
+      return y * 10 + n;
+    };
+    const deductee = periodNum(d.financial_year, d.quarter);
+    const current = periodNum(selFy, selQuarter);
+    return deductee < current;
+  }, [selQuarter, selFy]);
+
   // Issue 5: Split entries into prev (read-only) and current (editable)
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from("tds_deductees").select("*")
@@ -545,10 +571,15 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
     const list = (data || []) as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
-    // Split into prev (carry-forward from earlier quarters, read-only) and
-    // current (editable entries that belong to THIS quarter's filing).
+    // Three-way split:
+    //   - current  → editable entries belonging to THIS quarter's filing
+    //   - prior    → read-only entries from EARLIER quarters (carry-forward IN)
+    //   - future   → entries from LATER quarters (excluded from this view
+    //                entirely; they belong to their own quarter's view only).
+    // This prevents Q2 utilisation entries from showing up as read-only rows
+    // when the user is viewing the Q1 page of the same carry-forward challan.
     if (filing) {
-      setPrevEntries(list.filter(d => !isCurrentQuarterDeductee(d)));
+      setPrevEntries(list.filter(d => isPriorQuarterDeductee(d)));
       setDeductees(list.filter(d => isCurrentQuarterDeductee(d)));
     } else {
       setPrevEntries([]);
