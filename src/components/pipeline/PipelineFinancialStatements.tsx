@@ -969,7 +969,26 @@ export default function PipelineFinancialStatements({
     }
   }, [engagement, engagementId, activeFlatItems, coaMapping]);
 
+  // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
+  // Writes enriched { v, by, at } shape; amounts without meta retain legacy shape.
+  const buildPyPayload = useCallback(
+    (amounts: Record<string, number>, meta: Record<string, { by: string; at: string }>) => {
+      const payload: Record<string, any> = {};
+      for (const [k, v] of Object.entries(amounts)) {
+        const n = Number(v);
+        if (!Number.isFinite(n) || Math.abs(n) <= 0.005) continue;
+        const m = meta[k];
+        payload[k] = m
+          ? { v: Math.round(n * 100) / 100, by: m.by, at: m.at }
+          : Math.round(n * 100) / 100;
+      }
+      return payload;
+    },
+    []
+  );
+
   // Apply confirmed Tally fetch → merge into pyManualAmounts and persist
+  // IMPORTANT: declared after buildPyPayload to avoid TDZ error in deps array
   const applyPyTallyFetch = useCallback(async () => {
     if (!fetchPyTallyPreview) return;
     const byName = (user as any)?.name || (user as any)?.email || "Unknown";
@@ -991,24 +1010,6 @@ export default function PipelineFinancialStatements({
     setFetchPyTallyPreview(null);
     toast(`PY P&L populated — ${Object.keys(fetchPyTallyPreview).length} line items fetched from FY-1 Tally.`);
   }, [fetchPyTallyPreview, pyManualAmounts, pyManualMeta, user, buildPyPayload, engagementId, queryClient]);
-
-  // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
-  // Writes enriched { v, by, at } shape; amounts without meta retain legacy shape.
-  const buildPyPayload = useCallback(
-    (amounts: Record<string, number>, meta: Record<string, { by: string; at: string }>) => {
-      const payload: Record<string, any> = {};
-      for (const [k, v] of Object.entries(amounts)) {
-        const n = Number(v);
-        if (!Number.isFinite(n) || Math.abs(n) <= 0.005) continue;
-        const m = meta[k];
-        payload[k] = m
-          ? { v: Math.round(n * 100) / 100, by: m.by, at: m.at }
-          : Math.round(n * 100) / 100;
-      }
-      return payload;
-    },
-    []
-  );
 
   const savePyManual = async () => {
     setPyManualSaving(true);
