@@ -459,9 +459,32 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   };
 
   const fetchChallans = async (filingId: string) => {
+    // Query by the stable logical key (client+FY+quarter+form) rather than
+    // just filing_id. filing_id is a UUID that can drift if the filing row
+    // was re-created (e.g., after a prior delete) — its challans would then
+    // be orphaned and disappear from the UI while still existing in the DB.
+    // Self-heal any stale filing_id back to the current one so future queries
+    // match strictly too.
     const { data } = await supabase.from("tds_challans").select("*")
-      .eq("filing_id", filingId).order("deposit_date", { ascending: true });
+      .eq("client_id", selClient)
+      .eq("form_type", selForm)
+      .eq("financial_year", selFy)
+      .eq("quarter", selQuarter)
+      .order("deposit_date", { ascending: true });
     const list = (data as unknown as Challan[]) || [];
+
+    // Self-heal filing_id drift
+    const stale = list.filter(c => c.filing_id !== filingId);
+    if (stale.length > 0) {
+      console.log(`[TDS] Repairing filing_id on ${stale.length} challan(s) for ${selFy} ${selQuarter} ${selForm}`);
+      const { error: fixErr } = await supabase.from("tds_challans")
+        .update({ filing_id: filingId })
+        .in("id", stale.map(c => c.id));
+      if (fixErr) console.warn("[TDS] filing_id self-heal failed:", fixErr.message);
+      // Reflect the fix in the in-memory list so the UI shows correct relations
+      stale.forEach(c => { (c as any).filing_id = filingId; });
+    }
+
     setChallans(list);
     if (list.length > 0) {
       const challanIds = list.map(c => c.id);
