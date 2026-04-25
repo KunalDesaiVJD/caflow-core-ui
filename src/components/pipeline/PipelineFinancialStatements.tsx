@@ -4056,8 +4056,11 @@ export default function PipelineFinancialStatements({
           <TabsContent value="pl" className="mt-3">
             {/* ── Manual PY P&L entry ──
                 Shows when no prior engagement FS rows exist AND the user has
-                not opted into py_shell or explicitly skipped (none). */}
-            {noPriorEngagement &&
+                not opted into py_shell or explicitly skipped (none).
+                Corporate entities use the inline-editable PY column on the
+                pixel-perfect P&L view instead — hide this alert for them. */}
+            {isNonCorporate &&
+             noPriorEngagement &&
              (engagement as any)?.py_source !== "py_shell" &&
              (engagement as any)?.py_source !== "none" && (
               <Alert className="mb-3">
@@ -4133,8 +4136,11 @@ export default function PipelineFinancialStatements({
 
             {/* ── Manual PY Annexures (ledger-level breakdown per FS code) ──
                 Shown alongside manual P&L entry. Allows PY line items that
-                don't exist in CY — each FS code can carry its own ledger list. */}
-            {noPriorEngagement &&
+                don't exist in CY — each FS code can carry its own ledger list.
+                Corporate entities edit PY values directly on the pixel-perfect
+                P&L statement — hide this alert for them. */}
+            {isNonCorporate &&
+             noPriorEngagement &&
              (engagement as any)?.py_source !== "py_shell" &&
              (engagement as any)?.py_source !== "none" && (
               <Alert className="mb-3">
