@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, FileText, Award, ClipboardList } from "lucide-react";
+import { Sparkles, Loader2, Save, Eye, FileText, Award, ClipboardList } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
 import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
