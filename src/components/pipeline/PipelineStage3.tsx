@@ -27,9 +27,11 @@ import EngagementHeader from "@/components/pipeline/EngagementHeader";
 import {
   ArrowRight, CheckCircle2, AlertTriangle, Search, Download, FileSpreadsheet,
   Link2, RefreshCw, Eye, Pencil, ChevronRight, ChevronDown, Loader2, Trash2,
+  BookOpen, Brain,
 } from "lucide-react";
 import { NCE_FS_ITEMS, NCE_AUTO_MAP_RULES } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
+import { MappingRulesPanel, type MappingRule } from "@/components/pipeline/MappingRulesPanel";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -301,6 +303,16 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }>>({});
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
 
+  // ─── COA Intelligence & Manual Rules ───
+  // Intelligence: cross-client learned patterns from coa_mapping_intelligence
+  // Rules: firm/client-level manual instructions from coa_mapping_rules
+  const [intelligence, setIntelligence] = useState<{
+    normalized_name: string; account_head: string;
+    confidence_score: number; times_confirmed: number; times_overridden: number;
+  }[]>([]);
+  const [mappingRules, setMappingRules] = useState<MappingRule[]>([]);
+  const [rulesOpen, setRulesOpen] = useState(false);
+
   // ─── FS state (manual overrides) ───
   const [manualOverrides, setManualOverrides] = useState<Record<string, { amount: number; reason: string }>>({});
   const [pyAmounts, setPyAmounts] = useState<Record<string, number>>({});
@@ -541,6 +553,45 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [priorEngagement]);
 
+  // ─── Load cross-client intelligence + firm mapping rules ───────────────────
+  // Intelligence is loaded once per entity type and used in auto-mapping tier.
+  // Rules are firm/client scoped and take highest priority.
+  useEffect(() => {
+    if (!engagementId) return;
+    const entityTypeKey = isNonCorporate ? "nce" : "corporate";
+
+    // Fetch intelligence (confidence >= 60, ordered by confidence desc)
+    supabase
+      .from("coa_mapping_intelligence" as any)
+      .select("normalized_name, account_head, confidence_score, times_confirmed, times_overridden")
+      .eq("entity_type", entityTypeKey)
+      .gte("confidence_score", 60)
+      .order("confidence_score", { ascending: false })
+      .limit(500)
+      .then(({ data }: any) => {
+        if (data) setIntelligence(data);
+      });
+
+    // Fetch manual rules for this firm/client
+    if (engagement?.firm_id) {
+      (supabase as any)
+        .from("coa_mapping_rules")
+        .select("*")
+        .eq("firm_id", engagement.firm_id)
+        .eq("active", true)
+        .order("priority", { ascending: false })
+        .then(({ data }: any) => {
+          if (data) {
+            // Filter: null client_id = all clients; else must match this client
+            const filtered = data.filter((r: MappingRule) =>
+              r.client_id === null || r.client_id === engagement.client_id
+            );
+            setMappingRules(filtered);
+          }
+        });
+    }
+  }, [engagementId, isNonCorporate, engagement?.firm_id, engagement?.client_id]);
+
   // Load manual overrides from existing FS
   useEffect(() => {
     if (existingFs && existingFs.length > 0) {
@@ -554,19 +605,56 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     }
   }, [existingFs]);
 
+  // ─── Normalise ledger name (matches DB function) ─────────────────────────
+  const normalizeName = (name: string) =>
+    name.toLowerCase().replace(/\s+/g, " ").trim();
+
+  // ─── Apply a user rule against a ledger + group ───────────────────────────
+  const applyRules = (
+    ledgerName: string,
+    tallyGroup: string,
+    rules: MappingRule[],
+  ): string | null => {
+    const norm  = normalizeName(ledgerName);
+    const group = normalizeName(tallyGroup);
+    for (const r of rules) { // already sorted by priority desc
+      const pattern = normalizeName(r.match_value);
+      let matched = false;
+      switch (r.match_type) {
+        case "exact":       matched = norm === pattern; break;
+        case "contains":    matched = norm.includes(pattern); break;
+        case "starts_with": matched = norm.startsWith(pattern); break;
+        case "ends_with":   matched = norm.endsWith(pattern); break;
+        case "tally_group": matched = group === pattern; break;
+      }
+      if (matched) return r.fs_code;
+    }
+    return null;
+  };
+
+  // ─── Look up intelligence for a ledger ────────────────────────────────────
+  const applyIntelligence = (
+    ledgerName: string,
+    intel: typeof intelligence,
+  ): { code: string; confidence_score: number } | null => {
+    const norm = normalizeName(ledgerName);
+    const hit  = intel.find(i => i.normalized_name === norm);
+    return hit ? { code: hit.account_head, confidence_score: hit.confidence_score } : null;
+  };
+
   // ═══════ AUTO-MAPPING ═══════
-  //   Layered pipeline, per ledger:
-  //     1. parent_group match  (Tally's native taxonomy — strongest signal)
-  //     2. keyword rules       (ledger name substring match)
-  //     3. unmatched           (stays in "Unmapped" bucket)
+  //   Layered pipeline, per ledger (highest → lowest priority):
+  //     0. Manual rules    (firm/client instructions — always wins)
+  //     1. parent_group    (Tally's native taxonomy)
+  //     1.5 Intelligence   (cross-client learned patterns, conf ≥ 75)
+  //     2. keyword rules   (ledger name substring match)
+  //     3. unmatched       (stays in "Unmapped" bucket)
   //
-  //   Whichever stage fires first wins. The winner's confidence is kept; if a
-  //   later stage would promote confidence (rare), we take the higher rank.
-  //   Existing manual overrides ("manual" confidence) are preserved.
+  //   Existing manual / carried-forward mappings are always preserved.
   const runAutoMapping = useCallback(() => {
     const groupTable = isNonCorporate ? PARENT_GROUP_MAP_NCE : PARENT_GROUP_MAP_CORP;
     const newMapping: typeof coaMapping = {};
-    let viaGroup = 0, viaKeyword = 0;
+    let viaRule = 0, viaIntel = 0, viaGroup = 0, viaKeyword = 0;
 
     for (const acct of tbAccounts) {
       // Preserve manual overrides and carried-forward (PY-validated) mappings
@@ -576,24 +664,47 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         continue;
       }
 
-      let best: { code: string; confidence: string; source: "group" | "keyword" } | null = null;
+      let best: { code: string; confidence: string; source: string } | null = null;
+
+      // 0. Manual rules (highest priority)
+      const ruleCode = applyRules(acct.account_name, acct.account_group, mappingRules);
+      if (ruleCode) {
+        best = { code: ruleCode, confidence: "manual", source: "rule" };
+        viaRule++;
+      }
 
       // 1. parent_group
-      const g = matchParentGroup(acct.account_group, groupTable);
-      if (g) best = { code: g.code, confidence: g.confidence, source: "group" };
+      if (!best) {
+        const g = matchParentGroup(acct.account_group, groupTable);
+        if (g) { best = { code: g.code, confidence: g.confidence, source: "group" }; viaGroup++; }
+      }
 
-      // 2. keyword rules
-      const name = acct.account_name.toLowerCase();
-      for (const rule of activeAutoRules) {
-        if (rule.keywords.some(kw => name.includes(kw))) {
-          if (!best || confidenceRank(rule.confidence) > confidenceRank(best.confidence)) {
-            best = { code: rule.code, confidence: rule.confidence, source: "keyword" };
+      // 1.5. Intelligence (confidence ≥ 75 overrides lower-ranked, not higher)
+      if (!best || best.source === "keyword") {
+        const hit = applyIntelligence(acct.account_name, intelligence);
+        if (hit && hit.confidence_score >= 75) {
+          const intelConf = hit.confidence_score >= 90 ? "high" : "medium";
+          if (!best || confidenceRank(intelConf) > confidenceRank(best.confidence)) {
+            best = { code: hit.code, confidence: intelConf, source: "intelligence" };
+            viaIntel++;
           }
         }
       }
 
+      // 2. keyword rules
+      if (!best || best.source !== "rule") {
+        const name = acct.account_name.toLowerCase();
+        for (const rule of activeAutoRules) {
+          if (rule.keywords.some(kw => name.includes(kw))) {
+            if (!best || confidenceRank(rule.confidence) > confidenceRank(best.confidence)) {
+              best = { code: rule.code, confidence: rule.confidence, source: "keyword" };
+            }
+          }
+        }
+        if (best?.source === "keyword") viaKeyword++;
+      }
+
       if (best) {
-        if (best.source === "group") viaGroup++; else viaKeyword++;
         const lineItem = activeLeafItems.find(i => i.code === best!.code);
         newMapping[acct.account_name] = {
           code: best.code,
@@ -606,11 +717,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     setCoaMapping(newMapping);
     const total = Object.keys(newMapping).length;
+    const parts = [
+      viaRule    > 0 ? `${viaRule} via rules`        : "",
+      viaGroup   > 0 ? `${viaGroup} via Tally group` : "",
+      viaIntel   > 0 ? `${viaIntel} via AI memory`   : "",
+      viaKeyword > 0 ? `${viaKeyword} via keywords`   : "",
+    ].filter(Boolean).join(" · ");
     toast.success(
       `Auto-mapped ${total} of ${tbAccounts.length} accounts`,
-      { description: `${viaGroup} via Tally group · ${viaKeyword} via name keywords` },
+      { description: parts || "All via heuristics" },
     );
-  }, [tbAccounts, activeAutoRules, activeLeafItems, isNonCorporate, coaMapping]);
+  }, [tbAccounts, activeAutoRules, activeLeafItems, isNonCorporate, coaMapping, intelligence, mappingRules]);
 
   // ═══════ UNMAP ACTIONS ═══════
   const unmapAccount = useCallback(async (accountName: string) => {
@@ -653,8 +770,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       for (const acct of tbAccounts) {
         if (freshMapping[acct.account_name]) continue; // already preserved (CF)
         let best: { code: string; confidence: string } | null = null;
-        const g = matchParentGroup(acct.account_group, groupTable);
-        if (g) best = { code: g.code, confidence: g.confidence };
+
+        // 0. Manual rules
+        const ruleCode = applyRules(acct.account_name, acct.account_group, mappingRules);
+        if (ruleCode) best = { code: ruleCode, confidence: "manual" };
+
+        // 1. parent_group
+        if (!best) {
+          const g = matchParentGroup(acct.account_group, groupTable);
+          if (g) best = { code: g.code, confidence: g.confidence };
+        }
+
+        // 1.5. Intelligence
+        if (!best) {
+          const hit = applyIntelligence(acct.account_name, intelligence);
+          if (hit && hit.confidence_score >= 75) {
+            best = { code: hit.code, confidence: hit.confidence_score >= 90 ? "high" : "medium" };
+          }
+        }
+
+        // 2. keyword rules
         const name = acct.account_name.toLowerCase();
         for (const rule of activeAutoRules) {
           if (rule.keywords.some(kw => name.includes(kw))) {
@@ -663,6 +798,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             }
           }
         }
+
         if (best) {
           const lineItem = activeLeafItems.find(i => i.code === best!.code);
           freshMapping[acct.account_name] = {
@@ -736,11 +872,47 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     if (persist) {
       try { await supabase.from("audit_engagements").update({ coa_mapping: updated } as any).eq("id", engagementId); } catch { /* ignore */ }
     }
+
+    // ── Feed user correction into cross-client intelligence table ──
+    // Fire-and-forget: never block the UI.
+    if (confidence === "manual") {
+      const norm = normalizeName(ledgerName);
+      const entityTypeKey = isNonCorporate ? "nce" : "corporate";
+      const bsPl = lineItem.section?.startsWith("PL") ? "PL" : "BS";
+      supabase.rpc("upsert_coa_intelligence" as any, {
+        p_normalized_name: norm,
+        p_entity_type:     entityTypeKey,
+        p_account_head:    code,
+        p_bs_pl:           bsPl,
+        p_account_group:   acct?.account_group || null,
+        p_firm_id:         engagement?.firm_id || null,
+        p_engagement_id:   engagementId,
+        p_accepted:        true,
+      }).then(() => {
+        // Optimistically update local intelligence so next auto-map uses it
+        setIntelligence(prev => {
+          const idx = prev.findIndex(i => i.normalized_name === norm);
+          if (idx >= 0) {
+            return prev.map((i, n) => n !== idx ? i : {
+              ...i,
+              account_head:    code,
+              times_confirmed: i.times_confirmed + 1,
+              confidence_score: Math.min(99, i.confidence_score + 3),
+            });
+          }
+          return [
+            ...prev,
+            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0 },
+          ];
+        });
+      });
+    }
+
     toast.success(
       `Mapped "${ledgerName}" → ${lineItem.name}`,
       propagated > 0 ? { description: `Auto-applied to ${propagated} other unmapped ledgers in "${group}"` } : undefined,
     );
-  }, [activeLeafItems, coaMapping, engagementId, tbAccounts]);
+  }, [activeLeafItems, coaMapping, engagementId, tbAccounts, isNonCorporate, engagement?.firm_id]);
 
   // ═══════ AI MAPPING (Claude via claude-gateway) ═══════
   // Sends unmapped + low-confidence ledgers in batches to fs_line_mapper.
@@ -781,11 +953,18 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           closing_balance: Math.round(a.balance),
           side:            a.balance >= 0 ? "Dr" : "Cr",
         }));
+        // Include high-confidence intelligence patterns so Claude uses proven mappings
+        const intelAnchors = intelligence
+          .filter(i => i.confidence_score >= 80)
+          .slice(0, 60)
+          .map(i => ({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) }));
+
         const payload = {
           entity_type:        isNonCorporate ? "nce" : "corporate",
           fs_items:           fsItems,
           ledgers:            batch,
-          ...(cfAnchors.length > 0 ? { prior_year_anchors: cfAnchors } : {}),
+          ...(cfAnchors.length   > 0 ? { prior_year_anchors:   cfAnchors   } : {}),
+          ...(intelAnchors.length > 0 ? { learned_patterns:    intelAnchors } : {}),
         };
         const { data, error } = await supabase.functions.invoke("claude-gateway", {
           body: { request_type: "fs_line_mapper", user_message: JSON.stringify(payload) },
@@ -1252,13 +1431,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   }, [unmappedAccounts, tbAccounts, coaMapping]);
 
   // ═══════ SAVE ═══════
+  // On save, batch-sync all manual mappings to coa_mapping_intelligence so
+  // every confirmed mapping contributes to the cross-client learning pool.
   const saveMapping = async () => {
     setSaving(true);
     try {
       await supabase.from("audit_engagements").update({
         coa_mapping: coaMapping,
       } as any).eq("id", engagementId);
-      toast.success("Mapping saved");
+
+      // Background: sync manual mappings → intelligence table (per-period learning)
+      const entityTypeKey = isNonCorporate ? "nce" : "corporate";
+      supabase.rpc("sync_engagement_intelligence" as any, {
+        p_engagement_id: engagementId,
+        p_entity_type:   entityTypeKey,
+        p_firm_id:       engagement?.firm_id || null,
+      }).then(({ data: synced }: any) => {
+        if (synced > 0) {
+          toast.success("Mapping saved", {
+            description: `${synced} manual mapping${synced !== 1 ? "s" : ""} added to AI memory`,
+          });
+        } else {
+          toast.success("Mapping saved");
+        }
+      });
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -1382,13 +1578,49 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           <h1 className="text-lg font-bold text-foreground">Stage 6 — COA Mapping</h1>
           <p className="text-xs text-muted-foreground">Map every ledger to its financial-statement line item</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <Button
+            variant="outline" size="sm"
+            onClick={() => setRulesOpen(true)}
+            className="gap-1.5 border-amber-300 text-amber-700 hover:bg-amber-50"
+          >
+            <BookOpen size={13} /> Mapping Instructions
+            {mappingRules.length > 0 && (
+              <span className="ml-0.5 bg-amber-100 text-amber-800 rounded-full px-1.5 py-0 text-[10px] font-bold">
+                {mappingRules.length}
+              </span>
+            )}
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => {}}
+            className="gap-1.5 border-violet-300 text-violet-700 hover:bg-violet-50"
+            title={`AI Memory: ${intelligence.length} patterns loaded`}
+          >
+            <Brain size={13} /> AI Memory
+            <span className="ml-0.5 bg-violet-100 text-violet-800 rounded-full px-1.5 py-0 text-[10px] font-bold">
+              {intelligence.length}
+            </span>
+          </Button>
           <Button variant="outline" size="sm" onClick={saveMapping} disabled={saving}>Save Mapping</Button>
           <Button size="sm" onClick={handleCompleteStage3} disabled={!allMapped || saving} className="gap-1">
             Complete Stage 6 <ArrowRight size={14} />
           </Button>
         </div>
       </div>
+
+      {/* Mapping Rules Panel */}
+      {engagement?.firm_id && (
+        <MappingRulesPanel
+          open={rulesOpen}
+          onClose={() => setRulesOpen(false)}
+          firmId={engagement.firm_id}
+          clientId={engagement.client_id || ""}
+          entityType={isNonCorporate ? "nce" : "corporate"}
+          leafItems={activeLeafItems}
+          onRulesChange={(rules) => setMappingRules(rules)}
+        />
+      )}
 
       {/* Opening-TB balance banner (Task 2) */}
       {openingTbImbalanced && (
