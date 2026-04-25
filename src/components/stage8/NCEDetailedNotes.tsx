@@ -22,11 +22,17 @@ import { Badge }       from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import {
+  Popover, PopoverTrigger, PopoverContent,
+} from "@/components/ui/popover";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2 } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Info } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
-  NoteConfig, NOTES_CONFIG, computeDisplayData,
+  NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
 } from "@/config/nceNotesConfig";
 import {
   NCECustomRow, NCENoteData,
@@ -140,7 +146,7 @@ function CustomRowEditor({
   row, cyVal, pyVal, isPatternA,
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
-  onChangeLabel, onDelete,
+  onChangeLabel, onDelete, headingOptions, onPromote,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -150,7 +156,10 @@ function CustomRowEditor({
   onChangeCyLt: (v: number) => void; onChangeCySt: (v: number) => void;
   onChangePyLt: (v: number) => void; onChangePySt: (v: number) => void;
   onChangeLabel: (s: string) => void; onDelete: () => void;
+  headingOptions: { id: string; label: string }[];
+  onPromote: (staticId: string) => void;
 }) {
+  const merged = row.sources && row.sources.length > 1;
   return (
     <TableRow className="bg-blue-50/30 hover:bg-blue-50/50">
       <TableCell className={cn("p-1", isPatternA && "border-r")}>
@@ -162,6 +171,45 @@ function CustomRowEditor({
             placeholder="Row description"
           />
           <SourceBadge source={row.source} />
+          {merged && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button type="button"
+                  className="text-blue-600 hover:text-blue-800 shrink-0"
+                  title="View merged ledgers">
+                  <Info className="h-3.5 w-3.5" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-2 text-xs" align="start">
+                <div className="font-semibold mb-1">Merged ledgers ({row.sources!.length}):</div>
+                <ul className="space-y-0.5">
+                  {row.sources!.map((s, i) => (
+                    <li key={i} className="flex justify-between gap-2">
+                      <span className="truncate">
+                        {s.ledger}
+                        {s.column && <span className="text-muted-foreground ml-1">[{s.column.toUpperCase()}]</span>}
+                      </span>
+                      <span className="tabular-nums shrink-0">{fmtNum(s.amountCy)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </PopoverContent>
+            </Popover>
+          )}
+          {headingOptions.length > 0 && (
+            <Select value="" onValueChange={onPromote}>
+              <SelectTrigger className="h-6 text-[10px] px-1.5 w-[110px] shrink-0">
+                <SelectValue placeholder="Move to…" />
+              </SelectTrigger>
+              <SelectContent>
+                {headingOptions.map(opt => (
+                  <SelectItem key={opt.id} value={opt.id} className="text-xs">
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </TableCell>
       {isPatternA ? (
@@ -191,24 +239,37 @@ function CustomRowEditor({
 
 function PatternBTable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
-  customRows, onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
+  customRows, hiddenRows, labelOverrides,
+  onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
+  onHideStatic, onChangeStaticLabel, onPromote,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
   py:           Record<string, number>;
   cyYear:       number; pyYear: number;
   customRows:   NCECustomRow[];
+  hiddenRows:   string[];
+  labelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
+  onHideStatic: (id: string) => void;
+  onChangeStaticLabel: (id: string, label: string) => void;
+  onPromote:    (customId: string, staticId: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+  const headingOptions = useMemo(
+    () => config.rows
+      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
+      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
+    [config, hiddenRows, labelOverrides],
+  );
 
   return (
     <Table>
@@ -222,7 +283,9 @@ function PatternBTable({
       </TableHeader>
       <TableBody>
         {config.rows.map((row, idx) => {
+          if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           const insertCustomBefore = idx === grandTotalIdx;
+          const displayLabel = labelOverrides[row.id] ?? row.label;
           return (
             <>
               {/* Custom rows inserted just before grand total */}
@@ -240,32 +303,46 @@ function PatternBTable({
                   onChangePyLt={() => {}} onChangePySt={() => {}}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
+                  headingOptions={headingOptions}
+                  onPromote={(staticId) => onPromote(cr.id, staticId)}
                 />
               ))}
 
               {row.isSectionHeader ? (
                 <TableRow key={row.id} className="bg-muted/20">
                   <TableCell colSpan={4} className={cn("text-xs font-semibold py-1.5 text-muted-foreground", indentCls(row.indent))}>
-                    {row.label}
+                    {displayLabel}
                   </TableCell>
                 </TableRow>
               ) : row.isTotal ? (
                 <TableRow key={row.id} className="bg-muted/10 border-t-2 border-border/40">
-                  <TableCell className={cn("text-xs font-bold py-1.5", indentCls(row.indent))}>{row.label}</TableCell>
+                  <TableCell className={cn("text-xs font-bold py-1.5", indentCls(row.indent))}>{displayLabel}</TableCell>
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(cy[row.id] ?? 0)}</TableCell>
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(py[row.id] ?? 0)}</TableCell>
                   <TableCell />
                 </TableRow>
               ) : (
                 <TableRow key={row.id} className="hover:bg-muted/10">
-                  <TableCell className={cn("text-xs py-1", indentCls(row.indent))}>{row.label}</TableCell>
+                  <TableCell className={cn("p-1", indentCls(row.indent))}>
+                    <Input
+                      value={displayLabel}
+                      onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                      className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                    />
+                  </TableCell>
                   <TableCell className="p-1">
                     <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />
                   </TableCell>
                   <TableCell className="p-1">
                     <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />
                   </TableCell>
-                  <TableCell />
+                  <TableCell className="p-1 text-center w-8">
+                    <button type="button" onClick={() => onHideStatic(row.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      title="Hide row">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </TableCell>
                 </TableRow>
               )}
             </>
@@ -290,18 +367,25 @@ function PatternBTable({
 
 function PatternATable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
-  customRows, onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
+  customRows, hiddenRows, labelOverrides,
+  onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
+  onHideStatic, onChangeStaticLabel, onPromote,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
   py:           Record<string, number>;
   cyYear:       number; pyYear: number;
   customRows:   NCECustomRow[];
+  hiddenRows:   string[];
+  labelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
+  onHideStatic: (id: string) => void;
+  onChangeStaticLabel: (id: string, label: string) => void;
+  onPromote:    (customId: string, staticId: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -319,6 +403,13 @@ function PatternATable({
     }
     return groups;
   }, [customRows]);
+
+  const headingOptions = useMemo(
+    () => config.rows
+      .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
+      .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
+    [config, hiddenRows, labelOverrides],
+  );
 
   return (
     <Table>
@@ -338,6 +429,7 @@ function PatternATable({
       </TableHeader>
       <TableBody>
         {config.rows.map((row, idx) => {
+          if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           // Determine which custom rows to render before this row:
           //  • If this is a section-total (has sectionTag) → rows with that section
           //  • If this is the grand-total (last isTotal) → global (untagged) rows
@@ -346,6 +438,7 @@ function PatternATable({
             : idx === grandTotalIdx
               ? (customBySection["_global"] ?? [])
               : [];
+          const displayLabel = labelOverrides[row.id] ?? row.label;
           return (
             <>
               {sectionRows.map(cr => (
@@ -365,18 +458,20 @@ function PatternATable({
                   onChangePySt={v => onChangePy(cr.id + "_st", v)}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
+                  headingOptions={headingOptions}
+                  onPromote={(staticId) => onPromote(cr.id, staticId)}
                 />
               ))}
 
               {row.isSectionHeader ? (
                 <TableRow key={row.id} className="bg-muted/20">
                   <TableCell colSpan={6} className={cn("text-xs font-semibold py-1.5 text-muted-foreground", indentCls(row.indent))}>
-                    {row.label}
+                    {displayLabel}
                   </TableCell>
                 </TableRow>
               ) : row.isTotal ? (
                 <TableRow key={row.id} className="bg-muted/10 border-t-2 border-border/40">
-                  <TableCell className={cn("text-xs font-bold py-1.5 border-r", indentCls(row.indent))}>{row.label}</TableCell>
+                  <TableCell className={cn("text-xs font-bold py-1.5 border-r", indentCls(row.indent))}>{displayLabel}</TableCell>
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(cy[row.id + "_lt"] ?? 0)}</TableCell>
                   <TableCell className="text-xs text-right py-1.5 font-bold border-r">{fmtNum(py[row.id + "_lt"] ?? 0)}</TableCell>
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(cy[row.id + "_st"] ?? 0)}</TableCell>
@@ -385,7 +480,13 @@ function PatternATable({
                 </TableRow>
               ) : (
                 <TableRow key={row.id} className="hover:bg-muted/10">
-                  <TableCell className={cn("text-xs py-1 border-r", indentCls(row.indent))}>{row.label}</TableCell>
+                  <TableCell className={cn("p-1 border-r", indentCls(row.indent))}>
+                    <Input
+                      value={displayLabel}
+                      onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                      className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                    />
+                  </TableCell>
                   <TableCell className="p-1">
                     <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />
                   </TableCell>
@@ -398,7 +499,13 @@ function PatternATable({
                   <TableCell className="p-1">
                     <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />
                   </TableCell>
-                  <TableCell />
+                  <TableCell className="p-1 text-center w-8">
+                    <button type="button" onClick={() => onHideStatic(row.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      title="Hide row">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </TableCell>
                 </TableRow>
               )}
             </>
@@ -577,6 +684,60 @@ export function NCEDetailedNotes({ engagementId }: Props) {
     });
   }, [scheduleSave]);
 
+  // ── Static row hide / label override / promote custom→static ───────────
+  const handleHideStatic = useCallback((noteType: string, id: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const hidden = cur.hiddenRows ?? [];
+      if (hidden.includes(id)) return prev;
+      const next = { ...prev, [noteType]: { ...cur, hiddenRows: [...hidden, id] } };
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  const handleChangeStaticLabel = useCallback((noteType: string, id: string, label: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
+      const next = { ...prev, [noteType]: { ...cur, labelOverrides: overrides } };
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, staticId: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const newCy = { ...cur.cy };
+      const newPy = { ...cur.py };
+      // Move amounts across all suffix variants ("", "_lt", "_st").
+      for (const suf of ["", "_lt", "_st"]) {
+        const fromKey = customId + suf;
+        const toKey   = staticId + suf;
+        if (newCy[fromKey] !== undefined) {
+          newCy[toKey] = (newCy[toKey] ?? 0) + (newCy[fromKey] ?? 0);
+          delete newCy[fromKey];
+        }
+        if (newPy[fromKey] !== undefined) {
+          newPy[toKey] = (newPy[toKey] ?? 0) + (newPy[fromKey] ?? 0);
+          delete newPy[fromKey];
+        }
+      }
+      // Remove from hiddenRows if reassigning to a previously hidden row.
+      const hidden = (cur.hiddenRows ?? []).filter(x => x !== staticId);
+      const next = { ...prev, [noteType]: {
+        ...cur,
+        cy: newCy, py: newPy,
+        customRows: cur.customRows.filter(r => r.id !== customId),
+        hiddenRows: hidden,
+      } };
+      scheduleSave(next);
+      return next;
+    });
+    toast.success("Moved to selected heading");
+  }, [scheduleSave]);
+
   // ── Re-sync ─────────────────────────────────────────────────────────────
   const handleResync = useCallback(async () => {
     const ok = window.confirm(
@@ -680,11 +841,16 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     cy={d.cy} py={d.py}
                     cyYear={cyYear} pyYear={pyYear}
                     customRows={d.customRows}
+                    hiddenRows={d.hiddenRows ?? []}
+                    labelOverrides={d.labelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
+                    onHideStatic={id => handleHideStatic(nc.noteType, id)}
+                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
+                    onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                   />
                 ) : (
                   <PatternBTable
@@ -692,11 +858,16 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     cy={d.cy} py={d.py}
                     cyYear={cyYear} pyYear={pyYear}
                     customRows={d.customRows}
+                    hiddenRows={d.hiddenRows ?? []}
+                    labelOverrides={d.labelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}
                     onDeleteRow={id => handleDeleteRow(nc.noteType, id)}
                     onChangeLabel={(id, lbl) => handleChangeLabel(nc.noteType, id, lbl)}
+                    onHideStatic={id => handleHideStatic(nc.noteType, id)}
+                    onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
+                    onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                   />
                 )}
               </div>
