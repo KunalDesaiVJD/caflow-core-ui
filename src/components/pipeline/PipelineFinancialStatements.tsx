@@ -986,8 +986,15 @@ export default function PipelineFinancialStatements({
   // mapping comes from SCHEDULE_III_DIV_I, but a per-engagement override is
   // stored locally in localStorage (no DB column yet — keep this scoped).
   // Shape: Record<FS_CODE, number>.
+  // Storage value semantics:
+  //   undefined  → no override; use SCHEDULE_III_DIV_I default
+  //   null       → explicit hide; render blank cell + omit from Excel export
+  //   number     → user-supplied override
+  // Clearing a cell stores `null` (NOT delete) so the blank persists across
+  // refreshes and survives Save Draft. To restore the default, the user types
+  // the desired number back in.
   const NOTE_OVR_KEY = `caflow:fs_note_overrides:${engagementId}`;
-  const [noteOverrides, setNoteOverrides] = useState<Record<string, number>>(() => {
+  const [noteOverrides, setNoteOverrides] = useState<Record<string, number | null>>(() => {
     if (typeof window === "undefined") return {};
     try {
       const raw = window.localStorage.getItem(NOTE_OVR_KEY);
@@ -997,8 +1004,11 @@ export default function PipelineFinancialStatements({
   const updateNoteOverride = (code: string, value: number | null) => {
     setNoteOverrides(prev => {
       const next = { ...prev };
-      if (value === null || !Number.isFinite(value)) delete next[code];
-      else next[code] = value;
+      // Always set the key — even null. Null = explicit hide. Only a number
+      // value beats the default; non-finite numbers are also treated as hide.
+      if (value === null) next[code] = null;
+      else if (Number.isFinite(value)) next[code] = value;
+      else next[code] = null;
       try { window.localStorage.setItem(NOTE_OVR_KEY, JSON.stringify(next)); } catch {}
       return next;
     });
@@ -1676,9 +1686,14 @@ export default function PipelineFinancialStatements({
     // BS/PL note numbers default to the SCHEDULE_III_DIV_I mapping. If the
     // user edited a note number inline, surface it here so both the in-UI
     // statement and the Excel export pick it up.
+    //
+    // Override semantics:
+    //   key absent          → use default
+    //   key present, null   → explicit hide (blank in UI + Excel)
+    //   key present, number → user-supplied override
     if (bs) {
       const ov = (code: string, fallback: number | null | undefined) =>
-        noteOverrides[code] !== undefined ? noteOverrides[code] : (fallback ?? null);
+        code in noteOverrides ? noteOverrides[code] : (fallback ?? null);
       bs.shareCap.noteNo        = ov("BS_EQ_SC",   bs.shareCap.noteNo);
       bs.reserves.noteNo        = ov("BS_EQ_RS",   bs.reserves.noteNo);
       bs.ltBorrowings.noteNo    = ov("BS_NCL_LTB", bs.ltBorrowings.noteNo);
@@ -1702,7 +1717,7 @@ export default function PipelineFinancialStatements({
     }
     if (pl) {
       const ov = (code: string, fallback: number | null | undefined) =>
-        noteOverrides[code] !== undefined ? noteOverrides[code] : (fallback ?? null);
+        code in noteOverrides ? noteOverrides[code] : (fallback ?? null);
       pl.revFromOps.noteNo         = ov("PL_REV_OPS",  pl.revFromOps.noteNo);
       pl.otherIncome.noteNo        = ov("PL_REV_OI",   pl.otherIncome.noteNo);
       pl.purchasesStock.noteNo     = ov("PL_EXP_SIT",  pl.purchasesStock.noteNo);
