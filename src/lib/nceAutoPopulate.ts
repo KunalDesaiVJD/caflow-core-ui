@@ -25,35 +25,38 @@
 import { supabase } from "@/integrations/supabase/client";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
+//
+// Each note type maps to the set of FS codes that belong to it.
+// We include BOTH the NCE-specific codes (NCE_*) and the generic corporate
+// codes (BS_*/PL_*) because the COA mapping can use either depending on how
+// ledgers were auto-assigned or manually mapped.
 
 export const NCE_NOTE_FS_MAP: Record<string, {
   lt?:  string[];   // Pattern-A long-term
   st?:  string[];   // Pattern-A short-term
   all?: string[];   // Pattern-B
 }> = {
-  borrowings:         { lt: ["BS_NCL_LTB"],                              st: ["BS_CL_STB"] },
-  other_lt_liab:      { all: ["BS_NCL_OLT"] },
-  provisions:         { lt: ["BS_NCL_LTP"],                              st: ["BS_CL_STP"] },
-  trade_payables:     { all: ["BS_CL_TP"] },
-  other_cl:           { all: ["BS_CL_OCL"] },
-  cwip:               { all: ["BS_NCA_FA_WIP"] },
-  investments:        { lt: ["BS_NCA_INV"],                              st: [] },
-  loans_advances:     { lt: ["BS_NCA_LLA"],                              st: ["BS_CA_SLA"] },
-  other_nc_assets:    { all: ["BS_NCA_ONA"] },
-  inventories:        { all: ["BS_CA_INV"] },
-  trade_receivables:  { all: ["BS_CA_TR"] },
-  cash_bank:          { all: ["BS_CA_CCE"] },
-  other_ca:           { all: ["BS_CA_OCA"] },
-  revenue_ops:        { all: ["PL_REV_OPS"] },
-  other_income:       { all: ["PL_REV_OI"] },
-  cogs:               { all: ["PL_EXP_MAT", "PL_EXP_SIT", "PL_EXP_CII"] },
-  employee_exp:       { all: ["PL_EXP_EMP"] },
-  finance_costs:      { all: ["PL_EXP_FIN"] },
-  other_expenses:     { all: ["PL_EXP_OTH", "PL_EXP_OEX"] },
+  borrowings:         { lt: ["NCE_LTB",   "BS_NCL_LTB"],               st: ["NCE_STB",      "BS_CL_STB"] },
+  other_lt_liab:      { all: ["NCE_OLTL",  "BS_NCL_OLT"] },
+  provisions:         { lt: ["NCE_LTP",   "BS_NCL_LTP"],               st: ["NCE_STP",      "BS_CL_STP"] },
+  trade_payables:     { all: ["NCE_TP",   "BS_CL_TP"] },
+  other_cl:           { all: ["NCE_OCL",  "BS_CL_OCL"] },
+  cwip:               { all: ["NCE_CWIP", "BS_NCA_FA_WIP"] },
+  investments:        { lt: ["NCE_NCINV", "BS_NCA_INV"],               st: ["NCE_CINV"] },
+  loans_advances:     { lt: ["NCE_LTLA",  "BS_NCA_LLA"],               st: ["NCE_STLA",     "BS_CA_SLA"] },
+  other_nc_assets:    { all: ["NCE_ONCA", "BS_NCA_ONA"] },
+  inventories:        { all: ["NCE_STCK", "BS_CA_INV"] },
+  trade_receivables:  { all: ["NCE_TR",   "BS_CA_TR"] },
+  cash_bank:          { all: ["NCE_CASH", "BS_CA_CCE"] },
+  other_ca:           { all: ["NCE_OCA",  "BS_CA_OCA"] },
+  revenue_ops:        { all: ["NCE_REV_OPS", "PL_REV_OPS"] },
+  other_income:       { all: ["NCE_REV_OTH", "PL_REV_OI"] },
+  cogs:               { all: ["NCE_COGS", "NCE_CII", "PL_EXP_MAT", "PL_EXP_SIT", "PL_EXP_CII"] },
+  employee_exp:       { all: ["NCE_EMP_EXP",  "PL_EXP_EMP"] },
+  finance_costs:      { all: ["NCE_FIN_COST", "PL_EXP_FIN"] },
+  other_expenses:     { all: ["NCE_OTH_EXP",  "PL_EXP_OTH", "PL_EXP_OEX"] },
 };
 
-const PL_INCOME_TYPES  = new Set(["revenue_ops", "other_income"]);
-const PL_EXPENSE_TYPES = new Set(["cogs", "employee_exp", "finance_costs", "other_expenses"]);
 
 // ── Custom row type ───────────────────────────────────────────────────────────
 
@@ -79,10 +82,10 @@ function makeCustomId(name: string, idx: number): string {
   );
 }
 
-function ledgerAmt(dr: number, cr: number, noteType: string): number {
-  if (PL_INCOME_TYPES.has(noteType))  return Math.max(0, cr - dr);
-  if (PL_EXPENSE_TYPES.has(noteType)) return Math.max(0, dr - cr);
-  return Math.abs(cr - dr);
+// tally_trial_balance stores a single closing_balance (always positive) and
+// balance_type ("Dr" | "Cr"). For notes we just want the magnitude.
+function ledgerAmt(closingBalance: number): number {
+  return Math.abs(closingBalance ?? 0);
 }
 
 // ── Serialise / deserialise ───────────────────────────────────────────────────
@@ -134,12 +137,13 @@ export async function nceAutoPopulate(
   const clientId: string      = (eng as any)?.client_id ?? "";
 
   // ── 2. Load CY trial balance ────────────────────────────────────────────
+  // tally_trial_balance uses closing_balance (magnitude) + balance_type ("Dr"/"Cr")
   const { data: tbRows } = await supabase
     .from("tally_trial_balance")
-    .select("ledger_name, closing_dr, closing_cr")
+    .select("ledger_name, closing_balance, balance_type")
     .eq("engagement_id", engagementId);
 
-  type TBRow = { ledger_name: string; closing_dr: number; closing_cr: number };
+  type TBRow = { ledger_name: string; closing_balance: number; balance_type: string };
   const tb: TBRow[] = (tbRows ?? []) as TBRow[];
 
   // ── 3. Load CY FS totals (fallback for notes with no TB ledger matches) ─
@@ -207,7 +211,7 @@ export async function nceAutoPopulate(
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
         if (!mapped || !codeSet.has(mapped.code)) continue;
-        const amt = ledgerAmt(row.closing_dr, row.closing_cr, noteType);
+        const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
         const id = makeCustomId(row.ledger_name, idx++);
         newCy[id] = amt;
@@ -243,7 +247,7 @@ export async function nceAutoPopulate(
         const isLT = ltSet.has(mapped.code);
         const isST = stSet.has(mapped.code);
         if (!isLT && !isST) continue;
-        const amt = ledgerAmt(row.closing_dr, row.closing_cr, noteType);
+        const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
 
         const id = makeCustomId(row.ledger_name, idx++);
