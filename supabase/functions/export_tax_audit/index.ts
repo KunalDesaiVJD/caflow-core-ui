@@ -991,6 +991,97 @@ serve(async (req) => {
         clauseRecord[k] = (form3cd as Record<string, unknown>)[k] ?? {};
       }
 
+      // ── Clause 18 fallback: inject fa_depreciation_schedule rows ─────────────
+      // When the user entered depreciation data via the Depreciation page (which
+      // stores rows in fa_depreciation_schedule / fa_assets) but left cl_18._rows
+      // empty in Form 3CD, the annexure would be blank even though J59 correctly
+      // shows "As Per Annexure".  We detect this and pull the schedule rows in.
+      {
+        const cl18raw = clauseRecord.cl_18 as Record<string, unknown> ?? {};
+        const hasRows = Array.isArray((cl18raw as any)._rows) && (cl18raw as any)._rows.length > 0;
+        if (!hasRows && (cl18raw as any)._asPerAnnexure) {
+          const clientIdForDep = (eng as any).client_id as string | null;
+          const fyForDep       = (eng as any).financial_year as string | null;
+          if (clientIdForDep && fyForDep) {
+            try {
+              // Fetch assets for this client + FY (same query the Depreciation page uses)
+              const { data: faAssets } = await supabase
+                .from("fa_assets")
+                .select("id, asset_name, additions_during_year, addition_date, dep_days_addition, fa_categories(name, wdv_rate)")
+                .eq("client_id", clientIdForDep)
+                .eq("fy", fyForDep);
+
+              if (faAssets && faAssets.length > 0) {
+                const assetIds = (faAssets as any[]).map((a) => a.id);
+                const { data: depSched } = await supabase
+                  .from("fa_depreciation_schedule")
+                  .select("asset_id, depreciation_rate, wdv_opening, wdv_closing, depreciation_amount")
+                  .in("asset_id", assetIds)
+                  .eq("fy", fyForDep);
+
+                if (depSched && (depSched as any[]).length > 0) {
+                  // Group by (category name + rate) so each block of assets becomes one row,
+                  // matching the Schedule III / clause 18 layout.
+                  const catMap = new Map<string, {
+                    block: string; rate: number;
+                    openingWDV: number; addOver180: number; addUnder180: number;
+                    dep: number; closingWDV: number;
+                  }>();
+
+                  for (const sched of depSched as any[]) {
+                    const asset = (faAssets as any[]).find((a) => a.id === sched.asset_id);
+                    if (!asset) continue;
+                    const blockName: string =
+                      (asset.fa_categories as any)?.name || asset.asset_name || "Assets";
+                    const rate = Number(sched.depreciation_rate) || 0;
+                    const mapKey = `${blockName}__${rate}`;
+
+                    const totalAdditions = Number(asset.additions_during_year) || 0;
+                    // Split additions into >180 and <180 days using dep_days_addition.
+                    // If dep_days_addition >= 180 → full rate (addOver180); otherwise half rate (addUnder180).
+                    const depDays = asset.dep_days_addition != null ? Number(asset.dep_days_addition) : 365;
+                    const addOver  = depDays >= 180 ? totalAdditions : 0;
+                    const addUnder = depDays <  180 ? totalAdditions : 0;
+
+                    const existing = catMap.get(mapKey);
+                    if (existing) {
+                      existing.openingWDV += Number(sched.wdv_opening)         || 0;
+                      existing.addOver180 += addOver;
+                      existing.addUnder180 += addUnder;
+                      existing.dep        += Number(sched.depreciation_amount)  || 0;
+                      existing.closingWDV += Number(sched.wdv_closing)          || 0;
+                    } else {
+                      catMap.set(mapKey, {
+                        block:      blockName,
+                        rate,
+                        openingWDV:  Number(sched.wdv_opening)        || 0,
+                        addOver180:  addOver,
+                        addUnder180: addUnder,
+                        dep:         Number(sched.depreciation_amount) || 0,
+                        closingWDV:  Number(sched.wdv_closing)         || 0,
+                      });
+                    }
+                  }
+
+                  if (catMap.size > 0) {
+                    clauseRecord.cl_18 = {
+                      ...(cl18raw as Record<string, unknown>),
+                      _rows: [...catMap.values()],
+                    };
+                    console.log(
+                      `[Clause 18 fallback] Injected ${catMap.size} block(s) from fa_depreciation_schedule`,
+                    );
+                  }
+                }
+              }
+            } catch (depErr) {
+              // Non-fatal — if the fallback fails, the export still works (annex will be empty)
+              console.warn("[Clause 18 fallback] fa_depreciation_schedule fetch failed:", depErr);
+            }
+          }
+        }
+      }
+
       // Proxy sheet: intercepts ws[addr] = { v, t, ... } writes from clause_mapper
       function makeProxyWS(sheetName: string): Record<string, any> {
         const backing: Record<string, any> = {};

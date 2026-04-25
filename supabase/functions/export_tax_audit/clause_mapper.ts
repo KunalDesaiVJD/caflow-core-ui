@@ -330,19 +330,39 @@ export function buildClauseValues(
 
   // ── Clause 18 — Depreciation schedule ────────────────────────────────────
   // clauseNo '18' → DB col 'cl_18' (flat)
+  // Note: _rows may be injected from fa_depreciation_schedule in index.ts when
+  // the user entered data via the Depreciation page rather than inline here.
   const cl18 = dig(cl, "cl_18");
   const deprRows = rows(cl18);
+  // Build the J59 summary text — include note reference when the user supplied one.
+  const noteRef18 = cl18._noteRef ? String(cl18._noteRef).trim() : "";
+  const annxText18 = noteRef18 ? `As Per Annexure (Note ${noteRef18})` : "As Per Annexure";
   if (ax && deprRows.length > 0) {
     const ANX_DEPR_START = 36; // display row 37 → 0-idx 36
+    // Column layout in ANX_3CD_Main for clause 18 (0-indexed):
+    //   A(0) = Sr.No.  ← written by writeSrNos; do NOT also map 'block' here
+    //   B(1) = Block of assets
+    //   D(3) = Rate (%)
+    //   E(4) = Opening WDV
+    //   F(5) = Additions / Deductions > 180 days (full rate)
+    //   H(7) = Additions / Deductions < 180 days (half rate)
+    //   I(8) = Depreciation for the year
+    //   J(9) = Closing WDV
     const colMap18: Record<string, number> = {
-      block: 0, rate: 3, openingWDV: 4,
+      block: 1, rate: 3, openingWDV: 4,
       addOver180: 5, addUnder180: 7, dep: 8, closingWDV: 9,
     };
-    writeSrNos(ax, ANX_DEPR_START, Math.min(deprRows.length, 2));
-    deprRows.slice(0, 2).forEach((r, i) => writeRow(ax, ANX_DEPR_START + i, r, colMap18));
-    setV(f3, "J59", "As Per Annexure");
+    writeSrNos(ax, ANX_DEPR_START, deprRows.length);
+    deprRows.forEach((r, i) => writeRow(ax, ANX_DEPR_START + i, r, colMap18));
+    setV(f3, "J59", annxText18);
   } else {
-    setV(f3, "J59", naSummary(cl18));
+    // No rows — write Not Applicable / As Per Annexure label (with note ref if present)
+    if (cl18._notApplicable) {
+      setV(f3, "J59", "Not Applicable");
+    } else {
+      const fallback = noteRef18 ? annxText18 : naSummary(cl18);
+      setV(f3, "J59", fallback);
+    }
   }
 
   // ── Clause 19 — Admissible amounts ───────────────────────────────────────
