@@ -694,15 +694,15 @@ export default function TallySyncPage() {
   if (typeof window !== "undefined") {
     const _rawDr = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
     const _rawCr = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
-    console.log("[TB Footer Debug]", {
+    console.log("[TB Footer Debug] " + JSON.stringify({
       engagement: selectedEngagement?.client_name,
       plFooter: _plFooter ? {
         closing_balance: _plFooter.closing_balance,
         balance_type: _plFooter.balance_type,
         opening_balance: _plFooter.opening_balance,
         opening_type: _plFooter.opening_type,
-        debit_amount: _plFooter.debit_amount,
-        credit_amount: _plFooter.credit_amount,
+        debit_amount: (_plFooter as any).debit_amount,
+        credit_amount: (_plFooter as any).credit_amount,
       } : null,
       plTurnover: _plTurnover,
       plStrategy1: _plStrategy1,
@@ -723,7 +723,7 @@ export default function TallySyncPage() {
         const t = getTurnover(r);
         return !((t.debit ?? 0) > 0 || (t.credit ?? 0) > 0) && (r.opening_balance ?? 0) > 0.5;
       }).map(r => ({ name: r.ledger_name, opening: r.opening_balance, closing: r.closing_balance, balance_type: r.balance_type })),
-    });
+    }));
   }
 
   // Per-ledger reconciliation against Tally's authoritative closing
