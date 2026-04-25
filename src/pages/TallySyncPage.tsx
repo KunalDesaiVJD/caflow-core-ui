@@ -22,6 +22,7 @@ import {
   exportGroupsExcel,       exportGroupsPDF,
   type ExportMeta,
 } from "@/lib/tallyExport";
+import EngagementHeader from "@/components/pipeline/EngagementHeader";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1186,6 +1187,7 @@ export default function TallySyncPage() {
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
+      <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
