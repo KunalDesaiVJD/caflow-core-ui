@@ -4,8 +4,8 @@
  * Generates Excel workbooks for NCE letters matching the provided templates
  * EXACTLY: column widths, fonts, merged cells, bold formatting, row heights.
  *
- * Client Certificate font: Arial 11
- * Management Letter font:  Arial 11
+ * Client Certificate template font: Calibri 11
+ * Management Letter template font:  Arial 11
  *
  * Border strategy for merged headings (B2:H2, B3:H3):
  *   ExcelJS nullifies non-master cells after mergeCells(), so we cannot set
@@ -132,9 +132,9 @@ export async function exportClientCertificate(
     { width: 3      }, // I — right margin
   ];
 
-  // Font: Arial (user's format for both documents)
-  const n = (cell: ExcelJS.Cell) => applyFont(cell, { name: "Arial" });
-  const b = (cell: ExcelJS.Cell) => applyFont(cell, { name: "Arial", bold: true });
+  // Font shortcuts (Calibri — template font for Client Certificate)
+  const n = (cell: ExcelJS.Cell) => applyFont(cell);
+  const b = (cell: ExcelJS.Cell) => applyFont(cell, { bold: true });
 
   // ── Row 2 — Entity name ──
   // Set borders on B2:H2 BEFORE merging (see preMergeBorderRow comment above)
