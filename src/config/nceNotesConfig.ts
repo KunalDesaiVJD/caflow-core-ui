@@ -578,24 +578,38 @@ export const NOTES_CONFIG: NoteConfig[] = [
  *   Pattern B: cy[rowId], py[rowId]
  *   Pattern A: cy[rowId + "_lt"], cy[rowId + "_st"], py[rowId + "_lt"], py[rowId + "_st"]
  * Rows must be ordered so dependent totals come after their sources.
+ *
+ * @param customRowIds  IDs of user-added custom rows. They are included in the
+ *                      grand-total row only (the last isTotal row) so they
+ *                      don't double-count via intermediate subtotals.
  */
 export function computeDisplayData(
   config: NoteConfig,
   cy: Record<string, number>,
   py: Record<string, number>,
+  customRowIds?: string[],
 ): { cy: Record<string, number>; py: Record<string, number> } {
   const outCy = { ...cy };
   const outPy = { ...py };
+
+  // Find the ID of the grand-total row (last isTotal row in the config)
+  const grandTotalId = [...config.rows].reverse().find(r => r.isTotal)?.id ?? null;
 
   for (const row of config.rows) {
     if (!row.isTotal) continue;
     const adds = row.formulaAdd ?? [];
     const subs = row.formulaSub ?? [];
 
+    // Only the grand-total row adds custom row amounts
+    const extras = (row.id === grandTotalId && customRowIds?.length)
+      ? customRowIds
+      : [];
+
     if (config.pattern === "B") {
       let cVal = 0, pVal = 0;
-      for (const id of adds) { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
-      for (const id of subs) { cVal -= outCy[id] ?? 0; pVal -= outPy[id] ?? 0; }
+      for (const id of adds)   { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
+      for (const id of subs)   { cVal -= outCy[id] ?? 0; pVal -= outPy[id] ?? 0; }
+      for (const id of extras) { cVal += outCy[id] ?? 0; pVal += outPy[id] ?? 0; }
       outCy[row.id] = Math.round(cVal * 100) / 100;
       outPy[row.id] = Math.round(pVal * 100) / 100;
     } else {
@@ -607,6 +621,10 @@ export function computeDisplayData(
       for (const id of subs) {
         ltC -= outCy[id + "_lt"] ?? 0; ltP -= outPy[id + "_lt"] ?? 0;
         stC -= outCy[id + "_st"] ?? 0; stP -= outPy[id + "_st"] ?? 0;
+      }
+      for (const id of extras) {
+        ltC += outCy[id + "_lt"] ?? 0; ltP += outPy[id + "_lt"] ?? 0;
+        stC += outCy[id + "_st"] ?? 0; stP += outPy[id + "_st"] ?? 0;
       }
       outCy[row.id + "_lt"] = Math.round(ltC * 100) / 100;
       outPy[row.id + "_lt"] = Math.round(ltP * 100) / 100;
