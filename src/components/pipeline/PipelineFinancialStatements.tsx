@@ -1727,10 +1727,10 @@ export default function PipelineFinancialStatements({
       }
     }
 
-    // Apply manual overrides — inventory PL codes are locked when any inv ledger is mapped
+    // Apply manual overrides — CII codes are auto-computed but CAN be overridden
+    // when the TB opening_balance differs from Tally's P&L opening stock valuation
     for (const [code, override] of Object.entries(manualOverrides)) {
-      if (hasInvMapping && INV_PL_CODES.has(code)) continue; // auto-computed, locked
-      amounts[code] = override.amount;
+      amounts[code] = override.amount; // manual override always wins
     }
 
     // Compute parent totals (recursive)
@@ -1755,7 +1755,9 @@ export default function PipelineFinancialStatements({
     if (isNonCorporate) {
       const nceInc  = amounts["NCE_PL_INC"] || 0;
       const nceExp  = amounts["NCE_PL_EXP"] || 0;
-      amounts["NCE_PROF_V"]   = Math.round((nceInc - nceExp) * 100) / 100;
+      // Income is stored as NEGATIVE (credit balance from Tally), so negate it:
+      // Profit = Revenue − Expenses  →  -nceInc (positive) − nceExp (positive)
+      amounts["NCE_PROF_V"]   = Math.round((-nceInc - nceExp) * 100) / 100;
       amounts["NCE_PROF_VII"] = Math.round((amounts["NCE_PROF_V"]   - (amounts["NCE_EXCEP"]    || 0)) * 100) / 100;
       amounts["NCE_PROF_IX"]  = Math.round((amounts["NCE_PROF_VII"] - (amounts["NCE_EXTORD"]   || 0)) * 100) / 100;
       amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
@@ -1871,8 +1873,7 @@ export default function PipelineFinancialStatements({
       }
     }
     for (const [code, override] of Object.entries(manualOverrides)) {
-      // Inventory PL codes are locked when any inv ledger is mapped
-      if (hasInvMappingLocal && INV_PL_CODES.has(code)) continue;
+      // Manual override always wins — including CII codes (user may correct opening stock)
       exportCy[code] = override.amount;
     }
     const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
@@ -1913,7 +1914,8 @@ export default function PipelineFinancialStatements({
       const chain = (table: Record<string, number>) => {
         const inc = table["NCE_PL_INC"] || 0;
         const exp = table["NCE_PL_EXP"] || 0;
-        table["NCE_PROF_V"]   = Math.round((inc - exp) * 100) / 100;
+        // Income stored as negative (Tally credit) — negate to get the real revenue
+        table["NCE_PROF_V"]   = Math.round((-inc - exp) * 100) / 100;
         table["NCE_PROF_VII"] = Math.round((table["NCE_PROF_V"]   - (table["NCE_EXCEP"]    || 0)) * 100) / 100;
         table["NCE_PROF_IX"]  = Math.round((table["NCE_PROF_VII"] - (table["NCE_EXTORD"]   || 0)) * 100) / 100;
         table["NCE_PROF_XI"]  = Math.round((table["NCE_PROF_IX"]  - (table["NCE_PART_REM"] || 0)) * 100) / 100;
@@ -2054,24 +2056,30 @@ export default function PipelineFinancialStatements({
     computedAmounts, mergedPY, noteOverrides, pyInvCII,
   ]);
 
-  // ─── Corporate BS check + P&L summary (unchanged) ───
+  // ─── Corporate BS check + P&L summary ───
+  // Sign convention: Tally exports credit balances (liabilities, income) as NEGATIVE.
+  //   Assets     → positive  (debit)
+  //   Liabilities → negative (credit) → bsDiff = Assets + Liabilities (not Assets − Liabilities)
+  //   Revenue    → negative (credit) → netProfit = −Revenue − Expenses (not Revenue − Expenses)
   const totalAssets = (computedAmounts["BS_NCA"] || 0) + (computedAmounts["BS_CA"] || 0);
   const totalLiabilities =
     (computedAmounts["BS_EQ"] || 0) +
     (computedAmounts["BS_NCL"] || 0) +
     (computedAmounts["BS_CL"] || 0);
-  const bsDiff = Math.round((totalAssets - totalLiabilities) * 100) / 100;
-  const totalRevenue = (computedAmounts["PL_REV"] || 0);
-  const totalExpenses = (computedAmounts["PL_EXP"] || 0);
-  const netProfit = Math.round((totalRevenue - totalExpenses) * 100) / 100;
+  // totalLiabilities is already negative → adding gives the true diff (0 when balanced)
+  const bsDiff = Math.round((totalAssets + totalLiabilities) * 100) / 100;
+  const totalRevenue = (computedAmounts["PL_REV"] || 0);   // negative (credit)
+  const totalExpenses = (computedAmounts["PL_EXP"] || 0);  // positive (debit)
+  const netProfit = Math.round((-totalRevenue - totalExpenses) * 100) / 100;
 
   // ─── NCE stats bar ───────────────────────────────────────────────────────────
   // Sum individual leaf codes so the stats bar is independent of computeTotal
   // parent nodes. NCE_NET_PROF (row XIII) comes from the profit-chain block.
   const nceTotalAssets      = NCE_ASSET_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
+  // NCE liabilities are stored negative (Tally credit) → use + to get true diff
   const nceTotalLiabilities = NCE_LIAB_IDS.reduce((s, id) => s + (computedAmounts[id] || 0), 0);
-  const nceBsDiff           = Math.round((nceTotalAssets - nceTotalLiabilities) * 100) / 100;
-  const nceBsBalanced       = Math.abs(nceTotalAssets - nceTotalLiabilities) < 1;
+  const nceBsDiff           = Math.round((nceTotalAssets + nceTotalLiabilities) * 100) / 100;
+  const nceBsBalanced       = Math.abs(nceTotalAssets + nceTotalLiabilities) < 1;
   const nceNetProfit        = computedAmounts["NCE_NET_PROF"] || 0;
 
   // ─── Active summary values (swap between NCE and corporate in JSX) ───────
@@ -4076,8 +4084,18 @@ export default function PipelineFinancialStatements({
   const renderFSRows = (items: (FSLineItem & { depth: number })[]) =>
     items.map(item => {
       const isHeader = !!(item.children && item.children.length > 0);
-      const amount = computedAmounts[item.code] || 0;
-      const py = mergedPY[item.code] || 0;
+      const rawAmount = computedAmounts[item.code] || 0;
+      const rawPy     = mergedPY[item.code] || 0;
+      // ── Sign convention: Tally stores credit balances as NEGATIVE ──────────
+      // For display, negate credit-side sections so they appear as positive
+      // numbers on the Balance Sheet (liabilities) and P&L (revenue/income).
+      // Asset, expense, and profit-chain sections are left as-is.
+      const needsSignFlip =
+        item.section?.includes("BS_liabilities") ||    // corporate + NCE liabilities/equity
+        item.section === "PL_revenue"              ||  // corporate revenue items
+        item.section === "NCE_PL_income";              // NCE income items
+      const amount = needsSignFlip ? -rawAmount : rawAmount;
+      const py     = needsSignFlip ? -rawPy     : rawPy;
       const hasOverride    = !!manualOverrides[item.code];
       const hasPyOverride  = pyManualAmounts[item.code] !== undefined;
       const pyMeta         = pyManualMeta[item.code];
@@ -4114,17 +4132,16 @@ export default function PipelineFinancialStatements({
               ) : (
                 <span className="text-muted-foreground">—</span>
               )}
-              {!isHeader && !(item.code && INV_PL_CODES.has(item.code) && hasInvMapping) && (
+              {!isHeader && (
                 <button
                   className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
-                  title="Override CY amount"
+                  title={item.code && INV_PL_CODES.has(item.code) && hasInvMapping
+                    ? "Auto-computed from inventory TB. Override if Tally P&L opening stock differs from ledger opening balance."
+                    : "Override CY amount"}
                   onClick={() => openOverride(item.code, item.name)}
                 >
-                  <Pencil size={9} className="text-muted-foreground" />
+                  <Pencil size={9} className={item.code && INV_PL_CODES.has(item.code) && hasInvMapping ? "text-blue-400" : "text-muted-foreground"} />
                 </button>
-              )}
-              {!isHeader && item.code && INV_PL_CODES.has(item.code) && hasInvMapping && (
-                <span title="Auto-computed from inventory ledgers — locked" className="text-[9px] text-blue-500 ml-1">🔒</span>
               )}
             </div>
           </TableCell>
@@ -4162,7 +4179,7 @@ export default function PipelineFinancialStatements({
 
           {/* CY pencil (legacy action column — kept for clarity) */}
           <TableCell className="w-10 text-center">
-            {!isHeader && !(item.code && INV_PL_CODES.has(item.code) && hasInvMapping) && (
+            {!isHeader && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -4532,7 +4549,7 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || "[Company Name]"}
                   pyLocked={pyLocked}
-                  lockedCodes={hasInvMapping ? INV_PL_CODES : undefined}
+                  lockedCodes={undefined}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };

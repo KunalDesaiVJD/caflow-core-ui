@@ -73,12 +73,12 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
 
   // ── PROFIT & LOSS — EXPENSES ──
   { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", children: [
-    { code: "NCE_COGS",     name: "(a) Cost of goods sold",             noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_CII",      name: "(a-ii) Changes in inventories of stock", noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",      noteRef: 25, section: "NCE_PL_expenses" },
-    { code: "NCE_FIN_COST", name: "(c) Finance costs",                  noteRef: 26, section: "NCE_PL_expenses" },
-    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation",  noteRef: 27, section: "NCE_PL_expenses" },
-    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",                noteRef: 28, section: "NCE_PL_expenses" },
+    { code: "NCE_COGS",     name: "(a) Cost of goods sold / purchases",  noteRef: 24, section: "NCE_PL_expenses" },
+    { code: "NCE_CII",      name: "(b) Changes in inventories of stock", noteRef: 24, section: "NCE_PL_expenses" },
+    { code: "NCE_EMP_EXP",  name: "(c) Employee benefits expense",      noteRef: 25, section: "NCE_PL_expenses" },
+    { code: "NCE_FIN_COST", name: "(d) Finance costs",                  noteRef: 26, section: "NCE_PL_expenses" },
+    { code: "NCE_DEPR",     name: "(e) Depreciation and amortisation",  noteRef: 27, section: "NCE_PL_expenses" },
+    { code: "NCE_OTH_EXP",  name: "(f) Other expenses",                noteRef: 28, section: "NCE_PL_expenses" },
   ]},
 
   // ── PROFIT CHAIN ──
