@@ -194,6 +194,11 @@ export interface NCECustomRow {
    *  this records the underlying ledgers and their amounts. The (i) info button
    *  in the editor shows this list to the user. Absent for single-ledger rows. */
   sources?: NCEMergedSource[];
+  /** When user uses the "Move to…" dropdown, the row is visually attached
+   *  beneath the chosen static row (by NoteRowDef.id) instead of appearing
+   *  in the generic pre-total block. Amounts stay on the custom row — the
+   *  static row is unchanged. */
+  attachedTo?: string;
 }
 
 export interface NCENoteData {
