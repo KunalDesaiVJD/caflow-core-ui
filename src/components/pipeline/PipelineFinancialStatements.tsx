@@ -196,8 +196,8 @@ function formatINR(n: number | null | undefined): string {
 // writeBalanceSheet() in src/lib/fsExcelExport.ts.
 type BSDisplayRow =
   | { kind: "section";  label: string; size?: 9 | 10; indent?: number }
-  | { kind: "subhead";  label: string; noteNo?: number | null; indent?: number }
-  | { kind: "item";     label: string; noteNo?: number | null; cy: number; py: number; indent?: number; size?: 9 | 10 }
+  | { kind: "subhead";  label: string; noteNo?: number | null; indent?: number; code?: string }
+  | { kind: "item";     label: string; noteNo?: number | null; cy: number; py: number; indent?: number; size?: 9 | 10; code?: string }
   | { kind: "spacer" }
   | { kind: "total";    label: string; cy: number; py: number }
   | { kind: "footer";   label: string; noteNo?: number | null };
@@ -232,24 +232,24 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     // ── EQUITY & LIABILITIES ─────────────────────────────────────────────
     { kind: "section", label: "I  EQUITY AND LIABILITIES", size: 10 },
     { kind: "subhead", label: "(1) Shareholders' funds" },
-    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: bs.shareCap.cy || 0,    py: bs.shareCap.py || 0,    indent: 1 },
-    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: bs.reserves.cy || 0,    py: bs.reserves.py || 0,    indent: 1 },
+    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: bs.shareCap.cy || 0,    py: bs.shareCap.py || 0,    indent: 1, code: "BS_EQ_SC" },
+    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: bs.reserves.cy || 0,    py: bs.reserves.py || 0,    indent: 1, code: "BS_EQ_RS" },
     { kind: "spacer" },
     { kind: "item", label: "(2) Share application money pending allotment", cy: 0, py: 0, size: 9 },
     { kind: "spacer" },
     { kind: "subhead", label: "(3) Non-Current liabilities" },
-    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: bs.ltBorrowings.cy || 0, py: bs.ltBorrowings.py || 0, indent: 1 },
+    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: bs.ltBorrowings.cy || 0, py: bs.ltBorrowings.py || 0, indent: 1, code: "BS_NCL_LTB" },
     { kind: "item", label: "(b) Deferred tax liabilities (Net)", cy: 0, py: 0, indent: 1 },
-    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: bs.otherLtLiab.cy || 0,  py: bs.otherLtLiab.py || 0,  indent: 1 },
-    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: bs.ltProvisions.cy || 0, py: bs.ltProvisions.py || 0, indent: 1 },
+    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: bs.otherLtLiab.cy || 0,  py: bs.otherLtLiab.py || 0,  indent: 1, code: "BS_NCL_OLT" },
+    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: bs.ltProvisions.cy || 0, py: bs.ltProvisions.py || 0, indent: 1, code: "BS_NCL_LTP" },
     { kind: "spacer" },
     { kind: "subhead", label: "(4) Current liabilities" },
-    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: bs.stBorrowings.cy || 0, py: bs.stBorrowings.py || 0, indent: 1 },
-    { kind: "subhead", label: "(b) Trade payables", noteNo: bs.tradePayables.noteNo, indent: 1 },
+    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: bs.stBorrowings.cy || 0, py: bs.stBorrowings.py || 0, indent: 1, code: "BS_CL_STB" },
+    { kind: "subhead", label: "(b) Trade payables", noteNo: bs.tradePayables.noteNo, indent: 1, code: "BS_CL_TP" },
     { kind: "item", label: "(i) Micro and Small Enterprises", cy: bs.tradePayMSME.cy || 0,   py: bs.tradePayMSME.py || 0,   indent: 2 },
-    { kind: "item", label: "(ii) Others",                     cy: bs.tradePayOthers.cy || 0, py: bs.tradePayOthers.py || 0, indent: 2 },
-    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: bs.otherCurrLiab.cy || 0, py: bs.otherCurrLiab.py || 0, indent: 1, size: 10 },
-    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: bs.stProvisions.cy || 0,  py: bs.stProvisions.py || 0,  indent: 1 },
+    { kind: "item", label: "(ii) Others",                     cy: bs.tradePayOthers.cy || 0, py: bs.tradePayOthers.py || 0, indent: 2, code: "BS_CL_TP" },
+    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: bs.otherCurrLiab.cy || 0, py: bs.otherCurrLiab.py || 0, indent: 1, size: 10, code: "BS_CL_OCL" },
+    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: bs.stProvisions.cy || 0,  py: bs.stProvisions.py || 0,  indent: 1, code: "BS_CL_STP" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
     { kind: "spacer" },
@@ -257,21 +257,21 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     { kind: "section", label: "II  ASSETS", size: 10 },
     { kind: "subhead", label: "(1) Non-Current Assets" },
     { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
-    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: bs.ppe.noteNo, cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2 },
+    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: bs.ppe.noteNo, cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2, code: "BS_NCA_FA" },
     { kind: "item", label: "(ii) Intangible assets",          cy: 0, py: 0, indent: 2 },
     { kind: "item", label: "(iii) Capital work-in-Progress",  cy: 0, py: 0, indent: 2 },
-    { kind: "item", label: "(b) Non-current investments",        noteNo: bs.ncInvestments.noteNo, cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10 },
-    { kind: "item", label: "(c) Deferred tax assets (Net)",      noteNo: bs.dtAssets.noteNo,      cy: bs.dtAssets.cy || 0,      py: bs.dtAssets.py || 0,      indent: 1, size: 10 },
-    { kind: "item", label: "(d) Long-term loans and advances",   noteNo: bs.ltLoans.noteNo,       cy: bs.ltLoans.cy || 0,       py: bs.ltLoans.py || 0,       indent: 1 },
-    { kind: "item", label: "(e) Other non-current Assets",       noteNo: bs.otherNcAssets.noteNo, cy: bs.otherNcAssets.cy || 0, py: bs.otherNcAssets.py || 0, indent: 1, size: 10 },
+    { kind: "item", label: "(b) Non-current investments",        noteNo: bs.ncInvestments.noteNo, cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10, code: "BS_NCA_INV" },
+    { kind: "item", label: "(c) Deferred tax assets (Net)",      noteNo: bs.dtAssets.noteNo,      cy: bs.dtAssets.cy || 0,      py: bs.dtAssets.py || 0,      indent: 1, size: 10, code: "BS_NCA_DTA" },
+    { kind: "item", label: "(d) Long-term loans and advances",   noteNo: bs.ltLoans.noteNo,       cy: bs.ltLoans.cy || 0,       py: bs.ltLoans.py || 0,       indent: 1, code: "BS_NCA_LLA" },
+    { kind: "item", label: "(e) Other non-current Assets",       noteNo: bs.otherNcAssets.noteNo, cy: bs.otherNcAssets.cy || 0, py: bs.otherNcAssets.py || 0, indent: 1, size: 10, code: "BS_NCA_ONA" },
     { kind: "spacer" },
     { kind: "subhead", label: "(2) Current assets" },
-    { kind: "item", label: "(a) Current investments",          noteNo: bs.currInvestments.noteNo, cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1 },
-    { kind: "item", label: "(b) Inventories",                  noteNo: bs.inventories.noteNo,     cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1 },
-    { kind: "item", label: "(c) Trade receivables",            noteNo: bs.tradeRec.noteNo,        cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1 },
-    { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: bs.cashBank.noteNo,        cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1 },
-    { kind: "item", label: "(e) Short-term loans and advances",noteNo: bs.stLoans.noteNo,         cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1 },
-    { kind: "item", label: "(f) Other current assets",         noteNo: bs.otherCurrAssets.noteNo, cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1 },
+    { kind: "item", label: "(a) Current investments",          noteNo: bs.currInvestments.noteNo, cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1, code: "BS_CA_CI" },
+    { kind: "item", label: "(b) Inventories",                  noteNo: bs.inventories.noteNo,     cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1, code: "BS_CA_INV" },
+    { kind: "item", label: "(c) Trade receivables",            noteNo: bs.tradeRec.noteNo,        cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1, code: "BS_CA_TR" },
+    { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: bs.cashBank.noteNo,        cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1, code: "BS_CA_CCE" },
+    { kind: "item", label: "(e) Short-term loans and advances",noteNo: bs.stLoans.noteNo,         cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1, code: "BS_CA_SLA" },
+    { kind: "item", label: "(f) Other current assets",         noteNo: bs.otherCurrAssets.noteNo, cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1, code: "BS_CA_OCA" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL ASSETS", cy: totalAssets, py: totalAssetsPy },
     { kind: "footer", label: "Significant accounting policies and estimates", noteNo: bs.sigPolicies.noteNo },
@@ -279,16 +279,100 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
   ];
 }
 
+// Inline editable money cell — shows formatted ₹ when blurred, raw number
+// while focused. Commits onBlur or Enter. Empty string clears the override.
+function EditableMoneyCell({
+  value,
+  onCommit,
+  disabled,
+  className,
+}: {
+  value: number;
+  onCommit: (next: number | null) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft,   setDraft]   = useState<string>("");
+  if (disabled) {
+    return <span className={className}>{formatINR(value)}</span>;
+  }
+  const display = focused ? draft : formatINR(value);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={display}
+      title="Click to edit · clear to remove override"
+      onFocus={() => { setFocused(true); setDraft(value === 0 ? "" : String(value)); }}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+      onBlur={() => {
+        setFocused(false);
+        const trimmed = draft.trim();
+        if (trimmed === "") { onCommit(null); return; }
+        const parsed = Number(trimmed.replace(/,/g, ""));
+        if (Number.isFinite(parsed)) onCommit(parsed);
+      }}
+      className={cn(
+        "w-full bg-transparent border border-transparent rounded px-1 text-right tabular-nums",
+        "hover:border-muted-foreground/30 focus:border-primary focus:bg-background outline-none",
+        className,
+      )}
+    />
+  );
+}
+
+// Inline editable note-No. cell. Empty string clears the override (falls
+// back to the SCHEDULE_III_DIV_I default).
+function EditableNoteCell({
+  value,
+  onCommit,
+}: {
+  value: number | null | undefined;
+  onCommit: (next: number | null) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft,   setDraft]   = useState<string>("");
+  const display = focused ? draft : (value ?? "");
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={String(display)}
+      title="Click to edit note number · clear to use default"
+      onFocus={() => { setFocused(true); setDraft(value == null ? "" : String(value)); }}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+      onBlur={() => {
+        setFocused(false);
+        const trimmed = draft.trim();
+        if (trimmed === "") { onCommit(null); return; }
+        const parsed = parseInt(trimmed, 10);
+        if (Number.isFinite(parsed)) onCommit(parsed);
+      }}
+      className={cn(
+        "w-12 bg-transparent border border-transparent rounded px-1 text-center tabular-nums",
+        "hover:border-muted-foreground/30 focus:border-primary focus:bg-background outline-none",
+      )}
+    />
+  );
+}
+
 interface CorporateBalanceSheetViewProps {
-  bs:          BSRowData;
-  cyYear:      number;
-  pyYear:      number;
-  companyName: string;
-  pyLocked?:   boolean;
+  bs:            BSRowData;
+  cyYear:        number;
+  pyYear:        number;
+  companyName:   string;
+  pyLocked?:     boolean;
+  onCommitCY?:   (code: string, value: number | null) => void;
+  onCommitPY?:   (code: string, value: number | null) => void;
+  onEditNote?:   (code: string, value: number | null) => void;
 }
 
 function CorporateBalanceSheetView({
   bs, cyYear, pyYear, companyName, pyLocked,
+  onCommitCY, onCommitPY, onEditNote,
 }: CorporateBalanceSheetViewProps) {
   const rows = buildBSRows(bs);
   return (
@@ -336,7 +420,11 @@ function CorporateBalanceSheetView({
               return (
                 <tr key={idx}>
                   <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                  <td className="text-center py-1 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                  <td className="text-center py-1 px-2 text-muted-foreground">
+                    {row.code && onEditNote ? (
+                      <EditableNoteCell value={row.noteNo ?? null} onCommit={(v) => onEditNote(row.code!, v)} />
+                    ) : (row.noteNo ?? "")}
+                  </td>
                   <td />
                   <td />
                 </tr>
@@ -362,12 +450,27 @@ function CorporateBalanceSheetView({
             // item
             const indentPx = (row.indent || 0) * 16;
             const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
+            const editableNote = !!row.code && !!onEditNote;
+            const editableCY   = !!row.code && !!onCommitCY;
+            const editablePY   = !!row.code && !!onCommitPY && !pyLocked;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
-                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>{formatINR(row.cy)}</td>
-                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>{formatINR(row.py)}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">
+                  {editableNote
+                    ? <EditableNoteCell value={row.noteNo ?? null} onCommit={(v) => onEditNote!(row.code!, v)} />
+                    : (row.noteNo ?? "")}
+                </td>
+                <td className={`text-right tabular-nums py-0.5 px-1 ${fontSize}`}>
+                  {editableCY
+                    ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v)} />
+                    : formatINR(row.cy)}
+                </td>
+                <td className={`text-right tabular-nums py-0.5 px-1 ${fontSize}`}>
+                  {editablePY
+                    ? <EditableMoneyCell value={row.py} onCommit={(v) => onCommitPY!(row.code!, v)} />
+                    : formatINR(row.py)}
+                </td>
               </tr>
             );
           })}
@@ -821,6 +924,30 @@ export default function PipelineFinancialStatements({
   // ─── PY override dialog ───────────────────────────────────────────────────
   const [pyOverrideDialog, setPyOverrideDialog] = useState<{ code: string; name: string } | null>(null);
   const [pyOverrideAmount, setPyOverrideAmount] = useState<string>("");
+
+  // ─── Note-No. overrides (Phase UI-2 fix) ─────────────────────────────────
+  // Auditors sometimes renumber notes (e.g. shift Share Capital from N3 to N4
+  // because of Significant Accounting Policies layout changes). The default
+  // mapping comes from SCHEDULE_III_DIV_I, but a per-engagement override is
+  // stored locally in localStorage (no DB column yet — keep this scoped).
+  // Shape: Record<FS_CODE, number>.
+  const NOTE_OVR_KEY = `caflow:fs_note_overrides:${engagementId}`;
+  const [noteOverrides, setNoteOverrides] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(NOTE_OVR_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const updateNoteOverride = (code: string, value: number | null) => {
+    setNoteOverrides(prev => {
+      const next = { ...prev };
+      if (value === null || !Number.isFinite(value)) delete next[code];
+      else next[code] = value;
+      try { window.localStorage.setItem(NOTE_OVR_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
 
   // ─── Manual PY note-wise annexures (ledger-level breakdown per FS code) ──
   // Shape: { "<fs_code>": [{ ledger_name, amount, group? }] }
@@ -1460,11 +1587,52 @@ export default function PipelineFinancialStatements({
       };
     }
 
+    // ── Apply per-engagement Note-No. overrides (UI-2 fix) ────────────────
+    // BS/PL note numbers default to the SCHEDULE_III_DIV_I mapping. If the
+    // user edited a note number inline, surface it here so both the in-UI
+    // statement and the Excel export pick it up.
+    if (bs) {
+      const ov = (code: string, fallback: number | null | undefined) =>
+        noteOverrides[code] !== undefined ? noteOverrides[code] : (fallback ?? null);
+      bs.shareCap.noteNo        = ov("BS_EQ_SC",   bs.shareCap.noteNo);
+      bs.reserves.noteNo        = ov("BS_EQ_RS",   bs.reserves.noteNo);
+      bs.ltBorrowings.noteNo    = ov("BS_NCL_LTB", bs.ltBorrowings.noteNo);
+      bs.otherLtLiab.noteNo     = ov("BS_NCL_OLT", bs.otherLtLiab.noteNo);
+      bs.ltProvisions.noteNo    = ov("BS_NCL_LTP", bs.ltProvisions.noteNo);
+      bs.stBorrowings.noteNo    = ov("BS_CL_STB",  bs.stBorrowings.noteNo);
+      bs.tradePayables.noteNo   = ov("BS_CL_TP",   bs.tradePayables.noteNo);
+      bs.otherCurrLiab.noteNo   = ov("BS_CL_OCL",  bs.otherCurrLiab.noteNo);
+      bs.stProvisions.noteNo    = ov("BS_CL_STP",  bs.stProvisions.noteNo);
+      bs.ppe.noteNo             = ov("BS_NCA_FA",  bs.ppe.noteNo);
+      bs.ncInvestments.noteNo   = ov("BS_NCA_INV", bs.ncInvestments.noteNo);
+      bs.dtAssets.noteNo        = ov("BS_NCA_DTA", bs.dtAssets.noteNo);
+      bs.ltLoans.noteNo         = ov("BS_NCA_LLA", bs.ltLoans.noteNo);
+      bs.otherNcAssets.noteNo   = ov("BS_NCA_ONA", bs.otherNcAssets.noteNo);
+      bs.currInvestments.noteNo = ov("BS_CA_CI",   bs.currInvestments.noteNo);
+      bs.inventories.noteNo     = ov("BS_CA_INV",  bs.inventories.noteNo);
+      bs.tradeRec.noteNo        = ov("BS_CA_TR",   bs.tradeRec.noteNo);
+      bs.cashBank.noteNo        = ov("BS_CA_CCE",  bs.cashBank.noteNo);
+      bs.stLoans.noteNo         = ov("BS_CA_SLA",  bs.stLoans.noteNo);
+      bs.otherCurrAssets.noteNo = ov("BS_CA_OCA",  bs.otherCurrAssets.noteNo);
+    }
+    if (pl) {
+      const ov = (code: string, fallback: number | null | undefined) =>
+        noteOverrides[code] !== undefined ? noteOverrides[code] : (fallback ?? null);
+      pl.revFromOps.noteNo         = ov("PL_REV_OPS",  pl.revFromOps.noteNo);
+      pl.otherIncome.noteNo        = ov("PL_REV_OI",   pl.otherIncome.noteNo);
+      pl.purchasesStock.noteNo     = ov("PL_EXP_SIT",  pl.purchasesStock.noteNo);
+      pl.changesInventories.noteNo = ov("PL_EXP_CII",  pl.changesInventories.noteNo);
+      pl.employeeBenefits.noteNo   = ov("PL_EXP_EMP",  pl.employeeBenefits.noteNo);
+      pl.financeCosts.noteNo       = ov("PL_EXP_FIN",  pl.financeCosts.noteNo);
+      pl.depreciation.noteNo       = ov("PL_EXP_DEP",  pl.depreciation.noteNo);
+      pl.otherExpenses.noteNo      = ov("PL_EXP_OTH",  pl.otherExpenses.noteNo);
+    }
+
     return { exportCy, exportPy, cyOf, pyOf, bs, pl, cfs };
   }, [
     tbAccounts, coaMapping, manualOverrides, activeTree,
     pyAmounts, pyManualAmounts, noPriorEngagement, isNonCorporate,
-    computedAmounts, mergedPY,
+    computedAmounts, mergedPY, noteOverrides,
   ]);
 
   // ─── Corporate BS check + P&L summary (unchanged) ───
@@ -3724,6 +3892,24 @@ export default function PipelineFinancialStatements({
                 pyYear={pyYear}
                 companyName={engagement?.clients?.name || "[Company Name]"}
                 pyLocked={pyLocked}
+                onCommitCY={(code, value) => {
+                  setManualOverrides(prev => {
+                    const next = { ...prev };
+                    if (value === null) delete next[code];
+                    else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                    return next;
+                  });
+                }}
+                onCommitPY={(code, value) => {
+                  setPyManualAmounts(prev => {
+                    const next = { ...prev };
+                    if (value === null) delete next[code];
+                    else next[code] = value;
+                    return next;
+                  });
+                  setPyManualDirty(true);
+                }}
+                onEditNote={updateNoteOverride}
               />
             ) : (
               <div className="rounded-lg border overflow-hidden">
