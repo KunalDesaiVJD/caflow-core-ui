@@ -190,6 +190,17 @@ const NCE_LIAB_IDS: string[] = [
   "NCE_STB", "NCE_TP", "NCE_OCL", "NCE_STP",
 ];
 
+// Corporate BS liability-side codes — stored as NEGATIVE (Tally credit convention)
+// but displayed as POSITIVE. When a user edits inline, the committed value is
+// positive (as shown), so we must negate before storing back as a manual override.
+const BS_LIABILITY_CODES = new Set([
+  "BS_EQ_SC", "BS_EQ_RS",
+  "BS_NCL_LTB", "BS_NCL_OLT", "BS_NCL_LTP",
+  "BS_CL_STB", "BS_CL_TP", "BS_CL_OCL", "BS_CL_STP",
+]);
+// Corporate P&L revenue-side codes — same sign convention.
+const PL_REVENUE_CODES = new Set(["PL_REV_OPS", "PL_REV_OI"]);
+
 // ═══════════════════════════════════════
 // Props
 // ═══════════════════════════════════════
@@ -228,20 +239,25 @@ type BSDisplayRow =
   | { kind: "footer";   label: string; noteNo?: number | null };
 
 function buildBSRows(bs: BSRowData): BSDisplayRow[] {
+  // Sign convention: Tally exports credit balances (liabilities, equity) as NEGATIVE.
+  // For display, negate all liability-side values so they appear as positive figures
+  // on the Balance Sheet face (Assets and E&L both show positive amounts).
+  const negL = (v: number | null | undefined) => -(v || 0);
+
   // Section subtotals — match Excel SUM(E10:E30) and SUM(E35:E52) ranges.
-  // Liabilities side = all amount rows in the E&L block (incl. zero placeholders).
+  // Negate because raw values are negative (Tally credit convention).
   const totalEL =
-    (bs.shareCap.cy || 0) + (bs.reserves.cy || 0) +
-    (bs.ltBorrowings.cy || 0) + (bs.otherLtLiab.cy || 0) + (bs.ltProvisions.cy || 0) +
-    (bs.stBorrowings.cy || 0) +
-    (bs.tradePayMSME.cy || 0) + (bs.tradePayOthers.cy || 0) +
-    (bs.otherCurrLiab.cy || 0) + (bs.stProvisions.cy || 0);
+    negL(bs.shareCap.cy) + negL(bs.reserves.cy) +
+    negL(bs.ltBorrowings.cy) + negL(bs.otherLtLiab.cy) + negL(bs.ltProvisions.cy) +
+    negL(bs.stBorrowings.cy) +
+    negL(bs.tradePayMSME.cy) + negL(bs.tradePayOthers.cy) +
+    negL(bs.otherCurrLiab.cy) + negL(bs.stProvisions.cy);
   const totalELpy =
-    (bs.shareCap.py || 0) + (bs.reserves.py || 0) +
-    (bs.ltBorrowings.py || 0) + (bs.otherLtLiab.py || 0) + (bs.ltProvisions.py || 0) +
-    (bs.stBorrowings.py || 0) +
-    (bs.tradePayMSME.py || 0) + (bs.tradePayOthers.py || 0) +
-    (bs.otherCurrLiab.py || 0) + (bs.stProvisions.py || 0);
+    negL(bs.shareCap.py) + negL(bs.reserves.py) +
+    negL(bs.ltBorrowings.py) + negL(bs.otherLtLiab.py) + negL(bs.ltProvisions.py) +
+    negL(bs.stBorrowings.py) +
+    negL(bs.tradePayMSME.py) + negL(bs.tradePayOthers.py) +
+    negL(bs.otherCurrLiab.py) + negL(bs.stProvisions.py);
   const totalAssets =
     (bs.ppe.cy || 0) + (bs.ncInvestments.cy || 0) + (bs.dtAssets.cy || 0) +
     (bs.ltLoans.cy || 0) + (bs.otherNcAssets.cy || 0) +
@@ -257,24 +273,24 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     // ── EQUITY & LIABILITIES ─────────────────────────────────────────────
     { kind: "section", label: "I  EQUITY AND LIABILITIES", size: 10 },
     { kind: "subhead", label: "(1) Shareholders' funds" },
-    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: bs.shareCap.cy || 0,    py: bs.shareCap.py || 0,    indent: 1, code: "BS_EQ_SC" },
-    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: bs.reserves.cy || 0,    py: bs.reserves.py || 0,    indent: 1, code: "BS_EQ_RS" },
+    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: negL(bs.shareCap.cy),    py: negL(bs.shareCap.py),    indent: 1, code: "BS_EQ_SC" },
+    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: negL(bs.reserves.cy),    py: negL(bs.reserves.py),    indent: 1, code: "BS_EQ_RS" },
     { kind: "spacer" },
     { kind: "item", label: "(2) Share application money pending allotment", cy: 0, py: 0, size: 9 },
     { kind: "spacer" },
     { kind: "subhead", label: "(3) Non-Current liabilities" },
-    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: bs.ltBorrowings.cy || 0, py: bs.ltBorrowings.py || 0, indent: 1, code: "BS_NCL_LTB" },
+    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: negL(bs.ltBorrowings.cy), py: negL(bs.ltBorrowings.py), indent: 1, code: "BS_NCL_LTB" },
     { kind: "item", label: "(b) Deferred tax liabilities (Net)", cy: 0, py: 0, indent: 1 },
-    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: bs.otherLtLiab.cy || 0,  py: bs.otherLtLiab.py || 0,  indent: 1, code: "BS_NCL_OLT" },
-    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: bs.ltProvisions.cy || 0, py: bs.ltProvisions.py || 0, indent: 1, code: "BS_NCL_LTP" },
+    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: negL(bs.otherLtLiab.cy),  py: negL(bs.otherLtLiab.py),  indent: 1, code: "BS_NCL_OLT" },
+    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: negL(bs.ltProvisions.cy), py: negL(bs.ltProvisions.py), indent: 1, code: "BS_NCL_LTP" },
     { kind: "spacer" },
     { kind: "subhead", label: "(4) Current liabilities" },
-    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: bs.stBorrowings.cy || 0, py: bs.stBorrowings.py || 0, indent: 1, code: "BS_CL_STB" },
+    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: negL(bs.stBorrowings.cy), py: negL(bs.stBorrowings.py), indent: 1, code: "BS_CL_STB" },
     { kind: "subhead", label: "(b) Trade payables", noteNo: bs.tradePayables.noteNo, indent: 1, code: "BS_CL_TP" },
-    { kind: "item", label: "(i) Micro and Small Enterprises", cy: bs.tradePayMSME.cy || 0,   py: bs.tradePayMSME.py || 0,   indent: 2 },
-    { kind: "item", label: "(ii) Others",                     cy: bs.tradePayOthers.cy || 0, py: bs.tradePayOthers.py || 0, indent: 2, code: "BS_CL_TP" },
-    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: bs.otherCurrLiab.cy || 0, py: bs.otherCurrLiab.py || 0, indent: 1, size: 10, code: "BS_CL_OCL" },
-    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: bs.stProvisions.cy || 0,  py: bs.stProvisions.py || 0,  indent: 1, code: "BS_CL_STP" },
+    { kind: "item", label: "(i) Micro and Small Enterprises", cy: negL(bs.tradePayMSME.cy),   py: negL(bs.tradePayMSME.py),   indent: 2 },
+    { kind: "item", label: "(ii) Others",                     cy: negL(bs.tradePayOthers.cy), py: negL(bs.tradePayOthers.py), indent: 2, code: "BS_CL_TP" },
+    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: negL(bs.otherCurrLiab.cy), py: negL(bs.otherCurrLiab.py), indent: 1, size: 10, code: "BS_CL_OCL" },
+    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: negL(bs.stProvisions.cy),  py: negL(bs.stProvisions.py),  indent: 1, code: "BS_CL_STP" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
     { kind: "spacer" },
@@ -530,8 +546,13 @@ type PLDisplayRow =
   | { kind: "footer";   label: string };
 
 function buildPLRows(pl: PLRowData): PLDisplayRow[] {
-  const totalIncomeCy = (pl.revFromOps.cy || 0) + (pl.otherIncome.cy || 0);
-  const totalIncomePy = (pl.revFromOps.py || 0) + (pl.otherIncome.py || 0);
+  // Sign convention: Tally exports revenue/income as NEGATIVE (credit balances).
+  // Negate for display so income shows as positive on the P&L face.
+  const negI = (v: number | null | undefined) => -(v || 0);
+
+  // Total Income: negate raw values (which are stored as negative credits)
+  const totalIncomeCy = negI(pl.revFromOps.cy) + negI(pl.otherIncome.cy);
+  const totalIncomePy = negI(pl.revFromOps.py) + negI(pl.otherIncome.py);
   // Total Expenses excludes "Cost of materials consumed" (Excel row 14 has
   // note-no only, no amounts); SUM(G15:G20) covers rows 15–20.
   const totalExpensesCy =
@@ -543,6 +564,7 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
     (pl.employeeBenefits.py || 0) + (pl.financeCosts.py || 0) +
     (pl.depreciation.py || 0)    + (pl.otherExpenses.py || 0);
 
+  // Profit = Income (positive after negation) − Expenses (positive) → correct
   const pbExceptionalCy = totalIncomeCy - totalExpensesCy;        // V
   const pbExceptionalPy = totalIncomePy - totalExpensesPy;
   const exceptionalCy = 0;
@@ -565,8 +587,8 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
   const epsBasicPy = profitPy / epsDivisor;
 
   return [
-    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: pl.revFromOps.cy, py: pl.revFromOps.py, code: "PL_REV_OPS" },
-    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: pl.otherIncome.cy, py: pl.otherIncome.py, code: "PL_REV_OI" },
+    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: negI(pl.revFromOps.cy), py: negI(pl.revFromOps.py), code: "PL_REV_OPS" },
+    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: negI(pl.otherIncome.cy), py: negI(pl.otherIncome.py), code: "PL_REV_OI" },
     { kind: "total",  roman: "III.", label: "Total Income (I+II)",     cy: totalIncomeCy, py: totalIncomePy },
     { kind: "spacer" },
     { kind: "header", roman: "IV.",  label: "Expenses" },
@@ -4457,7 +4479,11 @@ export default function PipelineFinancialStatements({
                     setManualOverrides(prev => {
                       const next = { ...prev };
                       if (value === null) delete next[code];
-                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      else {
+                        // Liability/equity side: user types positive, store as negative (Tally credit convention)
+                        const storeValue = BS_LIABILITY_CODES.has(code) ? -Math.abs(value) : value;
+                        next[code] = { amount: storeValue, reason: prev[code]?.reason || "(inline edit)" };
+                      }
                       return next;
                     });
                   }}
@@ -4465,7 +4491,11 @@ export default function PipelineFinancialStatements({
                     setPyManualAmounts(prev => {
                       const next = { ...prev };
                       if (value === null) delete next[code];
-                      else next[code] = value;
+                      else {
+                        // Same sign convention for PY liability overrides
+                        const storeValue = BS_LIABILITY_CODES.has(code) ? -Math.abs(value) : value;
+                        next[code] = storeValue;
+                      }
                       return next;
                     });
                     setPyManualDirty(true);
@@ -4554,7 +4584,11 @@ export default function PipelineFinancialStatements({
                     setManualOverrides(prev => {
                       const next = { ...prev };
                       if (value === null) delete next[code];
-                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      else {
+                        // Revenue side: user types positive, store as negative (Tally credit convention)
+                        const storeValue = PL_REVENUE_CODES.has(code) ? -Math.abs(value) : value;
+                        next[code] = { amount: storeValue, reason: prev[code]?.reason || "(inline edit)" };
+                      }
                       return next;
                     });
                   }}
@@ -4562,7 +4596,11 @@ export default function PipelineFinancialStatements({
                     setPyManualAmounts(prev => {
                       const next = { ...prev };
                       if (value === null) delete next[code];
-                      else next[code] = value;
+                      else {
+                        // Same sign convention for PY revenue overrides
+                        const storeValue = PL_REVENUE_CODES.has(code) ? -Math.abs(value) : value;
+                        next[code] = storeValue;
+                      }
                       return next;
                     });
                     setPyManualDirty(true);
