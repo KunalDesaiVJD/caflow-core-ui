@@ -1550,9 +1550,24 @@ export default function PipelineFinancialStatements({
   }, [tallyTb]);
 
   // ─── COA mapping from engagement prop ───
+  // Applies backward-compat migration: pre-Phase-9 entries that mapped directly
+  // to BS_CA_INV (now a parent node) are rewritten to INV_STOCK so that
+  // computeTotal does not overwrite the accumulated inventory balance with 0.
   const coaMapping: Record<string, { code: string }> = useMemo(() => {
     if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object") {
-      return engagement.coa_mapping as any;
+      const raw = engagement.coa_mapping as Record<string, any>;
+      let needsMigration = false;
+      for (const v of Object.values(raw)) {
+        if ((v as any)?.code === "BS_CA_INV") { needsMigration = true; break; }
+      }
+      if (!needsMigration) return raw as any;
+      const patched: Record<string, any> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        patched[k] = (v as any)?.code === "BS_CA_INV"
+          ? { ...(v as any), code: "INV_STOCK", scheduleRef: "BS+P&L" }
+          : v;
+      }
+      return patched;
     }
     return {};
   }, [engagement?.coa_mapping]);

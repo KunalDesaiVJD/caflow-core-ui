@@ -517,7 +517,34 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // Load existing mapping from engagement
   useEffect(() => {
     if (engagement?.coa_mapping && typeof engagement.coa_mapping === "object" && Object.keys(engagement.coa_mapping).length > 0) {
-      setCoaMapping(engagement.coa_mapping as any);
+      const raw = engagement.coa_mapping as Record<string, any>;
+      // ── Backward-compat migration: BS_CA_INV direct → INV_STOCK ──────────
+      // Pre-Phase-9 coa_mapping entries reference BS_CA_INV directly. After
+      // Phase 9, BS_CA_INV is a parent node (with INV_* children), so
+      // computeTotal overwrites any direct accumulation to 0. Auto-migrate
+      // such entries to INV_STOCK (generic inventory dual-post code).
+      let migrated = false;
+      const patched: typeof raw = { ...raw };
+      for (const [ledger, entry] of Object.entries(raw)) {
+        if ((entry as any)?.code === "BS_CA_INV") {
+          patched[ledger] = { ...(entry as any), code: "INV_STOCK", scheduleRef: "BS+P&L" };
+          migrated = true;
+        }
+      }
+      setCoaMapping(patched);
+      if (migrated) {
+        // Persist migration silently; show a one-time info toast
+        supabase
+          .from("audit_engagements")
+          .update({ coa_mapping: patched } as any)
+          .eq("id", engagementId)
+          .then(() =>
+            toast.info("Inventory ledgers upgraded to dual-posting (BS+P&L)", {
+              description: "Old BS_CA_INV mappings auto-migrated to INV_STOCK.",
+              duration: 5000,
+            })
+          );
+      }
     } else if (tbAccounts.length > 0 && Object.keys(coaMapping).length === 0) {
       // Auto-map on first load
       runAutoMapping();
