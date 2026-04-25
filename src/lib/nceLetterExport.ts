@@ -6,6 +6,12 @@
  *
  * Client Certificate template font: Calibri 11
  * Management Letter template font:  Arial 11
+ *
+ * Border strategy for merged headings (B2:H2, B3:H3):
+ *   ExcelJS nullifies non-master cells after mergeCells(), so we cannot set
+ *   their borders through the normal API. We set borders on every cell in the
+ *   range BEFORE calling mergeCells() — the cell objects exist at that point
+ *   and are written to the XLSX even after the merge is recorded.
  */
 
 import ExcelJS from "exceljs";
@@ -63,6 +69,35 @@ function applyFont(cell: ExcelJS.Cell, opts: FontOpts = {}) {
   };
 }
 
+/**
+ * Set a thin box border on every cell from startCol to endCol in the given
+ * row BEFORE the range is merged.  ExcelJS nullifies non-master cells during
+ * mergeCells(), but cell objects created before the call remain in the
+ * worksheet's internal _cells array and are written to the XLSX with their
+ * styles intact — which is exactly how Excel's own "Format Cells" produces
+ * bordered merged-cell headings.
+ *
+ * Call this helper FIRST, then mergeCells(), then set value/font/alignment.
+ */
+function preMergeBorderRow(
+  ws: ExcelJS.Worksheet,
+  row: number,
+  startCol: number,
+  endCol: number,
+  style: ExcelJS.BorderStyle = "thin",
+) {
+  for (let c = startCol; c <= endCol; c++) {
+    // Access each cell directly while it is still an independent object
+    const cell = ws.getRow(row).getCell(c);
+    cell.border = {
+      top:    { style },
+      bottom: { style },
+      left:   { style },
+      right:  { style },
+    };
+  }
+}
+
 function download(buf: ExcelJS.Buffer, filename: string) {
   const blob = new Blob([buf as BlobPart], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -90,7 +125,7 @@ export async function exportClientCertificate(
     { width: 16.86  }, // B — main text
     { width: 10.14  }, // C — cash value / small col
     { width: 9.57   }, // D — "was with the firm..."
-    { width: 9.14   }, // E — closing stock value
+    { width: 9.14   }, // E
     { width: 5.71   }, // F — "as on"
     { width: 7.86   }, // G — FY / date
     { width: 31     }, // H — remainder
@@ -100,20 +135,23 @@ export async function exportClientCertificate(
   // Font shortcuts (Calibri — template font)
   const n = (cell: ExcelJS.Cell) => applyFont(cell);
   const b = (cell: ExcelJS.Cell) => applyFont(cell, { bold: true });
-  const ni = (cell: ExcelJS.Cell) => applyFont(cell, { name: "Calibri" }); // alias
 
   // ── Row 2 — Entity name ──
+  // Set borders on B2:H2 BEFORE merging (see preMergeBorderRow comment above)
+  preMergeBorderRow(ws, 2, 2, 8);
   ws.mergeCells("B2:H2");
   ws.getCell("B2").value = data.clientName || "[ENTITY NAME]";
   b(ws.getCell("B2"));
   ws.getCell("B2").alignment = { horizontal: "center", vertical: "middle" };
+  ws.getRow(2).height = 21;
 
   // ── Row 3 — Entity address ──
+  preMergeBorderRow(ws, 3, 2, 8);
   ws.mergeCells("B3:H3");
   ws.getCell("B3").value = data.clientAddress || "[ENTITY ADDRESS]";
   b(ws.getCell("B3"));
   ws.getCell("B3").alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  ws.getRow(3).height = 36;
+  ws.getRow(3).height = 18;
 
   // ── Row 5 — Date ──
   ws.mergeCells("B5:H5");
@@ -124,70 +162,89 @@ export async function exportClientCertificate(
   // ── Row 7 — "To," ──
   ws.getCell("B7").value = "To,";
   n(ws.getCell("B7"));
+  ws.getCell("B7").alignment = { vertical: "top" };
 
-  // ── Row 8 — Firm name (PLAIN per template) ──
+  // ── Row 8 — Firm name ──
   ws.getCell("B8").value = data.firmName || "[AUDIT FIRM NAME]";
   n(ws.getCell("B8"));
+  ws.getCell("B8").alignment = { vertical: "top" };
 
   // ── Row 9 — Firm address ──
   ws.getCell("B9").value = data.firmAddress || "[AUDIT FIRM ADDRESS]";
   n(ws.getCell("B9"));
-  ws.getCell("B9").alignment = { wrapText: true, vertical: "top" };
-  ws.getRow(9).height = 36;
+  ws.getCell("B9").alignment = { vertical: "top" };
 
   // ── Row 10 — FRN ──
   ws.getCell("B10").value = data.firmFRN ? `FRN: ${data.firmFRN}` : "";
   n(ws.getCell("B10"));
+  ws.getCell("B10").alignment = { vertical: "top" };
 
   // ── Row 12 — Dear Sir ──
   ws.getCell("B12").value = "Dear Sir,";
   n(ws.getCell("B12"));
-  ws.getCell("B12").alignment = { wrapText: true };
+  ws.getCell("B12").alignment = { vertical: "top", wrapText: true };
 
-  // ── Rows 13-14 — Opening line ──
+  // ── Row 13 — Opening line ──
+  // No wrapText — text in B13 and H13 overflows naturally across empty cols,
+  // exactly as the template does (wrapText in a narrow col would break layout).
   ws.getCell("B13").value = "In connection with the Tax Audits for the financial year";
   n(ws.getCell("B13"));
+  ws.getCell("B13").alignment = { vertical: "top" };
   ws.getCell("G13").value = data.financialYear || "______";
   b(ws.getCell("G13"));
+  ws.getCell("G13").alignment = { vertical: "top" };
   ws.getCell("H13").value = "u/s. 44AB, we herewith certify as";
   n(ws.getCell("H13"));
+  ws.getCell("H13").alignment = { vertical: "top" };
+
+  // ── Row 14 — "under :" ──
   ws.getCell("B14").value = "under :";
   n(ws.getCell("B14"));
+  ws.getCell("B14").alignment = { vertical: "top" };
 
   // ── Row 16 — Cash on hand ──
-  ws.getCell("B16").value = "Cash on hand Rs.";
+  // D16 text overflows naturally into empty E-H — NO merge, NO wrapText.
+  // Row height = 18 to match template.
+  ws.getCell("B16").value = "Cash on hand  Rs..";
   n(ws.getCell("B16"));
+  ws.getCell("B16").alignment = { vertical: "top", wrapText: true };
   const coh = data.cashOnHand ? parseFloat(data.cashOnHand) : 0;
   ws.getCell("C16").value = coh;
   ws.getCell("C16").numFmt = "#,##0.00";
   n(ws.getCell("C16"));
+  ws.getCell("C16").alignment = { vertical: "top" };
   ws.getCell("D16").value = "was with the firm and same was tallied with the cash book.";
   n(ws.getCell("D16"));
-  ws.getCell("D16").alignment = { wrapText: true, vertical: "top" };
+  ws.getCell("D16").alignment = { vertical: "top" }; // NO wrapText — let overflow
   ws.getRow(16).height = 18;
 
-  // ── Row 18 — Closing stock ──
+  // ── Row 18 — Closing stock (B18:D18 merged) ──
   ws.mergeCells("B18:D18");
   ws.getCell("B18").value = "Approxi. Value of the Closing stock is Rs.";
   n(ws.getCell("B18"));
+  ws.getCell("B18").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   const cs = data.closingStock ? parseFloat(data.closingStock) : 0;
   ws.getCell("E18").value = cs;
   ws.getCell("E18").numFmt = "#,##0.00";
   n(ws.getCell("E18"));
+  ws.getCell("E18").alignment = { vertical: "top" };
   ws.getCell("F18").value = "as on";
   n(ws.getCell("F18"));
+  ws.getCell("F18").alignment = { vertical: "top" };
   ws.getCell("G18").value = data.closingStockDate ? fmtDate(data.closingStockDate) : "_______";
   n(ws.getCell("G18"));
+  ws.getCell("G18").alignment = { vertical: "top" };
   ws.getCell("H18").value = "and same was physically verified.";
   n(ws.getCell("H18"));
+  ws.getCell("H18").alignment = { vertical: "top" };
 
   // ── Rows 19+ — Dynamic points ──
-  // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31
-  // Extra points beyond 7 extend past row 31
+  // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
+  // Each merges B:H and uses justify alignment with enough height for the text.
   const FIXED_ROWS = [19, 21, 23, 25, 27, 29, 31];
   const points = data.points || [];
 
-  let lastPointRow = 17;
+  let lastPointRow = 18;
   points.forEach((text, i) => {
     const row = i < FIXED_ROWS.length
       ? FIXED_ROWS[i]
@@ -198,66 +255,60 @@ export async function exportClientCertificate(
     cell.value = text;
     n(cell);
     cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
-    ws.getRow(row).height = 32;
+    // Approximate height based on text length; template varies per point
+    ws.getRow(row).height = text.length > 150 ? 48 : text.length > 80 ? 32 : 17.25;
     lastPointRow = row;
   });
 
-  // ── Closing line ──
+  // ── Closing line (B:H merged) ──
   const closingRow = Math.max(33, lastPointRow + 2);
   ws.mergeCells(`B${closingRow}:H${closingRow}`);
   const clCell = ws.getCell(`B${closingRow}`);
   clCell.value = data.closingLine || "You are requested to note the same.";
   n(clCell);
-  clCell.alignment = { horizontal: "left", wrapText: true };
+  clCell.alignment = { horizontal: "left", vertical: "top", wrapText: true };
 
-  // ── Signature block (BOLD throughout — exact template layout) ──
-  const sig = closingRow + 2; // row 35 for default 7 points
+  // ── Signature block (matches template rows 35-43 for default 7 points) ──
+  const sig = closingRow + 2; // row 35
 
-  // sig, sig+1 — blank bold spacer rows
   for (const r of [sig, sig + 1]) {
     ws.mergeCells(`B${r}:D${r}`);
-    b(ws.getCell(`B${r}`));
     ws.getRow(r).height = 15;
   }
 
-  // "Yours faithfully,"
-  const yfRow = sig + 2; // row 37
+  const yfRow = sig + 2;
   ws.mergeCells(`B${yfRow}:D${yfRow}`);
   ws.getCell(`B${yfRow}`).value = "Yours faithfully,";
   b(ws.getCell(`B${yfRow}`));
+  ws.getCell(`B${yfRow}`).alignment = { vertical: "top", wrapText: true };
   ws.getRow(yfRow).height = 15;
 
-  // Two-column signature space (left B:D + right F:H)
   for (const r of [sig + 3, sig + 4]) {
     ws.mergeCells(`B${r}:D${r}`);
     ws.mergeCells(`F${r}:H${r}`);
-    b(ws.getCell(`B${r}`));
     ws.getRow(r).height = 15;
   }
 
-  // Right-only spacer
   const rOnlyRow = sig + 5;
   ws.mergeCells(`F${rOnlyRow}:H${rOnlyRow}`);
   ws.getRow(rOnlyRow).height = 15;
 
-  // "x_____________"
-  const xRow = sig + 6; // row 41
+  const xRow = sig + 6;
   ws.mergeCells(`B${xRow}:D${xRow}`);
   ws.getCell(`B${xRow}`).value = "x_____________";
   b(ws.getCell(`B${xRow}`));
+  ws.getCell(`B${xRow}`).alignment = { vertical: "top", wrapText: true };
   ws.getRow(xRow).height = 15;
 
-  // "(Signature & stamp)"
-  const stRow = sig + 7; // row 42
+  const stRow = sig + 7;
   ws.mergeCells(`B${stRow}:D${stRow}`);
   ws.getCell(`B${stRow}`).value = "(Signature & stamp)";
   b(ws.getCell(`B${stRow}`));
+  ws.getCell(`B${stRow}`).alignment = { vertical: "top", wrapText: true };
   ws.getRow(stRow).height = 15;
 
-  // Final blank bold row
-  const finRow = sig + 8; // row 43
+  const finRow = sig + 8;
   ws.mergeCells(`B${finRow}:D${finRow}`);
-  b(ws.getCell(`B${finRow}`));
   ws.getRow(finRow).height = 15;
 
   const buf = await wb.xlsx.writeBuffer();
@@ -275,15 +326,15 @@ export async function exportManagementLetter(
 
   // ── Column widths — exact match to template ──
   ws.columns = [
-    { width: 3         }, // A — left margin
-    { width: 11        }, // B
-    { width: 10.140625 }, // C
-    { width: 9.5703125 }, // D
-    { width: 9.140625  }, // E
+    { width: 3           }, // A — left margin
+    { width: 11          }, // B
+    { width: 10.140625   }, // C
+    { width: 9.5703125   }, // D
+    { width: 9.140625    }, // E
     { width: 11.42578125 }, // F
     { width: 11.42578125 }, // G
-    { width: 18        }, // H
-    { width: 3         }, // I — right margin
+    { width: 18          }, // H
+    { width: 3           }, // I — right margin
   ];
 
   // Font: Arial (template font for management letter)
@@ -291,6 +342,7 @@ export async function exportManagementLetter(
   const b = (cell: ExcelJS.Cell) => applyFont(cell, { name: "Arial", bold: true });
 
   // ── Row 2 — Entity name ──
+  preMergeBorderRow(ws, 2, 2, 8); // borders on B2:H2 before merge
   ws.mergeCells("B2:H2");
   ws.getCell("B2").value = data.clientName || "[ENTITY NAME]";
   b(ws.getCell("B2"));
@@ -298,6 +350,7 @@ export async function exportManagementLetter(
   ws.getRow(2).height = 20.25;
 
   // ── Row 3 — Entity address ──
+  preMergeBorderRow(ws, 3, 2, 8); // borders on B3:H3 before merge
   ws.mergeCells("B3:H3");
   ws.getCell("B3").value = data.clientAddress || "[ENTITY ADDRESS]";
   b(ws.getCell("B3"));
@@ -322,7 +375,7 @@ export async function exportManagementLetter(
   // ── Row 10 — Firm address ──
   ws.getCell("B10").value = data.firmAddress || "[AUDIT FIRM ADDRESS]";
   n(ws.getCell("B10"));
-  ws.getCell("B10").alignment = { vertical: "top", wrapText: true };
+  ws.getCell("B10").alignment = { vertical: "top" };
 
   // ── Row 11 — FRN ──
   ws.getCell("B11").value = data.firmFRN ? `FRN: ${data.firmFRN}` : "";
@@ -331,7 +384,7 @@ export async function exportManagementLetter(
 
   // ── Row 14 — Subject ──
   ws.mergeCells("B14:F14");
-  ws.getCell("B14").value = "Subject : Appointment as Tax Auditors for Financial year";
+  ws.getCell("B14").value = "Subject : Appointment as Tax Auditors for Financial year ";
   n(ws.getCell("B14"));
   ws.getCell("B14").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   ws.getCell("G14").value = data.financialYear || "______";
@@ -339,19 +392,53 @@ export async function exportManagementLetter(
   ws.getCell("G14").alignment = { vertical: "top", wrapText: true };
   ws.getRow(14).height = 17.25;
 
-  // ── Row 16 — Dear Sir ──
+  // ── Row 16 — Dear Sir (includes "\n\n" newlines to match template) ──
   ws.mergeCells("B16:H16");
-  ws.getCell("B16").value = "Dear Sir,";
+  ws.getCell("B16").value = "Dear Sir,\n\n";
   n(ws.getCell("B16"));
   ws.getCell("B16").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   ws.getRow(16).height = 18.75;
 
-  // ── Row 18 — Body paragraph (full resolved text, wrap) ──
+  // ── Rows 18 + 20 — Body paragraph (split to match template layout) ──
+  // Template row 18: "We are pleased ... u/s. 44AB"  (height 30.75)
+  // Template row 20: "books of accounts ... ending on" (B20:G20) + fyEnd (H20)
+  //
+  // bodyPara arrives fully resolved (fyEnd already substituted).
+  // We split at "u/s. 44AB" then strip fyEnd from the tail for H20.
+  const SPLIT_MARKER = "u/s. 44AB";
+  const splitIdx = data.bodyPara.indexOf(SPLIT_MARKER);
+  let row18text: string;
+  let row20label: string;
+
+  if (splitIdx !== -1) {
+    row18text  = data.bodyPara.slice(0, splitIdx + SPLIT_MARKER.length).trim();
+    let tail   = data.bodyPara.slice(splitIdx + SPLIT_MARKER.length).trim();
+    // Remove trailing fyEnd value and any trailing period
+    if (data.fyEnd && tail.includes(data.fyEnd)) {
+      row20label = tail.slice(0, tail.lastIndexOf(data.fyEnd)).trim().replace(/\.+$/, "").trim();
+    } else {
+      row20label = tail.replace(/\.+$/, "").trim();
+    }
+  } else {
+    // Fallback: whole body in row 18, row 20 shows standard text
+    row18text  = data.bodyPara;
+    row20label = "books of accounts of my/our business for the financial year ending on";
+  }
+
   ws.mergeCells("B18:H18");
-  ws.getCell("B18").value = data.bodyPara;
+  ws.getCell("B18").value = row18text;
   n(ws.getCell("B18"));
   ws.getCell("B18").alignment = { horizontal: "justify", vertical: "top", wrapText: true };
-  ws.getRow(18).height = 60;
+  ws.getRow(18).height = 30.75;
+
+  ws.mergeCells("B20:G20");
+  ws.getCell("B20").value = row20label;
+  n(ws.getCell("B20"));
+  ws.getCell("B20").alignment = { horizontal: "left", vertical: "top", wrapText: true };
+  ws.getCell("H20").value = data.fyEnd || "______";
+  n(ws.getCell("H20"));
+  ws.getCell("H20").alignment = { vertical: "top", wrapText: true };
+  ws.getRow(20).height = 15;
 
   // ── Row 22 — Confirm line ──
   ws.mergeCells("B22:G22");
@@ -359,6 +446,10 @@ export async function exportManagementLetter(
   n(ws.getCell("B22"));
   ws.getCell("B22").alignment = { horizontal: "left", vertical: "top", wrapText: true };
   ws.getRow(22).height = 15;
+
+  // ── Row 24 — Blank spacer ──
+  ws.mergeCells("B24:D24");
+  ws.getRow(24).height = 15;
 
   // ── Row 25 — Thank You ──
   ws.mergeCells("B25:D25");
@@ -374,7 +465,7 @@ export async function exportManagementLetter(
   ws.getCell("B27").alignment = { vertical: "top", wrapText: true };
   ws.getRow(27).height = 15;
 
-  // ── Rows 28-30 — Signature space (left B:D + right F:H) ──
+  // ── Rows 28-30 — Signature space ──
   for (const r of [28, 29]) {
     ws.mergeCells(`B${r}:D${r}`);
     ws.mergeCells(`F${r}:H${r}`);
