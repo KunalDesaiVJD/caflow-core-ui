@@ -2,8 +2,8 @@
  * NCEManagementLetter — Management Representation Letter for Non-Corporate Entities
  * Stage 8 | Tab 6 | NCE only
  *
- * Renders as a formal printed letter. Body is fully auto-derived.
- * Only editable field: letter_date (defaults to today).
+ * Renders as a formal printed letter. Body paragraphs are manually editable.
+ * Persisted fields: letter_date, custom_content (JSONB overrides).
  * Address fallback: shows editable textarea when clients.address or
  *   firms.address is absent (not persisted — update records in settings).
  * Saves to nce_letters (letter_type = 'management_letter').
@@ -16,13 +16,55 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, Loader2, Printer, FileDown } from "lucide-react";
-import { exportToPdf } from "@/lib/exportUtils";
+import { Save, Loader2, FileSpreadsheet } from "lucide-react";
+import { exportManagementLetter, type MgmtLetterData } from "@/lib/nceLetterExport";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   engagementId: string;
+}
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
+
+const DEFAULTS = {
+  bodyPara:    "We are pleased to informed you that our firm has appointed you to carried out Tax Audit u/s. 44AB books of accounts of my/our business for the financial year ending on [fyEnd].",
+  confirmLine: "You are requested to confirm the same.",
+};
+
+// ─── EditablePara ─────────────────────────────────────────────────────────────
+
+interface EditableParaProps {
+  value:    string;
+  onChange: (v: string) => void;
+}
+
+function EditablePara({ value, onChange }: EditableParaProps) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize on value change
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={2}
+      className={[
+        "w-full bg-transparent border-0 border-b border-transparent resize-none overflow-hidden",
+        "hover:border-b hover:border-blue-300 focus:border-b focus:border-blue-500",
+        "text-sm font-serif text-gray-900 leading-relaxed",
+        "focus:outline-none transition-colors duration-150",
+        "cursor-text",
+      ].join(" ")}
+    />
+  );
 }
 
 // ─── Helper: firms.address is Json — may be object or plain string ────────────
@@ -85,13 +127,14 @@ function AddrFallback({ label, value, onChange }: AddrFallbackProps) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function NCEManagementLetter({ engagementId }: Props) {
-  const letterRef = useRef<HTMLDivElement>(null);
 
   // ── Engagement data (auto-linked) ─────────────────────────────────────────
   const [eng, setEng] = useState<any>(null);
 
-  // ── Only persisted editable field ────────────────────────────────────────
-  const [letterDate, setLetterDate] = useState(today);
+  // ── Persisted editable fields ─────────────────────────────────────────────
+  const [letterDate,   setLetterDate]   = useState(today);
+  const [bodyPara,     setBodyPara]     = useState(DEFAULTS.bodyPara);
+  const [confirmLine,  setConfirmLine]  = useState(DEFAULTS.confirmLine);
 
   // ── Address overrides (local only — fill when DB address is absent) ────────
   const [clientAddrInput, setClientAddrInput] = useState("");
@@ -106,7 +149,6 @@ export function NCEManagementLetter({ engagementId }: Props) {
   const clientAddrDb  = (eng?.clients?.address as string) || "";
   const firmName      = ((eng?.firms?.display_name || eng?.firms?.name) as string) || "";
   const firmAddrDb    = formatFirmAddress(eng?.firms?.address);
-  // FRN: confirmed column names are icai_firm_reg_no / icai_reg_no
   const firmFRN       = ((eng?.firms?.icai_firm_reg_no || eng?.firms?.icai_reg_no) as string) || "";
   const fyEnd         = fyEndDate(financialYear);
 
@@ -122,7 +164,6 @@ export function NCEManagementLetter({ engagementId }: Props) {
     (async () => {
       setLoading(true);
 
-      // Wildcard fetch — engagement + full clients and firms objects
       const { data: engRow } = await supabase
         .from("audit_engagements")
         .select("*, clients(*), firms(*)")
@@ -135,7 +176,6 @@ export function NCEManagementLetter({ engagementId }: Props) {
       const fy = (engRow?.financial_year as string) || "";
       if (!fy) { setLoading(false); return; }
 
-      // Load previously saved letter data
       const { data: saved } = await (supabase as any)
         .from("nce_letters")
         .select("*")
@@ -144,9 +184,11 @@ export function NCEManagementLetter({ engagementId }: Props) {
         .eq("letter_type", "management_letter")
         .maybeSingle();
 
-      if (!cancelled && saved?.letter_date) {
-        // Use saved date; keep today() default if never saved before
-        setLetterDate(saved.letter_date);
+      if (!cancelled && saved) {
+        if (saved.letter_date) setLetterDate(saved.letter_date);
+        const cc = (saved.custom_content as Record<string, string>) || {};
+        if (cc.bodyPara    !== undefined) setBodyPara(cc.bodyPara);
+        if (cc.confirmLine !== undefined) setConfirmLine(cc.confirmLine);
       }
 
       if (!cancelled) setLoading(false);
@@ -159,6 +201,12 @@ export function NCEManagementLetter({ engagementId }: Props) {
   const handleSave = async () => {
     if (!financialYear) return;
     setSaving(true);
+
+    // Only persist non-default overrides
+    const cc: Record<string, string> = {};
+    if (bodyPara    !== DEFAULTS.bodyPara)    cc.bodyPara    = bodyPara;
+    if (confirmLine !== DEFAULTS.confirmLine) cc.confirmLine = confirmLine;
+
     const { error } = await (supabase as any)
       .from("nce_letters")
       .upsert(
@@ -167,6 +215,7 @@ export function NCEManagementLetter({ engagementId }: Props) {
           financial_year: financialYear,
           letter_type:    "management_letter",
           letter_date:    letterDate || null,
+          custom_content: Object.keys(cc).length > 0 ? cc : null,
           updated_at:     new Date().toISOString(),
         },
         { onConflict: "engagement_id,financial_year,letter_type" }
@@ -176,15 +225,29 @@ export function NCEManagementLetter({ engagementId }: Props) {
     else       toast.success("Management letter saved");
   };
 
-  // ── Print ─────────────────────────────────────────────────────────────────
-  const handlePrint = () => window.print();
+  // ── Export Excel ──────────────────────────────────────────────────────────
+  const handleExportExcel = async () => {
+    const slug = clientName.replace(/\s+/g, "_").slice(0, 30)
+               + "_" + financialYear.replace("/", "-");
 
-  // ── Export PDF ────────────────────────────────────────────────────────────
-  const handleExportPdf = async () => {
-    if (!letterRef.current) return;
-    const slug = clientName.replace(/\s+/g, "_").slice(0, 30);
-    const fy   = financialYear.replace("/", "-");
-    await exportToPdf(letterRef.current, `ManagementLetter_${slug}_${fy}.pdf`);
+    const data: MgmtLetterData = {
+      clientName,
+      clientAddress,
+      letterDate,
+      firmName,
+      firmAddress,
+      firmFRN,
+      financialYear,
+      fyEnd,
+      bodyPara:    bodyPara.replace("[fyEnd]", fyEnd),
+      confirmLine,
+    };
+
+    try {
+      await exportManagementLetter(data, slug);
+    } catch (err: any) {
+      toast.error("Export failed: " + err.message);
+    }
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -200,44 +263,28 @@ export function NCEManagementLetter({ engagementId }: Props) {
   return (
     <div className="space-y-4">
 
-      {/* Print isolation — same pattern as NCEClientCertificate */}
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          .nce-mgmt-letter-print,
-          .nce-mgmt-letter-print * { visibility: visible !important; }
-          .nce-mgmt-letter-print {
-            position: absolute !important;
-            left: 0 !important; top: 0 !important;
-            width: 100% !important;
-            box-shadow: none !important;
-            border: none !important;
-          }
-        }
-      `}</style>
-
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-2 flex-wrap print:hidden">
+      <div className="flex items-center gap-2 flex-wrap">
         <Button size="sm" onClick={handleSave} disabled={saving} className="gap-1.5">
           {saving
             ? <Loader2 className="w-4 h-4 animate-spin" />
             : <Save className="w-4 h-4" />}
           Save
         </Button>
-        <Button size="sm" variant="outline" onClick={handlePrint} className="gap-1.5">
-          <Printer className="w-4 h-4" /> Print
-        </Button>
-        <Button size="sm" variant="outline" onClick={handleExportPdf} className="gap-1.5">
-          <FileDown className="w-4 h-4" /> Export PDF
+        <Button size="sm" variant="outline" onClick={handleExportExcel} className="gap-1.5">
+          <FileSpreadsheet className="w-4 h-4" /> Export Excel
         </Button>
       </div>
+
+      {/* ── Edit hint ── */}
+      <p className="text-xs text-muted-foreground">
+        Click any paragraph text to edit it directly.
+      </p>
 
       {/* ── Letter paper ── */}
       <div className="flex justify-center">
         <div
-          ref={letterRef}
           className={[
-            "nce-mgmt-letter-print",
             "bg-white border border-gray-200 shadow-md rounded",
             "p-10 w-full max-w-3xl",
             "font-serif text-sm text-gray-900 leading-relaxed",
@@ -251,7 +298,6 @@ export function NCEManagementLetter({ engagementId }: Props) {
               {clientName || <span className="text-gray-400">[Entity Name]</span>}
             </p>
 
-            {/* Client address — DB value or editable fallback */}
             {clientAddrDb
               ? <p className="text-gray-700 whitespace-pre-line">{clientAddrDb}</p>
               : <AddrFallback
@@ -279,7 +325,6 @@ export function NCEManagementLetter({ engagementId }: Props) {
               {firmName || <span className="text-gray-400">[Audit Firm Name]</span>}
             </p>
 
-            {/* Firm address — DB value or editable fallback */}
             {firmAddrDb
               ? <p className="text-gray-700 whitespace-pre-line">{firmAddrDb}</p>
               : <AddrFallback
@@ -302,15 +347,17 @@ export function NCEManagementLetter({ engagementId }: Props) {
           {/* ── Salutation ── */}
           <p>Dear Sir,</p>
 
-          {/* ── Body ── */}
-          <p>
-            We are pleased to informed you that our firm has appointed you to
-            carried out Tax Audit u/s. 44AB books of accounts of my/our business
-            for the financial year ending on{" "}
-            <strong>{fyEnd}</strong>.
-          </p>
+          {/* ── Body paragraph (editable) ── */}
+          <EditablePara
+            value={bodyPara.replace("[fyEnd]", fyEnd)}
+            onChange={(v) => setBodyPara(v.replace(fyEnd, "[fyEnd]"))}
+          />
 
-          <p>You are requested to confirm the same.</p>
+          {/* ── Confirm line (editable) ── */}
+          <EditablePara
+            value={confirmLine}
+            onChange={setConfirmLine}
+          />
 
           {/* ── Closing ── */}
           <div className="pt-8 space-y-1">
