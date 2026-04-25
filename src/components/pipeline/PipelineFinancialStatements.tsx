@@ -501,7 +501,7 @@ function CorporateBalanceSheetView({
 type PLDisplayRow =
   | { kind: "spacer" }
   | { kind: "header";   roman?: string; label: string }              // bold section header e.g. "IV. Expenses"
-  | { kind: "item";     roman?: string; label: string; noteNo?: number | null; cy?: number; py?: number; bold?: boolean; indent?: number }
+  | { kind: "item";     roman?: string; label: string; noteNo?: number | null; cy?: number; py?: number; bold?: boolean; indent?: number; code?: string }
   | { kind: "total";    roman?: string; label: string; cy: number; py: number }
   | { kind: "subnote";  label: string; bold?: boolean }              // helper line e.g. "(III-IV)"
   | { kind: "footer";   label: string };
@@ -542,18 +542,18 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
   const epsBasicPy = profitPy / epsDivisor;
 
   return [
-    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: pl.revFromOps.cy, py: pl.revFromOps.py },
-    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: pl.otherIncome.cy, py: pl.otherIncome.py },
+    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: pl.revFromOps.cy, py: pl.revFromOps.py, code: "PL_REV_OPS" },
+    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: pl.otherIncome.cy, py: pl.otherIncome.py, code: "PL_REV_OI" },
     { kind: "total",  roman: "III.", label: "Total Income (I+II)",     cy: totalIncomeCy, py: totalIncomePy },
     { kind: "spacer" },
     { kind: "header", roman: "IV.",  label: "Expenses" },
-    { kind: "item",   label: "Cost of materials consumed",            noteNo: pl.costMaterials.noteNo, indent: 1 },
-    { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: pl.purchasesStock.noteNo, cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1 },
-    { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: pl.changesInventories.noteNo, cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1 },
-    { kind: "item",   label: "Employee benefits expense",             noteNo: pl.employeeBenefits.noteNo, cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1 },
-    { kind: "item",   label: "Finance Costs",                         noteNo: pl.financeCosts.noteNo, cy: pl.financeCosts.cy, py: pl.financeCosts.py, indent: 1 },
-    { kind: "item",   label: "Depreciation & Amortisation Expenses",  noteNo: pl.depreciation.noteNo, cy: pl.depreciation.cy, py: pl.depreciation.py, indent: 1 },
-    { kind: "item",   label: "Other expenses",                        noteNo: pl.otherExpenses.noteNo, cy: pl.otherExpenses.cy, py: pl.otherExpenses.py, indent: 1 },
+    { kind: "item",   label: "Cost of materials consumed",            noteNo: pl.costMaterials.noteNo, indent: 1, code: "PL_EXP_MAT" },
+    { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: pl.purchasesStock.noteNo, cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1, code: "PL_EXP_SIT" },
+    { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: pl.changesInventories.noteNo, cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1, code: "PL_EXP_CII" },
+    { kind: "item",   label: "Employee benefits expense",             noteNo: pl.employeeBenefits.noteNo, cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1, code: "PL_EXP_EMP" },
+    { kind: "item",   label: "Finance Costs",                         noteNo: pl.financeCosts.noteNo, cy: pl.financeCosts.cy, py: pl.financeCosts.py, indent: 1, code: "PL_EXP_FIN" },
+    { kind: "item",   label: "Depreciation & Amortisation Expenses",  noteNo: pl.depreciation.noteNo, cy: pl.depreciation.cy, py: pl.depreciation.py, indent: 1, code: "PL_EXP_DEP" },
+    { kind: "item",   label: "Other expenses",                        noteNo: pl.otherExpenses.noteNo, cy: pl.otherExpenses.cy, py: pl.otherExpenses.py, indent: 1, code: "PL_EXP_OTH" },
     { kind: "total",  label: "Total Expenses",                        cy: totalExpensesCy, py: totalExpensesPy },
     { kind: "spacer" },
     { kind: "item",   roman: "V.",   label: "Profit before exceptional and extraordinary items and tax", cy: pbExceptionalCy, py: pbExceptionalPy, bold: true },
@@ -563,8 +563,8 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
     { kind: "item",   roman: "VIII.",label: "Extraordinary items",    cy: extraordinaryCy, py: extraordinaryPy },
     { kind: "item",   roman: "IX.",  label: "Profit before tax (VII-VIII)", cy: pbtCy, py: pbtPy, bold: true },
     { kind: "header", roman: "X.",   label: "Tax expense:" },
-    { kind: "item",   label: "(1) Current tax",  cy: currentTaxCy, py: currentTaxPy, indent: 2 },
-    { kind: "item",   label: "(2) Deferred tax", cy: deferredTaxCy, py: deferredTaxPy, indent: 2 },
+    { kind: "item",   label: "(1) Current tax",  cy: currentTaxCy, py: currentTaxPy, indent: 2, code: "PL_TAX_CUR" },
+    { kind: "item",   label: "(2) Deferred tax", cy: deferredTaxCy, py: deferredTaxPy, indent: 2, code: "PL_TAX_DEF" },
     { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", bold: true },
     { kind: "subnote", label: "(VII-VIII)", bold: true },
     { kind: "item",   roman: "XII.", label: "Profit (loss) for period from discontinuing operations" },
@@ -581,14 +581,18 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
 }
 
 interface CorporatePLViewProps {
-  pl:          PLRowData;
-  cyYear:      number;
-  pyYear:      number;
-  companyName: string;
-  pyLocked?:   boolean;
+  pl:           PLRowData;
+  cyYear:       number;
+  pyYear:       number;
+  companyName:  string;
+  pyLocked?:    boolean;
+  onCommitCY?:  (code: string, value: number | null) => void;
+  onCommitPY?:  (code: string, value: number | null) => void;
 }
 
-function CorporatePLView({ pl, cyYear, pyYear, companyName, pyLocked }: CorporatePLViewProps) {
+function CorporatePLView({
+  pl, cyYear, pyYear, companyName, pyLocked, onCommitCY, onCommitPY,
+}: CorporatePLViewProps) {
   const rows = buildPLRows(pl);
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
@@ -663,16 +667,22 @@ function CorporatePLView({ pl, cyYear, pyYear, companyName, pyLocked }: Corporat
             // item
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
+            const editableCY = !!row.code && !!onCommitCY;
+            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
                 <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
-                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
-                  {row.cy === undefined ? "" : formatINR(row.cy)}
+                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                  {editableCY
+                    ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v)} />
+                    : (row.cy === undefined ? "" : formatINR(row.cy))}
                 </td>
-                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
-                  {row.py === undefined ? "" : formatINR(row.py)}
+                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                  {editablePY
+                    ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommitPY!(row.code!, v)} />
+                    : (row.py === undefined ? "" : formatINR(row.py))}
                 </td>
               </tr>
             );
@@ -4533,6 +4543,23 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || "[Company Name]"}
                   pyLocked={pyLocked}
+                  onCommitCY={(code, value) => {
+                    setManualOverrides(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      return next;
+                    });
+                  }}
+                  onCommitPY={(code, value) => {
+                    setPyManualAmounts(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = value;
+                      return next;
+                    });
+                    setPyManualDirty(true);
+                  }}
                 />
                 <CorporateSignatureBlock
                   firmName={sigFirmName}
