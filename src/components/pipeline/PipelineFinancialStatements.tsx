@@ -4063,7 +4063,7 @@ export default function PipelineFinancialStatements({
 
   return (
     <div className="max-w-6xl space-y-4">
-      <EngagementHeader engagement={engagement} stageNumber={5} stageLabel="Financial Statements" />
+      <EngagementHeader engagement={engagement} stageNumber={10} stageLabel="Financial Statements" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

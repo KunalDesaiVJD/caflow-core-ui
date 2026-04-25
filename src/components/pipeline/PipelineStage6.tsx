@@ -42,7 +42,7 @@ export default function PipelineStage6({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
-      <EngagementHeader engagement={engagement} stageNumber={2} stageLabel="Workpapers & Audit Sheet" />
+      <EngagementHeader engagement={engagement} stageNumber={6} stageLabel="Workpapers & Audit Sheet" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

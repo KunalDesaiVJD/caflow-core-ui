@@ -6,7 +6,7 @@ import { Building2, FileBadge, MapPin, CalendarRange, Hash } from "lucide-react"
 
 interface EngagementHeaderProps {
   engagement: any;
-  stageNumber?: number;            // 1..9, shows "Stage X / 9" in header
+  stageNumber?: number;            // 1..9, shows "Stage X / 10" in header
   stageLabel?: string;             // e.g. "COA Mapping"
   compact?: boolean;               // collapsed single-line variant
   className?: string;
@@ -157,7 +157,7 @@ export default function EngagementHeader({
               <div className="text-right border-l pl-3 ml-1">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Pipeline</p>
                 <p className="text-xs font-semibold">
-                  Stage <span className="text-primary">{stageNumber}</span> / 9
+                  Stage <span className="text-primary">{stageNumber}</span> / 10
                 </p>
                 {stageLabel && <p className="text-[10px] text-muted-foreground">{stageLabel}</p>}
               </div>
