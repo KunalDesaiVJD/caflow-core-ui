@@ -119,6 +119,24 @@ export async function exportClientCertificate(
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Client Certificate");
 
+  // ── Page setup — exact match to template ──
+  // Narrow margins are essential: with 0.35in left/right the 9-column layout
+  // fits A4 width and all content fits on one page.
+  ws.pageSetup.paperSize        = 9;          // A4
+  ws.pageSetup.orientation      = "portrait";
+  ws.pageSetup.fitToPage        = false;
+  ws.pageSetup.fitToWidth       = 1;
+  ws.pageSetup.fitToHeight      = 0;
+  ws.pageSetup.scale            = 100;
+  ws.pageSetup.showGridLines    = false;
+  ws.pageSetup.horizontalCentered = true;
+  ws.pageSetup.printArea        = "A1:I43";
+  ws.pageSetup.margins = {
+    left: 0.35, right: 0.35,
+    top:  0.55, bottom: 0.55,
+    header: 0.2, footer: 0.2,
+  };
+
   // ── Column widths — exact match to template ──
   ws.columns = [
     { width: 3      }, // A — left margin
@@ -202,6 +220,10 @@ export async function exportClientCertificate(
   n(ws.getCell("B14"));
   ws.getCell("B14").alignment = { vertical: "top" };
 
+  // ── Spacer rows 15 and 17 — height 11.25 to match template ──
+  ws.getRow(15).height = 11.25;
+  ws.getRow(17).height = 11.25;
+
   // ── Row 16 — Cash on hand ──
   // D16 text overflows naturally into empty E-H — NO merge, NO wrapText.
   // Row height = 18 to match template.
@@ -240,8 +262,10 @@ export async function exportClientCertificate(
 
   // ── Rows 19+ — Dynamic points ──
   // Template fixed rows for points (up to 7): 19, 21, 23, 25, 27, 29, 31.
-  // Each merges B:H and uses justify alignment with enough height for the text.
-  const FIXED_ROWS = [19, 21, 23, 25, 27, 29, 31];
+  // Odd rows = content; even rows between them = spacers at height 11.25pt.
+  // Template-exact heights for the 7 fixed content rows:
+  const FIXED_ROWS        = [19,   21,   23,    25,    27,   29, 31];
+  const FIXED_ROW_HEIGHTS = [undefined, 31.5, 32.25, 17.25, 31.5, 48, 48];
   const points = data.points || [];
 
   let lastPointRow = 18;
@@ -255,21 +279,32 @@ export async function exportClientCertificate(
     cell.value = text;
     n(cell);
     cell.alignment = { wrapText: true, horizontal: "justify", vertical: "top" };
-    // Approximate height based on text length; template varies per point
-    ws.getRow(row).height = text.length > 150 ? 48 : text.length > 80 ? 32 : 17.25;
+
+    // Use template-exact height for the 7 fixed rows; formula for extras
+    const h = i < FIXED_ROW_HEIGHTS.length
+      ? FIXED_ROW_HEIGHTS[i]
+      : (text.length > 150 ? 48 : text.length > 80 ? 32 : 17.25);
+    if (h !== undefined) ws.getRow(row).height = h;
+
+    // Spacer row immediately before this content row (even row = row-1 for rows 21+)
+    if (row > 19) ws.getRow(row - 1).height = 11.25;
+
     lastPointRow = row;
   });
 
   // ── Closing line (B:H merged) ──
   const closingRow = Math.max(33, lastPointRow + 2);
+  // Spacer row before closing line
+  ws.getRow(closingRow - 1).height = 11.25;
   ws.mergeCells(`B${closingRow}:H${closingRow}`);
   const clCell = ws.getCell(`B${closingRow}`);
   clCell.value = data.closingLine || "You are requested to note the same.";
   n(clCell);
   clCell.alignment = { horizontal: "left", vertical: "top", wrapText: true };
 
-  // ── Signature block (matches template rows 35-43 for default 7 points) ──
+  // ── Spacer row before signature block (template: height 9) ──
   const sig = closingRow + 2; // row 35
+  ws.getRow(sig - 1).height = 9;
 
   for (const r of [sig, sig + 1]) {
     ws.mergeCells(`B${r}:D${r}`);
@@ -324,6 +359,18 @@ export async function exportManagementLetter(
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Management Letter");
 
+  // ── Page setup — exact match to template ──
+  ws.pageSetup.paperSize        = 9;          // A4
+  ws.pageSetup.orientation      = "portrait";
+  ws.pageSetup.fitToPage        = false;
+  ws.pageSetup.scale            = 100;
+  ws.pageSetup.printArea        = "A1:I33";
+  ws.pageSetup.margins = {
+    left: 0.7, right: 0.7,
+    top:  0.75, bottom: 0.75,
+    header: 0.3, footer: 0.3,
+  };
+
   // ── Column widths — exact match to template ──
   ws.columns = [
     { width: 3           }, // A — left margin
@@ -356,6 +403,15 @@ export async function exportManagementLetter(
   b(ws.getCell("B3"));
   ws.getCell("B3").alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   ws.getRow(3).height = 19.5;
+
+  // ── Spacer rows — exact heights from template ──
+  ws.getRow(4).height  = 4.9;   // tiny gap after address
+  ws.getRow(13).height = 11.25; // gap before Subject
+  ws.getRow(15).height = 9;     // gap between Subject and Dear Sir
+  ws.getRow(17).height = 9;     // gap between Dear Sir and body
+  ws.getRow(19).height = 9;     // gap between body rows 18 and 20
+  ws.getRow(21).height = 9;     // gap between row 20 and confirm line
+  ws.getRow(23).height = 9;     // gap after confirm line
 
   // ── Row 6 — Date ──
   ws.getCell("B6").value = `Date : ${fmtDate(data.letterDate)}`;
