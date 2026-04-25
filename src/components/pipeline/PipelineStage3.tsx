@@ -265,6 +265,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [fsSearch, setFsSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
   // ─── Entity type detection ───
@@ -1255,6 +1256,64 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return amounts;
   }, [tbAccounts, coaMapping, isNonCorporate]);
 
+  // ═══════ FS LEDGER SEARCH ═══════
+  // When the user types in the right-panel search box, build a flat result list:
+  // each entry = { ledger name, FS item code, FS item name, depth breadcrumb, confidence }
+  const fsSearchResults = useMemo(() => {
+    const q = fsSearch.trim().toLowerCase();
+    if (!q) return null;
+
+    // Build code → full breadcrumb path  e.g. "NCE_CASH" → "Current Assets → Cash and bank"
+    const breadcrumb: Record<string, string> = {};
+    const buildCrumb = (items: FSLineItem[], ancestors: string[]) => {
+      for (const item of items) {
+        const path = [...ancestors, item.name];
+        breadcrumb[item.code] = path.join(" › ");
+        if (item.children?.length) buildCrumb(item.children, path);
+      }
+    };
+    buildCrumb(activeTree, []);
+
+    const results: {
+      ledger: string;
+      fsCode: string;
+      fsName: string;
+      breadcrumb: string;
+      confidence: string;
+      balance: number;
+    }[] = [];
+
+    for (const acc of tbAccounts) {
+      const mapping = coaMapping[acc.account_name];
+      if (!mapping?.code) continue; // unmapped — skip
+      const fsItem = activeFlatItems.find(i => i.code === mapping.code);
+      if (!fsItem) continue;
+
+      // Match against ledger name OR fs head name
+      const matchesLedger = acc.account_name.toLowerCase().includes(q);
+      const matchesHead   = fsItem.name.toLowerCase().includes(q) || breadcrumb[mapping.code]?.toLowerCase().includes(q);
+      if (!matchesLedger && !matchesHead) continue;
+
+      results.push({
+        ledger:     acc.account_name,
+        fsCode:     mapping.code,
+        fsName:     fsItem.name,
+        breadcrumb: breadcrumb[mapping.code] || fsItem.name,
+        confidence: mapping.confidence || "low",
+        balance:    acc.balance ?? 0,
+      });
+    }
+
+    // Sort: ledger matches first, then head matches
+    results.sort((a, b) => {
+      const aLed = a.ledger.toLowerCase().includes(q) ? 0 : 1;
+      const bLed = b.ledger.toLowerCase().includes(q) ? 0 : 1;
+      return aLed - bLed || a.ledger.localeCompare(b.ledger);
+    });
+
+    return results;
+  }, [fsSearch, tbAccounts, coaMapping, activeFlatItems, activeTree]);
+
   // ═══════ OPENING-TB BALANCE CHECK (Task 2) ═══════
   // Sum opening Dr vs Cr directly from tallyTb (authoritative source).
   // Only shown when using Tally Sync data; if tbSnapshot/tbLeafNodes path is active,
@@ -2088,18 +2147,95 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
             {/* Right: FS Line Items Tree — mapping destination + unmap workspace */}
             <div className="w-1/2 flex flex-col border rounded-lg overflow-hidden">
-              <div className="p-2 border-b bg-muted/30 flex items-center justify-between">
-                <p className="text-xs font-semibold text-muted-foreground">
-                  {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
-                </p>
-                <p className="text-[10px] text-muted-foreground">
-                  {selectedAccount
-                    ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
-                    : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
-                </p>
+              <div className="p-2 border-b bg-muted/30 space-y-1.5">
+                {/* Title row */}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground">
+                    {isNonCorporate ? `NCE Line Items (${entityType})` : "Schedule III Line Items"}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {selectedAccount
+                      ? <>Click a line item to map <span className="font-semibold text-primary">"{selectedAccount}"</span></>
+                      : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
+                  </p>
+                </div>
+                {/* Search box */}
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+                  <Input
+                    value={fsSearch}
+                    onChange={e => setFsSearch(e.target.value)}
+                    placeholder="Search ledger or head… (e.g. Commission, Cash, PPE)"
+                    className="h-7 pl-6 pr-6 text-xs"
+                  />
+                  {fsSearch && (
+                    <button
+                      onClick={() => setFsSearch("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <span className="text-xs">✕</span>
+                    </button>
+                  )}
+                </div>
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-1">
+
+                  {/* ── SEARCH RESULTS MODE ── */}
+                  {fsSearchResults !== null ? (
+                    <div>
+                      <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 flex items-center justify-between text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                        <span>
+                          {fsSearchResults.length === 0
+                            ? "No results"
+                            : `${fsSearchResults.length} ledger${fsSearchResults.length !== 1 ? "s" : ""} found`}
+                        </span>
+                        <span className="text-right normal-case font-normal">
+                          {fsSearchResults.length > 0 && "Ledger → FS Head"}
+                        </span>
+                      </div>
+
+                      {fsSearchResults.length === 0 ? (
+                        <div className="py-10 text-center text-xs text-muted-foreground">
+                          <Search className="w-5 h-5 mx-auto mb-2 opacity-30" />
+                          No mapped ledger or FS head matches <strong>"{fsSearch}"</strong>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-border/50">
+                          {fsSearchResults.map((r, idx) => {
+                            const confClass = confChipClass(r.confidence);
+                            return (
+                              <div
+                                key={idx}
+                                className="px-2 py-2 hover:bg-muted/40 transition-colors"
+                              >
+                                {/* Ledger name */}
+                                <div className="flex items-center gap-1.5 min-w-0 mb-0.5">
+                                  <span className="text-xs font-medium truncate">{r.ledger}</span>
+                                  <Badge variant="outline" className={cn("text-[8px] px-1 shrink-0", confClass)}>
+                                    {confBadgeLabel(r.confidence)}
+                                  </Badge>
+                                  {Math.abs(r.balance) > 0.005 && (
+                                    <span className="ml-auto text-[10px] font-mono text-muted-foreground shrink-0">
+                                      ₹{Math.abs(r.balance).toLocaleString("en-IN")}
+                                      <span className="ml-0.5 text-[9px]">{r.balance >= 0 ? "Dr" : "Cr"}</span>
+                                    </span>
+                                  )}
+                                </div>
+                                {/* Breadcrumb path */}
+                                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                  <ArrowRight className="w-2.5 h-2.5 shrink-0 text-primary/60" />
+                                  <span className="truncate">{r.breadcrumb}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                  <>
+                  {/* ── NORMAL TREE MODE ── */}
                   {/* Column header: CY | PY | Δ */}
                   <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-1 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
                     <span>FS Line Item</span>
@@ -2264,6 +2400,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       </div>
                     );
                   })}
+                  </>
+                  )} {/* end search ternary */}
                 </div>
               </ScrollArea>
             </div>
