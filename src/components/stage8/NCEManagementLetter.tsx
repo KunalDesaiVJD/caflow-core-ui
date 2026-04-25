@@ -230,6 +230,7 @@ export function NCEManagementLetter({ engagementId }: Props) {
     const slug = clientName.replace(/\s+/g, "_").slice(0, 30)
                + "_" + financialYear.replace("/", "-");
 
+    const resolvedBody = bodyPara.replace(/\[fyEnd\]/g, fyEnd);
     const data: MgmtLetterData = {
       clientName,
       clientAddress,
@@ -239,7 +240,7 @@ export function NCEManagementLetter({ engagementId }: Props) {
       firmFRN,
       financialYear,
       fyEnd,
-      bodyPara:    bodyPara.replace("[fyEnd]", fyEnd),
+      bodyPara:    resolvedBody,
       confirmLine,
     };
 
