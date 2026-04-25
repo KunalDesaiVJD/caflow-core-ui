@@ -659,11 +659,19 @@ export default function TallySyncPage() {
   // The fix: treat the net stock change (opening − closing, signed) as an
   // additional implicit P&L item in the footer totals only.
   //
-  // Applies only to accounts with ZERO debit AND ZERO credit (pure inventory
-  // valuation change). Accounts with explicit entries are unaffected.
+  // Guard 1 — no journal activity: use getTurnover (DB column + voucher fallback)
+  //   so that P&L accounts whose debit_amount/credit_amount DB columns are NULL
+  //   (older syncs) are still excluded when vouchers confirm they have activity.
+  // Guard 2 — non-zero opening: Tally nominal accounts (Sales, Purchases,
+  //   Expenses) always start the year at zero; stock/BS carry-forwards do not.
+  //   This catches the rare case where vouchers are also missing for a P&L account.
   // Has no effect on companies without inventory (invAdj = 0).
   const _invAdj = filteredTB
-    .filter(r => !((r.debit_amount ?? 0) > 0 || (r.credit_amount ?? 0) > 0))
+    .filter(r => {
+      const t = getTurnover(r);
+      return !((t.debit ?? 0) > 0 || (t.credit ?? 0) > 0) // Guard 1: no activity
+          && (r.opening_balance ?? 0) > 0.5;               // Guard 2: BS carry-forward
+    })
     .reduce((sum, r) => {
       const ob = (r.opening_balance ?? 0) * ((r.opening_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
       const cb = (r.closing_balance ?? 0) * ((r.balance_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
