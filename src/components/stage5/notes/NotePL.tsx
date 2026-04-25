@@ -79,11 +79,12 @@ export default function NotePL({
     );
   };
 
-  // EPS values
-  const npat = Number(get("pl.eps.npat") ?? 0);
+  // EPS values — formula per FS NOTES.xlsx template: NPAT × 100 / Weighted Avg Shares
+  // (the ×100 reflects the template convention of values in `'000s).
+  const npat    = Number(get("pl.eps.npat") ?? 0);
   const nominal = Number(get("pl.eps.nominal_value") ?? 10);
-  const wavg = Number(get("pl.eps.weighted_avg_shares") ?? 0);
-  const basicEps = wavg > 0 ? Math.round((npat / wavg) * 10000) / 10000 : 0;
+  const wavg    = Number(get("pl.eps.weighted_avg_shares") ?? 0);
+  const basicEps = wavg > 0 ? Math.round(((npat * 100) / wavg) * 10000) / 10000 : 0;
 
   return (
     <div className="space-y-4">

@@ -38,7 +38,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
   const [notes,    setNotes]    = useState<Stage5Notes | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [syncing,  setSyncing]  = useState(false);
-  const [activeTab,setActiveTab]= useState<"bs_liab" | "bs_asset" | "fa" | "pl">("bs_liab");
+  const [activeTab,setActiveTab]= useState<"bs_liab" | "bs_asset" | "pl" | "fa">("bs_liab");
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
 
   // ── Initial load + auto-populate-if-needed ────────────────────────────
@@ -141,16 +141,29 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
   }, [updatePath]);
 
   // ── Re-sync from COA button ───────────────────────────────────────────
+  // If the user has any manual_edits[] in flight, show a confirm dialog
+  // explaining that those overrides will be preserved. Hitting Cancel
+  // aborts the re-sync entirely.
   const handleResync = useCallback(async () => {
+    const existing = notes ?? await loadStage5Notes(engagementId);
+    const overrides = existing.manual_edits?.length ?? 0;
+    if (overrides > 0) {
+      const ok = window.confirm(
+        `Re-sync from COA mapping?\n\n` +
+        `You have ${overrides} manual override(s). Re-sync refreshes ` +
+        `auto-filled cells but PRESERVES your manual edits. ` +
+        `Click OK to continue or Cancel to abort.`,
+      );
+      if (!ok) return;
+    }
     setSyncing(true);
     try {
-      const existing = notes ?? await loadStage5Notes(engagementId);
       const fresh = await autoPopulateNotes(engagementId, { existing });
       await saveStage5Notes(engagementId, fresh);
       setNotes(fresh);
       toast.success(
-        existing.manual_edits?.length
-          ? `Re-synced — ${existing.manual_edits.length} manual override(s) preserved.`
+        overrides > 0
+          ? `Re-synced — ${overrides} manual override(s) preserved.`
           : "Re-synced from COA mapping.",
       );
     } catch (e: any) {
@@ -226,11 +239,11 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
           <TabsTrigger value="bs_asset" className="gap-1 text-xs">
             <Building2 size={13} /> Note BS-Asset
           </TabsTrigger>
-          <TabsTrigger value="fa"       className="gap-1 text-xs">
-            <Coins size={13} /> FA
-          </TabsTrigger>
           <TabsTrigger value="pl"       className="gap-1 text-xs">
             <FileText size={13} /> Note PL
+          </TabsTrigger>
+          <TabsTrigger value="fa"       className="gap-1 text-xs">
+            <Coins size={13} /> FA
           </TabsTrigger>
         </TabsList>
 
@@ -246,14 +259,14 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
           />
         </TabsContent>
-        <TabsContent value="fa" className="mt-3">
-          <FAGrid rows={notes.fa.rows} pyRows={pyFaRows} onChange={updateFaRows} />
-        </TabsContent>
         <TabsContent value="pl" className="mt-3">
           <NotePL
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
           />
+        </TabsContent>
+        <TabsContent value="fa" className="mt-3">
+          <FAGrid rows={notes.fa.rows} pyRows={pyFaRows} onChange={updateFaRows} />
         </TabsContent>
       </Tabs>
     </div>

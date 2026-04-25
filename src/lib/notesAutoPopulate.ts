@@ -52,22 +52,57 @@ export interface Stage5Notes {
   auto_synced_at: string | null;   // ISO timestamp
 }
 
-/** Default Stage5Notes mirrors the JSONB DEFAULT in the migration. */
+/**
+ * Canonical 9-row FA default (matches FS NOTES.xlsx template). The Phase 1
+ * migration shipped with only 4 rows; loadStage5Notes() merges any missing
+ * default rows into existing engagements automatically (see DEFAULT_FA_ROWS
+ * + the merge in loadStage5Notes below) so legacy data picks up the rest
+ * without a second migration.
+ */
+export const DEFAULT_FA_ROWS: FARow[] = [
+  // ── Property, Plant & Equipment ─────────────────────────────────────────
+  { id: "land",                  particulars: "Land",                   useful_life: "indefinite", gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "factory_building",      particulars: "Factory Building",       useful_life: 30,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "plant_machinery",       particulars: "Plant & Machinery",      useful_life: 15,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "electric_equipments",   particulars: "Electric Equipments",    useful_life: 10,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "computers",             particulars: "Computers",              useful_life: 3,            gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "office_equipment",      particulars: "Office Equipment",       useful_life: 5,            gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "furniture_fixtures",    particulars: "Furniture and Fixtures", useful_life: 10,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  { id: "vehicles",              particulars: "Vehicles",               useful_life: 8,            gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+  // ── Intangible Assets ───────────────────────────────────────────────────
+  { id: "software",              particulars: "Software",               useful_life: 10,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
+];
+
+/** Default Stage5Notes — uses the canonical 9-row FA default. */
 export const DEFAULT_STAGE5_NOTES: Stage5Notes = {
-  bs_liab:  {},
-  bs_asset: {},
-  pl:       {},
-  fa: {
-    rows: [
-      { id: "land",             particulars: "Land",              useful_life: "indefinite", gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
-      { id: "factory_building", particulars: "Factory Building",  useful_life: 30,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
-      { id: "plant_machinery",  particulars: "Plant & Machinery", useful_life: 15,           gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
-      { id: "computers",        particulars: "Computers",         useful_life: 3,            gross_open: 0, additions: 0, disposals: 0, depn_open: 0, depn_add: 0, depn_disp: 0 },
-    ],
-  },
+  bs_liab:        {},
+  bs_asset:       {},
+  pl:             {},
+  fa:             { rows: DEFAULT_FA_ROWS.map(r => ({ ...r })) },
   manual_edits:   [],
   auto_synced_at: null,
 };
+
+/**
+ * Merge canonical default FA rows into an existing rows array. Used by
+ * loadStage5Notes to backfill engagements created against the older
+ * 4-row default without requiring a DB migration.
+ *
+ * Rules:
+ *   - Existing rows whose `id` matches a default are kept verbatim
+ *     (user-entered amounts win — never overwritten).
+ *   - Default rows whose `id` is missing from the existing array are
+ *     appended at the end with all-zero values.
+ *   - Custom rows (not in defaults) are preserved untouched.
+ */
+export function mergeFaDefaults(existing: FARow[]): FARow[] {
+  const out = Array.isArray(existing) ? existing.slice() : [];
+  const seenIds = new Set(out.map(r => r.id));
+  for (const def of DEFAULT_FA_ROWS) {
+    if (!seenIds.has(def.id)) out.push({ ...def });
+  }
+  return out;
+}
 
 // ═════════════════════════════════════════════════════════════════════════
 // Note row registry — maps note row keys to FS codes
@@ -428,13 +463,15 @@ export async function loadStage5Notes(engagementId: string): Promise<Stage5Notes
     .maybeSingle();
   const raw = (data as any)?.stage5_notes;
   if (raw && typeof raw === "object") {
-    // Defensive merge with defaults so missing top-level keys never crash UI
+    // Defensive merge with defaults so missing top-level keys never crash UI.
+    // mergeFaDefaults() backfills any of the 9 canonical FA rows that aren't
+    // already present (e.g. legacy engagements created against the 4-row
+    // migration default) without overwriting user-entered amounts.
+    const existingFa = raw.fa && Array.isArray(raw.fa.rows) ? raw.fa.rows : [];
     return {
       ...DEFAULT_STAGE5_NOTES,
       ...(raw as Partial<Stage5Notes>),
-      fa: raw.fa && Array.isArray(raw.fa.rows)
-            ? raw.fa
-            : DEFAULT_STAGE5_NOTES.fa,
+      fa: { rows: mergeFaDefaults(existingFa) },
       manual_edits: Array.isArray(raw.manual_edits) ? raw.manual_edits : [],
     } as Stage5Notes;
   }
@@ -504,14 +541,19 @@ export async function autoPopulateNotes(
     return any ? Math.round(total * 100) / 100 : 0;
   };
 
+  // Seed FA from canonical 9-row default, then carry forward existing
+  // user-entered amounts via the merge helper below.
   const out: Stage5Notes = {
     bs_liab:  {},
     bs_asset: {},
     pl:       {},
-    fa:       JSON.parse(JSON.stringify(DEFAULT_STAGE5_NOTES.fa)),
+    fa:       { rows: DEFAULT_FA_ROWS.map(r => ({ ...r })) },
     manual_edits:   [],
     auto_synced_at: new Date().toISOString(),
   };
+  if (options.existing?.fa?.rows) {
+    out.fa.rows = mergeFaDefaults(options.existing.fa.rows);
+  }
 
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
     const rows = NOTE_ROW_REGISTRY[section];

@@ -68,7 +68,11 @@ export function EditableCell({
       inputMode={type === "number" ? "decimal" : "text"}
       value={String(display ?? "")}
       placeholder={placeholder}
-      title={isOverridden ? "Manual override (click × to reset)" : isAutoFilled ? "Auto-filled from COA mapping" : ""}
+      title={
+        isOverridden  ? "(manual) — overridden value · click × to reset to (auto)"
+        : isAutoFilled ? "(auto) — auto-filled from COA mapping"
+        : ""
+      }
       onFocus={(e) => {
         setFocused(true);
         const v = value;

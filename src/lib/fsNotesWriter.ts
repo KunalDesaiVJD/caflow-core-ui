@@ -929,12 +929,13 @@ function writeNotePL(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | null):
   setCell(sheet, "B119", "Weighted average number of equity shares outstanding");
   setCell(sheet, "F119", num(notes, "pl.eps.weighted_avg_shares"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "G119", num(notes, "pl.eps.weighted_avg_shares_py"), { numFmt: MONEY_FMT, align: "right" });
+  // EPS = NPAT × 100 / Weighted Avg Shares — per FS NOTES.xlsx template.
   setCell(sheet, "B120", "Basic earnings per share (in Rs.)");
-  setCell(sheet, "F120", { formula: "IFERROR((F117/F119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "G120", { formula: "IFERROR((G117/G119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "F120", { formula: "IFERROR((F117*100/F119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "G120", { formula: "IFERROR((G117*100/G119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "B121", "Diluted earnings per share (in Rs.)");
-  setCell(sheet, "F121", { formula: "IFERROR((F117/F119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "G121", { formula: "IFERROR((G117/G119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "F121", { formula: "IFERROR((F117*100/F119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "G121", { formula: "IFERROR((G117*100/G119),0)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   setCell(sheet, "A127", "(This space has been intentionally left blank)", { align: "center", size: 9 });
   sheet.mergeCells("A127:H127");
