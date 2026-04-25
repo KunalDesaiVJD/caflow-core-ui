@@ -79,7 +79,13 @@ const SCHEDULE_III_DIV_I: FSLineItem[] = [
   ]},
   { code: "BS_CA", name: "CURRENT ASSETS", noteRef: null, section: "BS_assets", children: [
     { code: "BS_CA_CI", name: "Current Investments", noteRef: 19, section: "BS_assets" },
-    { code: "BS_CA_INV", name: "Inventories", noteRef: 20, section: "BS_assets" },
+    { code: "BS_CA_INV", name: "Inventories", noteRef: 20, section: "BS_assets", children: [
+      { code: "INV_RM",    name: "Raw Materials",             noteRef: 20, section: "BS_assets" },
+      { code: "INV_WIP",   name: "Work-in-Progress",          noteRef: 20, section: "BS_assets" },
+      { code: "INV_FG",    name: "Finished Goods",            noteRef: 20, section: "BS_assets" },
+      { code: "INV_STT",   name: "Stock-in-Trade",            noteRef: 20, section: "BS_assets" },
+      { code: "INV_STOCK", name: "Stock / Other Inventories", noteRef: 20, section: "BS_assets" },
+    ]},
     { code: "BS_CA_TR", name: "Trade Receivables", noteRef: 21, section: "BS_assets" },
     { code: "BS_CA_CCE", name: "Cash and Cash Equivalents", noteRef: 22, section: "BS_assets" },
     { code: "BS_CA_SLA", name: "Short-term Loans and Advances", noteRef: 23, section: "BS_assets" },
@@ -124,6 +130,13 @@ function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: num
 }
 
 const FLAT_ITEMS = flattenTree(SCHEDULE_III_DIV_I);
+
+// ── Inventory dual-posting codes ──────────────────────────────────────────────
+// Ledgers mapped to any of these codes simultaneously post to:
+//   • BS_CA_INV  (closing balance  → Note 20 Inventories)
+//   • PL_EXP_CII (opening − closing → Note 27 Changes in Inventories)
+// PL_EXP_CII is auto-computed and LOCKED when any INV_* ledger is active.
+const INV_CODES = new Set(["INV_STOCK", "INV_RM", "INV_WIP", "INV_FG", "INV_STT"]);
 
 // ═══════════════════════════════════════
 // Non-Corporate Entity detection
@@ -586,12 +599,13 @@ interface CorporatePLViewProps {
   pyYear:       number;
   companyName:  string;
   pyLocked?:    boolean;
+  lockedCodes?: Set<string>;
   onCommitCY?:  (code: string, value: number | null) => void;
   onCommitPY?:  (code: string, value: number | null) => void;
 }
 
 function CorporatePLView({
-  pl, cyYear, pyYear, companyName, pyLocked, onCommitCY, onCommitPY,
+  pl, cyYear, pyYear, companyName, pyLocked, lockedCodes, onCommitCY, onCommitPY,
 }: CorporatePLViewProps) {
   const rows = buildPLRows(pl);
   return (
@@ -667,8 +681,9 @@ function CorporatePLView({
             // item
             const indentPx = (row.indent || 0) * 16;
             const boldCls = row.bold ? "font-bold" : "";
-            const editableCY = !!row.code && !!onCommitCY;
-            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const isLockedCY = !!row.code && lockedCodes?.has(row.code);
+            const editableCY = !!row.code && !!onCommitCY && !isLockedCY;
+            const editablePY = !!row.code && !!onCommitPY && !pyLocked && !isLockedCY;
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
@@ -677,7 +692,7 @@ function CorporatePLView({
                 <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v)} />
-                    : (row.cy === undefined ? "" : formatINR(row.cy))}
+                    : (row.cy === undefined ? "" : <span className="inline-flex items-center gap-1">{formatINR(row.cy)}{isLockedCY && <span title="Auto-computed from INV_* ledgers — locked" className="text-blue-400">🔒</span>}</span>)}
                 </td>
                 <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
                   {editablePY
@@ -1356,6 +1371,34 @@ export default function PipelineFinancialStatements({
     enabled: (engagement as any)?.py_source === "py_shell" && !!engagement?.client_id && !!engagement?.financial_year,
   });
 
+  // ─── PY Shell Trial Balance (for PY Changes in Inventories) ─────────────
+  // When INV_* ledgers are mapped we need the PY shell's TB to compute the
+  // prior-year P&L line "Changes in Inventories" as:
+  //   Σ (PY Shell opening_balance − PY Shell closing_balance) for each
+  //   ledger name that maps to an INV_* code in the current year.
+  // Also used for the mismatch warning: CY opening ≠ PY Shell closing.
+  const { data: pyShellTb } = useQuery({
+    queryKey: ["py-shell-tb", pyShellId],
+    queryFn: async () => {
+      if (!pyShellId) return [] as any[];
+      const PAGE = 500;
+      const rows: any[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name, opening_balance, opening_type, closing_balance, balance_type")
+          .eq("engagement_id", pyShellId)
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        if (!data?.length) break;
+        rows.push(...data);
+        if (data.length < PAGE) break;
+      }
+      return rows;
+    },
+    enabled: !!pyShellId,
+  });
+
   // ─── Firm data (NCE signature block) ─────────────────────────────────────
   // Pulls `membership_numbers` as well so the partner's M.No. can be
   // resolved from the engagement's `partner_name` when `partner_id` is
@@ -1514,6 +1557,58 @@ export default function PipelineFinancialStatements({
     return {};
   }, [engagement?.coa_mapping]);
 
+  // ─── PY Shell TB helpers for inventory dual-posting ───────────────────────
+
+  // Build a fast lookup map from the PY Shell TB: ledger_name → { opening, closing }
+  const pyShellTbMap = useMemo((): Map<string, { opening: number; closing: number }> => {
+    const m = new Map<string, { opening: number; closing: number }>();
+    if (!pyShellTb?.length) return m;
+    for (const row of pyShellTb) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const cb   = Math.abs(Number(row.closing_balance ?? 0));
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      const ob   = Math.abs(Number(row.opening_balance ?? 0)) *
+                   (String(row.opening_type ?? "").toUpperCase() === "CR" ? -1 : 1);
+      m.set(name, { opening: ob, closing: isDr ? cb : -cb });
+    }
+    return m;
+  }, [pyShellTb]);
+
+  // PY Changes in Inventories: computed from PY Shell TB for INV_* mapped ledgers.
+  // Returns null when no PY Shell TB is available (fall back to prior engagement).
+  const pyInvCII = useMemo((): number | null => {
+    if (!pyShellTbMap.size) return null;
+    let hasInv = false;
+    let total = 0;
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping || !INV_CODES.has(mapping.code)) continue;
+      hasInv = true;
+      const pyRow = pyShellTbMap.get(acct.account_name);
+      if (!pyRow) continue;
+      total += pyRow.opening - pyRow.closing;
+    }
+    return hasInv ? total : null;
+  }, [pyShellTbMap, tbAccounts, coaMapping]);
+
+  // Inventory mismatch: CY opening_balance ≠ PY Shell closing_balance per ledger.
+  // Surfaced as a warning banner when any discrepancy > ₹1 exists.
+  const invMismatchLedgers = useMemo((): { ledger: string; cyOpening: number; pyClosing: number }[] => {
+    if (!pyShellTbMap.size) return [];
+    const result: { ledger: string; cyOpening: number; pyClosing: number }[] = [];
+    for (const acct of tbAccounts) {
+      const mapping = coaMapping[acct.account_name];
+      if (!mapping || !INV_CODES.has(mapping.code)) continue;
+      const pyRow = pyShellTbMap.get(acct.account_name);
+      if (!pyRow) continue;
+      if (Math.abs(acct.opening_balance - pyRow.closing) > 1) {
+        result.push({ ledger: acct.account_name, cyOpening: acct.opening_balance, pyClosing: pyRow.closing });
+      }
+    }
+    return result;
+  }, [pyShellTbMap, tbAccounts, coaMapping]);
+
   // ─── Load PY amounts ───
   useEffect(() => {
     if (priorEngagement && Array.isArray(priorEngagement)) {
@@ -1590,16 +1685,29 @@ export default function PipelineFinancialStatements({
   // ─── Computed FS amounts ───
   const computedAmounts: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
+    let hasInvMapping = false;
 
     // Aggregate TB accounts → FS line items via COA mapping
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
       if (!mapping) continue;
-      amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+
+      if (INV_CODES.has(mapping.code)) {
+        // ── Dual-post: BS closing balance + P&L Changes in Inventories ──
+        // BS: accumulate closing balance under the INV_* code
+        //     (parent BS_CA_INV total computed by computeTotal recursion)
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+        // P&L: Changes in Inventories = opening − closing (positive = stock consumed)
+        amounts["PL_EXP_CII"] = (amounts["PL_EXP_CII"] || 0) + (acct.opening_balance - acct.balance);
+        hasInvMapping = true;
+      } else {
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+      }
     }
 
-    // Apply manual overrides
+    // Apply manual overrides — PL_EXP_CII is locked when INV_* ledgers are mapped
     for (const [code, override] of Object.entries(manualOverrides)) {
+      if (code === "PL_EXP_CII" && hasInvMapping) continue; // auto-computed, locked
       amounts[code] = override.amount;
     }
 
@@ -1636,6 +1744,13 @@ export default function PipelineFinancialStatements({
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
+  // True when at least one TB ledger is mapped to an INV_* code.
+  // Used to lock PL_EXP_CII from manual overrides (it is auto-computed).
+  const hasInvMapping = useMemo(
+    () => tbAccounts.some(a => INV_CODES.has(coaMapping[a.account_name]?.code)),
+    [tbAccounts, coaMapping],
+  );
+
   // ═══════ COMPARATIVE (PY) AMOUNTS ═══════
   // Prior-year BS from opening_balance on CY trial balance. Same coa_mapping
   // → re-mapping a ledger re-groups both periods. P&L opens at 0 so PY P&L
@@ -1661,6 +1776,8 @@ export default function PipelineFinancialStatements({
 
   // ─── Merged PY: BS uses computedAmountsPY (from opening); P&L uses pyAmounts (prior engagement) ───
   // When there is no prior engagement, PY P&L is sourced from engagement.py_manual_amounts.
+  // PL_EXP_CII: when INV_* are mapped, injected from PY Shell TB (pyInvCII). This takes
+  // priority over both pyAmounts and pyManualAmounts since it is the authoritative source.
   const mergedPY: Record<string, number> = useMemo(() => {
     const merged: Record<string, number> = { ...pyAmounts };
     // Fold in manual PY P&L for items that have no prior-engagement value.
@@ -1678,6 +1795,11 @@ export default function PipelineFinancialStatements({
       const isBS = sec.includes("bs") || sec.includes("asset") || sec.includes("liab") || sec.includes("equity");
       if (isBS && Math.abs(val) > 0.005) merged[code] = val;
     }
+    // ── PY Changes in Inventories: inject from PY Shell TB when available ──
+    // pyInvCII !== null means INV_* are mapped AND PY Shell TB was loaded.
+    if (pyInvCII !== null) {
+      merged["PL_EXP_CII"] = pyInvCII;
+    }
     // Recompute P&L parent totals from leaves so manual leaf entries flow up.
     const computePL = (item: FSLineItem): number => {
       const sec = String(item.section || "").toLowerCase();
@@ -1690,7 +1812,7 @@ export default function PipelineFinancialStatements({
     };
     for (const item of activeTree) computePL(item);
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, noPriorEngagement, activeFlatItems, activeTree, pyInvCII]);
 
   // ─── Phase UI-1: Shared FS display data ─────────────────────────────────
   // Hoisted out of exportToExcel() so both the Export Excel button AND the
@@ -1703,14 +1825,26 @@ export default function PipelineFinancialStatements({
   const fsDisplayData = useMemo(() => {
     const exportCy: Record<string, number> = {};
     const exportPy: Record<string, number> = {};
+    let hasInvMappingLocal = false;
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
       if (!mapping) continue;
-      exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
       const opening = acct.opening_balance ?? 0;
-      if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+      if (INV_CODES.has(mapping.code)) {
+        // Dual-post CY: BS closing balance + P&L Changes in Inventories
+        exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
+        exportCy["PL_EXP_CII"] = (exportCy["PL_EXP_CII"] || 0) + (opening - (acct.balance || 0));
+        // PY BS: opening balance (prior year closing)
+        if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+        hasInvMappingLocal = true;
+      } else {
+        exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
+        if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
+      }
     }
     for (const [code, override] of Object.entries(manualOverrides)) {
+      // PL_EXP_CII is locked when INV_* ledgers are mapped
+      if (code === "PL_EXP_CII" && hasInvMappingLocal) continue;
       exportCy[code] = override.amount;
     }
     const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
@@ -1732,6 +1866,10 @@ export default function PipelineFinancialStatements({
           if (exportPy[code] === undefined || exportPy[code] === 0) exportPy[code] = val;
         }
       }
+    }
+    // PY Changes in Inventories: override with PY Shell TB when INV_* are mapped
+    if (pyInvCII !== null) {
+      exportPy["PL_EXP_CII"] = pyInvCII;
     }
     const computePlLocal = (item: FSLineItem): number => {
       const sec = String(item.section || "").toLowerCase();
@@ -1885,7 +2023,7 @@ export default function PipelineFinancialStatements({
   }, [
     tbAccounts, coaMapping, manualOverrides, activeTree,
     pyAmounts, pyManualAmounts, noPriorEngagement, isNonCorporate,
-    computedAmounts, mergedPY, noteOverrides,
+    computedAmounts, mergedPY, noteOverrides, pyInvCII,
   ]);
 
   // ─── Corporate BS check + P&L summary (unchanged) ───
@@ -3948,7 +4086,7 @@ export default function PipelineFinancialStatements({
               ) : (
                 <span className="text-muted-foreground">—</span>
               )}
-              {!isHeader && (
+              {!isHeader && !(item.code === "PL_EXP_CII" && hasInvMapping) && (
                 <button
                   className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
                   title="Override CY amount"
@@ -3956,6 +4094,9 @@ export default function PipelineFinancialStatements({
                 >
                   <Pencil size={9} className="text-muted-foreground" />
                 </button>
+              )}
+              {!isHeader && item.code === "PL_EXP_CII" && hasInvMapping && (
+                <span title="Auto-computed from INV_* ledgers — locked" className="text-[9px] text-blue-500 ml-1">🔒</span>
               )}
             </div>
           </TableCell>
@@ -3993,7 +4134,7 @@ export default function PipelineFinancialStatements({
 
           {/* CY pencil (legacy action column — kept for clarity) */}
           <TableCell className="w-10 text-center">
-            {!isHeader && (
+            {!isHeader && !(item.code === "PL_EXP_CII" && hasInvMapping) && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -4089,6 +4230,40 @@ export default function PipelineFinancialStatements({
           one of four paths: existing engagement, PY shell import, manual
           entry, or skip. Hidden once py_setup_completed is true and a prior
           engagement / annexures / amounts have been recorded. */}
+      {/* ── Inventory Mismatch Warning ────────────────────────────────────────
+           Shown when CY opening balance for INV_* ledgers doesn't match
+           the PY Shell closing balance for the same ledger names. This
+           typically means the PY Shell TB hasn't been synced yet, or that
+           there is a genuine discrepancy. */}
+      {invMismatchLedgers.length > 0 && (
+        <Alert className="border-amber-400 bg-amber-50 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-xs text-amber-800 dark:text-amber-400">
+            Inventory Opening Balance Mismatch
+          </AlertTitle>
+          <AlertDescription className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+            <p className="mb-1">
+              CY opening balance ≠ PY Shell closing balance for {invMismatchLedgers.length} inventory ledger{invMismatchLedgers.length > 1 ? "s" : ""}.
+              The PY Changes in Inventories figure may not tally with the prior year. Sync the PY Shell Tally data to resolve.
+            </p>
+            <ul className="list-disc pl-4 space-y-0.5">
+              {invMismatchLedgers.map(m => (
+                <li key={m.ledger}>
+                  <span className="font-medium">{m.ledger}</span>
+                  {" — "}CY Opening: ₹{Math.abs(m.cyOpening).toLocaleString("en-IN")}
+                  {" vs "}PY Shell Closing: ₹{Math.abs(m.pyClosing).toLocaleString("en-IN")}
+                  {Math.abs(m.cyOpening - m.pyClosing) > 0 && (
+                    <span className="text-amber-600 ml-1">
+                      (diff ₹{Math.abs(m.cyOpening - m.pyClosing).toLocaleString("en-IN")})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {noPriorEngagement && !(engagement as any)?.is_py_shell && (
         <Alert className="border-primary/30">
           <FileSpreadsheet className="h-4 w-4" />
@@ -4320,6 +4495,7 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || "[Company Name]"}
                   pyLocked={pyLocked}
+                  lockedCodes={hasInvMapping ? new Set(["PL_EXP_CII"]) : undefined}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };

@@ -47,6 +47,12 @@ const NON_CORPORATE = [
   "Individual",
 ];
 
+// ── Inventory dual-posting codes ──────────────────────────────────────────────
+// Ledgers mapped to these codes post to BOTH BS_CA_INV (closing balance) AND
+// PL_EXP_CII (opening − closing = Changes in Inventories). PL_EXP_CII is
+// auto-computed and locked when any INV_* code is active.
+const INV_CODES_SET = new Set(["INV_STOCK", "INV_RM", "INV_WIP", "INV_FG", "INV_STT"]);
+
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions  (corporate)
 // ═══════════════════════════════════════
@@ -84,7 +90,13 @@ const SCHEDULE_III_DIV_I: FSLineItem[] = [
   ]},
   { code: "BS_CA", name: "CURRENT ASSETS", noteRef: null, section: "BS_assets", children: [
     { code: "BS_CA_CI", name: "Current Investments", noteRef: 19, section: "BS_assets" },
-    { code: "BS_CA_INV", name: "Inventories", noteRef: 20, section: "BS_assets" },
+    { code: "BS_CA_INV", name: "Inventories", noteRef: 20, section: "BS_assets", children: [
+      { code: "INV_RM",    name: "Raw Materials",             noteRef: 20, section: "BS_assets", scheduleRef: "BS+P&L" },
+      { code: "INV_WIP",   name: "Work-in-Progress",          noteRef: 20, section: "BS_assets", scheduleRef: "BS+P&L" },
+      { code: "INV_FG",    name: "Finished Goods",            noteRef: 20, section: "BS_assets", scheduleRef: "BS+P&L" },
+      { code: "INV_STT",   name: "Stock-in-Trade",            noteRef: 20, section: "BS_assets", scheduleRef: "BS+P&L" },
+      { code: "INV_STOCK", name: "Stock / Other Inventories", noteRef: 20, section: "BS_assets", scheduleRef: "BS+P&L" },
+    ]},
     { code: "BS_CA_TR", name: "Trade Receivables", noteRef: 21, section: "BS_assets" },
     { code: "BS_CA_CCE", name: "Cash and Cash Equivalents", noteRef: 22, section: "BS_assets" },
     { code: "BS_CA_SLA", name: "Short-term Loans and Advances", noteRef: 23, section: "BS_assets" },
@@ -119,7 +131,11 @@ const AUTO_MAP_RULES: { keywords: string[]; code: string; confidence: "high" | "
   { keywords: ["cash", "bank", "cash in hand", "cash at bank", "cash and bank"], code: "BS_CA_CCE", confidence: "high" },
   { keywords: ["sundry debtor", "trade receivable", "accounts receivable", "debtors"], code: "BS_CA_TR", confidence: "high" },
   { keywords: ["sundry creditor", "trade payable", "accounts payable", "creditors"], code: "BS_CL_TP", confidence: "high" },
-  { keywords: ["inventory", "stock", "stock in trade", "raw material", "finished goods"], code: "BS_CA_INV", confidence: "high" },
+  { keywords: ["raw material", "raw materials consumed"], code: "INV_RM",    confidence: "high" },
+  { keywords: ["work in progress", "work-in-progress", "wip"], code: "INV_WIP",  confidence: "high" },
+  { keywords: ["finished goods", "finished stock"],             code: "INV_FG",   confidence: "high" },
+  { keywords: ["stock in trade", "stock-in-trade", "trading stock"], code: "INV_STT", confidence: "high" },
+  { keywords: ["inventory", "stock", "closing stock", "opening stock"], code: "INV_STOCK", confidence: "high" },
   { keywords: ["share capital", "equity capital", "authorised capital", "paid up capital"], code: "BS_EQ_SC", confidence: "high" },
   { keywords: ["reserve", "surplus", "retained earning", "general reserve", "profit and loss", "profit & loss", "p&l", "p & l"], code: "BS_EQ_RS", confidence: "high" },
   { keywords: ["secured loan", "term loan", "long term borrowing", "long-term loan"], code: "BS_NCL_LTB", confidence: "high" },
@@ -173,7 +189,7 @@ const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high"
   { match: ["sundry debtors", "trade receivable", "debtors", "accounts receivable"], code: "BS_CA_TR",       confidence: "high" },
   { match: ["sundry creditors", "trade payable", "creditors for goods", "creditors for expenses", "accounts payable"], code: "BS_CL_TP", confidence: "high" },
   { match: ["bank accounts", "bank od", "cash-in-hand", "cash in hand"], code: "BS_CA_CCE",                  confidence: "high" },
-  { match: ["stock-in-hand", "stock in hand", "stock in trade", "inventory"], code: "BS_CA_INV",             confidence: "high" },
+  { match: ["stock-in-hand", "stock in hand", "stock in trade", "inventory"], code: "INV_STOCK",            confidence: "high" },
   { match: ["fixed assets"],                                                  code: "BS_NCA_FA_TAN",        confidence: "medium" },
   { match: ["investments"],                                                   code: "BS_NCA_INV",           confidence: "medium" },
   { match: ["loans & advances (asset)", "loans and advances (asset)", "loans (asset)"], code: "BS_CA_SLA",  confidence: "medium" },
@@ -2044,6 +2060,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                                     )}
                                     <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
                                     {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
+                                    {INV_CODES_SET.has(mapping.code) && (
+                                      <Badge className="text-[8px] px-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">📦 BS+P&L</Badge>
+                                    )}
                                   </div>
                                 ) : (
                                   <Badge variant="destructive" className="text-[8px] mt-1">Unmapped</Badge>
@@ -2133,6 +2152,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                             )}
                             <span className="text-[10px] text-primary truncate">→ {lineItem?.name || mapping.code}</span>
                             {mapping.noteRef && <Badge className="text-[8px] px-1 bg-muted text-muted-foreground">N{mapping.noteRef}</Badge>}
+                            {INV_CODES_SET.has(mapping.code) && (
+                              <Badge className="text-[8px] px-1 bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300">📦 BS+P&L</Badge>
+                            )}
                           </div>
                         ) : (
                           <Badge variant="destructive" className="text-[8px] mt-1">Unmapped</Badge>
@@ -2471,7 +2493,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     <SelectContent className="max-h-60">
                       {activeLeafItems.map(item => (
                         <SelectItem key={item.code} value={item.code} className="text-xs">
-                          {item.noteRef ? `[N${item.noteRef}] ` : ""}{item.name}
+                          {item.noteRef ? `[N${item.noteRef}] ` : ""}
+                          {item.name}
+                          {item.scheduleRef === "BS+P&L" ? " 📦" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
