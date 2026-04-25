@@ -58,12 +58,127 @@ export const NCE_NOTE_FS_MAP: Record<string, {
 };
 
 
+// ── Smart static-row mapping ──────────────────────────────────────────────────
+//
+// For each note type, an ordered list of rules (most-specific first).
+// When a TB ledger's name fuzzy-matches a rule, its amount is accumulated
+// directly into the corresponding static row key instead of creating a
+// custom row. This keeps auto-populated data inside standard Schedule-III
+// row slots wherever the ledger name clearly matches.
+//
+// Pattern B notes: rowId → cy[rowId] / py[rowId]
+// Pattern A notes: rowId → cy[rowId+"_lt"] / cy[rowId+"_st"] based on COA code
+
+type SmartRule = { rowId: string; keywords: string[] };
+
+export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
+  // ── Other Current Liabilities ──────────────────────────────────────────────
+  other_cl: [
+    { rowId: "tds_payable",  keywords: ["tds", "tax deducted"] },
+    { rowId: "gst_payable",  keywords: ["gst payable", "output gst", "gst liability", "igst payable", "cgst payable", "sgst payable"] },
+    { rowId: "emp_payable",  keywords: ["salary payable", "wages payable", "employee payable", "staff payable"] },
+    { rowId: "inc_advance",  keywords: ["advance from customer", "income received in advance", "customer advance"] },
+  ],
+
+  // ── Cash & Bank Balances ───────────────────────────────────────────────────
+  cash_bank: [
+    { rowId: "la_cc",      keywords: ["cash credit", "cc account", "cc limit", "overdraft", " od "] },
+    { rowId: "la_fd_3m",   keywords: ["fixed deposit", " fd ", "fdr", "short term deposit"] },
+    { rowId: "la_current", keywords: ["current a/c", "current account", "current a c", "savings", "bank"] },
+    { rowId: "la_cash",    keywords: ["cash"] },
+  ],
+
+  // ── Inventories ────────────────────────────────────────────────────────────
+  inventories: [
+    { rowId: "raw_mat",     keywords: ["raw material", "raw stock", "raw goods"] },
+    { rowId: "wip",         keywords: ["wip", "work in progress", "work-in-progress"] },
+    { rowId: "finished",    keywords: ["finished good", "finished stock", "finished product", "fg "] },
+    { rowId: "stock_trade", keywords: ["stock in trade", "stock-in-trade", "trading stock"] },
+    { rowId: "stores",      keywords: ["stores", "spares"] },
+  ],
+
+  // ── Revenue from Operations ────────────────────────────────────────────────
+  revenue_ops: [
+    { rowId: "sale_services", keywords: ["service income", "consulting", "professional revenue", "service revenue"] },
+    { rowId: "sale_products", keywords: ["sale", "sales", "revenue", "turnover", "income from project"] },
+    { rowId: "other_ops",     keywords: ["other operating", "other ops"] },
+  ],
+
+  // ── Employee Benefits Expense ──────────────────────────────────────────────
+  employee_exp: [
+    { rowId: "pf",            keywords: ["provident fund", " pf ", " epf", "esic", "esi contribution"] },
+    { rowId: "gratuity",      keywords: ["gratuity"] },
+    { rowId: "staff_welfare", keywords: ["welfare", "staff welfare"] },
+    { rowId: "other_allow",   keywords: ["allowance", "bonus", "incentive", "hrra", "lta"] },
+    { rowId: "salaries",      keywords: ["salary", "salaries", "wage", "wages", "remuneration", "manpower", "director remuneration"] },
+  ],
+
+  // ── Finance Costs ──────────────────────────────────────────────────────────
+  finance_costs: [
+    { rowId: "int_partners",  keywords: ["to partner", "on partner", "partner interest", "interest to partner", "on partners capital", "partners capital"] },
+    { rowId: "int_bank",      keywords: ["on bank loan", "bank interest", "cc interest", "od interest", "term loan interest", "on cc", "on od", "on working capital"] },
+    { rowId: "bank_charges",  keywords: ["bank charge", "bank fee", "bank commission", "processing fee", "service charge", "lc charge"] },
+    { rowId: "disc_charges",  keywords: ["discounting", "discount charge"] },
+    { rowId: "guarantee",     keywords: ["guarantee"] },
+    { rowId: "int_other",     keywords: ["interest"] }, // catch-all — keep last
+    { rowId: "other_fin",     keywords: ["finance charge", "financing cost"] },
+  ],
+
+  // ── Other Expenses ─────────────────────────────────────────────────────────
+  other_expenses: [
+    { rowId: "advertisement",  keywords: ["advertisement", "advertising", "hoarding", "publicity", "banner"] },
+    { rowId: "auditor_rem",    keywords: ["audit fee", "auditor", "audit charge", "statutory audit", "tax audit"] },
+    { rowId: "legal",          keywords: ["legal", "advocate", "lawyer", "professional fee", "professional fees", "solicitor"] },
+    { rowId: "rates_taxes",    keywords: ["rera", "auda", "municipal tax", "property tax", "stamp duty", "plan pass", "govt fee", "government fee", "regulatory", "noc fee", "development charge"] },
+    { rowId: "power",          keywords: ["electricity", "power", "fuel", "energy", "generator"] },
+    { rowId: "rent",           keywords: ["rent"] },
+    { rowId: "labour",         keywords: ["labour", "labor", "contractor labour", "site labour"] },
+    { rowId: "communication",  keywords: ["courier", "postage", "telephone", "mobile bill", "internet", "broadband", "communication"] },
+    { rowId: "printing",       keywords: ["printing", "stationery", "stationary"] },
+    { rowId: "travel",         keywords: ["travel", "conveyance", "petrol", "diesel", "vehicle", "cab", "uber"] },
+    { rowId: "insurance",      keywords: ["insurance"] },
+    { rowId: "repairs_bldg",   keywords: ["repair", "maintenance", "renovation"] },
+    { rowId: "commission",     keywords: ["commission", "brokerage"] },
+    { rowId: "miscellaneous",  keywords: ["miscellaneous", "misc", "kasar", "round off", "roundoff", "office expense", "tea", "refreshment"] },
+  ],
+
+  // ── Loans & Advances (Pattern A — fills static rows by section+column) ─────
+  loans_advances: [
+    { rowId: "unsec_adv_tax",  keywords: ["advance tax", "tds receivable", "income tax refund", "self assessment tax", "advance income tax"] },
+    { rowId: "unsec_gst",      keywords: ["gst input", "input tax credit", "itc", "igst input", "cgst input", "sgst input"] },
+    { rowId: "unsec_security", keywords: ["security deposit", "security money", "earnest money", "emd"] },
+    { rowId: "unsec_prepaid",  keywords: ["prepaid expense", "prepaid"] },
+    { rowId: "unsec_related",  keywords: ["advance to director", "advance to partner", "advance to related", "advance to associate"] },
+  ],
+};
+
+/** Normalise a ledger name for keyword matching. */
+function normLedger(name: string): string {
+  return " " + name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
+}
+
+/** Returns the first matching static rowId, or null if none match. */
+function smartMatch(ledgerName: string, rules: SmartRule[]): string | null {
+  const norm = normLedger(ledgerName);
+  for (const rule of rules) {
+    for (const kw of rule.keywords) {
+      if (norm.includes(kw)) return rule.rowId;
+    }
+  }
+  return null;
+}
+
 // ── Custom row type ───────────────────────────────────────────────────────────
 
 export interface NCECustomRow {
-  id:     string;
-  label:  string;
-  source: "auto" | "manual";
+  id:       string;
+  label:    string;
+  source:   "auto" | "manual";
+  /** For Pattern-A notes with sections: which section total to insert before.
+   *  "secured" | "unsecured" → row appears under that section heading and
+   *  is counted in that section's total (not the grand total directly).
+   *  Absent → row is a global custom row counted only in the grand total. */
+  section?: string;
 }
 
 export interface NCENoteData {
@@ -205,7 +320,8 @@ export async function nceAutoPopulate(
 
     if (noteFs.all) {
       // ── Pattern B ──────────────────────────────────────────────────────
-      const codeSet = new Set(noteFs.all);
+      const codeSet    = new Set(noteFs.all);
+      const smartRules = NOTE_SMART_MAP[noteType] ?? [];
       let idx = 0;
 
       for (const row of tb) {
@@ -213,14 +329,26 @@ export async function nceAutoPopulate(
         if (!mapped || !codeSet.has(mapped.code)) continue;
         const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
-        const id = makeCustomId(row.ledger_name, idx++);
-        newCy[id] = amt;
-        newPy[id] = pyNotes[noteType]?.[id] ?? 0;
-        autoRows.push({ id, label: row.ledger_name, source: "auto" });
+
+        const matchedRowId = smartMatch(row.ledger_name, smartRules);
+        if (matchedRowId) {
+          // Accumulate directly into the static row — no custom row created
+          newCy[matchedRowId] = (newCy[matchedRowId] ?? 0) + amt;
+          // PY: carry from prior-year cy_data for the same static key, if any
+          if (!(matchedRowId in newPy)) {
+            newPy[matchedRowId] = pyNotes[noteType]?.[matchedRowId] ?? 0;
+          }
+        } else {
+          const id = makeCustomId(row.ledger_name, idx++);
+          newCy[id] = amt;
+          newPy[id] = pyNotes[noteType]?.[id] ?? 0;
+          autoRows.push({ id, label: row.ledger_name, source: "auto" });
+        }
       }
 
-      // Fallback: if no ledger-level matches, use FS-code total
-      if (autoRows.length === 0) {
+      // Fallback: if nothing was populated at all, use FS-code totals
+      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      if (!hasData) {
         let fsCY = 0, fsPY = 0;
         for (const code of noteFs.all) {
           fsCY += fsByCode[code]?.cy ?? 0;
@@ -236,8 +364,9 @@ export async function nceAutoPopulate(
 
     } else {
       // ── Pattern A (LT / ST columns) ────────────────────────────────────
-      const ltSet = new Set(noteFs.lt ?? []);
-      const stSet = new Set(noteFs.st ?? []);
+      const ltSet      = new Set(noteFs.lt ?? []);
+      const stSet      = new Set(noteFs.st ?? []);
+      const smartRules = NOTE_SMART_MAP[noteType] ?? [];
       let idx = 0;
       const seen = new Set<string>();
 
@@ -250,17 +379,34 @@ export async function nceAutoPopulate(
         const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
 
-        const id = makeCustomId(row.ledger_name, idx++);
-        if (isLT) { newCy[id + "_lt"] = amt; newPy[id + "_lt"] = 0; }
-        if (isST) { newCy[id + "_st"] = amt; newPy[id + "_st"] = 0; }
-        if (!seen.has(id)) {
-          seen.add(id);
-          autoRows.push({ id, label: row.ledger_name, source: "auto" });
+        const matchedRowId = smartMatch(row.ledger_name, smartRules);
+        if (matchedRowId) {
+          // Fill static row directly with LT/ST suffix
+          if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;
+          if (isST) newCy[matchedRowId + "_st"] = (newCy[matchedRowId + "_st"] ?? 0) + amt;
+          // PY from prior year if available
+          if (isLT && !(matchedRowId + "_lt" in newPy))
+            newPy[matchedRowId + "_lt"] = pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0;
+          if (isST && !(matchedRowId + "_st" in newPy))
+            newPy[matchedRowId + "_st"] = pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0;
+        } else {
+          // Create custom row — for borrowings, tag as "unsecured" since all
+          // individual partner/person loans that don't match specific rows are
+          // unsecured by nature
+          const id = makeCustomId(row.ledger_name, idx++);
+          if (isLT) { newCy[id + "_lt"] = amt; newPy[id + "_lt"] = 0; }
+          if (isST) { newCy[id + "_st"] = amt; newPy[id + "_st"] = 0; }
+          if (!seen.has(id)) {
+            seen.add(id);
+            const section = noteType === "borrowings" ? "unsecured" : undefined;
+            autoRows.push({ id, label: row.ledger_name, source: "auto", section });
+          }
         }
       }
 
       // Fallback: use FS-code totals
-      if (autoRows.length === 0) {
+      const hasData = autoRows.length > 0 || Object.values(newCy).some(v => v > 0);
+      if (!hasData) {
         let ltCY = 0, ltPY = 0, stCY = 0, stPY = 0;
         for (const code of (noteFs.lt ?? [])) { ltCY += fsByCode[code]?.cy ?? 0; ltPY += fsByCode[code]?.py ?? 0; }
         for (const code of (noteFs.st ?? [])) { stCY += fsByCode[code]?.cy ?? 0; stPY += fsByCode[code]?.py ?? 0; }

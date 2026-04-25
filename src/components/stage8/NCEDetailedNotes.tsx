@@ -204,10 +204,9 @@ function PatternBTable({
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
 }) {
-  const customIds = useMemo(() => customRows.map(r => r.id), [customRows]);
   const { cy, py } = useMemo(
-    () => computeDisplayData(config, rawCy, rawPy, customIds),
-    [config, rawCy, rawPy, customIds],
+    () => computeDisplayData(config, rawCy, rawPy, customRows),
+    [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
 
@@ -304,12 +303,22 @@ function PatternATable({
   onDeleteRow:  (id: string) => void;
   onChangeLabel:(id: string, label: string) => void;
 }) {
-  const customIds = useMemo(() => customRows.map(r => r.id), [customRows]);
   const { cy, py } = useMemo(
-    () => computeDisplayData(config, rawCy, rawPy, customIds),
-    [config, rawCy, rawPy, customIds],
+    () => computeDisplayData(config, rawCy, rawPy, customRows),
+    [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+
+  // Group custom rows by section (for section-aware insertion in Pattern A)
+  const customBySection = useMemo(() => {
+    const groups: Record<string, NCECustomRow[]> = { _global: [] };
+    for (const cr of customRows) {
+      const key = cr.section ?? "_global";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(cr);
+    }
+    return groups;
+  }, [customRows]);
 
   return (
     <Table>
@@ -329,10 +338,17 @@ function PatternATable({
       </TableHeader>
       <TableBody>
         {config.rows.map((row, idx) => {
-          const insertCustomBefore = idx === grandTotalIdx;
+          // Determine which custom rows to render before this row:
+          //  • If this is a section-total (has sectionTag) → rows with that section
+          //  • If this is the grand-total (last isTotal) → global (untagged) rows
+          const sectionRows: NCECustomRow[] = row.sectionTag
+            ? (customBySection[row.sectionTag] ?? [])
+            : idx === grandTotalIdx
+              ? (customBySection["_global"] ?? [])
+              : [];
           return (
             <>
-              {insertCustomBefore && customRows.map(cr => (
+              {sectionRows.map(cr => (
                 <CustomRowEditor
                   key={cr.id}
                   row={cr}

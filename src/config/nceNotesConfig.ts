@@ -22,6 +22,9 @@ export interface NoteRowDef {
   naLT?: boolean;
   naST?: boolean;
   naAll?: boolean;
+  /** For section-total rows in Pattern A: tag to match NCECustomRow.section.
+   *  Custom rows with this section tag are added into THIS total (not the grand total). */
+  sectionTag?: string;
 }
 
 export interface NoteConfig {
@@ -90,7 +93,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "sec_related",       label: "Loans from related parties",                       indent: 1 },
       { id: "sec_other",         label: "Other secured loans",                              indent: 1 },
       {
-        id: "sec_total", label: "Total (A)", isTotal: true,
+        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
         formulaAdd: ["sec_term_bank","sec_term_fi","sec_term_others","sec_demand_bank",
                      "sec_demand_other","sec_deferred","sec_related","sec_other"],
       },
@@ -104,7 +107,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "unsec_related",       label: "Loans from related parties",                       indent: 1 },
       { id: "unsec_other",         label: "Other unsecured loans",                            indent: 1 },
       {
-        id: "unsec_total", label: "Total (B)", isTotal: true,
+        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
         formulaAdd: ["unsec_term_bank","unsec_term_fi","unsec_term_others","unsec_demand_bank",
                      "unsec_demand_other","unsec_deferred","unsec_related","unsec_other"],
       },
@@ -250,7 +253,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "sec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "sec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "sec_total", label: "Total (A)", isTotal: true,
+        id: "sec_total", label: "Total (A)", isTotal: true, sectionTag: "secured",
         formulaAdd: ["sec_cap_good","sec_cap_doubt","sec_related","sec_prepaid",
                      "sec_adv_tax","sec_gst","sec_security","sec_govt","sec_others"],
         formulaSub: ["sec_cap_prov"],
@@ -267,7 +270,7 @@ export const NOTES_CONFIG: NoteConfig[] = [
       { id: "unsec_govt",       label: "Advances to government authorities",           indent: 1 },
       { id: "unsec_others",     label: "Others",                                       indent: 1 },
       {
-        id: "unsec_total", label: "Total (B)", isTotal: true,
+        id: "unsec_total", label: "Total (B)", isTotal: true, sectionTag: "unsecured",
         formulaAdd: ["unsec_cap_good","unsec_cap_doubt","unsec_related","unsec_prepaid",
                      "unsec_adv_tax","unsec_gst","unsec_security","unsec_govt","unsec_others"],
         formulaSub: ["unsec_cap_prov"],
@@ -579,15 +582,16 @@ export const NOTES_CONFIG: NoteConfig[] = [
  *   Pattern A: cy[rowId + "_lt"], cy[rowId + "_st"], py[rowId + "_lt"], py[rowId + "_st"]
  * Rows must be ordered so dependent totals come after their sources.
  *
- * @param customRowIds  IDs of user-added custom rows. They are included in the
- *                      grand-total row only (the last isTotal row) so they
- *                      don't double-count via intermediate subtotals.
+ * @param customRows  Custom rows (auto + manual). Each may carry an optional
+ *   `section` tag (e.g. "secured" | "unsecured") that routes its amount into
+ *   the matching section-total row (identified by `NoteRowDef.sectionTag`)
+ *   rather than the grand total. Untagged rows go into the grand total only.
  */
 export function computeDisplayData(
   config: NoteConfig,
   cy: Record<string, number>,
   py: Record<string, number>,
-  customRowIds?: string[],
+  customRows?: Array<{ id: string; section?: string }>,
 ): { cy: Record<string, number>; py: Record<string, number> } {
   const outCy = { ...cy };
   const outPy = { ...py };
@@ -600,10 +604,16 @@ export function computeDisplayData(
     const adds = row.formulaAdd ?? [];
     const subs = row.formulaSub ?? [];
 
-    // Only the grand-total row adds custom row amounts
-    const extras = (row.id === grandTotalId && customRowIds?.length)
-      ? customRowIds
-      : [];
+    // Determine which custom rows contribute to THIS total:
+    //   • Section-total (sectionTag set)  → custom rows tagged with that section
+    //   • Grand-total (last isTotal)       → custom rows with NO section tag
+    //   • Intermediate sub-totals          → no custom rows (avoids double-count)
+    let extras: string[] = [];
+    if (row.sectionTag && customRows?.length) {
+      extras = customRows.filter(cr => cr.section === row.sectionTag).map(cr => cr.id);
+    } else if (row.id === grandTotalId && customRows?.length) {
+      extras = customRows.filter(cr => !cr.section).map(cr => cr.id);
+    }
 
     if (config.pattern === "B") {
       let cVal = 0, pVal = 0;
