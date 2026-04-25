@@ -4067,7 +4067,7 @@ export default function PipelineFinancialStatements({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-foreground">Stage 5 — Financial Statements</h1>
+          <h1 className="text-lg font-bold text-foreground">Stage 7 — Financial Statements</h1>
           <p className="text-xs text-muted-foreground">Generated from mapped trial balance</p>
         </div>
         <div className="flex gap-2">
