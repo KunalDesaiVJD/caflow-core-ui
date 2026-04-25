@@ -5,13 +5,18 @@
  * type is non-corporate (Partnership, LLP, Proprietorship, HUF, Trust, …).
  *
  * Three sub-tabs reuse the Stage 8 components verbatim — same data source,
- * same Supabase tables, no duplication.
+ * same Supabase tables, no duplication. Edits made here are reflected in
+ * Stage 8 and vice versa.
+ *
+ * Styling matches UI-6 corporate sub-tabs (gap-1.5, size-14 icons) so the
+ * NCE and corporate Notes panels feel like the same surface.
  *
  * Props
  *   engagementId — passed straight through to each sub-component.
  */
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Wallet, FileText, Building2 } from "lucide-react";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes }  from "@/components/stage8/NCEDetailedNotes";
 import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
@@ -26,24 +31,24 @@ interface Props {
 
 export default function NCENotesTab({ engagementId }: Props) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
 
-      {/* Header */}
-      <h2 className="text-base font-semibold tracking-tight">
+      {/* Header — typography aligned with Stage 7's other section labels */}
+      <h2 className="text-base font-semibold tracking-tight text-foreground">
         Notes to Financial Statements
       </h2>
 
       {/* Sub-tabs */}
       <Tabs defaultValue="capital_account">
         <TabsList>
-          <TabsTrigger value="capital_account" className="text-xs">
-            Capital Account
+          <TabsTrigger value="capital_account" className="gap-1.5">
+            <Wallet size={14} /> Capital Account
           </TabsTrigger>
-          <TabsTrigger value="notes_to_accounts" className="text-xs">
-            Notes to Accounts
+          <TabsTrigger value="notes_to_accounts" className="gap-1.5">
+            <FileText size={14} /> Notes to Accounts
           </TabsTrigger>
-          <TabsTrigger value="ppe_schedule" className="text-xs">
-            PPE Schedule
+          <TabsTrigger value="ppe_schedule" className="gap-1.5">
+            <Building2 size={14} /> PPE Schedule
           </TabsTrigger>
         </TabsList>
 

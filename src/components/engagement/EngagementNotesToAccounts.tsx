@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties, Award, ClipboardList } from "lucide-react";
+import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties, Award, ClipboardList, Info } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
 import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
@@ -405,17 +405,20 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
         </TabsContent>
 
         {/* Tab 2 — Capital Account */}
-        <TabsContent value="capital">
+        <TabsContent value="capital" className="space-y-3">
+          <CrossRefBanner />
           <NCECapitalAccount engagementId={engagementId} />
         </TabsContent>
 
         {/* Tab 3 — Detailed Notes to Accounts */}
-        <TabsContent value="detailed-notes">
+        <TabsContent value="detailed-notes" className="space-y-3">
+          <CrossRefBanner />
           <NCEDetailedNotes engagementId={engagementId} />
         </TabsContent>
 
         {/* Tab 4 — PPE Schedule */}
-        <TabsContent value="ppe">
+        <TabsContent value="ppe" className="space-y-3">
+          <CrossRefBanner />
           <NCEPPESchedule engagementId={engagementId} />
         </TabsContent>
 
@@ -434,6 +437,19 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
 
   // ── Corporate: return existing content directly — ZERO change ────────────
   return noteEditorBody;
+}
+
+// ─── Cross-reference banner ──────────────────────────────────────────────────
+// Shown above the 3 sub-tabs (Capital Account, Detailed Notes, PPE Schedule)
+// that are ALSO surfaced under Stage 7 → Notes (UI-7). Same data source —
+// edits in either location are reflected in the other.
+function CrossRefBanner() {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-900/50 text-[11px] text-blue-700 dark:text-blue-300">
+      <Info className="w-3.5 h-3.5 shrink-0" />
+      <span>Also accessible from <strong>Stage 7 → Notes</strong> tab. Edits sync both ways.</span>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
