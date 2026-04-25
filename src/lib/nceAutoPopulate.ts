@@ -170,6 +170,16 @@ function smartMatch(ledgerName: string, rules: SmartRule[]): string | null {
 
 // ── Custom row type ───────────────────────────────────────────────────────────
 
+/** A single TB ledger that contributes to a merged custom row.
+ *  Stored on `NCECustomRow.sources` so the (i) info popover can show what's
+ *  bundled together. For Pattern A, one ledger may contribute to LT, ST or both. */
+export interface NCEMergedSource {
+  ledger:    string;
+  amountCy:  number;
+  /** "lt" | "st" — only set for Pattern A merged rows. */
+  column?:   "lt" | "st";
+}
+
 export interface NCECustomRow {
   id:       string;
   label:    string;
@@ -179,12 +189,23 @@ export interface NCECustomRow {
    *  is counted in that section's total (not the grand total directly).
    *  Absent → row is a global custom row counted only in the grand total. */
   section?: string;
+  /** When auto-populated from MULTIPLE TB ledgers that share a common head
+   *  (e.g. "Site Expense - 18%" + "Site Expense - URD" → merged "Site Expense"),
+   *  this records the underlying ledgers and their amounts. The (i) info button
+   *  in the editor shows this list to the user. Absent for single-ledger rows. */
+  sources?: NCEMergedSource[];
 }
 
 export interface NCENoteData {
   cy:         Record<string, number>;
   py:         Record<string, number>;
   customRows: NCECustomRow[];
+  /** Static rows the user has soft-deleted (hidden from display).
+   *  Listed by NoteRowDef.id. Survives re-sync. */
+  hiddenRows?: string[];
+  /** User-edited labels for static rows. Keyed by NoteRowDef.id.
+   *  Empty string keeps the default config label. Survives re-sync. */
+  labelOverrides?: Record<string, string>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -197,6 +218,49 @@ function makeCustomId(name: string, idx: number): string {
   );
 }
 
+/** Strip percentage / URD / GST-rate suffixes after a dash so similar
+ *  ledgers normalise to the same base name.
+ *  "Site Expense - 18%" → "Site Expense"
+ *  "Site Expense - URD" → "Site Expense"
+ *  "Salary - January"   → "Salary" */
+function deriveBaseHead(name: string): string {
+  return name
+    .trim()
+    // strip "- 18%", "-5%" etc
+    .replace(/\s*[-—]\s*\d+\s*%.*$/i, "")
+    // strip GST/regn classifiers
+    .replace(/\s*[-—]\s*(urd|reg|regd|registered|unregistered|igst|cgst|sgst|gst|exempt|nil|0%|5%|12%|18%|28%)\b.*$/i, "")
+    // strip month names that appear as suffixes
+    .replace(/\s*[-—]\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d*.*$/i, "")
+    // strip plain trailing numbers e.g. "Loan A/c - 123"
+    .replace(/\s*[-—]\s*\d+.*$/, "")
+    .trim();
+}
+
+/** Group key for unmatched ledgers — first significant word, lowercased.
+ *  Within a single note, ledgers that share their first word are usually
+ *  conceptually related (e.g. "Site Expense", "Site Survey Expense") and
+ *  should be merged under one common head. */
+function groupKey(name: string): string {
+  const head = deriveBaseHead(name);
+  // First word — but skip stopwords like "to", "from"
+  const words = head.split(/\s+/).filter(w => w.length > 0);
+  return (words[0] ?? head).toLowerCase();
+}
+
+/** Pick the displayed merged label from a list of base heads.
+ *  Strategy: the most-frequent base head, falling back to the longest
+ *  common prefix when frequencies tie. */
+function pickMergedLabel(baseHeads: string[]): string {
+  if (baseHeads.length === 0) return "";
+  if (baseHeads.length === 1) return baseHeads[0];
+  const counts = new Map<string, number>();
+  for (const h of baseHeads) counts.set(h, (counts.get(h) ?? 0) + 1);
+  let best = baseHeads[0]; let bestN = 0;
+  for (const [h, n] of counts) if (n > bestN) { best = h; bestN = n; }
+  return best;
+}
+
 // tally_trial_balance stores a single closing_balance (always positive) and
 // balance_type ("Dr" | "Cr"). For notes we just want the magnitude.
 function ledgerAmt(closingBalance: number): number {
@@ -205,6 +269,10 @@ function ledgerAmt(closingBalance: number): number {
 
 // ── Serialise / deserialise ───────────────────────────────────────────────────
 
+// Reserved keys used as JSONB metadata inside cy_data — must be filtered out
+// when reading numeric values back into the cy/py maps.
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides"]);
+
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
   rawPy: Record<string, any>,
@@ -212,23 +280,35 @@ export function deserialiseNoteData(
   const customRows: NCECustomRow[] = Array.isArray(rawCy._custom_rows)
     ? (rawCy._custom_rows as NCECustomRow[])
     : [];
+  const hiddenRows: string[] = Array.isArray(rawCy._hidden_rows)
+    ? (rawCy._hidden_rows as string[])
+    : [];
+  const labelOverrides: Record<string, string> =
+    rawCy._label_overrides && typeof rawCy._label_overrides === "object"
+      ? (rawCy._label_overrides as Record<string, string>)
+      : {};
 
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
-    if (k !== "_custom_rows" && typeof v === "number") cy[k] = v;
+    if (!META_KEYS.has(k) && typeof v === "number") cy[k] = v;
   }
   const py: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawPy)) {
-    if (k !== "_custom_rows" && typeof v === "number") py[k] = v;
+    if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows };
+  return { cy, py, customRows, hiddenRows, labelOverrides };
 }
 
 export function serialiseNoteData(
   d: NCENoteData,
 ): { cy_data: Record<string, any>; py_data: Record<string, number> } {
   return {
-    cy_data: { ...d.cy, _custom_rows: d.customRows },
+    cy_data: {
+      ...d.cy,
+      _custom_rows:     d.customRows,
+      _hidden_rows:     d.hiddenRows ?? [],
+      _label_overrides: d.labelOverrides ?? {},
+    },
     py_data: d.py,
   };
 }
@@ -322,7 +402,8 @@ export async function nceAutoPopulate(
       // ── Pattern B ──────────────────────────────────────────────────────
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      let idx = 0;
+      // Stage 1: split each ledger into "matched-static" or "unmatched"
+      const unmatchedB: { ledger: string; amt: number }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -339,11 +420,37 @@ export async function nceAutoPopulate(
             newPy[matchedRowId] = pyNotes[noteType]?.[matchedRowId] ?? 0;
           }
         } else {
-          const id = makeCustomId(row.ledger_name, idx++);
-          newCy[id] = amt;
-          newPy[id] = pyNotes[noteType]?.[id] ?? 0;
-          autoRows.push({ id, label: row.ledger_name, source: "auto" });
+          unmatchedB.push({ ledger: row.ledger_name, amt });
         }
+      }
+
+      // Stage 2: group unmatched ledgers by common head (first word) and
+      // create one merged custom row per group. Singletons keep their full
+      // ledger name; groups of 2+ get a merged label and a `sources` array.
+      const groupsB = new Map<string, { ledger: string; amt: number }[]>();
+      for (const um of unmatchedB) {
+        const k = groupKey(um.ledger);
+        if (!groupsB.has(k)) groupsB.set(k, []);
+        groupsB.get(k)!.push(um);
+      }
+      let idx = 0;
+      for (const ledgers of groupsB.values()) {
+        const totalAmt = ledgers.reduce((s, l) => s + l.amt, 0);
+        const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
+        const label = ledgers.length === 1
+          ? ledgers[0].ledger
+          : pickMergedLabel(baseHeads);
+        const id = makeCustomId(label, idx++);
+        newCy[id] = totalAmt;
+        newPy[id] = pyNotes[noteType]?.[id] ?? 0;
+        autoRows.push({
+          id,
+          label,
+          source: "auto",
+          sources: ledgers.length > 1
+            ? ledgers.map(l => ({ ledger: l.ledger, amountCy: l.amt }))
+            : undefined,
+        });
       }
 
       // Fallback: if nothing was populated at all, use FS-code totals
@@ -367,8 +474,7 @@ export async function nceAutoPopulate(
       const ltSet      = new Set(noteFs.lt ?? []);
       const stSet      = new Set(noteFs.st ?? []);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      let idx = 0;
-      const seen = new Set<string>();
+      const unmatchedA: { ledger: string; amt: number; isLT: boolean; isST: boolean }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -390,18 +496,48 @@ export async function nceAutoPopulate(
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0;
         } else {
-          // Create custom row — for borrowings, tag as "unsecured" since all
-          // individual partner/person loans that don't match specific rows are
-          // unsecured by nature
-          const id = makeCustomId(row.ledger_name, idx++);
-          if (isLT) { newCy[id + "_lt"] = amt; newPy[id + "_lt"] = 0; }
-          if (isST) { newCy[id + "_st"] = amt; newPy[id + "_st"] = 0; }
-          if (!seen.has(id)) {
-            seen.add(id);
-            const section = noteType === "borrowings" ? "unsecured" : undefined;
-            autoRows.push({ id, label: row.ledger_name, source: "auto", section });
-          }
+          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST });
         }
+      }
+
+      // Group unmatched Pattern-A ledgers by common head and merge.
+      // Pattern A complication: each ledger contributes to LT or ST. The
+      // merged row sums LT-side and ST-side independently and `sources[]`
+      // tags each contributor with its column.
+      const groupsA = new Map<string, typeof unmatchedA>();
+      for (const um of unmatchedA) {
+        const k = groupKey(um.ledger);
+        if (!groupsA.has(k)) groupsA.set(k, []);
+        groupsA.get(k)!.push(um);
+      }
+      let idx = 0;
+      for (const ledgers of groupsA.values()) {
+        const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
+        const label = ledgers.length === 1
+          ? ledgers[0].ledger
+          : pickMergedLabel(baseHeads);
+        const id = makeCustomId(label, idx++);
+
+        let totalLt = 0, totalSt = 0;
+        for (const l of ledgers) {
+          if (l.isLT) totalLt += l.amt;
+          if (l.isST) totalSt += l.amt;
+        }
+        if (totalLt > 0) { newCy[id + "_lt"] = totalLt; newPy[id + "_lt"] = 0; }
+        if (totalSt > 0) { newCy[id + "_st"] = totalSt; newPy[id + "_st"] = 0; }
+
+        // For borrowings, all unmatched are unsecured by nature
+        const section = noteType === "borrowings" ? "unsecured" : undefined;
+        autoRows.push({
+          id, label, source: "auto", section,
+          sources: ledgers.length > 1
+            ? ledgers.map(l => ({
+                ledger: l.ledger,
+                amountCy: l.amt,
+                column: l.isLT ? "lt" : "st",
+              }))
+            : undefined,
+        });
       }
 
       // Fallback: use FS-code totals
