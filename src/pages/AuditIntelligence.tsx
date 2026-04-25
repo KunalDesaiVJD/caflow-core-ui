@@ -34,18 +34,18 @@ import {
 import { toast } from "sonner";
 
 // ─── Stage definitions ───
-// Sequential order matching the audit pipeline (stages 1–10)
+// Order matches the left sidebar pipeline order (positions 3,4,5,7,8,9,10,11,12,13)
 const STAGES = [
   { num: 1,  label: "Engagement Setup",           icon: Building2      },
+  { num: 6,  label: "Workpapers & Audit Sheet",    icon: Shield         },
+  { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
+  { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
   { num: 2,  label: "Tally Sync",                  icon: FileText       },
   { num: 3,  label: "COA Mapping",                 icon: Calculator     },
-  { num: 4,  label: "Scrutiny Engine",             icon: Eye            },
-  { num: 5,  label: "Query Tracker",               icon: ClipboardCheck },
-  { num: 6,  label: "Workpapers & Audit Sheet",    icon: Shield         },
+  { num: 10, label: "Financial Statements",        icon: FileOutput     },
   { num: 7,  label: "Notes to Accounts & CARO",    icon: BookMarked     },
   { num: 8,  label: "3CA / 3CB / 3CD Reports",     icon: FileText       },
   { num: 9,  label: "Sign-off & UDIN",             icon: Award          },
-  { num: 10, label: "Financial Statements",        icon: FileOutput     },
 ];
 
 
@@ -646,7 +646,7 @@ export default function AuditIntelligence() {
                         "w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold",
                         getStageColor(status)
                       )}>
-                        {stage.num}
+                        {status === "complete" ? <CheckCircle2 size={16} /> : idx + 1}
                       </div>
                       <span className="text-[11px] font-medium text-center leading-tight text-foreground">{stage.label}</span>
                       <span className={cn("text-[9px] font-medium uppercase tracking-wider", getStageTextColor(status))}>
