@@ -4411,9 +4411,12 @@ export default function PipelineFinancialStatements({
                 <BookOpen size={14} /> Notes
               </TabsTrigger>
             )}
-            {/* UI-7 — NCE Notes tab (Capital Account / Notes to Accounts / PPE) */}
+            {/* UI-7 — NCE Notes tab (Capital Account / Notes to Accounts / PPE).
+                Guard is REVERSED vs corporate UI-6 above; the two never co-exist
+                so re-using value="notes" is safe and gives both branches the same
+                tab key. */}
             {isNonCorporate && (
-              <TabsTrigger value="nce_notes" className="gap-1.5">
+              <TabsTrigger value="notes" className="gap-1.5">
                 <BookOpen size={14} /> Notes
               </TabsTrigger>
             )}
@@ -4728,7 +4731,7 @@ export default function PipelineFinancialStatements({
 
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
-            <TabsContent value="nce_notes" className="mt-3">
+            <TabsContent value="notes" className="mt-3">
               <NCENotesTab engagementId={engagementId} />
             </TabsContent>
           )}
