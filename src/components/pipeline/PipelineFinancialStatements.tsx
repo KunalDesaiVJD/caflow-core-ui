@@ -570,6 +570,202 @@ function CorporatePLView({ pl, cyYear, pyYear, companyName, pyLocked }: Corporat
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Phase UI-4 — Cash Flow Statement (in-UI render, AS-3 Indirect Method)
+// ─────────────────────────────────────────────────────────────────────────
+// Mirrors writeCashFlow() in src/lib/fsExcelExport.ts row-by-row.
+// Sections: A Operating, B Investing, C Financing, then opening + closing
+// cash reconciliation. Several adjustment rows are label-only placeholders
+// in the template (Interest income, Profit on sale, Interest expense,
+// Short term provision, Interest Paid, Loan repayments) — caller fills
+// those manually in the exported sheet. The UI mirrors that, leaving
+// those rows blank.
+
+type CFDisplayRow =
+  | { kind: "spacer" }
+  | { kind: "section"; letter?: string; label: string }
+  | { kind: "subhead"; label: string; bold?: boolean }
+  | { kind: "item";    label: string; cy?: number; py?: number; bold?: boolean; size?: 9 | 10 }
+  | { kind: "total";   label: string; cy: number; py: number };
+
+function buildCFRows(bs: BSRowData, pl: PLRowData, cfs: CFSRowData): CFDisplayRow[] {
+  // ── Operating activities (Section A) ──────────────────────────────────
+  const pbtCy = pl.pbt.cy || 0;
+  const pbtPy = pl.pbt.py || 0;
+  const depCy = pl.depreciation.cy || 0;
+  const depPy = pl.depreciation.py || 0;
+  // Operating profit before WC = pbt + dep + (other label-only adjustments = 0)
+  const opProfCy = pbtCy + depCy;
+  const opProfPy = pbtPy + depPy;
+  const tradePayCy = cfs.tradePayChange.cy || 0;
+  const otherClCy  = cfs.otherCurrLiabChange.cy || 0;
+  const invCy      = (bs.inventories.py || 0) - (bs.inventories.cy || 0);
+  const trCy       = (bs.tradeRec.py     || 0) - (bs.tradeRec.cy     || 0);
+  const otherCaCy  = cfs.otherCurrAssetsChange.cy || 0;
+  // Cash generated from operations = SUM(H16:H23) = OpProf + WC changes
+  const cashFromOpsCy = opProfCy + tradePayCy + otherClCy + invCy + trCy + otherCaCy;
+  const cashFromOpsPy = opProfPy + 0;  // PY column is hardcoded 0 in writer
+  const taxPaidCy = cfs.incomeTaxPaid.cy ?? 0;
+  // Net cash from operating (A) = H24+H25  (matches writer formula)
+  const netOpCy = cashFromOpsCy + taxPaidCy;
+  const netOpPy = cashFromOpsPy + 0;
+
+  // ── Investing activities (Section B) ──────────────────────────────────
+  const ppeOutCy = -(cfs.ppePurchases.cy || 0);   // outflow → negative
+  // Interest income row is label-only (0 contribution)
+  const netInvCy = ppeOutCy + 0;
+  const netInvPy = 0;
+
+  // ── Financing activities (Section C) ──────────────────────────────────
+  // All four rows are 0 / label-only in the template
+  const netFinCy = 0;
+  const netFinPy = 0;
+
+  // ── Reconciliation ────────────────────────────────────────────────────
+  const netIncCy = netOpCy + netInvCy + netFinCy;
+  const netIncPy = netOpPy + netInvPy + netFinPy;
+  // Writer uses H41 = I42 (PY closing → CY opening). PY closing = 0 in
+  // the template, so opening = 0 as well. This is intentional — the
+  // template treats opening cash as a manual fill. We mirror that here.
+  const openCy = 0;
+  const openPy = 0;
+  const closeCy = netIncCy + openCy;
+  const closePy = netIncPy + openPy;
+
+  return [
+    { kind: "section", letter: "A.", label: "Cash flows from operating activities" },
+    { kind: "item",    label: "Net profit before tax", cy: pbtCy, py: pbtPy, bold: true, size: 10 },
+    { kind: "subhead", label: "Adjustments for:" },
+    { kind: "item",    label: "Depreciation expense", cy: depCy, py: depPy },
+    { kind: "item",    label: "Interest income" },
+    { kind: "item",    label: "Profit on sale of assets" },
+    { kind: "item",    label: "Interest expense" },
+    { kind: "item",    label: "Operating profit before working capital changes", cy: opProfCy, py: opProfPy, bold: true },
+    { kind: "subhead", label: "Changes in working capital:", bold: true },
+    { kind: "item",    label: "Trade payables",          cy: tradePayCy, py: 0 },
+    { kind: "item",    label: "Other current liabilities", cy: otherClCy, py: 0, size: 10 },
+    { kind: "item",    label: "Inventories",             cy: invCy,      py: 0 },
+    { kind: "item",    label: "Trade receivables",        cy: trCy,       py: 0 },
+    { kind: "item",    label: "Short term provision" },
+    { kind: "item",    label: "Other current assets",     cy: otherCaCy,  py: 0, size: 10 },
+    { kind: "item",    label: "Cash generated from operations", cy: cashFromOpsCy, py: cashFromOpsPy, bold: true },
+    { kind: "item",    label: "Income tax paid",          cy: taxPaidCy,  py: 0, size: 10 },
+    { kind: "total",   label: "Net cash generated from operating activities (A)", cy: netOpCy, py: netOpPy },
+    { kind: "spacer" },
+    { kind: "section", letter: "B.", label: "Cash flows from investing activities" },
+    { kind: "item",    label: "Purchase of property, plant & equipments", cy: ppeOutCy, py: 0 },
+    { kind: "item",    label: "Interest Income" },
+    { kind: "total",   label: "Net cash used in investing activities (B)", cy: netInvCy, py: netInvPy },
+    { kind: "spacer" },
+    { kind: "section", letter: "C.", label: "Cash flows from financing activities" },
+    { kind: "item",    label: "Proceeds from issue of share capital", cy: 0, py: 0 },
+    { kind: "item",    label: "Proceeds / Repayment of long-term Borrowings" },
+    { kind: "item",    label: "Payment of Other Loan term Liabilities" },
+    { kind: "item",    label: "Interest Paid" },
+    { kind: "total",   label: "Net cash used in financing activities (C)", cy: netFinCy, py: netFinPy },
+    { kind: "spacer" },
+    { kind: "item",    label: "Net increase in cash and cash equivalents (A+B+C)", cy: netIncCy, py: netIncPy, bold: true },
+    { kind: "item",    label: "Cash and cash equivalents at the beginning of period", cy: openCy, py: openPy },
+    { kind: "total",   label: "Cash and cash equivalents at the end of period", cy: closeCy, py: closePy },
+  ];
+}
+
+interface CorporateCFViewProps {
+  bs:          BSRowData;
+  pl:          PLRowData;
+  cfs:         CFSRowData;
+  cyYear:      number;
+  pyYear:      number;
+  companyName: string;
+}
+
+function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName }: CorporateCFViewProps) {
+  const rows = buildCFRows(bs, pl, cfs);
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <div className="text-center border-b bg-muted/30 py-2 px-3">
+          <div className="font-bold text-sm">{companyName}</div>
+          <div className="text-xs mt-0.5">Cash Flow Statement for the year ended [31 March {cyYear}]</div>
+          <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+        </div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-muted/50 border-b">
+              <th className="text-center font-semibold py-2 px-1 w-[5%]"></th>
+              <th className="text-left font-semibold py-2 px-3 w-[55%]">Particulars</th>
+              <th className="text-right font-semibold py-2 px-3 w-[20%]">As at<br />31st March, {cyYear}</th>
+              <th className="text-right font-semibold py-2 px-3 w-[20%]">As at<br />31st March, {pyYear}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              if (row.kind === "spacer") {
+                return <tr key={idx}><td colSpan={4} className="h-2" /></tr>;
+              }
+              if (row.kind === "section") {
+                return (
+                  <tr key={idx} className="bg-muted/20">
+                    <td className="text-center font-bold py-1.5 px-1 text-[12px]">{row.letter || ""}</td>
+                    <td colSpan={3} className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
+                  </tr>
+                );
+              }
+              if (row.kind === "subhead") {
+                return (
+                  <tr key={idx}>
+                    <td />
+                    <td colSpan={3} className={`py-0.5 px-3 ${row.bold ? "font-bold" : "font-semibold"} text-[11px]`}>{row.label}</td>
+                  </tr>
+                );
+              }
+              if (row.kind === "total") {
+                return (
+                  <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+                    <td />
+                    <td className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
+                    <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
+                    <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+                  </tr>
+                );
+              }
+              // item
+              const boldCls = row.bold ? "font-bold" : "";
+              const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
+              return (
+                <tr key={idx} className="hover:bg-muted/10">
+                  <td />
+                  <td className={`py-0.5 px-3 ${boldCls} ${fontSize}`} style={{ paddingLeft: 24 }}>{row.label}</td>
+                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
+                    {row.cy === undefined ? "" : formatINR(row.cy)}
+                  </td>
+                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
+                    {row.py === undefined ? "" : formatINR(row.py)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="rounded-lg border bg-muted/10 p-3 text-[11px] text-muted-foreground space-y-1">
+        <p className="font-semibold">Notes to cash flow statement</p>
+        <p>
+          The above cash flow statement has been prepared in accordance with the
+          &lsquo;Indirect method&rsquo; as set out in Accounting Standard&nbsp;-&nbsp;3
+          on &lsquo;Cash Flow Statements&rsquo;.
+        </p>
+        <p className="italic">
+          Adjustment rows shown without amounts (Interest income, Profit on sale of assets,
+          Interest expense, Short term provision, Loan repayments, Interest Paid) are
+          template placeholders — fill them manually in the exported workbook if applicable.
+          Opening cash balance is treated as a manual fill in the template.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -3910,13 +4106,30 @@ export default function PipelineFinancialStatements({
           </TabsContent>
 
           {/* ── Cash Flow (corporate only) ── */}
+          {/* Phase UI-4: Pixel-perfect on-screen Cash Flow Statement using
+              fsDisplayData.bs / .pl / .cfs from UI-1. Mirrors writeCashFlow()
+              in src/lib/fsExcelExport.ts (AS-3 Indirect Method). */}
           {!isNonCorporate && (
             <TabsContent value="cf" className="mt-3">
-              <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
-                <Droplets size={32} className="text-muted-foreground/40" />
-                <p className="text-sm font-medium text-muted-foreground">Cash Flow Statement</p>
-                <p className="text-xs text-muted-foreground">Coming soon — will auto-derive from Balance Sheet movements</p>
-              </div>
+              {fsDisplayData.bs && fsDisplayData.pl && fsDisplayData.cfs ? (
+                <CorporateCFView
+                  bs={fsDisplayData.bs}
+                  pl={fsDisplayData.pl}
+                  cfs={fsDisplayData.cfs}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  companyName={engagement?.clients?.name || "[Company Name]"}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
+                  <Droplets size={32} className="text-muted-foreground/40" />
+                  <p className="text-sm font-medium text-muted-foreground">Cash Flow Statement</p>
+                  <p className="text-xs text-muted-foreground">
+                    Trial balance not loaded yet — import a TB and map the Chart of
+                    Accounts to see the Cash Flow Statement here.
+                  </p>
+                </div>
+              )}
             </TabsContent>
           )}
         </Tabs>
