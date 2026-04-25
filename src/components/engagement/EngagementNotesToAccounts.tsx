@@ -8,11 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Save, Eye, FileText, LayoutList, TableProperties, Award, ClipboardList, Info } from "lucide-react";
+import { Sparkles, Loader2, Save, FileText, Award, ClipboardList } from "lucide-react";
 import { Json } from "@/integrations/supabase/types";
-import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
-import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
-import { NCEPPESchedule } from "@/components/stage8/NCEPPESchedule";
 import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
 import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
 import { NCENotesToAccounts } from "@/components/stage7/NotesToAccounts";
@@ -374,22 +371,16 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
     );
   }
 
-  // ── NCE: wrap in 6-tab structure ──────────────────────────────────────────
+  // ── NCE: wrap in 3-tab structure ──────────────────────────────────────────
+  // UI-7 cleanup — Capital Account, Notes to Accounts, and PPE Schedule have
+  // been moved to Stage 7 → Notes (NCENotesTab). Stage 8 now only carries
+  // Note 1 + the two engagement letters.
   if (isNonCorporate) {
     return (
       <Tabs defaultValue="notes" className="space-y-4">
         <TabsList>
           <TabsTrigger value="notes" className="gap-1.5">
             <FileText size={13} /> Note 1
-          </TabsTrigger>
-          <TabsTrigger value="capital" className="gap-1.5">
-            <LayoutList size={13} /> Capital Account
-          </TabsTrigger>
-          <TabsTrigger value="detailed-notes" className="gap-1.5">
-            <Eye size={13} /> Notes to Accounts
-          </TabsTrigger>
-          <TabsTrigger value="ppe" className="gap-1.5">
-            <TableProperties size={13} /> PPE Schedule
           </TabsTrigger>
           <TabsTrigger value="client-certificate" className="gap-1.5">
             <Award size={13} /> Client Certificate
@@ -404,30 +395,12 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
           <NCENotesToAccounts engagementId={engagementId} engagement={engagement} />
         </TabsContent>
 
-        {/* Tab 2 — Capital Account */}
-        <TabsContent value="capital" className="space-y-3">
-          <CrossRefBanner />
-          <NCECapitalAccount engagementId={engagementId} />
-        </TabsContent>
-
-        {/* Tab 3 — Detailed Notes to Accounts */}
-        <TabsContent value="detailed-notes" className="space-y-3">
-          <CrossRefBanner />
-          <NCEDetailedNotes engagementId={engagementId} />
-        </TabsContent>
-
-        {/* Tab 4 — PPE Schedule */}
-        <TabsContent value="ppe" className="space-y-3">
-          <CrossRefBanner />
-          <NCEPPESchedule engagementId={engagementId} />
-        </TabsContent>
-
-        {/* Tab 5 — Client Certificate */}
+        {/* Tab 2 — Client Certificate */}
         <TabsContent value="client-certificate">
           <NCEClientCertificate engagementId={engagementId} />
         </TabsContent>
 
-        {/* Tab 6 — Management Letter */}
+        {/* Tab 3 — Management Letter */}
         <TabsContent value="management-letter">
           <NCEManagementLetter engagementId={engagementId} />
         </TabsContent>
@@ -439,24 +412,8 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
   return noteEditorBody;
 }
 
-// ─── Cross-reference banner ──────────────────────────────────────────────────
-// Shown above the 3 sub-tabs (Capital Account, Detailed Notes, PPE Schedule)
-// that are ALSO surfaced under Stage 7 → Notes (UI-7). Same data source —
-// edits in either location are reflected in the other.
-function CrossRefBanner() {
-  return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-900/50 text-[11px] text-blue-700 dark:text-blue-300">
-      <Info className="w-3.5 h-3.5 shrink-0" />
-      <span>Also accessible from <strong>Stage 7 → Notes</strong> tab. Edits sync both ways.</span>
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // NCE Tab implementations
-// NCECapitalAccount     — @/components/stage8/NCECapitalAccount
-// NCEDetailedNotes      — @/components/stage8/NCEDetailedNotes
-// NCEPPESchedule        — @/components/stage8/NCEPPESchedule
 // NCEClientCertificate  — @/components/stage8/NCEClientCertificate
 // NCEManagementLetter   — @/components/stage8/NCEManagementLetter
 // ═══════════════════════════════════════════════════════════════════════════
