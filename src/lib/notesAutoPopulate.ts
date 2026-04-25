@@ -123,6 +123,17 @@ export interface NoteRowSpec {
   fsCodes: string[];
   /** Optional label hint — Phase 3 UI uses NOTES_TEMPLATE for the source-of-truth label */
   label?: string;
+  /**
+   * Optional Schedule-III suggestion list of breakdown heads (e.g. the 37
+   * line items under "Other expenses"). When present:
+   *   - autoPopulateNotes seeds one row per head;
+   *   - any TB ledger fuzzy-matching a head fills that row's amount;
+   *   - unmatched ledgers are appended at the bottom as new linked rows.
+   * When absent, breakdown rows are emitted purely from COA-mapped ledgers
+   * (one row per ledger) so notes like Long-term Borrowings or Trade
+   * Receivables show actual party names.
+   */
+  template?: string[];
 }
 
 export const NOTE_ROW_REGISTRY: {
@@ -168,7 +179,28 @@ export const NOTE_ROW_REGISTRY: {
     employee_benefits:  { fsCodes: ["PL_EXP_EMP"], label: "Employee benefits expense" },
     finance_costs:      { fsCodes: ["PL_EXP_FIN"], label: "Finance costs" },
     depreciation:       { fsCodes: ["PL_EXP_DEP"], label: "Depreciation & amortisation" },
-    other_expenses:     { fsCodes: ["PL_EXP_OTH"], label: "Other expenses" },
+    other_expenses:     {
+      fsCodes: ["PL_EXP_OTH", "PL_EXP_OEX"], label: "Other expenses",
+      // Schedule III "Other Expenses" suggestion list (37 heads). TB ledgers
+      // fuzzy-matching one of these fill the head's amount; un-matched
+      // ledgers (e.g. firm-specific names like "NSDL Charges") are appended
+      // as new linked rows.
+      template: [
+        "Audit fees", "Bank charges", "Books & periodicals", "Business promotion",
+        "Commission", "Communication expenses", "Computer expenses", "Conveyance",
+        "Donation", "Electricity", "Festival expenses", "Freight & forwarding",
+        "GST expenses (non-creditable)", "Insurance", "Interest on TDS",
+        "Internet & web charges", "Labour charges", "Legal & professional",
+        "Loss on sale of assets", "Membership & subscription", "Office expenses",
+        "Postage & courier", "Printing & stationery", "Rates & taxes",
+        "Rent", "Repairs & maintenance — building",
+        "Repairs & maintenance — plant & machinery",
+        "Repairs & maintenance — others", "ROC fees", "Round-off",
+        "Security charges", "Software expenses", "Staff welfare expenses",
+        "Sundry expenses", "Travelling — domestic", "Travelling — foreign",
+        "Vehicle running & maintenance",
+      ],
+    },
   },
 };
 
@@ -382,6 +414,162 @@ export function sumLedgersByFsCodes(
 }
 
 /**
+ * Return all TB ledgers whose COA-mapped FS code is in `fsCodes`. Used to
+ * generate per-ledger breakdown rows under each note. Preserves the signed
+ * convention from `getTrialBalance` (DR = +, CR = −) so callers can decide
+ * presentation.
+ */
+export function getLedgersByFsCodes(
+  tb: TBLedger[],
+  mapping: COAMapping,
+  fsCodes: string[],
+): TBLedger[] {
+  if (!fsCodes.length) return [];
+  const codeSet = new Set(fsCodes);
+  const out: TBLedger[] = [];
+  for (const acct of tb) {
+    const code = mapping[acct.account_name]?.code;
+    if (code && codeSet.has(code)) out.push(acct);
+  }
+  return out;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Fuzzy ledger ↔ template-head matching
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * Normalise a name for fuzzy comparison: lower-case, drop non-alphanumeric,
+ * strip common Indian-CA noise words ("a/c", "fee", "expenses", "charges",
+ * "paid", "received") so "ROC Fee" and "ROC fees" collapse to the same
+ * token set.
+ */
+export function normalizeLedgerName(s: string): string {
+  if (!s) return "";
+  return String(s)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(a c|account|expense|expenses|charges|charge|fee|fees|paid|received|on|the|to|of|and|for)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Score similarity between two names in [0, 1]. Uses normalized form,
+ * substring containment and Jaccard token overlap. 1.0 = identical (after
+ * normalization); 0 = no overlap.
+ */
+export function matchScore(a: string, b: string): number {
+  const na = normalizeLedgerName(a);
+  const nb = normalizeLedgerName(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1.0;
+  if (na.includes(nb) || nb.includes(na)) return 0.85;
+  const ta = new Set(na.split(" ").filter(Boolean));
+  const tb = new Set(nb.split(" ").filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let intersect = 0;
+  for (const t of ta) if (tb.has(t)) intersect++;
+  return intersect / Math.max(ta.size, tb.size);
+}
+
+/** Threshold below which a fuzzy match is considered "no match". */
+const MATCH_THRESHOLD = 0.5;
+
+/**
+ * Smart-merge a list of TB ledgers (mapped to a note's FS code) into a
+ * structured breakup array suitable for ListTable rendering.
+ *
+ *   - If `template` is provided, every template head becomes a row.
+ *     Ledgers fuzzy-matching a head fill that row's amount; un-matched
+ *     ledgers append as new linked rows at the bottom.
+ *   - If no template, one linked row per ledger is emitted.
+ *   - Existing rows with `source === "manual"` are preserved verbatim
+ *     (user-typed entries survive every re-sync).
+ *
+ * Output rows carry `source: "linked"` plus `linked_ledger` for traceability;
+ * the ListTable UI flips a row to `source: "manual"` the moment the user
+ * edits its description or amount.
+ */
+export interface BreakupRow {
+  description?:    string;
+  amount_cy?:      number;
+  amount_py?:      number;
+  source?:         "linked" | "manual";
+  linked_ledger?:  string;
+}
+
+export function buildBreakup(
+  ledgers: TBLedger[],
+  template: string[] | undefined,
+  existing: BreakupRow[] | undefined,
+): BreakupRow[] {
+  // 1) Preserve manual rows from existing breakup verbatim — these are user-
+  //    typed entries that don't correspond to any COA-mapped ledger.
+  //    Legacy rows persisted before this feature have no `source` field;
+  //    treat anything not explicitly "linked" as manual so existing data
+  //    survives the first re-sync.
+  const manualRows: BreakupRow[] = (existing || []).filter(r => r.source !== "linked");
+
+  // 2) Build linked rows
+  const result: BreakupRow[] = [];
+  const usedLedgers = new Set<string>();
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  if (template && template.length > 0) {
+    for (const head of template) {
+      // Find best-matching ledger for this template head
+      let matched: TBLedger | null = null;
+      let bestScore = 0;
+      for (const l of ledgers) {
+        if (usedLedgers.has(l.account_name)) continue;
+        const score = matchScore(head, l.account_name);
+        if (score >= MATCH_THRESHOLD && score > bestScore) {
+          bestScore = score;
+          matched = l;
+        }
+      }
+      if (matched) {
+        usedLedgers.add(matched.account_name);
+        result.push({
+          description:   head,
+          amount_cy:     Math.abs(round2(matched.balance)),
+          amount_py:     Math.abs(round2(matched.opening_balance)),
+          source:        "linked",
+          linked_ledger: matched.account_name,
+        });
+      } else {
+        // Template head with no matching ledger — keep as suggestion with 0
+        result.push({
+          description: head,
+          amount_cy:   0,
+          amount_py:   0,
+          source:      "linked",
+        });
+      }
+    }
+  }
+
+  // 3) Append remaining (un-matched) ledgers as fresh linked rows
+  for (const l of ledgers) {
+    if (usedLedgers.has(l.account_name)) continue;
+    result.push({
+      description:   l.account_name,
+      amount_cy:     Math.abs(round2(l.balance)),
+      amount_py:     Math.abs(round2(l.opening_balance)),
+      source:        "linked",
+      linked_ledger: l.account_name,
+    });
+  }
+
+  // 4) Append manual rows at the end so the user's custom entries are visible
+  result.push(...manualRows);
+  return result;
+}
+
+/**
  * Convenience: resolve a note row key (e.g. "share_capital") to a sum via
  * the registry. Returns 0 if the key isn't registered.
  */
@@ -560,7 +748,16 @@ export async function autoPopulateNotes(
     for (const [rowKey, spec] of Object.entries(rows)) {
       const cy = sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
       const py = pyOf(section, rowKey, spec);
-      out[section][rowKey] = { cy, py };
+
+      // Build per-ledger breakdown rows from COA mapping. The breakup array
+      // is what drives the editable line items shown under each note (Note
+      // 5 lists individual borrowings, Note 29 lists each expense head, etc.)
+      // Manual rows from `existing.breakup` are preserved verbatim.
+      const ledgers       = getLedgersByFsCodes(tb, mapping, spec.fsCodes);
+      const existingBreak = options.existing?.[section]?.[rowKey]?.breakup as BreakupRow[] | undefined;
+      const breakup       = buildBreakup(ledgers, spec.template, existingBreak);
+
+      out[section][rowKey] = { cy, py, breakup };
     }
   }
 
@@ -585,8 +782,16 @@ export async function autoPopulateNotes(
   }
 
   // Respect user-touched paths from the existing notes (if provided).
+  // Special-case: `.breakup` paths are NOT locked at path level — per-row
+  // `source: "manual"` preservation is already handled by buildBreakup
+  // above. Strip them out here so the freshly built breakup wins.
   if (options.existing) {
-    return respectManualEdits(out, options.existing);
+    const filteredExisting: Stage5Notes = {
+      ...options.existing,
+      manual_edits: (options.existing.manual_edits || [])
+        .filter(p => !p.endsWith(".breakup")),
+    };
+    return respectManualEdits(out, filteredExisting);
   }
   return out;
 }

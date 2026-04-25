@@ -215,11 +215,26 @@ export function NoteHeaderRow({ cyLabel, pyLabel }: { cyLabel: string; pyLabel: 
  * ListTable — managed list of {description, amount_cy, amount_py} rows.
  * Used for note line-items where the user adds rows freely (e.g. ledger
  * break-ups under a note). Persisted as an array under a single dot-path.
+ *
+ * Row provenance:
+ *   - source = "linked" — auto-built from a COA-mapped ledger; row shows a
+ *     small "Linked" badge and renders the description / amount in the
+ *     blue auto-fill tint.
+ *   - source = "manual" — user-typed row (or a linked row the user has
+ *     edited). Renders in the amber override tint. Re-sync from COA never
+ *     overwrites manual rows.
+ *   - source = undefined — legacy rows from before the breakup was wired
+ *     to COA mapping. Treated as manual (preserved on re-sync).
+ *
+ * Editing the description or either amount of a "linked" row flips it to
+ * "manual" automatically (and clears `linked_ledger`).
  */
 export interface ListRow {
-  description?: string;
-  amount_cy?:   number;
-  amount_py?:   number;
+  description?:    string;
+  amount_cy?:      number;
+  amount_py?:      number;
+  source?:         "linked" | "manual";
+  linked_ledger?:  string;
 }
 
 export function ListTable({
@@ -233,9 +248,22 @@ export function ListTable({
   addLabel?:        string;
   descPlaceholder?: string;
 }) {
+  // Patch a row. If the row is currently "linked" and the user touched any
+  // user-visible field (description / amount), flip it to "manual" and
+  // drop the linked_ledger so re-sync from COA leaves it alone.
   const update = (i: number, patch: Partial<ListRow>) => {
+    const cur = rows[i] || {};
+    const flipsToManual =
+      cur.source === "linked" &&
+      (Object.prototype.hasOwnProperty.call(patch, "description") ||
+        Object.prototype.hasOwnProperty.call(patch, "amount_cy") ||
+        Object.prototype.hasOwnProperty.call(patch, "amount_py"));
     const next = rows.slice();
-    next[i] = { ...next[i], ...patch };
+    next[i] = {
+      ...cur,
+      ...patch,
+      ...(flipsToManual ? { source: "manual", linked_ledger: undefined } : {}),
+    };
     onChange(next);
   };
   const remove = (i: number) => {
@@ -243,47 +271,78 @@ export function ListTable({
     next.splice(i, 1);
     onChange(next);
   };
-  const add = () => onChange([...rows, { description: "", amount_cy: 0, amount_py: 0 }]);
+  const add = () => onChange([
+    ...rows,
+    { description: "", amount_cy: 0, amount_py: 0, source: "manual" },
+  ]);
 
   return (
     <div className="space-y-1">
       {rows.length === 0 && (
         <div className="text-[10px] italic text-muted-foreground py-1">No entries yet.</div>
       )}
-      {rows.map((r, i) => (
-        <div key={i} className="grid grid-cols-12 gap-2 items-center">
-          <div className="col-span-6">
-            <EditableCell
-              type="text"
-              value={r.description ?? ""}
-              placeholder={descPlaceholder}
-              onCommit={(v) => update(i, { description: String(v ?? "") })}
-            />
+      {rows.map((r, i) => {
+        const isLinked = r.source === "linked";
+        const isManual = r.source === "manual";
+        return (
+          <div key={i} className="grid grid-cols-12 gap-2 items-center">
+            <div className="col-span-6 flex items-center gap-1.5">
+              <div className="flex-1 min-w-0">
+                <EditableCell
+                  type="text"
+                  value={r.description ?? ""}
+                  placeholder={descPlaceholder}
+                  isAutoFilled={isLinked}
+                  isOverridden={isManual && !!r.description}
+                  onCommit={(v) => update(i, { description: String(v ?? "") })}
+                />
+              </div>
+              {isLinked && (
+                <span
+                  title={r.linked_ledger ? `Linked from COA ledger: ${r.linked_ledger}` : "Linked from COA mapping"}
+                  className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-200"
+                >
+                  Linked
+                </span>
+              )}
+              {isManual && (
+                <span
+                  title="Manually entered — re-sync from COA will not change this row"
+                  className="shrink-0 inline-flex items-center px-1 py-[1px] rounded text-[8px] font-semibold uppercase tracking-wide border border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                >
+                  Manual
+                </span>
+              )}
+            </div>
+            <div className="col-span-3">
+              <EditableCell
+                value={r.amount_cy ?? 0}
+                isAutoFilled={isLinked}
+                isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
+                onCommit={(v) => update(i, { amount_cy: v == null ? 0 : Number(v) })}
+              />
+            </div>
+            <div className="col-span-2">
+              <EditableCell
+                value={r.amount_py ?? 0}
+                isAutoFilled={isLinked}
+                isOverridden={isManual && (r.amount_py ?? 0) !== 0}
+                onCommit={(v) => update(i, { amount_py: v == null ? 0 : Number(v) })}
+              />
+            </div>
+            <div className="col-span-1 flex justify-end">
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
+                title="Remove row"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
           </div>
-          <div className="col-span-3">
-            <EditableCell
-              value={r.amount_cy ?? 0}
-              onCommit={(v) => update(i, { amount_cy: v == null ? 0 : Number(v) })}
-            />
-          </div>
-          <div className="col-span-2">
-            <EditableCell
-              value={r.amount_py ?? 0}
-              onCommit={(v) => update(i, { amount_py: v == null ? 0 : Number(v) })}
-            />
-          </div>
-          <div className="col-span-1 flex justify-end">
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
-              title="Remove row"
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
       <Button
         type="button" variant="outline" size="sm"
         onClick={add}

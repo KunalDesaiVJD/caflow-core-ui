@@ -95,12 +95,17 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
 
   // ── Helpers passed to each sub-tab ────────────────────────────────────
   // Update a path AND mark it as a manual edit (so re-sync respects it).
+  // Exception: `.breakup` paths are NOT marked manual at path level — the
+  // ListTable encodes per-row `source: "linked" | "manual"` and re-sync
+  // preserves manual rows row-by-row via buildBreakup().
   const updatePath = useCallback((path: string, value: any) => {
     setNotes(prev => {
       if (!prev) return prev;
       const next: Stage5Notes = JSON.parse(JSON.stringify(prev));
       setAtPath(next, path, value);
-      next.manual_edits = markManualEdit(next, path);
+      if (!path.endsWith(".breakup")) {
+        next.manual_edits = markManualEdit(next, path);
+      }
       // Fire-and-forget save; toast on error.
       saveStage5Notes(engagementId, next).catch((e: any) =>
         toast.error(`Save failed: ${e?.message || e}`),

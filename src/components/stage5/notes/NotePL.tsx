@@ -17,26 +17,6 @@ interface Props {
   isOverridden: (path: string) => boolean;
 }
 
-// Note 29 — Other Expenses: 37 line items per Schedule III. We seed the
-// list once when the array is empty so the auditor sees the full template
-// to fill in (and can still + Add row / × Remove for engagement-specific
-// items).
-const OTHER_EXPENSES_TEMPLATE: ListRow[] = [
-  "Audit fees", "Bank charges", "Books & periodicals", "Business promotion",
-  "Commission", "Communication expenses", "Computer expenses", "Conveyance",
-  "Donation", "Electricity", "Festival expenses", "Freight & forwarding",
-  "GST expenses (non-creditable)", "Insurance", "Interest on TDS",
-  "Internet & web charges", "Labour charges", "Legal & professional",
-  "Loss on sale of assets", "Membership & subscription", "Office expenses",
-  "Postage & courier", "Printing & stationery", "Rates & taxes",
-  "Rent", "Repairs & maintenance — building",
-  "Repairs & maintenance — plant & machinery",
-  "Repairs & maintenance — others", "ROC fees", "Round-off",
-  "Security charges", "Software expenses", "Staff welfare expenses",
-  "Sundry expenses", "Travelling — domestic", "Travelling — foreign",
-  "Vehicle running & maintenance",
-].map(n => ({ description: n, amount_cy: 0, amount_py: 0 }));
-
 export default function NotePL({
   notes, cyYear, pyYear, updatePath, resetPath, isOverridden,
 }: Props) {
@@ -44,16 +24,20 @@ export default function NotePL({
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // Breakup rows now come from autoPopulateNotes (notesAutoPopulate.ts):
+  // each note's `.breakup` array is built from COA-mapped TB ledgers, with
+  // optional Schedule-III suggestion templates merged in (e.g. Note 29's 37
+  // expense heads). Fuzzy-matched ledgers fill matching heads; un-matched
+  // ledgers append at the bottom as new linked rows. User-typed rows are
+  // preserved across re-syncs (per-row `source: "manual"`).
   const renderListNote = (
     noteNo: number,
     title: string,
     key: string,
     breakupHint: string,
-    seedTemplate: ListRow[] | null = null,
   ) => {
     const path = `pl.${key}.breakup`;
-    const existing: ListRow[] = (get(path) ?? []) as ListRow[];
-    const rows = existing.length === 0 && seedTemplate ? seedTemplate : existing;
+    const rows: ListRow[] = (get(path) ?? []) as ListRow[];
     return (
       <NoteCard noteNo={noteNo} title={title}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
@@ -216,10 +200,9 @@ export default function NotePL({
       {renderListNote(28, "Finance Cost",              "finance_costs",
         "Interest to Bank / Other / Other borrowing cost / Interest on advance income tax")}
 
-      {/* Note 29 — Other expenses with 37-row template seed */}
+      {/* Note 29 — Other expenses; 37-head template lives in NOTE_ROW_REGISTRY */}
       {renderListNote(29, "Other expenses", "other_expenses",
-        "Other expense particulars",
-        OTHER_EXPENSES_TEMPLATE)}
+        "Other expense particulars")}
 
       <NoteCard noteNo={30} title="Earnings per share (EPS)">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
