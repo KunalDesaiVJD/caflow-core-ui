@@ -2434,7 +2434,26 @@ export default function PipelineFinancialStatements({
         if (!memoBs || !memoPl || !memoCfs) {
           throw new Error("fsDisplayData missing BS/PL/CFS for corporate engagement");
         }
-        const blob = await generateFinancialStatementsXLSX(fsEng, fsFirm, memoBs, memoPl, memoCfs);
+
+        // UI-6 Phase 5 — Load stage5_notes for the 4 extra worksheets
+        // (Note BS-Liab / Note BS-Asset / Note PL / FA). If the column is
+        // null or the row is missing the export still works; the writer
+        // emits 0/blank cells with formulas intact.
+        let notesData: any = null;
+        try {
+          const { data: notesRow } = await supabase
+            .from("audit_engagements")
+            .select("stage5_notes")
+            .eq("id", engagement.id)
+            .maybeSingle();
+          notesData = (notesRow as any)?.stage5_notes ?? null;
+        } catch (e) {
+          console.warn("[FS Export] Could not load stage5_notes:", e);
+        }
+
+        const blob = await generateFinancialStatementsXLSX(
+          fsEng, fsFirm, memoBs, memoPl, memoCfs, notesData,
+        );
         const safeClientPP = (engagement?.clients?.name || "Client").replace(/[^A-Za-z0-9]/g, "_");
         const urlPP = URL.createObjectURL(blob);
         const aPP = document.createElement("a");

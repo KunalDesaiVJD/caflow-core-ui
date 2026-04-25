@@ -1734,6 +1734,8 @@ export async function generateFinancialStatementsXLSX(
   bsData:       BSRowData,
   plData:       PLRowData,
   cfsData:      CFSRowData,
+  /** UI-6 Phase 5: optional Stage 5 Notes data — populates 4 extra sheets. */
+  notesData:    import("./notesAutoPopulate").Stage5Notes | null = null,
 ): Promise<Blob> {
   // ── Shared variables (per Phase 1 spec — define ONCE, use in all 3 sheets) ──
   const cyYear      = new Date(engagement.fy_end).getFullYear();
@@ -1786,6 +1788,12 @@ export async function generateFinancialStatementsXLSX(
   const cfs = wb.addWorksheet("CFS", { views: [{ showGridLines: false }] });
   cfs.columns = CFS_COLUMNS;
   writeCashFlow(cfs, ctx, cfsData, bsData, plData);
+
+  // ── UI-6 Phase 5 — Notes sheets (Note BS-Liab / Note BS-Asset / Note PL / FA)
+  // Lazy import to keep the writer module out of the BS/PL/CFS critical path
+  // and avoid a circular dep with notesAutoPopulate (which also imports types).
+  const { writeNotesSheets } = await import("./fsNotesWriter");
+  writeNotesSheets(wb, { cyYear, pyYear, companyName }, notesData);
 
   // ── Serialise to a Blob ──────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
