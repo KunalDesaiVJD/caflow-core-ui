@@ -924,6 +924,142 @@ function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName, overrides, 
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Corporate signature block — shown below BS / P&L / CFS statements
+// ─────────────────────────────────────────────────────────────────────────
+// Mirrors the template signature block: auditor side (firm + partner),
+// company side (board of directors), three signatory columns + Place + Date
+// repeated under each column. Audit firm details are auto-fetched and
+// read-only; director details are inline-editable and persisted in
+// localStorage; Place + Date are also editable.
+
+interface CorporateSignatureBlockProps {
+  firmName:        string;
+  firmRegNo:       string;
+  partnerName:     string;
+  partnerMemNo:    string;
+  companyName:     string;
+  dir1Name:        string;
+  dir1Din:         string;
+  dir2Name:        string;
+  dir2Din:         string;
+  onChangeDir:     (field: "dir1Name" | "dir1Din" | "dir2Name" | "dir2Din", value: string) => void;
+  place:           string;
+  onChangePlace:   (value: string) => void;
+  date:            string;       // ISO yyyy-mm-dd
+  onChangeDate:    (value: string) => void;
+}
+
+function CorporateSignatureBlock({
+  firmName, firmRegNo, partnerName, partnerMemNo, companyName,
+  dir1Name, dir1Din, dir2Name, dir2Din, onChangeDir,
+  place, onChangePlace, date, onChangeDate,
+}: CorporateSignatureBlockProps) {
+  // Inline editable plain-text input — minimal styling, dashed border on
+  // hover to signal editability (matches the BS / CFS amount cells).
+  const editableCls =
+    "bg-background/40 border border-dashed border-muted-foreground/30 rounded px-1 cursor-text " +
+    "hover:bg-background hover:border-muted-foreground/60 focus:border-primary focus:bg-background focus:border-solid outline-none";
+
+  return (
+    <div className="mt-4 rounded-lg border bg-card px-4 py-4 text-[11px] space-y-3">
+      <div>As per our Audit Report of even date</div>
+
+      {/* Firm header / Board header */}
+      <div className="grid grid-cols-2 gap-x-8">
+        <div>
+          <div className="font-bold">For {firmName || "[Statutory Auditor Name]"}</div>
+          <div>Chartered Accountants</div>
+          <div>Firm's Registration No.: {firmRegNo || "[FRN]"}</div>
+        </div>
+        <div>
+          <div>For and on behalf of the Board of Directors of</div>
+          <div className="font-bold">{companyName || "[Name of the Company]"}</div>
+        </div>
+      </div>
+
+      {/* Signatures — 3 columns */}
+      <div className="grid grid-cols-3 gap-x-6 pt-6">
+        {/* Partner */}
+        <div className="space-y-0.5">
+          <div className="font-bold">{partnerName || "[Signing Partner / Proprietor]"}</div>
+          <div>Partner</div>
+          <div>Membership No.: {partnerMemNo || "—"}</div>
+        </div>
+        {/* Director 1 */}
+        <div className="space-y-1">
+          <input
+            type="text"
+            placeholder="[Director Name]"
+            value={dir1Name}
+            onChange={(e) => onChangeDir("dir1Name", e.target.value)}
+            className={cn(editableCls, "w-full font-bold")}
+          />
+          <div>Director</div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0">DIN:</span>
+            <input
+              type="text"
+              placeholder="—"
+              value={dir1Din}
+              onChange={(e) => onChangeDir("dir1Din", e.target.value)}
+              className={cn(editableCls, "flex-1")}
+            />
+          </div>
+        </div>
+        {/* Director 2 */}
+        <div className="space-y-1">
+          <input
+            type="text"
+            placeholder="[Director Name]"
+            value={dir2Name}
+            onChange={(e) => onChangeDir("dir2Name", e.target.value)}
+            className={cn(editableCls, "w-full font-bold")}
+          />
+          <div>Director</div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0">DIN:</span>
+            <input
+              type="text"
+              placeholder="—"
+              value={dir2Din}
+              onChange={(e) => onChangeDir("dir2Din", e.target.value)}
+              className={cn(editableCls, "flex-1")}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Place + Date row — 3 columns matching signatures */}
+      <div className="grid grid-cols-3 gap-x-6 pt-2">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="space-y-0.5">
+            <div className="flex items-center gap-1">
+              <span className="shrink-0">Place:</span>
+              <input
+                type="text"
+                value={place}
+                onChange={(e) => onChangePlace(e.target.value)}
+                className={cn(editableCls, "flex-1")}
+                placeholder="Ahmedabad"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0">Date:</span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => onChangeDate(e.target.value)}
+                className={cn(editableCls, "flex-1")}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -1783,10 +1919,63 @@ export default function PipelineFinancialStatements({
     firmMnoEntry?.membership_no || partnerData?.membership_number || "";
   const sigClientName   = engagement?.clients?.name      || "";
 
-  // Pre-fill Place once firm data loads (only if user hasn't typed)
+  // Pre-fill Place once firm data loads (only if user hasn't typed).
+  // Falls back to "Ahmedabad" if neither user input nor firm city are present.
   useEffect(() => {
-    if (sigFirmCity && !sigPlace) setSigPlace(sigFirmCity);
+    if (!sigPlace) setSigPlace(sigFirmCity || "Ahmedabad");
   }, [sigFirmCity]);
+
+  // ─── Corporate signature block — director state (per-engagement) ─────────
+  // Auto-fetched from mrl_data.header_data on mount (already populated by the
+  // MRL flow). User can edit inline; edits persist to localStorage.
+  // (Firm name / Reg No / Partner name / Membership No come from sigFirmName
+  //  etc. above — those are already auto-fetched and read-only here.)
+  const SIG_DIR_KEY = `caflow:fs_sig_directors:${engagementId}`;
+  type DirState = { dir1Name: string; dir1Din: string; dir2Name: string; dir2Din: string };
+  const [corpSigDirs, setCorpSigDirs] = useState<DirState>(() => {
+    if (typeof window === "undefined") return { dir1Name: "", dir1Din: "", dir2Name: "", dir2Din: "" };
+    try {
+      const raw = window.localStorage.getItem(SIG_DIR_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return { dir1Name: "", dir1Din: "", dir2Name: "", dir2Din: "" };
+  });
+  const updateCorpSigDir = (field: keyof DirState, value: string) => {
+    setCorpSigDirs(prev => {
+      const next = { ...prev, [field]: value };
+      try { window.localStorage.setItem(SIG_DIR_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  // Auto-load directors from mrl_data.header_data once, only if the local
+  // copy is still empty (so user edits aren't clobbered on reload).
+  useEffect(() => {
+    if (!engagementId) return;
+    if (corpSigDirs.dir1Name || corpSigDirs.dir2Name) return; // already populated
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: mrl } = await supabase
+          .from("mrl_data")
+          .select("header_data")
+          .eq("engagement_id", engagementId)
+          .maybeSingle();
+        const h = (mrl as any)?.header_data || {};
+        if (cancelled) return;
+        if (h.director1Name || h.director2Name) {
+          const next: DirState = {
+            dir1Name: h.director1Name || "",
+            dir1Din:  h.director1Din  || "",
+            dir2Name: h.director2Name || "",
+            dir2Din:  h.director2Din  || "",
+          };
+          setCorpSigDirs(next);
+          try { window.localStorage.setItem(SIG_DIR_KEY, JSON.stringify(next)); } catch {}
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [engagementId]);
 
   // ─── Open override dialog ───
   const openOverride = (code: string, name: string) => {
@@ -3986,31 +4175,49 @@ export default function PipelineFinancialStatements({
                 the shared fsDisplayData.bs from UI-1. NCE entities continue
                 to render via the legacy renderFSRows() table — untouched. */}
             {!isNonCorporate && fsDisplayData.bs ? (
-              <CorporateBalanceSheetView
-                bs={fsDisplayData.bs}
-                cyYear={cyYear}
-                pyYear={pyYear}
-                companyName={engagement?.clients?.name || "[Company Name]"}
-                pyLocked={pyLocked}
-                onCommitCY={(code, value) => {
-                  setManualOverrides(prev => {
-                    const next = { ...prev };
-                    if (value === null) delete next[code];
-                    else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
-                    return next;
-                  });
-                }}
-                onCommitPY={(code, value) => {
-                  setPyManualAmounts(prev => {
-                    const next = { ...prev };
-                    if (value === null) delete next[code];
-                    else next[code] = value;
-                    return next;
-                  });
-                  setPyManualDirty(true);
-                }}
-                onEditNote={updateNoteOverride}
-              />
+              <>
+                <CorporateBalanceSheetView
+                  bs={fsDisplayData.bs}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  companyName={engagement?.clients?.name || "[Company Name]"}
+                  pyLocked={pyLocked}
+                  onCommitCY={(code, value) => {
+                    setManualOverrides(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      return next;
+                    });
+                  }}
+                  onCommitPY={(code, value) => {
+                    setPyManualAmounts(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = value;
+                      return next;
+                    });
+                    setPyManualDirty(true);
+                  }}
+                  onEditNote={updateNoteOverride}
+                />
+                <CorporateSignatureBlock
+                  firmName={sigFirmName}
+                  firmRegNo={sigFirmFRN}
+                  partnerName={sigPartnerName}
+                  partnerMemNo={sigMembershipNo}
+                  companyName={sigClientName || engagement?.clients?.name || ""}
+                  dir1Name={corpSigDirs.dir1Name}
+                  dir1Din={corpSigDirs.dir1Din}
+                  dir2Name={corpSigDirs.dir2Name}
+                  dir2Din={corpSigDirs.dir2Din}
+                  onChangeDir={updateCorpSigDir}
+                  place={sigPlace}
+                  onChangePlace={setSigPlace}
+                  date={sigDate}
+                  onChangeDate={setSigDate}
+                />
+              </>
             ) : (
               <div className="rounded-lg border overflow-hidden">
                 <Table>
@@ -4287,13 +4494,31 @@ export default function PipelineFinancialStatements({
                 using fsDisplayData.pl from UI-1. NCE entities continue to render
                 via the legacy renderFSRows() table — untouched. */}
             {!isNonCorporate && fsDisplayData.pl ? (
-              <CorporatePLView
-                pl={fsDisplayData.pl}
-                cyYear={cyYear}
-                pyYear={pyYear}
-                companyName={engagement?.clients?.name || "[Company Name]"}
-                pyLocked={pyLocked}
-              />
+              <>
+                <CorporatePLView
+                  pl={fsDisplayData.pl}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  companyName={engagement?.clients?.name || "[Company Name]"}
+                  pyLocked={pyLocked}
+                />
+                <CorporateSignatureBlock
+                  firmName={sigFirmName}
+                  firmRegNo={sigFirmFRN}
+                  partnerName={sigPartnerName}
+                  partnerMemNo={sigMembershipNo}
+                  companyName={sigClientName || engagement?.clients?.name || ""}
+                  dir1Name={corpSigDirs.dir1Name}
+                  dir1Din={corpSigDirs.dir1Din}
+                  dir2Name={corpSigDirs.dir2Name}
+                  dir2Din={corpSigDirs.dir2Din}
+                  onChangeDir={updateCorpSigDir}
+                  place={sigPlace}
+                  onChangePlace={setSigPlace}
+                  date={sigDate}
+                  onChangeDate={setSigDate}
+                />
+              </>
             ) : (
               <div className="rounded-lg border overflow-hidden">
                 <Table>
@@ -4404,16 +4629,34 @@ export default function PipelineFinancialStatements({
           {!isNonCorporate && (
             <TabsContent value="cf" className="mt-3">
               {fsDisplayData.bs && fsDisplayData.pl && fsDisplayData.cfs ? (
-                <CorporateCFView
-                  bs={fsDisplayData.bs}
-                  pl={fsDisplayData.pl}
-                  cfs={fsDisplayData.cfs}
-                  cyYear={cyYear}
-                  pyYear={pyYear}
-                  companyName={engagement?.clients?.name || "[Company Name]"}
-                  overrides={cfsOverrides}
-                  onCommit={updateCfsOverride}
-                />
+                <>
+                  <CorporateCFView
+                    bs={fsDisplayData.bs}
+                    pl={fsDisplayData.pl}
+                    cfs={fsDisplayData.cfs}
+                    cyYear={cyYear}
+                    pyYear={pyYear}
+                    companyName={engagement?.clients?.name || "[Company Name]"}
+                    overrides={cfsOverrides}
+                    onCommit={updateCfsOverride}
+                  />
+                  <CorporateSignatureBlock
+                    firmName={sigFirmName}
+                    firmRegNo={sigFirmFRN}
+                    partnerName={sigPartnerName}
+                    partnerMemNo={sigMembershipNo}
+                    companyName={sigClientName || engagement?.clients?.name || ""}
+                    dir1Name={corpSigDirs.dir1Name}
+                    dir1Din={corpSigDirs.dir1Din}
+                    dir2Name={corpSigDirs.dir2Name}
+                    dir2Din={corpSigDirs.dir2Din}
+                    onChangeDir={updateCorpSigDir}
+                    place={sigPlace}
+                    onChangePlace={setSigPlace}
+                    date={sigDate}
+                    onChangeDate={setSigDate}
+                  />
+                </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
                   <Droplets size={32} className="text-muted-foreground/40" />
