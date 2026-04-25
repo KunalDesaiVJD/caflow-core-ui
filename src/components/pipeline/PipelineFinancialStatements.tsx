@@ -377,6 +377,199 @@ function CorporateBalanceSheetView({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Phase UI-3 — Statement of Profit & Loss (in-UI render)
+// ─────────────────────────────────────────────────────────────────────────
+// Mirrors writeProfitAndLoss() in src/lib/fsExcelExport.ts row-by-row:
+// Roman numerals I–XV in the leftmost column, particulars / note no /
+// CY / PY in the remaining four. Subtotals (III, V, IX, XV, Total Expenses)
+// are rendered bold with a top rule.
+
+type PLDisplayRow =
+  | { kind: "spacer" }
+  | { kind: "header";   roman?: string; label: string }              // bold section header e.g. "IV. Expenses"
+  | { kind: "item";     roman?: string; label: string; noteNo?: number | null; cy?: number; py?: number; bold?: boolean; indent?: number }
+  | { kind: "total";    roman?: string; label: string; cy: number; py: number }
+  | { kind: "subnote";  label: string; bold?: boolean }              // helper line e.g. "(III-IV)"
+  | { kind: "footer";   label: string };
+
+function buildPLRows(pl: PLRowData): PLDisplayRow[] {
+  const totalIncomeCy = (pl.revFromOps.cy || 0) + (pl.otherIncome.cy || 0);
+  const totalIncomePy = (pl.revFromOps.py || 0) + (pl.otherIncome.py || 0);
+  // Total Expenses excludes "Cost of materials consumed" (Excel row 14 has
+  // note-no only, no amounts); SUM(G15:G20) covers rows 15–20.
+  const totalExpensesCy =
+    (pl.purchasesStock.cy || 0) + (pl.changesInventories.cy || 0) +
+    (pl.employeeBenefits.cy || 0) + (pl.financeCosts.cy || 0) +
+    (pl.depreciation.cy || 0)    + (pl.otherExpenses.cy || 0);
+  const totalExpensesPy =
+    (pl.purchasesStock.py || 0) + (pl.changesInventories.py || 0) +
+    (pl.employeeBenefits.py || 0) + (pl.financeCosts.py || 0) +
+    (pl.depreciation.py || 0)    + (pl.otherExpenses.py || 0);
+
+  const pbExceptionalCy = totalIncomeCy - totalExpensesCy;        // V
+  const pbExceptionalPy = totalIncomePy - totalExpensesPy;
+  const exceptionalCy = 0;
+  const exceptionalPy = 0;
+  const pbExtraordinaryCy = pbExceptionalCy - exceptionalCy;       // VII
+  const pbExtraordinaryPy = pbExceptionalPy - exceptionalPy;
+  const extraordinaryCy = 0;
+  const extraordinaryPy = 0;
+  const pbtCy = pbExtraordinaryCy - extraordinaryCy;               // IX
+  const pbtPy = pbExtraordinaryPy - extraordinaryPy;
+  const currentTaxCy = pl.currentTax.cy || 0;
+  const currentTaxPy = pl.currentTax.py || 0;
+  const deferredTaxCy = pl.deferredTax.cy || 0;
+  const deferredTaxPy = pl.deferredTax.py || 0;
+  // Match Excel: CY = IX - currentTax + deferredTax ; PY = IX - currentTax - deferredTax
+  const profitCy = pbtCy - currentTaxCy + deferredTaxCy;           // XV
+  const profitPy = pbtPy - currentTaxPy - deferredTaxPy;
+  const epsDivisor = pl.shareCap.noteNo || 1;
+  const epsBasicCy = profitCy / epsDivisor;
+  const epsBasicPy = profitPy / epsDivisor;
+
+  return [
+    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: pl.revFromOps.cy, py: pl.revFromOps.py },
+    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: pl.otherIncome.cy, py: pl.otherIncome.py },
+    { kind: "total",  roman: "III.", label: "Total Income (I+II)",     cy: totalIncomeCy, py: totalIncomePy },
+    { kind: "spacer" },
+    { kind: "header", roman: "IV.",  label: "Expenses" },
+    { kind: "item",   label: "Cost of materials consumed",            noteNo: pl.costMaterials.noteNo, indent: 1 },
+    { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: pl.purchasesStock.noteNo, cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1 },
+    { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: pl.changesInventories.noteNo, cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1 },
+    { kind: "item",   label: "Employee benefits expense",             noteNo: pl.employeeBenefits.noteNo, cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1 },
+    { kind: "item",   label: "Finance Costs",                         noteNo: pl.financeCosts.noteNo, cy: pl.financeCosts.cy, py: pl.financeCosts.py, indent: 1 },
+    { kind: "item",   label: "Depreciation & Amortisation Expenses",  noteNo: pl.depreciation.noteNo, cy: pl.depreciation.cy, py: pl.depreciation.py, indent: 1 },
+    { kind: "item",   label: "Other expenses",                        noteNo: pl.otherExpenses.noteNo, cy: pl.otherExpenses.cy, py: pl.otherExpenses.py, indent: 1 },
+    { kind: "total",  label: "Total Expenses",                        cy: totalExpensesCy, py: totalExpensesPy },
+    { kind: "spacer" },
+    { kind: "item",   roman: "V.",   label: "Profit before exceptional and extraordinary items and tax", cy: pbExceptionalCy, py: pbExceptionalPy, bold: true },
+    { kind: "subnote", label: "(III-IV)", bold: true },
+    { kind: "item",   roman: "VI.",  label: "Exceptional items",      cy: exceptionalCy, py: exceptionalPy },
+    { kind: "item",   roman: "VII.", label: "Profit before extraordinary items and tax (V-VI)", cy: pbExtraordinaryCy, py: pbExtraordinaryPy, bold: true },
+    { kind: "item",   roman: "VIII.",label: "Extraordinary items",    cy: extraordinaryCy, py: extraordinaryPy },
+    { kind: "item",   roman: "IX.",  label: "Profit before tax (VII-VIII)", cy: pbtCy, py: pbtPy, bold: true },
+    { kind: "header", roman: "X.",   label: "Tax expense:" },
+    { kind: "item",   label: "(1) Current tax",  cy: currentTaxCy, py: currentTaxPy, indent: 2 },
+    { kind: "item",   label: "(2) Deferred tax", cy: deferredTaxCy, py: deferredTaxPy, indent: 2 },
+    { kind: "item",   roman: "XI.",  label: "Profit (loss) for period from continuing operations", bold: true },
+    { kind: "subnote", label: "(VII-VIII)", bold: true },
+    { kind: "item",   roman: "XII.", label: "Profit (loss) for period from discontinuing operations" },
+    { kind: "item",   roman: "XIII.",label: "Tax expense of discontinuing operations" },
+    { kind: "item",   roman: "XIV.", label: "Profit (loss) from discontinuing operations (after tax)", bold: true },
+    { kind: "subnote", label: "(XII-XIII)", bold: true },
+    { kind: "total",  roman: "XV.",  label: "Profit / (Loss) for the period (XI+XIV)", cy: profitCy, py: profitPy },
+    { kind: "spacer" },
+    { kind: "item",   label: "Earnings per equity share ;", noteNo: pl.eps.noteNo, bold: true },
+    { kind: "item",   label: "(1) Basic",   cy: epsBasicCy, py: epsBasicPy, indent: 2 },
+    { kind: "item",   label: "(2) Diluted", indent: 2 },
+    { kind: "footer", label: "The accompanying notes form an integral part of the financial statements." },
+  ];
+}
+
+interface CorporatePLViewProps {
+  pl:          PLRowData;
+  cyYear:      number;
+  pyYear:      number;
+  companyName: string;
+  pyLocked?:   boolean;
+}
+
+function CorporatePLView({ pl, cyYear, pyYear, companyName, pyLocked }: CorporatePLViewProps) {
+  const rows = buildPLRows(pl);
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      <div className="text-center border-b bg-muted/30 py-2 px-3">
+        <div className="font-bold text-sm">{companyName}</div>
+        <div className="text-xs mt-0.5">
+          Statement of Profit &amp; Loss Account for the year ended 31st March, {cyYear}
+        </div>
+        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-muted/50 border-b">
+            <th className="text-center font-semibold py-2 px-1 w-[5%]"></th>
+            <th className="text-left font-semibold py-2 px-3 w-[50%]">Particulars</th>
+            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
+            <th className="text-right font-semibold py-2 px-3 w-[18%]">
+              For the year ended<br />31st March, {cyYear}
+            </th>
+            <th className="text-right font-semibold py-2 px-3 w-[19%]">
+              <span className="inline-flex flex-col items-end gap-0.5">
+                <span>For the year ended<br />31st March, {pyYear}</span>
+                {pyLocked && (
+                  <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5">
+                    <Lock size={7} /> Finalized
+                  </Badge>
+                )}
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => {
+            if (row.kind === "spacer") {
+              return <tr key={idx}><td colSpan={5} className="h-2" /></tr>;
+            }
+            if (row.kind === "subnote") {
+              return (
+                <tr key={idx}>
+                  <td />
+                  <td colSpan={4} className={`py-0.5 px-3 ${row.bold ? "font-bold" : ""} text-[11px]`}>{row.label}</td>
+                </tr>
+              );
+            }
+            if (row.kind === "footer") {
+              return (
+                <tr key={idx}>
+                  <td />
+                  <td colSpan={4} className="py-1 px-3 text-[11px] italic text-muted-foreground">{row.label}</td>
+                </tr>
+              );
+            }
+            if (row.kind === "header") {
+              return (
+                <tr key={idx} className="bg-muted/20">
+                  <td className="text-center font-bold py-1 px-1 text-[12px]">{row.roman || ""}</td>
+                  <td colSpan={4} className="font-bold py-1 px-3 text-[12px]">{row.label}</td>
+                </tr>
+              );
+            }
+            if (row.kind === "total") {
+              return (
+                <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+                  <td className="text-center font-bold py-1.5 px-1 text-[12px]">{row.roman || ""}</td>
+                  <td className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
+                  <td />
+                  <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
+                  <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+                </tr>
+              );
+            }
+            // item
+            const indentPx = (row.indent || 0) * 16;
+            const boldCls = row.bold ? "font-bold" : "";
+            return (
+              <tr key={idx} className="hover:bg-muted/10">
+                <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
+                <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
+                  {row.cy === undefined ? "" : formatINR(row.cy)}
+                </td>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
+                  {row.py === undefined ? "" : formatINR(row.py)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
@@ -3601,50 +3794,52 @@ export default function PipelineFinancialStatements({
               </Alert>
             )}
 
-            <div className="rounded-lg border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50 group">
-                    <TableHead className="text-xs">Particulars</TableHead>
-                    <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
-                    <TableHead className="text-xs text-right">
-                      <span className="flex items-center justify-end gap-1">
-                        PY {pyYear} (₹)
-                        {pyLocked ? (
-                          <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
-                            <Lock size={7} /> Finalized
-                          </Badge>
-                        ) : (
-                          <span className="text-[9px] text-muted-foreground font-normal ml-1 italic">editable</span>
-                        )}
-                      </span>
-                    </TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {renderFSRows(
-                    activeFlatItems.filter(i =>
-                      isNonCorporate
-                        ? i.section.startsWith("NCE_PL_")
-                        : i.section.startsWith("PL_")
-                    )
-                  )}
-                  {/* Net Profit / Loss summary row — corporate only.
-                      NCE: row XIII (NCE_NET_PROF) is already rendered inline above. */}
-                  {!isNonCorporate && (
-                    <TableRow className="bg-muted/60 font-bold border-t-2">
-                      <TableCell className="text-xs pl-2">NET PROFIT / (LOSS) FOR THE YEAR</TableCell>
-                      <TableCell className={cn("text-right text-xs font-mono tabular-nums", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
-                        {activeNetProfit >= 0 ? "" : "("}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}{activeNetProfit < 0 ? ")" : ""}
-                      </TableCell>
-                      <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">—</TableCell>
-                      <TableCell />
+            {/* Phase UI-3: Pixel-perfect on-screen P&L for corporate entities.
+                Mirrors writeProfitAndLoss() in src/lib/fsExcelExport.ts row-by-row
+                using fsDisplayData.pl from UI-1. NCE entities continue to render
+                via the legacy renderFSRows() table — untouched. */}
+            {!isNonCorporate && fsDisplayData.pl ? (
+              <CorporatePLView
+                pl={fsDisplayData.pl}
+                cyYear={cyYear}
+                pyYear={pyYear}
+                companyName={engagement?.clients?.name || "[Company Name]"}
+                pyLocked={pyLocked}
+              />
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50 group">
+                      <TableHead className="text-xs">Particulars</TableHead>
+                      <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
+                      <TableHead className="text-xs text-right">
+                        <span className="flex items-center justify-end gap-1">
+                          PY {pyYear} (₹)
+                          {pyLocked ? (
+                            <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
+                              <Lock size={7} /> Finalized
+                            </Badge>
+                          ) : (
+                            <span className="text-[9px] text-muted-foreground font-normal ml-1 italic">editable</span>
+                          )}
+                        </span>
+                      </TableHead>
+                      <TableHead className="w-10" />
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {renderFSRows(
+                      activeFlatItems.filter(i =>
+                        isNonCorporate
+                          ? i.section.startsWith("NCE_PL_")
+                          : i.section.startsWith("PL_")
+                      )
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
             {nceSignatureBlock}
           </TabsContent>
 
