@@ -125,7 +125,8 @@ function fmtAmt(n: number) {
 }
 
 function statusColor(status: string) {
-  if (status === "complete" || status === "success") return "text-emerald-600";
+  // "completed" is written by sync-engine.js / sync-step.js; "complete" / "success" are legacy
+  if (status === "complete" || status === "completed" || status === "success") return "text-emerald-600";
   if (status === "complete_with_warnings") return "text-amber-600";
   if (status === "failed") return "text-red-600";
   if (status === "running" || status === "processing") return "text-blue-600";
@@ -133,7 +134,7 @@ function statusColor(status: string) {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "complete" || status === "success")
+  if (status === "complete" || status === "completed" || status === "success")
     return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "complete_with_warnings")
     return <AlertTriangle className="h-4 w-4 text-amber-600" />;

@@ -119,7 +119,7 @@ const AUTO_MAP_RULES: { keywords: string[]; code: string; confidence: "high" | "
   { keywords: ["sundry creditor", "trade payable", "accounts payable", "creditors"], code: "BS_CL_TP", confidence: "high" },
   { keywords: ["inventory", "stock", "stock in trade", "raw material", "finished goods"], code: "BS_CA_INV", confidence: "high" },
   { keywords: ["share capital", "equity capital", "authorised capital", "paid up capital"], code: "BS_EQ_SC", confidence: "high" },
-  { keywords: ["reserve", "surplus", "retained earning", "general reserve", "profit and loss", "p&l"], code: "BS_EQ_RS", confidence: "high" },
+  { keywords: ["reserve", "surplus", "retained earning", "general reserve", "profit and loss", "profit & loss", "p&l", "p & l"], code: "BS_EQ_RS", confidence: "high" },
   { keywords: ["secured loan", "term loan", "long term borrowing", "long-term loan"], code: "BS_NCL_LTB", confidence: "high" },
   { keywords: ["unsecured loan", "short term borrowing", "cash credit", "overdraft", "od", "cc limit"], code: "BS_CL_STB", confidence: "high" },
   { keywords: ["fixed asset", "plant", "machinery", "furniture", "vehicle", "computer", "building", "land"], code: "BS_NCA_FA_TAN", confidence: "medium" },
@@ -494,6 +494,41 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       runAutoMapping();
     }
   }, [engagement?.coa_mapping, tbAccounts.length]);
+
+  // ── Auto-patch: silently map "Profit & Loss A/c" type ledgers ─────────────
+  // In Tally, when the firm transfers net profit to Capital / Reserves, a
+  // "Profit & Loss A/c" ledger appears under the Primary group with the
+  // transferred amount as a Cr balance. It belongs to Reserves and Surplus
+  // (BS_EQ_RS) on Schedule III — not unmapped. This effect detects such
+  // ledgers in the current mapping and patches them automatically.
+  useEffect(() => {
+    if (!tbAccounts.length || !activeLeafItems.length) return;
+    // Only patch when we already have a mapping loaded (not the first-load auto-map case)
+    if (!Object.keys(coaMapping).length) return;
+
+    const PNL_PATTERNS = ["profit & loss a/c", "profit & loss", "p & l", "profit and loss a/c"];
+    const pnlLedgers = tbAccounts.filter(a => {
+      const lower = a.account_name.toLowerCase();
+      return PNL_PATTERNS.some(p => lower === p || lower.startsWith(p)) && !coaMapping[a.account_name];
+    });
+
+    if (pnlLedgers.length === 0) return;
+
+    const lineItem = activeLeafItems.find(i => i.code === "BS_EQ_RS");
+    const patch: typeof coaMapping = { ...coaMapping };
+    for (const acct of pnlLedgers) {
+      patch[acct.account_name] = {
+        code: "BS_EQ_RS",
+        noteRef: lineItem?.noteRef ?? null,
+        scheduleRef: lineItem?.scheduleRef ?? "",
+        confidence: "high",
+      };
+    }
+
+    setCoaMapping(patch);
+    // Persist silently — no toast (it's automatic)
+    supabase.from("audit_engagements").update({ coa_mapping: patch } as any).eq("id", engagementId);
+  }, [tbAccounts, coaMapping, activeLeafItems, engagementId]);
 
   // Load PY amounts
   useEffect(() => {
