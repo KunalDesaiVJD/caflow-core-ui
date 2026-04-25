@@ -176,6 +176,208 @@ interface PipelineFinancialStatementsProps {
 }
 
 // ═══════════════════════════════════════
+// Phase UI-2/3/4 — Pixel-perfect in-UI render helpers
+// ═══════════════════════════════════════
+
+// Indian numbering (1,23,45,678.00) with parens for negatives and "-" for zero.
+// Mirrors the Excel money format `#,##0.00;(#,##0.00);"-"` so the on-screen
+// statement reads identically to the exported workbook.
+function formatINR(n: number | null | undefined): string {
+  const v = Number(n);
+  if (!Number.isFinite(v) || Math.abs(v) < 0.005) return "-";
+  const abs = Math.abs(v).toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return v < 0 ? `(${abs})` : abs;
+}
+
+// Single BS row spec — keeps the renderer declarative and easy to compare to
+// writeBalanceSheet() in src/lib/fsExcelExport.ts.
+type BSDisplayRow =
+  | { kind: "section";  label: string; size?: 9 | 10; indent?: number }
+  | { kind: "subhead";  label: string; noteNo?: number | null; indent?: number }
+  | { kind: "item";     label: string; noteNo?: number | null; cy: number; py: number; indent?: number; size?: 9 | 10 }
+  | { kind: "spacer" }
+  | { kind: "total";    label: string; cy: number; py: number }
+  | { kind: "footer";   label: string; noteNo?: number | null };
+
+function buildBSRows(bs: BSRowData): BSDisplayRow[] {
+  // Section subtotals — match Excel SUM(E10:E30) and SUM(E35:E52) ranges.
+  // Liabilities side = all amount rows in the E&L block (incl. zero placeholders).
+  const totalEL =
+    (bs.shareCap.cy || 0) + (bs.reserves.cy || 0) +
+    (bs.ltBorrowings.cy || 0) + (bs.otherLtLiab.cy || 0) + (bs.ltProvisions.cy || 0) +
+    (bs.stBorrowings.cy || 0) +
+    (bs.tradePayMSME.cy || 0) + (bs.tradePayOthers.cy || 0) +
+    (bs.otherCurrLiab.cy || 0) + (bs.stProvisions.cy || 0);
+  const totalELpy =
+    (bs.shareCap.py || 0) + (bs.reserves.py || 0) +
+    (bs.ltBorrowings.py || 0) + (bs.otherLtLiab.py || 0) + (bs.ltProvisions.py || 0) +
+    (bs.stBorrowings.py || 0) +
+    (bs.tradePayMSME.py || 0) + (bs.tradePayOthers.py || 0) +
+    (bs.otherCurrLiab.py || 0) + (bs.stProvisions.py || 0);
+  const totalAssets =
+    (bs.ppe.cy || 0) + (bs.ncInvestments.cy || 0) + (bs.dtAssets.cy || 0) +
+    (bs.ltLoans.cy || 0) + (bs.otherNcAssets.cy || 0) +
+    (bs.currInvestments.cy || 0) + (bs.inventories.cy || 0) + (bs.tradeRec.cy || 0) +
+    (bs.cashBank.cy || 0) + (bs.stLoans.cy || 0) + (bs.otherCurrAssets.cy || 0);
+  const totalAssetsPy =
+    (bs.ppe.py || 0) + (bs.ncInvestments.py || 0) + (bs.dtAssets.py || 0) +
+    (bs.ltLoans.py || 0) + (bs.otherNcAssets.py || 0) +
+    (bs.currInvestments.py || 0) + (bs.inventories.py || 0) + (bs.tradeRec.py || 0) +
+    (bs.cashBank.py || 0) + (bs.stLoans.py || 0) + (bs.otherCurrAssets.py || 0);
+
+  return [
+    // ── EQUITY & LIABILITIES ─────────────────────────────────────────────
+    { kind: "section", label: "I  EQUITY AND LIABILITIES", size: 10 },
+    { kind: "subhead", label: "(1) Shareholders' funds" },
+    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: bs.shareCap.cy || 0,    py: bs.shareCap.py || 0,    indent: 1 },
+    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: bs.reserves.cy || 0,    py: bs.reserves.py || 0,    indent: 1 },
+    { kind: "spacer" },
+    { kind: "item", label: "(2) Share application money pending allotment", cy: 0, py: 0, size: 9 },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(3) Non-Current liabilities" },
+    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: bs.ltBorrowings.cy || 0, py: bs.ltBorrowings.py || 0, indent: 1 },
+    { kind: "item", label: "(b) Deferred tax liabilities (Net)", cy: 0, py: 0, indent: 1 },
+    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: bs.otherLtLiab.cy || 0,  py: bs.otherLtLiab.py || 0,  indent: 1 },
+    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: bs.ltProvisions.cy || 0, py: bs.ltProvisions.py || 0, indent: 1 },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(4) Current liabilities" },
+    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: bs.stBorrowings.cy || 0, py: bs.stBorrowings.py || 0, indent: 1 },
+    { kind: "subhead", label: "(b) Trade payables", noteNo: bs.tradePayables.noteNo, indent: 1 },
+    { kind: "item", label: "(i) Micro and Small Enterprises", cy: bs.tradePayMSME.cy || 0,   py: bs.tradePayMSME.py || 0,   indent: 2 },
+    { kind: "item", label: "(ii) Others",                     cy: bs.tradePayOthers.cy || 0, py: bs.tradePayOthers.py || 0, indent: 2 },
+    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: bs.otherCurrLiab.cy || 0, py: bs.otherCurrLiab.py || 0, indent: 1, size: 10 },
+    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: bs.stProvisions.cy || 0,  py: bs.stProvisions.py || 0,  indent: 1 },
+    { kind: "spacer" },
+    { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
+    { kind: "spacer" },
+    // ── ASSETS ───────────────────────────────────────────────────────────
+    { kind: "section", label: "II  ASSETS", size: 10 },
+    { kind: "subhead", label: "(1) Non-Current Assets" },
+    { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
+    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: bs.ppe.noteNo, cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2 },
+    { kind: "item", label: "(ii) Intangible assets",          cy: 0, py: 0, indent: 2 },
+    { kind: "item", label: "(iii) Capital work-in-Progress",  cy: 0, py: 0, indent: 2 },
+    { kind: "item", label: "(b) Non-current investments",        noteNo: bs.ncInvestments.noteNo, cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10 },
+    { kind: "item", label: "(c) Deferred tax assets (Net)",      noteNo: bs.dtAssets.noteNo,      cy: bs.dtAssets.cy || 0,      py: bs.dtAssets.py || 0,      indent: 1, size: 10 },
+    { kind: "item", label: "(d) Long-term loans and advances",   noteNo: bs.ltLoans.noteNo,       cy: bs.ltLoans.cy || 0,       py: bs.ltLoans.py || 0,       indent: 1 },
+    { kind: "item", label: "(e) Other non-current Assets",       noteNo: bs.otherNcAssets.noteNo, cy: bs.otherNcAssets.cy || 0, py: bs.otherNcAssets.py || 0, indent: 1, size: 10 },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(2) Current assets" },
+    { kind: "item", label: "(a) Current investments",          noteNo: bs.currInvestments.noteNo, cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1 },
+    { kind: "item", label: "(b) Inventories",                  noteNo: bs.inventories.noteNo,     cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1 },
+    { kind: "item", label: "(c) Trade receivables",            noteNo: bs.tradeRec.noteNo,        cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1 },
+    { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: bs.cashBank.noteNo,        cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1 },
+    { kind: "item", label: "(e) Short-term loans and advances",noteNo: bs.stLoans.noteNo,         cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1 },
+    { kind: "item", label: "(f) Other current assets",         noteNo: bs.otherCurrAssets.noteNo, cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1 },
+    { kind: "spacer" },
+    { kind: "total", label: "TOTAL ASSETS", cy: totalAssets, py: totalAssetsPy },
+    { kind: "footer", label: "Significant accounting policies and estimates", noteNo: bs.sigPolicies.noteNo },
+    { kind: "footer", label: "The accompanying notes form an integral part of the financial statements." },
+  ];
+}
+
+interface CorporateBalanceSheetViewProps {
+  bs:          BSRowData;
+  cyYear:      number;
+  pyYear:      number;
+  companyName: string;
+  pyLocked?:   boolean;
+}
+
+function CorporateBalanceSheetView({
+  bs, cyYear, pyYear, companyName, pyLocked,
+}: CorporateBalanceSheetViewProps) {
+  const rows = buildBSRows(bs);
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      {/* Title block — mirrors rows 2–7 of the exported sheet */}
+      <div className="text-center border-b bg-muted/30 py-2 px-3">
+        <div className="font-bold text-sm">{companyName}</div>
+        <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
+        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-muted/50 border-b">
+            <th className="text-left font-semibold py-2 px-3 w-[55%]">Particulars</th>
+            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
+            <th className="text-right font-semibold py-2 px-3 w-[18%]">
+              As at<br />31st March, {cyYear}
+            </th>
+            <th className="text-right font-semibold py-2 px-3 w-[19%]">
+              <span className="inline-flex flex-col items-end gap-0.5">
+                <span>As at<br />31st March, {pyYear}</span>
+                {pyLocked && (
+                  <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5">
+                    <Lock size={7} /> Finalized
+                  </Badge>
+                )}
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => {
+            if (row.kind === "spacer") {
+              return <tr key={idx}><td colSpan={4} className="h-2" /></tr>;
+            }
+            if (row.kind === "section") {
+              return (
+                <tr key={idx} className="bg-muted/20">
+                  <td colSpan={4} className="font-bold py-1.5 px-3 text-[13px]">{row.label}</td>
+                </tr>
+              );
+            }
+            if (row.kind === "subhead") {
+              const indentPx = (row.indent || 0) * 16;
+              return (
+                <tr key={idx}>
+                  <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+                  <td className="text-center py-1 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                  <td />
+                  <td />
+                </tr>
+              );
+            }
+            if (row.kind === "total") {
+              return (
+                <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+                  <td className="font-bold py-1.5 px-3 uppercase text-[12px]" colSpan={2}>{row.label}</td>
+                  <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
+                  <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+                </tr>
+              );
+            }
+            if (row.kind === "footer") {
+              return (
+                <tr key={idx}>
+                  <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
+                  <td className="text-center py-1 px-2 text-muted-foreground italic">{row.noteNo ?? ""}</td>
+                </tr>
+              );
+            }
+            // item
+            const indentPx = (row.indent || 0) * 16;
+            const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
+            return (
+              <tr key={idx} className="hover:bg-muted/10">
+                <td className={`py-0.5 px-3 ${fontSize}`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>{formatINR(row.cy)}</td>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>{formatINR(row.py)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
 export default function PipelineFinancialStatements({
@@ -3122,36 +3324,50 @@ export default function PipelineFinancialStatements({
 
           {/* ── Balance Sheet ── */}
           <TabsContent value="bs" className="mt-3">
-            <div className="rounded-lg border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50 group">
-                    <TableHead className="text-xs">Particulars</TableHead>
-                    <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
-                    <TableHead className="text-xs text-right">
-                      <span className="flex items-center justify-end gap-1">
-                        PY {pyYear} (₹)
-                        {pyLocked && (
-                          <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
-                            <Lock size={7} /> Finalized
-                          </Badge>
-                        )}
-                      </span>
-                    </TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {renderFSRows(
-                    activeFlatItems.filter(i =>
-                      isNonCorporate
-                        ? i.section.startsWith("NCE_BS_")
-                        : i.section.startsWith("BS_")
-                    )
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+            {/* Phase UI-2: Pixel-perfect on-screen BS for corporate entities.
+                Mirrors writeBalanceSheet() in src/lib/fsExcelExport.ts using
+                the shared fsDisplayData.bs from UI-1. NCE entities continue
+                to render via the legacy renderFSRows() table — untouched. */}
+            {!isNonCorporate && fsDisplayData.bs ? (
+              <CorporateBalanceSheetView
+                bs={fsDisplayData.bs}
+                cyYear={cyYear}
+                pyYear={pyYear}
+                companyName={engagement?.clients?.name || "[Company Name]"}
+                pyLocked={pyLocked}
+              />
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50 group">
+                      <TableHead className="text-xs">Particulars</TableHead>
+                      <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
+                      <TableHead className="text-xs text-right">
+                        <span className="flex items-center justify-end gap-1">
+                          PY {pyYear} (₹)
+                          {pyLocked && (
+                            <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5 ml-1">
+                              <Lock size={7} /> Finalized
+                            </Badge>
+                          )}
+                        </span>
+                      </TableHead>
+                      <TableHead className="w-10" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {renderFSRows(
+                      activeFlatItems.filter(i =>
+                        isNonCorporate
+                          ? i.section.startsWith("NCE_BS_")
+                          : i.section.startsWith("BS_")
+                      )
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
             {!activeBsBalanced && (
               <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
                 <AlertTriangle size={13} />
