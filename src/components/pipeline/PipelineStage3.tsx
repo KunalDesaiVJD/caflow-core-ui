@@ -305,13 +305,6 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const activeTree      = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
   const activeFlatItems = isNonCorporate ? NCE_FLAT_ITEMS  : FLAT_ITEMS;
   const activeLeafItems = isNonCorporate ? NCE_LEAF_ITEMS  : LEAF_ITEMS;
-  // Right-panel tab filtering — BS or P&L items only (used for tree rendering; search uses all)
-  const filteredFsItems = useMemo(
-    () => activeFlatItems.filter(i =>
-      fsPanelTab === "bs" ? i.section.includes("BS_") : i.section.includes("PL_")
-    ),
-    [activeFlatItems, fsPanelTab]
-  );
   // NCE rules first (higher specificity for capital/remuneration keywords),
   // then fall back to the general keyword list which covers all common items.
   const activeAutoRules = isNonCorporate
@@ -340,6 +333,14 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   // ─── Right panel tab (Balance Sheet vs P&L) ───
   const [fsPanelTab, setFsPanelTab] = useState<"bs" | "pl">("bs");
+  // Filtered items for the right-panel tree — only BS or P&L items depending on active tab.
+  // Declared AFTER fsPanelTab so its deps array doesn't hit the TDZ.
+  const filteredFsItems = useMemo(
+    () => activeFlatItems.filter(i =>
+      fsPanelTab === "bs" ? i.section.includes("BS_") : i.section.includes("PL_")
+    ),
+    [activeFlatItems, fsPanelTab]
+  );
 
   // ─── COA Intelligence & Manual Rules ───
   // Intelligence: cross-client learned patterns from coa_mapping_intelligence
