@@ -54,7 +54,7 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
     ]},
     { code: "NCE_CA", name: "(2) Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
       { code: "NCE_CINV", name: "(a) Current investments",           noteRef: 16, section: "NCE_BS_assets" },
-      { code: "NCE_STCK", name: "(b) Inventories",                   noteRef: 17, section: "NCE_BS_assets" },
+      { code: "NCE_STCK", name: "(b) Inventories",                   noteRef: 17, section: "NCE_BS_assets", scheduleRef: "BS+P&L" },
       { code: "NCE_TR",   name: "(c) Trade receivables",             noteRef: 18, section: "NCE_BS_assets" },
       { code: "NCE_CASH", name: "(d) Cash and bank balances",        noteRef: 19, section: "NCE_BS_assets" },
       { code: "NCE_STLA", name: "(e) Short-term loans and advances", noteRef: 20, section: "NCE_BS_assets" },
@@ -74,6 +74,7 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   // ── PROFIT & LOSS — EXPENSES ──
   { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", children: [
     { code: "NCE_COGS",     name: "(a) Cost of goods sold",             noteRef: 24, section: "NCE_PL_expenses" },
+    { code: "NCE_CII",      name: "(a-ii) Changes in inventories of stock", noteRef: 24, section: "NCE_PL_expenses" },
     { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",      noteRef: 25, section: "NCE_PL_expenses" },
     { code: "NCE_FIN_COST", name: "(c) Finance costs",                  noteRef: 26, section: "NCE_PL_expenses" },
     { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation",  noteRef: 27, section: "NCE_PL_expenses" },

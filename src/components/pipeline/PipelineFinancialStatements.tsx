@@ -132,12 +132,21 @@ function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: num
 
 const FLAT_ITEMS = flattenTree(SCHEDULE_III_DIV_I);
 
-// ── Inventory dual-posting codes ──────────────────────────────────────────────
-// Ledgers mapped to any of these codes simultaneously post to:
-//   • BS_CA_INV  (closing balance  → Note 20 Inventories)
-//   • PL_EXP_CII (opening − closing → Note 27 Changes in Inventories)
-// PL_EXP_CII is auto-computed and LOCKED when any INV_* ledger is active.
-const INV_CODES = new Set(["INV_STOCK", "INV_RM", "INV_WIP", "INV_FG", "INV_STT"]);
+// ── Inventory dual-posting map ────────────────────────────────────────────────
+// Maps BS inventory code → P&L "Changes in Inventories" code (corporate + NCE).
+// Ledgers mapped to any key are dual-posted:
+//   BS: accumulate closing balance under the BS code
+//   P&L: accumulate (opening − closing) under the PL code
+const INV_DUAL_MAP: Record<string, string> = {
+  "INV_STOCK": "PL_EXP_CII",  // Corporate — generic stock
+  "INV_RM":    "PL_EXP_CII",  // Corporate — raw materials
+  "INV_WIP":   "PL_EXP_CII",  // Corporate — work-in-progress
+  "INV_FG":    "PL_EXP_CII",  // Corporate — finished goods
+  "INV_STT":   "PL_EXP_CII",  // Corporate — stock-in-trade
+  "NCE_STCK":  "NCE_CII",     // NCE / Partnership — inventories
+};
+const INV_CODES    = new Set(Object.keys(INV_DUAL_MAP));
+const INV_PL_CODES = new Set(Object.values(INV_DUAL_MAP));
 
 // ═══════════════════════════════════════
 // Non-Corporate Entity detection
@@ -1707,23 +1716,20 @@ export default function PipelineFinancialStatements({
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
       if (!mapping) continue;
-
-      if (INV_CODES.has(mapping.code)) {
+      const plCode = INV_DUAL_MAP[mapping.code];
+      if (plCode) {
         // ── Dual-post: BS closing balance + P&L Changes in Inventories ──
-        // BS: accumulate closing balance under the INV_* code
-        //     (parent BS_CA_INV total computed by computeTotal recursion)
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
-        // P&L: Changes in Inventories = opening − closing (positive = stock consumed)
-        amounts["PL_EXP_CII"] = (amounts["PL_EXP_CII"] || 0) + (acct.opening_balance - acct.balance);
+        amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
       } else {
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
       }
     }
 
-    // Apply manual overrides — PL_EXP_CII is locked when INV_* ledgers are mapped
+    // Apply manual overrides — inventory PL codes are locked when any inv ledger is mapped
     for (const [code, override] of Object.entries(manualOverrides)) {
-      if (code === "PL_EXP_CII" && hasInvMapping) continue; // auto-computed, locked
+      if (hasInvMapping && INV_PL_CODES.has(code)) continue; // auto-computed, locked
       amounts[code] = override.amount;
     }
 
@@ -1760,8 +1766,8 @@ export default function PipelineFinancialStatements({
     return amounts;
   }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate]);
 
-  // True when at least one TB ledger is mapped to an INV_* code.
-  // Used to lock PL_EXP_CII from manual overrides (it is auto-computed).
+  // True when at least one TB ledger is mapped to any dual-posting inventory code.
+  // Used to lock the corresponding P&L code from manual overrides.
   const hasInvMapping = useMemo(
     () => tbAccounts.some(a => INV_CODES.has(coaMapping[a.account_name]?.code)),
     [tbAccounts, coaMapping],
@@ -1812,9 +1818,14 @@ export default function PipelineFinancialStatements({
       if (isBS && Math.abs(val) > 0.005) merged[code] = val;
     }
     // ── PY Changes in Inventories: inject from PY Shell TB when available ──
-    // pyInvCII !== null means INV_* are mapped AND PY Shell TB was loaded.
+    // pyInvCII !== null means inventory codes are mapped AND PY Shell TB was loaded.
     if (pyInvCII !== null) {
-      merged["PL_EXP_CII"] = pyInvCII;
+      // Corporate: PL_EXP_CII | NCE: NCE_CII — write to whichever is applicable
+      const hasCorporateInv = tbAccounts.some(a => {
+        const code = coaMapping[a.account_name]?.code;
+        return code && INV_DUAL_MAP[code] === "PL_EXP_CII";
+      });
+      merged[hasCorporateInv ? "PL_EXP_CII" : "NCE_CII"] = pyInvCII;
     }
     // Recompute P&L parent totals from leaves so manual leaf entries flow up.
     const computePL = (item: FSLineItem): number => {
@@ -1846,10 +1857,11 @@ export default function PipelineFinancialStatements({
       const mapping = coaMapping[acct.account_name];
       if (!mapping) continue;
       const opening = acct.opening_balance ?? 0;
-      if (INV_CODES.has(mapping.code)) {
+      const plCode = INV_DUAL_MAP[mapping.code];
+      if (plCode) {
         // Dual-post CY: BS closing balance + P&L Changes in Inventories
         exportCy[mapping.code] = (exportCy[mapping.code] || 0) + (acct.balance || 0);
-        exportCy["PL_EXP_CII"] = (exportCy["PL_EXP_CII"] || 0) + (opening - (acct.balance || 0));
+        exportCy[plCode] = (exportCy[plCode] || 0) + (opening - (acct.balance || 0));
         // PY BS: opening balance (prior year closing)
         if (opening) exportPy[mapping.code] = (exportPy[mapping.code] || 0) + opening;
         hasInvMappingLocal = true;
@@ -1859,8 +1871,8 @@ export default function PipelineFinancialStatements({
       }
     }
     for (const [code, override] of Object.entries(manualOverrides)) {
-      // PL_EXP_CII is locked when INV_* ledgers are mapped
-      if (code === "PL_EXP_CII" && hasInvMappingLocal) continue;
+      // Inventory PL codes are locked when any inv ledger is mapped
+      if (hasInvMappingLocal && INV_PL_CODES.has(code)) continue;
       exportCy[code] = override.amount;
     }
     const computeTotalLocal = (item: FSLineItem, table: Record<string, number>): number => {
@@ -4102,7 +4114,7 @@ export default function PipelineFinancialStatements({
               ) : (
                 <span className="text-muted-foreground">—</span>
               )}
-              {!isHeader && !(item.code === "PL_EXP_CII" && hasInvMapping) && (
+              {!isHeader && !(item.code && INV_PL_CODES.has(item.code) && hasInvMapping) && (
                 <button
                   className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
                   title="Override CY amount"
@@ -4111,8 +4123,8 @@ export default function PipelineFinancialStatements({
                   <Pencil size={9} className="text-muted-foreground" />
                 </button>
               )}
-              {!isHeader && item.code === "PL_EXP_CII" && hasInvMapping && (
-                <span title="Auto-computed from INV_* ledgers — locked" className="text-[9px] text-blue-500 ml-1">🔒</span>
+              {!isHeader && item.code && INV_PL_CODES.has(item.code) && hasInvMapping && (
+                <span title="Auto-computed from inventory ledgers — locked" className="text-[9px] text-blue-500 ml-1">🔒</span>
               )}
             </div>
           </TableCell>
@@ -4150,7 +4162,7 @@ export default function PipelineFinancialStatements({
 
           {/* CY pencil (legacy action column — kept for clarity) */}
           <TableCell className="w-10 text-center">
-            {!isHeader && !(item.code === "PL_EXP_CII" && hasInvMapping) && (
+            {!isHeader && !(item.code && INV_PL_CODES.has(item.code) && hasInvMapping) && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -4517,7 +4529,7 @@ export default function PipelineFinancialStatements({
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || "[Company Name]"}
                   pyLocked={pyLocked}
-                  lockedCodes={hasInvMapping ? new Set(["PL_EXP_CII"]) : undefined}
+                  lockedCodes={hasInvMapping ? INV_PL_CODES : undefined}
                   onCommitCY={(code, value) => {
                     setManualOverrides(prev => {
                       const next = { ...prev };

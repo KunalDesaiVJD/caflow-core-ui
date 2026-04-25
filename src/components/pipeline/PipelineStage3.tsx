@@ -47,11 +47,23 @@ const NON_CORPORATE = [
   "Individual",
 ];
 
-// ── Inventory dual-posting codes ──────────────────────────────────────────────
-// Ledgers mapped to these codes post to BOTH BS_CA_INV (closing balance) AND
-// PL_EXP_CII (opening − closing = Changes in Inventories). PL_EXP_CII is
-// auto-computed and locked when any INV_* code is active.
-const INV_CODES_SET = new Set(["INV_STOCK", "INV_RM", "INV_WIP", "INV_FG", "INV_STT"]);
+// ── Inventory dual-posting map ────────────────────────────────────────────────
+// Maps each BS inventory code → its P&L "Changes in Inventories" code.
+// Ledgers mapped to any key are dual-posted:
+//   BS: accumulate closing balance under the BS code
+//   P&L: accumulate (opening − closing) under the mapped PL code
+// Both corporate (Schedule III) and NCE (Partnership/LLP) are covered.
+const INV_DUAL_MAP: Record<string, string> = {
+  "INV_STOCK": "PL_EXP_CII",  // Corporate — generic stock
+  "INV_RM":    "PL_EXP_CII",  // Corporate — raw materials
+  "INV_WIP":   "PL_EXP_CII",  // Corporate — work-in-progress
+  "INV_FG":    "PL_EXP_CII",  // Corporate — finished goods
+  "INV_STT":   "PL_EXP_CII",  // Corporate — stock-in-trade
+  "NCE_STCK":  "NCE_CII",     // NCE / Partnership — inventories
+};
+const INV_CODES_SET = new Set(Object.keys(INV_DUAL_MAP));
+// P&L codes that are auto-computed from inventory dual-posting — locked from manual override
+const INV_PL_CODES  = new Set(Object.values(INV_DUAL_MAP));
 
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions  (corporate)
@@ -293,6 +305,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const activeTree      = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
   const activeFlatItems = isNonCorporate ? NCE_FLAT_ITEMS  : FLAT_ITEMS;
   const activeLeafItems = isNonCorporate ? NCE_LEAF_ITEMS  : LEAF_ITEMS;
+  // Right-panel tab filtering — BS or P&L items only (used for tree rendering; search uses all)
+  const filteredFsItems = useMemo(
+    () => activeFlatItems.filter(i =>
+      fsPanelTab === "bs" ? i.section.includes("BS_") : i.section.includes("PL_")
+    ),
+    [activeFlatItems, fsPanelTab]
+  );
   // NCE rules first (higher specificity for capital/remuneration keywords),
   // then fall back to the general keyword list which covers all common items.
   const activeAutoRules = isNonCorporate
@@ -319,6 +338,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     code: string; noteRef: number | null; scheduleRef: string; confidence: string;
   }>>({});
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // ─── Right panel tab (Balance Sheet vs P&L) ───
+  const [fsPanelTab, setFsPanelTab] = useState<"bs" | "pl">("bs");
 
   // ─── COA Intelligence & Manual Rules ───
   // Intelligence: cross-client learned patterns from coa_mapping_intelligence
@@ -1240,16 +1261,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // ═══════ COMPUTED FS AMOUNTS ═══════
   const computedAmounts: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
-    
+    let hasInvMapping = false;
+
     // Aggregate TB accounts into FS line items
     for (const acct of tbAccounts) {
       const mapping = coaMapping[acct.account_name];
       if (!mapping) continue;
-      amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+      const plCode = INV_DUAL_MAP[mapping.code];
+      if (plCode) {
+        // ── Dual-post: BS closing balance + P&L Changes in Inventories ──
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+        amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
+        hasInvMapping = true;
+      } else {
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
+      }
     }
 
-    // Apply manual overrides
+    // Apply manual overrides — inventory P&L codes are locked when any inv ledger is mapped
     for (const [code, override] of Object.entries(manualOverrides)) {
+      if (hasInvMapping && INV_PL_CODES.has(code)) continue; // auto-computed, locked
       amounts[code] = override.amount;
     }
 
@@ -2208,6 +2239,31 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                       : <>Click a mapped ledger's <span className="text-destructive font-semibold">✕</span> to unmap</>}
                   </p>
                 </div>
+                {/* BS / P&L tab switcher */}
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setFsPanelTab("bs")}
+                    className={cn(
+                      "flex-1 text-[10px] font-semibold py-1 rounded border transition-colors",
+                      fsPanelTab === "bs"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
+                    )}
+                  >
+                    Balance Sheet
+                  </button>
+                  <button
+                    onClick={() => setFsPanelTab("pl")}
+                    className={cn(
+                      "flex-1 text-[10px] font-semibold py-1 rounded border transition-colors",
+                      fsPanelTab === "pl"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
+                    )}
+                  >
+                    P&amp;L
+                  </button>
+                </div>
                 {/* Search box */}
                 <div className="relative">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
@@ -2292,7 +2348,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     <span className="text-right">Prior Yr</span>
                     <span className="text-right">Δ %</span>
                   </div>
-                  {activeFlatItems.map(item => {
+                  {filteredFsItems.map(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amountCY = computedAmounts[item.code]   || 0;
