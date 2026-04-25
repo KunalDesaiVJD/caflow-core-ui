@@ -131,6 +131,10 @@ export default function AuditIntelligence() {
   // Searchable client dropdown
   const [clientOpen, setClientOpen] = useState(false);
 
+  // Searchable engagement picker
+  const [engPickerOpen, setEngPickerOpen] = useState(false);
+  const [engPickerSearch, setEngPickerSearch] = useState("");
+
   // Edit form — must be declared BEFORE editDialogClients useMemo
   const [engForm, setEngForm] = useState({
     audit_firm_id: "", client_id: "", financial_year: "2024-25", audit_type: "statutory",
@@ -486,22 +490,81 @@ export default function AuditIntelligence() {
         {/* Resolved engagement info */}
         {uniqueFilteredEngagements.length > 1 && (
           <div className="mt-3 pt-3 border-t border-border">
-            <p className="text-xs text-muted-foreground mb-1">{uniqueFilteredEngagements.length} engagements match. Select one:</p>
-            <Select
-              value={selectedEngagementId ?? ""}
-              onValueChange={val => setSelectedEngagementId(val)}
-            >
-              <SelectTrigger className="h-8 text-xs w-full max-w-xl">
-                <SelectValue placeholder="— choose engagement —" />
-              </SelectTrigger>
-              <SelectContent>
-                {uniqueFilteredEngagements.map((e, i) => (
-                  <SelectItem key={e.id} value={e.id} className="text-xs">
-                    [{String(i + 1).padStart(2, "0")}] {e.client_name} — {e.audit_type || "Audit"} — FY {e.financial_year}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <p className="text-xs text-muted-foreground mb-1">
+              {uniqueFilteredEngagements.length} engagements match. Select one:
+            </p>
+            <Popover open={engPickerOpen} onOpenChange={setEngPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={engPickerOpen}
+                  className="h-8 text-xs w-full max-w-xl justify-between font-normal"
+                >
+                  <span className="truncate">
+                    {selectedEngagementId
+                      ? (() => {
+                          const idx = uniqueFilteredEngagements.findIndex(e => e.id === selectedEngagementId);
+                          const e   = uniqueFilteredEngagements[idx];
+                          return e
+                            ? `[${String(idx + 1).padStart(2, "0")}] ${e.client_name} — ${e.audit_type || "Audit"} — FY ${e.financial_year}`
+                            : "— choose engagement —";
+                        })()
+                      : "— choose engagement —"}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[480px] p-0" align="start">
+                <Command shouldFilter={false}>
+                  <CommandInput
+                    placeholder="Search by client name, FY, or type…"
+                    value={engPickerSearch}
+                    onValueChange={setEngPickerSearch}
+                  />
+                  <CommandList>
+                    <CommandEmpty>No matching engagement found.</CommandEmpty>
+                    <CommandGroup>
+                      {uniqueFilteredEngagements
+                        .map((e, i) => ({ e, i }))
+                        .filter(({ e }) => {
+                          if (!engPickerSearch.trim()) return true;
+                          const q = engPickerSearch.toLowerCase();
+                          return (
+                            e.client_name?.toLowerCase().includes(q) ||
+                            e.financial_year?.toLowerCase().includes(q) ||
+                            (e.audit_type || "").toLowerCase().includes(q)
+                          );
+                        })
+                        .map(({ e, i }) => (
+                          <CommandItem
+                            key={e.id}
+                            value={e.id}
+                            onSelect={(val) => {
+                              setSelectedEngagementId(val);
+                              setEngPickerOpen(false);
+                              setEngPickerSearch("");
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-3.5 w-3.5 shrink-0",
+                                selectedEngagementId === e.id ? "opacity-100" : "opacity-0",
+                              )}
+                            />
+                            <span className="text-xs">
+                              [{String(i + 1).padStart(2, "0")}]{" "}
+                              <span className="font-medium">{e.client_name}</span>
+                              {" — "}{e.audit_type || "Audit"}
+                              {" — "}FY {e.financial_year}
+                            </span>
+                          </CommandItem>
+                        ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
         {selectedEngagement && (
