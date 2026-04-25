@@ -1469,10 +1469,10 @@ export default function AuditPipeline() {
 
             return (
               <div className="space-y-4">
-                <EngagementHeader engagement={engagement} stageNumber={8} stageLabel="3CA / 3CB / 3CD Reports" />
+                <EngagementHeader engagement={engagement} stageNumber={9} stageLabel="3CA / 3CB / 3CD Reports" />
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-lg font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
+                    <h1 className="text-lg font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
                     <p className="text-xs text-muted-foreground">Tax audit report forms and annexures</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
@@ -1488,7 +1488,7 @@ export default function AuditPipeline() {
         ) : activeStage === 9 ? (
           /* STAGE 9 — Sign-off & UDIN */
           <div className="max-w-5xl space-y-4">
-            <EngagementHeader engagement={engagement} stageNumber={9} stageLabel="Sign-off & UDIN" />
+            <EngagementHeader engagement={engagement} stageNumber={10} stageLabel="Sign-off & UDIN" />
             <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
               <ChevronRight size={14} className="rotate-180" /> Back to Audit Dashboard
             </Button>

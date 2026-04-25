@@ -67,7 +67,7 @@ export default function PipelineStage7Combined({
 
   return (
     <div className="space-y-4">
-      <EngagementHeader engagement={engagement} stageNumber={7} stageLabel={isCorporate ? 'Notes, CARO & MRL' : 'Notes to Accounts'} />
+      <EngagementHeader engagement={engagement} stageNumber={8} stageLabel={isCorporate ? 'Notes, CARO & MRL' : 'Notes to Accounts'} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-foreground">

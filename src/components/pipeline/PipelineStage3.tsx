@@ -1630,7 +1630,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   return (
     <div className="max-w-6xl space-y-4">
-      <EngagementHeader engagement={engagement} stageNumber={3} stageLabel="COA Mapping" />
+      <EngagementHeader engagement={engagement} stageNumber={6} stageLabel="COA Mapping" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

@@ -102,7 +102,7 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
 
   return (
     <div className="space-y-4">
-      <EngagementHeader engagement={engagement} stageNumber={2} stageLabel="Tally Sync" />
+      <EngagementHeader engagement={engagement} stageNumber={5} stageLabel="Tally Sync" />
 
       <Card>
         <CardHeader>
