@@ -688,87 +688,123 @@ type CFDisplayRow =
   | { kind: "spacer" }
   | { kind: "section"; letter?: string; label: string }
   | { kind: "subhead"; label: string; bold?: boolean }
-  | { kind: "item";    label: string; cy?: number; py?: number; bold?: boolean; size?: 9 | 10 }
+  | { kind: "item";    label: string; cy?: number; py?: number; bold?: boolean; size?: 9 | 10; rowKey?: string; editable?: boolean }
   | { kind: "total";   label: string; cy: number; py: number };
 
-function buildCFRows(bs: BSRowData, pl: PLRowData, cfs: CFSRowData): CFDisplayRow[] {
+function buildCFRows(
+  bs: BSRowData,
+  pl: PLRowData,
+  cfs: CFSRowData,
+  overrides: Record<string, { cy?: number; py?: number }> = {},
+): CFDisplayRow[] {
+  // Effective-value helper: override beats default; null/undefined ignored.
+  const eff = (key: string, period: "cy" | "py", fallback: number): number => {
+    const o = overrides[key];
+    const v = o?.[period];
+    return Number.isFinite(v as number) ? (v as number) : fallback;
+  };
+
   // ── Operating activities (Section A) ──────────────────────────────────
-  const pbtCy = pl.pbt.cy || 0;
-  const pbtPy = pl.pbt.py || 0;
-  const depCy = pl.depreciation.cy || 0;
-  const depPy = pl.depreciation.py || 0;
-  // Operating profit before WC = pbt + dep + (other label-only adjustments = 0)
-  const opProfCy = pbtCy + depCy;
-  const opProfPy = pbtPy + depPy;
-  const tradePayCy = cfs.tradePayChange.cy || 0;
-  const otherClCy  = cfs.otherCurrLiabChange.cy || 0;
-  const invCy      = (bs.inventories.py || 0) - (bs.inventories.cy || 0);
-  const trCy       = (bs.tradeRec.py     || 0) - (bs.tradeRec.cy     || 0);
-  const otherCaCy  = cfs.otherCurrAssetsChange.cy || 0;
-  // Cash generated from operations = SUM(H16:H23) = OpProf + WC changes
-  const cashFromOpsCy = opProfCy + tradePayCy + otherClCy + invCy + trCy + otherCaCy;
-  const cashFromOpsPy = opProfPy + 0;  // PY column is hardcoded 0 in writer
-  const taxPaidCy = cfs.incomeTaxPaid.cy ?? 0;
-  // Net cash from operating (A) = H24+H25  (matches writer formula)
+  const pbtCy = eff("pbt", "cy", pl.pbt.cy || 0);
+  const pbtPy = eff("pbt", "py", pl.pbt.py || 0);
+  const depCy = eff("dep", "cy", pl.depreciation.cy || 0);
+  const depPy = eff("dep", "py", pl.depreciation.py || 0);
+  const intIncCy = eff("intInc", "cy", 0);
+  const intIncPy = eff("intInc", "py", 0);
+  const profSaleCy = eff("profSale", "cy", 0);
+  const profSalePy = eff("profSale", "py", 0);
+  const intExpCy = eff("intExp", "cy", 0);
+  const intExpPy = eff("intExp", "py", 0);
+  // Operating profit before WC = pbt + dep + intInc + profSale + intExp
+  const opProfCy = pbtCy + depCy + intIncCy + profSaleCy + intExpCy;
+  const opProfPy = pbtPy + depPy + intIncPy + profSalePy + intExpPy;
+
+  const tradePayCy = eff("tradePay", "cy", cfs.tradePayChange.cy || 0);
+  const tradePayPy = eff("tradePay", "py", 0);
+  const otherClCy  = eff("otherCl", "cy", cfs.otherCurrLiabChange.cy || 0);
+  const otherClPy  = eff("otherCl", "py", 0);
+  const invCy      = eff("inv", "cy", (bs.inventories.py || 0) - (bs.inventories.cy || 0));
+  const invPy      = eff("inv", "py", 0);
+  const trCy       = eff("tradeRec", "cy", (bs.tradeRec.py || 0) - (bs.tradeRec.cy || 0));
+  const trPy       = eff("tradeRec", "py", 0);
+  const stProvCy   = eff("stProv", "cy", 0);
+  const stProvPy   = eff("stProv", "py", 0);
+  const otherCaCy  = eff("otherCa", "cy", cfs.otherCurrAssetsChange.cy || 0);
+  const otherCaPy  = eff("otherCa", "py", 0);
+
+  // Cash generated from operations = OpProf + all WC changes
+  const cashFromOpsCy = opProfCy + tradePayCy + otherClCy + invCy + trCy + stProvCy + otherCaCy;
+  const cashFromOpsPy = opProfPy + tradePayPy + otherClPy + invPy + trPy + stProvPy + otherCaPy;
+  const taxPaidCy = eff("taxPaid", "cy", cfs.incomeTaxPaid.cy ?? 0);
+  const taxPaidPy = eff("taxPaid", "py", 0);
+  // Net cash from operating (A) = cashFromOps + taxPaid (matches writer formula H24+H25)
   const netOpCy = cashFromOpsCy + taxPaidCy;
-  const netOpPy = cashFromOpsPy + 0;
+  const netOpPy = cashFromOpsPy + taxPaidPy;
 
   // ── Investing activities (Section B) ──────────────────────────────────
-  const ppeOutCy = -(cfs.ppePurchases.cy || 0);   // outflow → negative
-  // Interest income row is label-only (0 contribution)
-  const netInvCy = ppeOutCy + 0;
-  const netInvPy = 0;
+  const ppeOutCy = eff("ppe", "cy", -(cfs.ppePurchases.cy || 0));
+  const ppeOutPy = eff("ppe", "py", 0);
+  const intIncInvCy = eff("intIncInv", "cy", 0);
+  const intIncInvPy = eff("intIncInv", "py", 0);
+  const netInvCy = ppeOutCy + intIncInvCy;
+  const netInvPy = ppeOutPy + intIncInvPy;
 
   // ── Financing activities (Section C) ──────────────────────────────────
-  // All four rows are 0 / label-only in the template
-  const netFinCy = 0;
-  const netFinPy = 0;
+  const shareProcCy = eff("shareProc", "cy", 0);
+  const shareProcPy = eff("shareProc", "py", 0);
+  const ltBorrCy = eff("ltBorr", "cy", 0);
+  const ltBorrPy = eff("ltBorr", "py", 0);
+  const otherLoanCy = eff("otherLoan", "cy", 0);
+  const otherLoanPy = eff("otherLoan", "py", 0);
+  const intPaidCy = eff("intPaid", "cy", 0);
+  const intPaidPy = eff("intPaid", "py", 0);
+  const netFinCy = shareProcCy + ltBorrCy + otherLoanCy + intPaidCy;
+  const netFinPy = shareProcPy + ltBorrPy + otherLoanPy + intPaidPy;
 
   // ── Reconciliation ────────────────────────────────────────────────────
   const netIncCy = netOpCy + netInvCy + netFinCy;
   const netIncPy = netOpPy + netInvPy + netFinPy;
-  // Writer uses H41 = I42 (PY closing → CY opening). PY closing = 0 in
-  // the template, so opening = 0 as well. This is intentional — the
-  // template treats opening cash as a manual fill. We mirror that here.
-  const openCy = 0;
-  const openPy = 0;
+  // Opening cash defaults to BS PY closing (more useful than the template's
+  // hardcoded 0); user can still override.
+  const openCy = eff("openCash", "cy", bs.cashBank.py || 0);
+  const openPy = eff("openCash", "py", 0);
   const closeCy = netIncCy + openCy;
   const closePy = netIncPy + openPy;
 
   return [
     { kind: "section", letter: "A.", label: "Cash flows from operating activities" },
-    { kind: "item",    label: "Net profit before tax", cy: pbtCy, py: pbtPy, bold: true, size: 10 },
+    { kind: "item",    label: "Net profit before tax", cy: pbtCy, py: pbtPy, bold: true, size: 10, rowKey: "pbt", editable: true },
     { kind: "subhead", label: "Adjustments for:" },
-    { kind: "item",    label: "Depreciation expense", cy: depCy, py: depPy },
-    { kind: "item",    label: "Interest income" },
-    { kind: "item",    label: "Profit on sale of assets" },
-    { kind: "item",    label: "Interest expense" },
+    { kind: "item",    label: "Depreciation expense", cy: depCy, py: depPy, rowKey: "dep", editable: true },
+    { kind: "item",    label: "Interest income",       cy: intIncCy,   py: intIncPy,   rowKey: "intInc",   editable: true },
+    { kind: "item",    label: "Profit on sale of assets", cy: profSaleCy, py: profSalePy, rowKey: "profSale", editable: true },
+    { kind: "item",    label: "Interest expense",      cy: intExpCy,   py: intExpPy,   rowKey: "intExp",   editable: true },
     { kind: "item",    label: "Operating profit before working capital changes", cy: opProfCy, py: opProfPy, bold: true },
     { kind: "subhead", label: "Changes in working capital:", bold: true },
-    { kind: "item",    label: "Trade payables",          cy: tradePayCy, py: 0 },
-    { kind: "item",    label: "Other current liabilities", cy: otherClCy, py: 0, size: 10 },
-    { kind: "item",    label: "Inventories",             cy: invCy,      py: 0 },
-    { kind: "item",    label: "Trade receivables",        cy: trCy,       py: 0 },
-    { kind: "item",    label: "Short term provision" },
-    { kind: "item",    label: "Other current assets",     cy: otherCaCy,  py: 0, size: 10 },
+    { kind: "item",    label: "Trade payables",          cy: tradePayCy, py: tradePayPy, rowKey: "tradePay", editable: true },
+    { kind: "item",    label: "Other current liabilities", cy: otherClCy, py: otherClPy, size: 10, rowKey: "otherCl", editable: true },
+    { kind: "item",    label: "Inventories",             cy: invCy,      py: invPy,      rowKey: "inv",      editable: true },
+    { kind: "item",    label: "Trade receivables",        cy: trCy,       py: trPy,       rowKey: "tradeRec", editable: true },
+    { kind: "item",    label: "Short term provision",     cy: stProvCy,   py: stProvPy,   rowKey: "stProv",   editable: true },
+    { kind: "item",    label: "Other current assets",     cy: otherCaCy,  py: otherCaPy,  size: 10, rowKey: "otherCa", editable: true },
     { kind: "item",    label: "Cash generated from operations", cy: cashFromOpsCy, py: cashFromOpsPy, bold: true },
-    { kind: "item",    label: "Income tax paid",          cy: taxPaidCy,  py: 0, size: 10 },
+    { kind: "item",    label: "Income tax paid",          cy: taxPaidCy,  py: taxPaidPy,  size: 10, rowKey: "taxPaid", editable: true },
     { kind: "total",   label: "Net cash generated from operating activities (A)", cy: netOpCy, py: netOpPy },
     { kind: "spacer" },
     { kind: "section", letter: "B.", label: "Cash flows from investing activities" },
-    { kind: "item",    label: "Purchase of property, plant & equipments", cy: ppeOutCy, py: 0 },
-    { kind: "item",    label: "Interest Income" },
+    { kind: "item",    label: "Purchase of property, plant & equipments", cy: ppeOutCy, py: ppeOutPy, rowKey: "ppe", editable: true },
+    { kind: "item",    label: "Interest Income",                          cy: intIncInvCy, py: intIncInvPy, rowKey: "intIncInv", editable: true },
     { kind: "total",   label: "Net cash used in investing activities (B)", cy: netInvCy, py: netInvPy },
     { kind: "spacer" },
     { kind: "section", letter: "C.", label: "Cash flows from financing activities" },
-    { kind: "item",    label: "Proceeds from issue of share capital", cy: 0, py: 0 },
-    { kind: "item",    label: "Proceeds / Repayment of long-term Borrowings" },
-    { kind: "item",    label: "Payment of Other Loan term Liabilities" },
-    { kind: "item",    label: "Interest Paid" },
+    { kind: "item",    label: "Proceeds from issue of share capital",         cy: shareProcCy, py: shareProcPy, rowKey: "shareProc", editable: true },
+    { kind: "item",    label: "Proceeds / Repayment of long-term Borrowings", cy: ltBorrCy,    py: ltBorrPy,    rowKey: "ltBorr",    editable: true },
+    { kind: "item",    label: "Payment of Other Loan term Liabilities",       cy: otherLoanCy, py: otherLoanPy, rowKey: "otherLoan", editable: true },
+    { kind: "item",    label: "Interest Paid",                                cy: intPaidCy,   py: intPaidPy,   rowKey: "intPaid",   editable: true },
     { kind: "total",   label: "Net cash used in financing activities (C)", cy: netFinCy, py: netFinPy },
     { kind: "spacer" },
     { kind: "item",    label: "Net increase in cash and cash equivalents (A+B+C)", cy: netIncCy, py: netIncPy, bold: true },
-    { kind: "item",    label: "Cash and cash equivalents at the beginning of period", cy: openCy, py: openPy },
+    { kind: "item",    label: "Cash and cash equivalents at the beginning of period", cy: openCy, py: openPy, rowKey: "openCash", editable: true },
     { kind: "total",   label: "Cash and cash equivalents at the end of period", cy: closeCy, py: closePy },
   ];
 }
@@ -780,10 +816,12 @@ interface CorporateCFViewProps {
   cyYear:      number;
   pyYear:      number;
   companyName: string;
+  overrides?:  Record<string, { cy?: number; py?: number }>;
+  onCommit?:   (rowKey: string, period: "cy" | "py", value: number | null) => void;
 }
 
-function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName }: CorporateCFViewProps) {
-  const rows = buildCFRows(bs, pl, cfs);
+function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName, overrides, onCommit }: CorporateCFViewProps) {
+  const rows = buildCFRows(bs, pl, cfs, overrides);
   return (
     <div className="space-y-3">
       <div className="rounded-lg border bg-card overflow-hidden">
@@ -835,15 +873,20 @@ function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName }: Corporate
               // item
               const boldCls = row.bold ? "font-bold" : "";
               const fontSize = row.size === 10 ? "text-[12px]" : "text-[11px]";
+              const editable = !!row.editable && !!row.rowKey && !!onCommit;
               return (
                 <tr key={idx} className="hover:bg-muted/10">
                   <td />
                   <td className={`py-0.5 px-3 ${boldCls} ${fontSize}`} style={{ paddingLeft: 24 }}>{row.label}</td>
-                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
-                    {row.cy === undefined ? "" : formatINR(row.cy)}
+                  <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} ${fontSize}`}>
+                    {editable
+                      ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommit!(row.rowKey!, "cy", v)} />
+                      : (row.cy === undefined ? "" : formatINR(row.cy))}
                   </td>
-                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
-                    {row.py === undefined ? "" : formatINR(row.py)}
+                  <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} ${fontSize}`}>
+                    {editable
+                      ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommit!(row.rowKey!, "py", v)} />
+                      : (row.py === undefined ? "" : formatINR(row.py))}
                   </td>
                 </tr>
               );
@@ -945,6 +988,36 @@ export default function PipelineFinancialStatements({
       if (value === null || !Number.isFinite(value)) delete next[code];
       else next[code] = value;
       try { window.localStorage.setItem(NOTE_OVR_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // ─── CFS row overrides (Phase UI-4 fix) ──────────────────────────────────
+  // The CFS template has several label-only placeholder rows (Interest income,
+  // Profit on sale of assets, Interest expense, Short term provision, Loan
+  // repayments, Interest Paid, opening cash) that auditors fill manually.
+  // It also derives Trade payables / Inventories / Trade rec / PPE purchase
+  // from BS movements — but auditors sometimes need to override those (e.g.
+  // adjust for revaluation reserve impact). We surface inline edits for both,
+  // persisted in localStorage per engagement.
+  // Shape: Record<row_key, { cy?: number; py?: number }>.
+  const CFS_OVR_KEY = `caflow:fs_cfs_overrides:${engagementId}`;
+  const [cfsOverrides, setCfsOverrides] = useState<Record<string, { cy?: number; py?: number }>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(CFS_OVR_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const updateCfsOverride = (key: string, period: "cy" | "py", value: number | null) => {
+    setCfsOverrides(prev => {
+      const next: Record<string, { cy?: number; py?: number }> = { ...prev };
+      const row = { ...(next[key] || {}) };
+      if (value === null || !Number.isFinite(value)) delete row[period];
+      else row[period] = value;
+      if (row.cy === undefined && row.py === undefined) delete next[key];
+      else next[key] = row;
+      try { window.localStorage.setItem(CFS_OVR_KEY, JSON.stringify(next)); } catch {}
       return next;
     });
   };
@@ -4305,6 +4378,8 @@ export default function PipelineFinancialStatements({
                   cyYear={cyYear}
                   pyYear={pyYear}
                   companyName={engagement?.clients?.name || "[Company Name]"}
+                  overrides={cfsOverrides}
+                  onCommit={updateCfsOverride}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center py-16 gap-3 border rounded-lg bg-muted/20">
