@@ -4173,9 +4173,10 @@ export default function PipelineFinancialStatements({
                 <Droplets size={14} /> Cash Flow
               </TabsTrigger>
             )}
+            {/* Phase 4.2 — Notes tab AFTER Cash Flow, corporate only */}
             {!isNonCorporate && (
               <TabsTrigger value="notes" className="gap-1.5">
-                <BookOpen size={14} /> Notes to Accounts
+                <BookOpen size={14} /> Notes
               </TabsTrigger>
             )}
           </TabsList>
