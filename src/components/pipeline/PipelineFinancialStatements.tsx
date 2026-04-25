@@ -28,6 +28,9 @@ import {
   type CFSRowData,
 } from "@/lib/fsExcelExport";
 import NotesTab from "@/components/stage5/NotesTab";
+import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
+import { NCEDetailedNotes }  from "@/components/stage8/NCEDetailedNotes";
+import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
@@ -4398,6 +4401,12 @@ export default function PipelineFinancialStatements({
                 <BookOpen size={14} /> Notes
               </TabsTrigger>
             )}
+            {/* UI-7 — NCE Notes tab (Capital Account / Notes to Accounts / PPE) */}
+            {isNonCorporate && (
+              <TabsTrigger value="nce_notes" className="gap-1.5">
+                <BookOpen size={14} /> Notes
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* ── Balance Sheet ── */}
@@ -4704,6 +4713,28 @@ export default function PipelineFinancialStatements({
                   Renders 4 sub-tabs (Note BS-Liab → Note BS-Asset → FA → Note PL),
                   uses notesAutoPopulate service for auto-fill, persists on every edit. */}
               <NotesTab engagementId={engagementId} cyYear={cyYear} pyYear={pyYear} />
+            </TabsContent>
+          )}
+
+          {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
+          {isNonCorporate && (
+            <TabsContent value="nce_notes" className="mt-3">
+              <Tabs defaultValue="capital_account">
+                <TabsList>
+                  <TabsTrigger value="capital_account" className="text-xs">Capital Account</TabsTrigger>
+                  <TabsTrigger value="notes_to_accounts" className="text-xs">Notes to Accounts</TabsTrigger>
+                  <TabsTrigger value="ppe_schedule" className="text-xs">PPE Schedule</TabsTrigger>
+                </TabsList>
+                <TabsContent value="capital_account" className="mt-3">
+                  <NCECapitalAccount engagementId={engagementId} />
+                </TabsContent>
+                <TabsContent value="notes_to_accounts" className="mt-3">
+                  <NCEDetailedNotes engagementId={engagementId} />
+                </TabsContent>
+                <TabsContent value="ppe_schedule" className="mt-3">
+                  <NCEPPESchedule engagementId={engagementId} />
+                </TabsContent>
+              </Tabs>
             </TabsContent>
           )}
         </Tabs>
