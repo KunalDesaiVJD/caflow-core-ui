@@ -286,10 +286,14 @@ function PatternBTable({
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           const insertCustomBefore = idx === grandTotalIdx;
           const displayLabel = labelOverrides[row.id] ?? row.label;
+          const attachedHere = !row.isSectionHeader && !row.isTotal
+            ? customRows.filter(cr => cr.attachedTo === row.id)
+            : [];
+          const unattachedAtGrand = customRows.filter(cr => !cr.attachedTo);
           return (
             <>
-              {/* Custom rows inserted just before grand total */}
-              {insertCustomBefore && customRows.map(cr => (
+              {/* Custom rows inserted just before grand total (only those NOT attached anywhere) */}
+              {insertCustomBefore && unattachedAtGrand.map(cr => (
                 <CustomRowEditor
                   key={cr.id}
                   row={cr}
@@ -345,6 +349,26 @@ function PatternBTable({
                   </TableCell>
                 </TableRow>
               )}
+
+              {/* Custom rows attached under this static row */}
+              {attachedHere.map(cr => (
+                <CustomRowEditor
+                  key={cr.id}
+                  row={cr}
+                  cyVal={rawCy[cr.id] ?? 0}
+                  pyVal={rawPy[cr.id] ?? 0}
+                  isPatternA={false}
+                  cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
+                  onChangeCy={v => onChangeCy(cr.id, v)}
+                  onChangePy={v => onChangePy(cr.id, v)}
+                  onChangeCyLt={() => {}} onChangeCySt={() => {}}
+                  onChangePyLt={() => {}} onChangePySt={() => {}}
+                  onChangeLabel={label => onChangeLabel(cr.id, label)}
+                  onDelete={() => onDeleteRow(cr.id)}
+                  headingOptions={headingOptions}
+                  onPromote={(staticId) => onPromote(cr.id, staticId)}
+                />
+              ))}
             </>
           );
         })}
@@ -393,10 +417,12 @@ function PatternATable({
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
 
-  // Group custom rows by section (for section-aware insertion in Pattern A)
+  // Group custom rows by section (for section-aware insertion in Pattern A).
+  // Attached rows are excluded — they're rendered beneath their parent static row.
   const customBySection = useMemo(() => {
     const groups: Record<string, NCECustomRow[]> = { _global: [] };
     for (const cr of customRows) {
+      if (cr.attachedTo) continue;
       const key = cr.section ?? "_global";
       if (!groups[key]) groups[key] = [];
       groups[key].push(cr);
@@ -438,6 +464,9 @@ function PatternATable({
             : idx === grandTotalIdx
               ? (customBySection["_global"] ?? [])
               : [];
+          const attachedHere = !row.isSectionHeader && !row.isTotal
+            ? customRows.filter(cr => cr.attachedTo === row.id)
+            : [];
           const displayLabel = labelOverrides[row.id] ?? row.label;
           return (
             <>
@@ -508,6 +537,29 @@ function PatternATable({
                   </TableCell>
                 </TableRow>
               )}
+
+              {/* Custom rows attached under this static row */}
+              {attachedHere.map(cr => (
+                <CustomRowEditor
+                  key={cr.id}
+                  row={cr}
+                  cyVal={0} pyVal={0}
+                  isPatternA={true}
+                  cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
+                  cyStVal={rawCy[cr.id + "_st"] ?? 0}
+                  pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
+                  pyStVal={rawPy[cr.id + "_st"] ?? 0}
+                  onChangeCy={() => {}} onChangePy={() => {}}
+                  onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
+                  onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
+                  onChangePyLt={v => onChangePy(cr.id + "_lt", v)}
+                  onChangePySt={v => onChangePy(cr.id + "_st", v)}
+                  onChangeLabel={label => onChangeLabel(cr.id, label)}
+                  onDelete={() => onDeleteRow(cr.id)}
+                  headingOptions={headingOptions}
+                  onPromote={(staticId) => onPromote(cr.id, staticId)}
+                />
+              ))}
             </>
           );
         })}
@@ -709,33 +761,20 @@ export function NCEDetailedNotes({ engagementId }: Props) {
   const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, staticId: string) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
-      const newCy = { ...cur.cy };
-      const newPy = { ...cur.py };
-      // Move amounts across all suffix variants ("", "_lt", "_st").
-      for (const suf of ["", "_lt", "_st"]) {
-        const fromKey = customId + suf;
-        const toKey   = staticId + suf;
-        if (newCy[fromKey] !== undefined) {
-          newCy[toKey] = (newCy[toKey] ?? 0) + (newCy[fromKey] ?? 0);
-          delete newCy[fromKey];
-        }
-        if (newPy[fromKey] !== undefined) {
-          newPy[toKey] = (newPy[toKey] ?? 0) + (newPy[fromKey] ?? 0);
-          delete newPy[fromKey];
-        }
-      }
-      // Remove from hiddenRows if reassigning to a previously hidden row.
-      const hidden = (cur.hiddenRows ?? []).filter(x => x !== staticId);
+      // Attach the custom row beneath the chosen static row. Amounts stay on
+      // the custom row's own keys — they continue to roll up into the same
+      // section/grand total via computeDisplayData. The static row itself is
+      // untouched so the move is fully reversible.
       const next = { ...prev, [noteType]: {
         ...cur,
-        cy: newCy, py: newPy,
-        customRows: cur.customRows.filter(r => r.id !== customId),
-        hiddenRows: hidden,
+        customRows: cur.customRows.map(r =>
+          r.id === customId ? { ...r, attachedTo: staticId } : r,
+        ),
       } };
       scheduleSave(next);
       return next;
     });
-    toast.success("Moved to selected heading");
+    toast.success("Attached under selected heading");
   }, [scheduleSave]);
 
   // ── Re-sync ─────────────────────────────────────────────────────────────
