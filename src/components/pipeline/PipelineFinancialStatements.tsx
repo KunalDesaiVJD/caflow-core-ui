@@ -304,7 +304,7 @@ function EditableMoneyCell({
       inputMode="decimal"
       value={display}
       title="Click to edit · clear to remove override"
-      onFocus={() => { setFocused(true); setDraft(value === 0 ? "" : String(value)); }}
+      onFocus={(e) => { setFocused(true); setDraft(value === 0 ? "" : String(value)); e.currentTarget.select(); }}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
       onBlur={() => {
@@ -315,8 +315,10 @@ function EditableMoneyCell({
         if (Number.isFinite(parsed)) onCommit(parsed);
       }}
       className={cn(
-        "w-full bg-transparent border border-transparent rounded px-1 text-right tabular-nums",
-        "hover:border-muted-foreground/30 focus:border-primary focus:bg-background outline-none",
+        // Always-visible dashed underline so users see the cell is editable.
+        // Hover deepens the border; focus uses the primary color and a soft bg.
+        "w-full bg-background/40 border border-dashed border-muted-foreground/30 rounded px-1 text-right tabular-nums cursor-text",
+        "hover:bg-background hover:border-muted-foreground/60 focus:border-primary focus:bg-background focus:border-solid outline-none",
         className,
       )}
     />
@@ -341,7 +343,7 @@ function EditableNoteCell({
       inputMode="numeric"
       value={String(display)}
       title="Click to edit note number · clear to use default"
-      onFocus={() => { setFocused(true); setDraft(value == null ? "" : String(value)); }}
+      onFocus={(e) => { setFocused(true); setDraft(value == null ? "" : String(value)); e.currentTarget.select(); }}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
       onBlur={() => {
@@ -352,8 +354,8 @@ function EditableNoteCell({
         if (Number.isFinite(parsed)) onCommit(parsed);
       }}
       className={cn(
-        "w-12 bg-transparent border border-transparent rounded px-1 text-center tabular-nums",
-        "hover:border-muted-foreground/30 focus:border-primary focus:bg-background outline-none",
+        "w-12 bg-background/40 border border-dashed border-muted-foreground/30 rounded px-1 text-center tabular-nums cursor-text",
+        "hover:bg-background hover:border-muted-foreground/60 focus:border-primary focus:bg-background focus:border-solid outline-none",
       )}
     />
   );
@@ -382,6 +384,12 @@ function CorporateBalanceSheetView({
         <div className="font-bold text-sm">{companyName}</div>
         <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
         <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+        {(onCommitCY || onCommitPY || onEditNote) && (
+          <div className="text-[10px] text-primary mt-1">
+            <Pencil className="inline w-2.5 h-2.5 mr-0.5" />
+            Click any dashed cell (Note No. / CY / PY) to edit · Enter / Tab to save · clear to revert
+          </div>
+        )}
       </div>
       <table className="w-full text-xs">
         <thead>
@@ -829,6 +837,10 @@ function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName, overrides, 
           <div className="font-bold text-sm">{companyName}</div>
           <div className="text-xs mt-0.5">Cash Flow Statement for the year ended [31 March {cyYear}]</div>
           <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+          <div className="text-[10px] text-primary mt-1">
+            <Pencil className="inline w-2.5 h-2.5 mr-0.5" />
+            Click any dashed cell to edit · Enter / Tab to save · clear to revert
+          </div>
         </div>
         <table className="w-full text-xs">
           <thead>
