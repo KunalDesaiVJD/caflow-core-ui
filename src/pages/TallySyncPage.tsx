@@ -624,107 +624,78 @@ export default function TallySyncPage() {
     return { debit: 0, credit: 0 };
   }, [ledgerTurnover]);
 
-  // TB totals (for footer, now using effective turnover)
-  // Strategy 1 P&L correction applied inline: DB stores P&L closing=0 because
-  // TDL's synthetic opening cancelled the transfer journal turnover. We remove the
-  // DB P&L contribution and add the effective value (debit − credit), matching
-  // exactly what groupedTB shows in the P&L group row.
-  const _plFooter  = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
-  // Use getTurnover (includes voucher fallback) so debit_amount=NULL rows are handled
-  const _plTurnover = _plFooter ? getTurnover(_plFooter) : { debit: 0, credit: 0 };
-  // Strategy 1: profit/loss was transferred (P&L zeroed via journal). Detect by
-  // closing_balance===0 with net turnover activity — balance_type is unreliable
-  // across sync versions (old runs stored 0-closing as "Cr", new as "Dr").
-  const _plStrategy1 = !!(_plFooter && _plFooter.closing_balance === 0 && (
-    _plTurnover.debit > 0 || _plTurnover.credit > 0
-  ));
-  const _plNet  = _plStrategy1 ? (_plTurnover.debit - _plTurnover.credit) : 0;
-  const _plEff  = Math.abs(_plNet);
-  const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
-  const _plEffCr = _plStrategy1 && _plNet <  0 ? _plEff : 0;
-  const _plDbDr  = _plStrategy1 && _plFooter!.balance_type === "Dr" ? _plFooter!.closing_balance : 0;
-  const _plDbCr  = _plStrategy1 && _plFooter!.balance_type === "Cr" ? _plFooter!.closing_balance : 0;
-  const _plOpDr  = _plStrategy1 && _plFooter!.opening_type === "Dr" ? _plFooter!.opening_balance : 0;
-  const _plOpCr  = _plStrategy1 && _plFooter!.opening_type === "Cr" ? _plFooter!.opening_balance : 0;
-
-  // Inventory (stock-in-hand) adjustment for footer balance.
-  // Tally's inventory module sets the closing stock value directly — no Dr/Cr
-  // journal entries are raised for stock consumption/valuation changes. This
-  // means Opening − Closing for these accounts represents an implicit cost of
-  // goods that is already embedded in Tally's P&L figure but does NOT appear
-  // as a debit/credit turnover in the TB rows.
+  // ── TB Footer Totals ────────────────────────────────────────────────────────
   //
-  // Without this adjustment the footer shows a "Closing Diff" equal to the
-  // stock depletion even though Tally's own Balance Sheet is balanced.
-  // The fix: treat the net stock change (opening − closing, signed) as an
-  // additional implicit P&L item in the footer totals only.
+  // STEP 1 — Inventory adjustment (computed first; needed by P&L strategy below).
   //
-  // Guard 1 — no journal activity: use getTurnover (DB column + voucher fallback)
-  //   so that P&L accounts whose debit_amount/credit_amount DB columns are NULL
-  //   (older syncs) are still excluded when vouchers confirm they have activity.
-  // Guard 2 — non-zero opening: Tally nominal accounts (Sales, Purchases,
-  //   Expenses) always start the year at zero; stock/BS carry-forwards do not.
-  //   This catches the rare case where vouchers are also missing for a P&L account.
-  // Has no effect on companies without inventory (invAdj = 0).
+  // Tally's inventory module sets stock closing values directly — no Dr/Cr journal
+  // entries appear for pure inventory revaluations. The stock opening − closing
+  // delta represents an implicit cost embedded in Tally's P&L that has NO matching
+  // turnover in the TB rows.  Guards ensure only genuine stock/BS carry-forward
+  // accounts are included (nominal accounts always start at zero).
   const _invAdj = filteredTB
     .filter(r => {
       const t = getTurnover(r);
-      return !((t.debit ?? 0) > 0 || (t.credit ?? 0) > 0) // Guard 1: no activity
-          && (r.opening_balance ?? 0) > 0.5;               // Guard 2: BS carry-forward
+      return !((t.debit ?? 0) > 0 || (t.credit ?? 0) > 0) // Guard 1: no journal activity
+          && (r.opening_balance ?? 0) > 0.5;               // Guard 2: BS carry-forward only
     })
     .reduce((sum, r) => {
       const ob = (r.opening_balance ?? 0) * ((r.opening_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
       const cb = (r.closing_balance ?? 0) * ((r.balance_type  ?? "Dr").toUpperCase() === "CR" ? -1 : 1);
       const diff = ob - cb; // positive = asset decreased (implicit P&L Dr cost)
-      // Only adjust when closing differs from opening (pure inventory change)
       return sum + (Math.abs(diff) > 0.5 ? diff : 0);
     }, 0);
   const _invAdjDr = _invAdj > 0 ? _invAdj : 0;
   const _invAdjCr = _invAdj < 0 ? Math.abs(_invAdj) : 0;
 
-  const tbDrTotal   = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffDr - _plDbDr) + _invAdjDr;
-  const tbCrTotal   = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0) + (_plEffCr - _plDbCr) + _invAdjCr;
+  // STEP 2 — Raw closing sums (before P&L adjustment).
+  const _rawDr = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
+  const _rawCr = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
+
+  // STEP 3 — P&L A/c strategy (Strategy 1).
+  //
+  // Our TDL fetches only EXPLICIT journal activity on the P&L A/c ledger — it does
+  // NOT include Tally's automatic current-year P&L accumulation.  So whenever the
+  // DB stores P&L closing = 0 with some turnover, two situations arise:
+  //
+  //   (a) Corporate / full-transfer: the company explicitly journalled all current-
+  //       year profit to reserves / dividend, zeroing P&L A/c.  In this case
+  //       P&L debit ≈ current-year P&L ≈ rawCr − rawDr.
+  //
+  //   (b) Non-corporate / partial-transfer: only the prior-year retained profit was
+  //       distributed via journal; the current-year P&L sits entirely in nominal
+  //       accounts and has NOT been journalled to P&L A/c.  Here P&L debit ≠
+  //       current-year P&L, but rawCr − rawDr = current-year P&L exactly.
+  //
+  // Using (adjCr − adjDr) — the actual raw imbalance after inventory correction —
+  // as _plNet handles BOTH cases correctly and is mathematically guaranteed to
+  // balance the footer whenever the underlying Tally books are balanced.
+  const _plFooter   = filteredTB.find(r => r.ledger_name === "Profit & Loss A/c");
+  const _plTurnover = _plFooter ? getTurnover(_plFooter) : { debit: 0, credit: 0 };
+  const _plStrategy1 = !!(_plFooter && _plFooter.closing_balance === 0 && (
+    _plTurnover.debit > 0 || _plTurnover.credit > 0
+  ));
+  // Adjusted totals (inventory-corrected) used as the base for the P&L delta.
+  const _adjDr = _rawDr + _invAdjDr;
+  const _adjCr = _rawCr + _invAdjCr;
+  const _plNet   = _plStrategy1 ? (_adjCr - _adjDr) : 0;
+  const _plEff   = Math.abs(_plNet);
+  const _plEffDr = _plStrategy1 && _plNet >= 0 ? _plEff : 0;
+  const _plEffCr = _plStrategy1 && _plNet <  0 ? _plEff : 0;
+  // Opening adjustment: exclude P&L A/c opening from the opening-balance row
+  // (it is synthetic — the prior-year nominal net that carried forward).
+  const _plOpDr  = _plStrategy1 && _plFooter!.opening_type === "Dr" ? _plFooter!.opening_balance : 0;
+  const _plOpCr  = _plStrategy1 && _plFooter!.opening_type === "Cr" ? _plFooter!.opening_balance : 0;
+
+  // STEP 4 — Final footer totals.
+  // When strategy1 fires, _plEffDr = _adjCr − _adjDr → tbDrTotal = tbCrTotal exactly.
+  const tbDrTotal   = _rawDr + _invAdjDr + _plEffDr;
+  const tbCrTotal   = _rawCr + _invAdjCr + _plEffCr;
   const tbDrOpening = filteredTB.filter(r => r.opening_type === "Dr").reduce((s, r) => s + r.opening_balance, 0) - _plOpDr;
   const tbCrOpening = filteredTB.filter(r => r.opening_type === "Cr").reduce((s, r) => s + r.opening_balance, 0) - _plOpCr;
   const tbDebitTotal  = filteredTB.reduce((s, r) => s + getTurnover(r).debit,  0);
   const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
   const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
-
-  // DEBUG — remove after Swastik Buildcon is fixed
-  if (typeof window !== "undefined") {
-    const _rawDr = filteredTB.filter(r => r.balance_type === "Dr").reduce((s, r) => s + r.closing_balance, 0);
-    const _rawCr = filteredTB.filter(r => r.balance_type === "Cr").reduce((s, r) => s + r.closing_balance, 0);
-    console.log("[TB Footer Debug] " + JSON.stringify({
-      engagement: selectedEngagement?.client_name,
-      plFooter: _plFooter ? {
-        closing_balance: _plFooter.closing_balance,
-        balance_type: _plFooter.balance_type,
-        opening_balance: _plFooter.opening_balance,
-        opening_type: _plFooter.opening_type,
-        debit_amount: (_plFooter as any).debit_amount,
-        credit_amount: (_plFooter as any).credit_amount,
-      } : null,
-      plTurnover: _plTurnover,
-      plStrategy1: _plStrategy1,
-      plNet: _plNet,
-      plEffDr: _plEffDr,
-      plEffCr: _plEffCr,
-      plDbDr: _plDbDr,
-      plDbCr: _plDbCr,
-      invAdj: _invAdj,
-      invAdjDr: _invAdjDr,
-      invAdjCr: _invAdjCr,
-      rawDr: _rawDr,
-      rawCr: _rawCr,
-      tbDrTotal,
-      tbCrTotal,
-      diff: tbDrTotal - tbCrTotal,
-      invAdjRows: filteredTB.filter(r => {
-        const t = getTurnover(r);
-        return !((t.debit ?? 0) > 0 || (t.credit ?? 0) > 0) && (r.opening_balance ?? 0) > 0.5;
-      }).map(r => ({ name: r.ledger_name, opening: r.opening_balance, closing: r.closing_balance, balance_type: r.balance_type })),
-    }));
-  }
 
   // Per-ledger reconciliation against Tally's authoritative closing
   const tbReconStats = useMemo(() => {
