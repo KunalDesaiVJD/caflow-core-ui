@@ -98,32 +98,17 @@ export default function NoteBSLiab({
 
       <NoteCard noteNo={4} title="Reserves and surplus">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
-        <EditableRow
-          label="1. General Reserve"
-          cy={Number(get("bs_liab.reserves_surplus.general_reserve_cy") ?? 0)}
-          py={Number(get("bs_liab.reserves_surplus.general_reserve_py") ?? 0)}
-          isOverriddenCy={isOverridden("bs_liab.reserves_surplus.general_reserve_cy")}
-          isOverriddenPy={isOverridden("bs_liab.reserves_surplus.general_reserve_py")}
-          onCommitCy={(v) => updatePath("bs_liab.reserves_surplus.general_reserve_cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.reserves_surplus.general_reserve_py", v)}
-        />
-        <EditableRow
-          label="2. Share Premium"
-          cy={Number(get("bs_liab.reserves_surplus.share_premium_cy") ?? 0)}
-          py={Number(get("bs_liab.reserves_surplus.share_premium_py") ?? 0)}
-          onCommitCy={(v) => updatePath("bs_liab.reserves_surplus.share_premium_cy", v)}
-          onCommitPy={(v) => updatePath("bs_liab.reserves_surplus.share_premium_py", v)}
-          isOverriddenCy={isOverridden("bs_liab.reserves_surplus.share_premium_cy")}
-          isOverriddenPy={isOverridden("bs_liab.reserves_surplus.share_premium_py")}
-        />
-        <div className="text-[10px] italic text-muted-foreground mt-2">Surplus in Statement of P&amp;L</div>
+        {/* Unified breakdown: auto-populated from COA-mapped ledgers via the
+            registry's template (General Reserve / Securities Premium /
+            Capital Reserve / Surplus in P&L / Other Reserves). Legacy data
+            from the old general_reserve_cy/share_premium_cy/surplus_breakup
+            paths is migrated into this list as manual rows. */}
         <ListTable
-          rows={(get("bs_liab.reserves_surplus.surplus_breakup") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.reserves_surplus.surplus_breakup", next)}
-          descPlaceholder="Opening / Profit for the year / Deferred tax adj / Excess provision IT / Closing"
-          addLabel="Add surplus row"
+          rows={(get("bs_liab.reserves_surplus.breakup") ?? []) as ListRow[]}
+          onChange={(next) => updatePath("bs_liab.reserves_surplus.breakup", next)}
+          descPlaceholder="General Reserve / Securities Premium / Surplus in P&L / Other Reserves"
+          addLabel="Add row"
         />
-
         <EditableRow
           label="Total — Reserves and surplus (per BS)"
           cy={cy("reserves_surplus")} py={py("reserves_surplus")}
@@ -140,23 +125,15 @@ export default function NoteBSLiab({
 
       <NoteCard noteNo={5} title="Long-term borrowings">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
-
-        <div className="text-[10px] italic text-muted-foreground mt-1">(A) Secured Loans → Term loans → (i) From banks</div>
+        {/* Unified breakdown: COA-mapped ledgers (party names) appear as
+            linked rows; legacy secured_term_loans / unsecured rows are
+            migrated as manual rows on first re-sync. */}
         <ListTable
-          rows={(get("bs_liab.lt_borrowings.secured_term_loans") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.lt_borrowings.secured_term_loans", next)}
-          descPlaceholder="Bank name / loan particulars"
-          addLabel="Add term loan"
+          rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
+          onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
+          descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
+          addLabel="Add row"
         />
-
-        <div className="text-[10px] italic text-muted-foreground mt-2">(B) Unsecured</div>
-        <ListTable
-          rows={(get("bs_liab.lt_borrowings.unsecured") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.lt_borrowings.unsecured", next)}
-          descPlaceholder="Loans from related parties / Directors / Others"
-          addLabel="Add unsecured loan"
-        />
-
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
           cy={cy("lt_borrowings")} py={py("lt_borrowings")}
@@ -217,19 +194,14 @@ export default function NoteBSLiab({
 
       <NoteCard noteNo={8} title="Short-term borrowings">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
-        <div className="text-[10px] italic text-muted-foreground mt-1">(A) Secured (OD / CC / Term loan)</div>
+        {/* Unified breakdown: COA-mapped ledgers (OD / CC / WC limits, party
+            names) appear as linked rows; legacy secured / unsecured rows
+            are migrated as manual rows on first re-sync. */}
         <ListTable
-          rows={(get("bs_liab.st_borrowings.secured") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.st_borrowings.secured", next)}
-          descPlaceholder="Particulars"
-          addLabel="Add secured loan"
-        />
-        <div className="text-[10px] italic text-muted-foreground mt-2">(B) Unsecured</div>
-        <ListTable
-          rows={(get("bs_liab.st_borrowings.unsecured") ?? []) as ListRow[]}
-          onChange={(next) => updatePath("bs_liab.st_borrowings.unsecured", next)}
-          descPlaceholder="Loans from related parties / Other loans"
-          addLabel="Add unsecured loan"
+          rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
+          onChange={(next) => updatePath("bs_liab.st_borrowings.breakup", next)}
+          descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
+          addLabel="Add row"
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"

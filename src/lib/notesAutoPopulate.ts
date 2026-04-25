@@ -144,7 +144,18 @@ export const NOTE_ROW_REGISTRY: {
   // ── Note 3-12 — BS Liabilities side ─────────────────────────────────────
   bs_liab: {
     share_capital:        { fsCodes: ["BS_EQ_SC"],   label: "Share capital" },
-    reserves_surplus:     { fsCodes: ["BS_EQ_RS"],   label: "Reserves and surplus" },
+    reserves_surplus:     {
+      fsCodes: ["BS_EQ_RS"], label: "Reserves and surplus",
+      // Schedule III heads under Reserves & Surplus. "Profit & Loss A/c"
+      // (the most common ledger) fuzzy-matches "Surplus in Statement of P&L".
+      template: [
+        "General Reserve",
+        "Securities Premium",
+        "Capital Reserve",
+        "Surplus in Statement of P&L",
+        "Other Reserves",
+      ],
+    },
     lt_borrowings:        { fsCodes: ["BS_NCL_LTB"], label: "Long-term borrowings" },
     deferred_tax_liab:    { fsCodes: ["BS_NCL_DTL"], label: "Deferred tax liabilities (Net)" },
     other_lt_liabilities: { fsCodes: ["BS_NCL_OLT"], label: "Other long-term liabilities" },
@@ -570,6 +581,52 @@ export function buildBreakup(
 }
 
 /**
+ * Legacy data migration: prior to the unified `.breakup` ListTable refactor,
+ * Notes 4 / 5 / 8 stored their sub-rows in custom paths:
+ *
+ *   reserves_surplus  → general_reserve_cy/py, share_premium_cy/py, surplus_breakup[]
+ *   lt_borrowings     → secured_term_loans[], unsecured[]
+ *   st_borrowings     → secured[], unsecured[]
+ *
+ * Returns an array of `BreakupRow` objects (all `source: "manual"`) seeded
+ * from those legacy paths so re-sync from COA never drops user data. Called
+ * from `autoPopulateNotes` only when the engagement's `<note>.breakup` is
+ * still empty (i.e. one-time forward migration).
+ */
+export function migrateLegacyBreakup(
+  section: keyof typeof NOTE_ROW_REGISTRY,
+  rowKey:  string,
+  rowVal:  any,
+): BreakupRow[] {
+  if (!rowVal || typeof rowVal !== "object") return [];
+  const out: BreakupRow[] = [];
+  const num = (v: any) => Number.isFinite(Number(v)) ? Number(v) : 0;
+  const pushManual = (description: string, amount_cy: number, amount_py: number) => {
+    if (!description && !amount_cy && !amount_py) return;
+    out.push({ description, amount_cy, amount_py, source: "manual" });
+  };
+  const pushArr = (arr: any[]) => {
+    for (const r of arr) {
+      if (!r || typeof r !== "object") continue;
+      pushManual(String(r.description ?? ""), num(r.amount_cy), num(r.amount_py));
+    }
+  };
+
+  if (section === "bs_liab" && rowKey === "reserves_surplus") {
+    pushManual("General Reserve",   num(rowVal.general_reserve_cy), num(rowVal.general_reserve_py));
+    pushManual("Securities Premium", num(rowVal.share_premium_cy),   num(rowVal.share_premium_py));
+    if (Array.isArray(rowVal.surplus_breakup)) pushArr(rowVal.surplus_breakup);
+  } else if (section === "bs_liab" && rowKey === "lt_borrowings") {
+    if (Array.isArray(rowVal.secured_term_loans)) pushArr(rowVal.secured_term_loans);
+    if (Array.isArray(rowVal.unsecured))          pushArr(rowVal.unsecured);
+  } else if (section === "bs_liab" && rowKey === "st_borrowings") {
+    if (Array.isArray(rowVal.secured))   pushArr(rowVal.secured);
+    if (Array.isArray(rowVal.unsecured)) pushArr(rowVal.unsecured);
+  }
+  return out;
+}
+
+/**
  * Convenience: resolve a note row key (e.g. "share_capital") to a sum via
  * the registry. Returns 0 if the key isn't registered.
  */
@@ -753,9 +810,18 @@ export async function autoPopulateNotes(
       // is what drives the editable line items shown under each note (Note
       // 5 lists individual borrowings, Note 29 lists each expense head, etc.)
       // Manual rows from `existing.breakup` are preserved verbatim.
-      const ledgers       = getLedgersByFsCodes(tb, mapping, spec.fsCodes);
-      const existingBreak = options.existing?.[section]?.[rowKey]?.breakup as BreakupRow[] | undefined;
-      const breakup       = buildBreakup(ledgers, spec.template, existingBreak);
+      const ledgers   = getLedgersByFsCodes(tb, mapping, spec.fsCodes);
+      const rowExist  = options.existing?.[section]?.[rowKey] as any;
+      let existingBreak = rowExist?.breakup as BreakupRow[] | undefined;
+      // One-time legacy migration: if the engagement was created before the
+      // unified .breakup refactor, seed manual rows from the deprecated
+      // paths (general_reserve_cy/py, secured_term_loans[], etc.) so we
+      // never lose user data. Only fires when .breakup is still empty.
+      if ((!existingBreak || existingBreak.length === 0) && rowExist) {
+        const migrated = migrateLegacyBreakup(section, rowKey, rowExist);
+        if (migrated.length > 0) existingBreak = migrated;
+      }
+      const breakup = buildBreakup(ledgers, spec.template, existingBreak);
 
       out[section][rowKey] = { cy, py, breakup };
     }
