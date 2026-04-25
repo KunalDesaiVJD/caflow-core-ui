@@ -1193,7 +1193,7 @@ export default function TallySyncPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
             <RefreshCw className="h-6 w-6 text-sidebar-gold" />
-            Tally Sync
+            Stage 5 — Tally Sync
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Sync Tally data into CAFlow · {(selectedEngagement as any)?.financial_year ?? "—"} · {(selectedEngagement as any)?.client_name ?? (selectedEngagement as any)?.clients?.name ?? ""}
