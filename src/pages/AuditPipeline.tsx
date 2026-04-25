@@ -51,16 +51,16 @@ import Form3CD from "@/pages/Form3CD";
 
 // ─── Constants ───
 const STAGES = [
-  { num: 1,  label: 'Engagement Setup',           icon: Building2   },
-  { num: 2,  label: 'Tally Sync',                  icon: RefreshCw   },
-  { num: 3,  label: 'COA Mapping',                 icon: Calculator  },
-  { num: 4,  label: 'Scrutiny Engine',             icon: Eye         },
+  { num: 1,  label: 'Engagement Setup',           icon: Building2      },
+  { num: 2,  label: 'Tally Sync',                  icon: RefreshCw      },
+  { num: 3,  label: 'COA Mapping',                 icon: Calculator     },
+  { num: 4,  label: 'Scrutiny Engine',             icon: Eye            },
   { num: 5,  label: 'Query Tracker',               icon: ClipboardCheck },
-  { num: 6,  label: 'Workpapers & Audit Sheet',    icon: Shield      },
-  { num: 7,  label: 'Notes to Accounts & CARO',   icon: BookMarked  },
-  { num: 8,  label: '3CA / 3CB / 3CD Reports',    icon: FileText    },
-  { num: 9,  label: 'Sign-off & UDIN',             icon: Award       },
-  { num: 10, label: 'Financial Statements',        icon: Calculator  },
+  { num: 6,  label: 'Workpapers & Audit Sheet',    icon: Shield         },
+  { num: 7,  label: 'Notes to Accounts & CARO',    icon: BookMarked     },
+  { num: 8,  label: '3CA / 3CB / 3CD Reports',     icon: FileText       },
+  { num: 9,  label: 'Sign-off & UDIN',             icon: Award          },
+  { num: 10, label: 'Financial Statements',        icon: Calculator     },
 ];
 
 const FY_OPTIONS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22", "2020-21"];
@@ -638,7 +638,7 @@ export default function AuditPipeline() {
         partner_name: form1A.partner_name || null,
         status: "planning",
         pipeline_stage: 1,
-        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started" },
+        stage_statuses: { "1": "in_progress", "2": "not_started", "3": "not_started", "4": "not_started", "5": "not_started", "6": "not_started", "7": "not_started", "8": "not_started", "9": "not_started", "10": "not_started" },
       } as any).select("id").single();
       if (error) throw error;
 
@@ -1469,10 +1469,10 @@ export default function AuditPipeline() {
 
             return (
               <div className="space-y-4">
-                <EngagementHeader engagement={engagement} stageNumber={9} stageLabel="3CA / 3CB / 3CD Reports" />
+                <EngagementHeader engagement={engagement} stageNumber={8} stageLabel="3CA / 3CB / 3CD Reports" />
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-lg font-bold text-foreground">Stage 9 — 3CA / 3CB / 3CD Reports</h1>
+                    <h1 className="text-lg font-bold text-foreground">Stage 8 — 3CA / 3CB / 3CD Reports</h1>
                     <p className="text-xs text-muted-foreground">Tax audit report forms and annexures</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => navigate('/audit')} className="gap-1 text-xs">
