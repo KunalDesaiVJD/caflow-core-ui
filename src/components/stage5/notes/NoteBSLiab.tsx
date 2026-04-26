@@ -1,5 +1,6 @@
 /**
- * NoteBSLiab — Notes 3–11 (BS Liabilities side).
+ * NoteBSLiab — Notes 3–12 (BS Liabilities side).
+ * Note 6 = Deferred Tax Liabilities (Net) — matches SCHEDULE_III_DIV_I row 59.
  *
  * Each note section reads its CY/PY auto values from the Stage5Notes object
  * (populated by notesAutoPopulate) and offers inline-editable cells routed
@@ -49,17 +50,38 @@ export default function NoteBSLiab({
       <NoteCard noteNo={3} title="Share capital">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
 
-        <div className="text-[10px] italic text-muted-foreground mt-1">Authorised shares</div>
+        {/* ── AUTHORISED ───────────────────────────────────────────────────── */}
+        <div className="text-[10px] font-semibold text-muted-foreground mt-1 uppercase tracking-wide">
+          Authorised
+        </div>
         <EditableCell
           type="text"
           value={get("bs_liab.share_capital.authorised_text") ?? ""}
-          placeholder="e.g. 1,00,000 equity shares of Rs. 10 each"
+          placeholder="e.g. 1,00,000 equity shares of ₹10 each"
           onCommit={(v) => updatePath("bs_liab.share_capital.authorised_text", String(v ?? ""))}
         />
-
-        <div className="text-[10px] italic text-muted-foreground mt-2">Issued, subscribed and fully paid up shares</div>
         <EditableRow
-          label="Total share capital (per BS)"
+          label="Authorised share capital"
+          cy={Number(get("bs_liab.share_capital.authorised_cy") ?? 0)}
+          py={Number(get("bs_liab.share_capital.authorised_py") ?? 0)}
+          isOverriddenCy={isOverridden("bs_liab.share_capital.authorised_cy")}
+          isOverriddenPy={isOverridden("bs_liab.share_capital.authorised_py")}
+          onCommitCy={(v) => updatePath("bs_liab.share_capital.authorised_cy", v)}
+          onCommitPy={(v) => updatePath("bs_liab.share_capital.authorised_py", v)}
+        />
+
+        {/* ── ISSUED, SUBSCRIBED & PAID UP ─────────────────────────────────── */}
+        <div className="text-[10px] font-semibold text-muted-foreground mt-3 uppercase tracking-wide">
+          Issued, Subscribed and Fully Paid Up
+        </div>
+        <EditableCell
+          type="text"
+          value={get("bs_liab.share_capital.issued_text") ?? ""}
+          placeholder="e.g. 1,00,000 equity shares of ₹10 each fully paid up"
+          onCommit={(v) => updatePath("bs_liab.share_capital.issued_text", String(v ?? ""))}
+        />
+        <EditableRow
+          label="Total — Issued, subscribed and fully paid up"
           cy={cy("share_capital")} py={py("share_capital")}
           autoCY={cy("share_capital")} autoPY={py("share_capital")}
           isOverriddenCy={isOverridden("bs_liab.share_capital.cy")}
@@ -148,7 +170,38 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={6} title="Other long-term liabilities">
+      <NoteCard noteNo={6} title="Deferred tax liabilities (Net)">
+        <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
+        <EditableRow
+          label="Excess of depreciation claimed in IT Act over books"
+          cy={Number(get("bs_liab.deferred_tax_liab.depr_excess_cy") ?? 0)}
+          py={Number(get("bs_liab.deferred_tax_liab.depr_excess_py") ?? 0)}
+          isOverriddenCy={isOverridden("bs_liab.deferred_tax_liab.depr_excess_cy")}
+          isOverriddenPy={isOverridden("bs_liab.deferred_tax_liab.depr_excess_py")}
+          onCommitCy={(v) => updatePath("bs_liab.deferred_tax_liab.depr_excess_cy", v)}
+          onCommitPy={(v) => updatePath("bs_liab.deferred_tax_liab.depr_excess_py", v)}
+        />
+        <ListTable
+          rows={(get("bs_liab.deferred_tax_liab.breakup") ?? []) as ListRow[]}
+          onChange={(next) => updatePath("bs_liab.deferred_tax_liab.breakup", next)}
+          descPlaceholder="Other timing differences"
+          addLabel="Add row"
+        />
+        <EditableRow
+          label="Total — Deferred tax liabilities (per BS)"
+          cy={cy("deferred_tax_liab")} py={py("deferred_tax_liab")}
+          autoCY={cy("deferred_tax_liab")} autoPY={py("deferred_tax_liab")}
+          isOverriddenCy={isOverridden("bs_liab.deferred_tax_liab.cy")}
+          isOverriddenPy={isOverridden("bs_liab.deferred_tax_liab.py")}
+          onCommitCy={(v) => updatePath("bs_liab.deferred_tax_liab.cy", v)}
+          onCommitPy={(v) => updatePath("bs_liab.deferred_tax_liab.py", v)}
+          onResetCy={() => resetPath("bs_liab.deferred_tax_liab.cy")}
+          onResetPy={() => resetPath("bs_liab.deferred_tax_liab.py")}
+          bold
+        />
+      </NoteCard>
+
+      <NoteCard noteNo={7} title="Other long-term liabilities">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.other_lt_liabilities.breakup") ?? []) as ListRow[]}
@@ -170,7 +223,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={7} title="Long-term provisions">
+      <NoteCard noteNo={8} title="Long-term provisions">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.lt_provisions.breakup") ?? []) as ListRow[]}
@@ -192,7 +245,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={8} title="Short-term borrowings">
+      <NoteCard noteNo={9} title="Short-term borrowings">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         {/* Unified breakdown: COA-mapped ledgers (OD / CC / WC limits, party
             names) appear as linked rows; legacy secured / unsecured rows
@@ -217,7 +270,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={9} title="Trade Payables">
+      <NoteCard noteNo={10} title="Trade Payables">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Total outstanding dues of Micro and Small Enterprises"
@@ -280,7 +333,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={10} title="Other current liabilities">
+      <NoteCard noteNo={11} title="Other current liabilities">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.other_curr_liab.breakup") ?? []) as ListRow[]}
@@ -302,7 +355,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={11} title="Short-term provisions">
+      <NoteCard noteNo={12} title="Short-term provisions">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.st_provisions.breakup") ?? []) as ListRow[]}
