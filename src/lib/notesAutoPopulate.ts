@@ -855,11 +855,25 @@ export async function autoPopulateNotes(
   // Special-case: `.breakup` paths are NOT locked at path level — per-row
   // `source: "manual"` preservation is already handled by buildBreakup
   // above. Strip them out here so the freshly built breakup wins.
+  //
+  // Migration: bs_liab note totals were previously stored as signed
+  // (CR = negative) values before the sectionSign fix. Any manual override
+  // on a bs_liab `*.cy` / `*.py` path that is still negative is a stale
+  // artefact from that era — drop it so the newly correct positive
+  // auto-value wins. Positive manual overrides (user-entered corrections)
+  // are preserved. This is a one-way, non-destructive migration.
   if (options.existing) {
     const filteredExisting: Stage5Notes = {
       ...options.existing,
       manual_edits: (options.existing.manual_edits || [])
-        .filter(p => !p.endsWith(".breakup")),
+        .filter(p => !p.endsWith(".breakup"))
+        .filter(p => {
+          if (!p.startsWith("bs_liab.")) return true;
+          if (!p.endsWith(".cy") && !p.endsWith(".py")) return true;
+          const stored = getAtPath(options.existing, p);
+          // Drop stale negative liability-total overrides (pre-sign-fix era).
+          return !(typeof stored === "number" && stored < 0);
+        }),
     };
     return respectManualEdits(out, filteredExisting);
   }
