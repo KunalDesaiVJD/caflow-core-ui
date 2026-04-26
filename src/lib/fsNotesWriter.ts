@@ -33,6 +33,7 @@
 
 import type ExcelJS from "exceljs";
 import type { Stage5Notes, FARow } from "./notesAutoPopulate";
+import { getNoteNo } from "./noteNumberRegistry";
 
 const MONEY_FMT = '#,##0.00;(#,##0.00);"-"';
 
@@ -144,7 +145,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   sheet.mergeCells("A4:H4");
 
   // ── Note 3 — Share capital (rows 5-12) ─────────────────────────────────
-  writeNoteBlockHeader(sheet, 5, 3, "Share capital", "BS!D12", "CFS!H4");
+  writeNoteBlockHeader(sheet, 5, getNoteNo("share_capital")!, "Share capital", "BS!D12", "CFS!H4");
   setCell(sheet, "B6", "Particulars", { bold: true });
   setCell(sheet, "G6", `As at 31st March, ${ctx.cyYear}`, { bold: true, align: "center" });
   setCell(sheet, "H6", `As at 31st March, ${ctx.pyYear}`, { bold: true, align: "center" });
@@ -171,13 +172,12 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "B17", "Equity shares");
   setCell(sheet, "G17", "Number", { bold: true, align: "right" });
   setCell(sheet, "H17", "Amount", { bold: true, align: "right" });
-  const recon = (notes?.bs_liab?.share_capital?.reconciliation as any[]) || [];
-  setCell(sheet, "B18", recon[0]?.description || "Opening balance at the beginning of the year");
-  setCell(sheet, "G18", Number(recon[0]?.amount_cy || 0), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H18", Number(recon[0]?.amount_py || 0), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "B19", recon[1]?.description || "Movement during the year");
-  setCell(sheet, "G19", Number(recon[1]?.amount_cy || 0), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H19", Number(recon[1]?.amount_py || 0), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "B18", "Opening balance at the beginning of the year");
+  setCell(sheet, "G18", num(notes, "bs_liab.share_capital.recon_open_cy_num"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H18", num(notes, "bs_liab.share_capital.recon_open_cy_amt"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "B19", "Movement during the year");
+  setCell(sheet, "G19", num(notes, "bs_liab.share_capital.recon_move_cy_num"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H19", num(notes, "bs_liab.share_capital.recon_move_cy_amt"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "B21", "Outstanding at the end of the year", { bold: true });
   setCell(sheet, "G21", { formula: "SUM(G18:G20)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "H21", { formula: "SUM(H18:H20)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
@@ -206,13 +206,13 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H38", { formula: "SUM(H35:H37)" }, { bold: true, numFmt: MONEY_FMT });
 
   // ── Note 4 — Reserves and surplus (rows 40-54) ─────────────────────────
-  writeNoteBlockHeader(sheet, 40, 4, "Reserves and surplus", "BS!D13", "+H5");
+  writeNoteBlockHeader(sheet, 40, getNoteNo("reserves_surplus")!, "Reserves and surplus", "BS!D13", "+H5");
   setCell(sheet, "B41", "Particulars", { bold: true });
   setCell(sheet, "G41", { formula: "+G16" }, { bold: true });
   setCell(sheet, "H41", { formula: "+H16" }, { bold: true });
   setCell(sheet, "B42", "1. General Reserve");
-  setCell(sheet, "G42", num(notes, "bs_liab.reserves_surplus.general_reserve_cy"), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H42", num(notes, "bs_liab.reserves_surplus.general_reserve_py"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "G42", num(notes, "bs_liab.reserves_surplus.gen_reserve_cy"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H42", num(notes, "bs_liab.reserves_surplus.gen_reserve_py"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "B43", "2. Share Premium");
   setCell(sheet, "G43", num(notes, "bs_liab.reserves_surplus.share_premium_cy"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "H43", num(notes, "bs_liab.reserves_surplus.share_premium_py"), { numFmt: MONEY_FMT, align: "right" });
@@ -222,7 +222,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "B47", "Surplus in the Statement of Profit and Loss", { bold: true });
   setCell(sheet, "B48", "Opening balance");
   setCell(sheet, "G48", { formula: "H54" }, { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H48", num(notes, "bs_liab.reserves_surplus.surplus_open_py"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H48", num(notes, "bs_liab.reserves_surplus.surplus_opening_py"), { numFmt: MONEY_FMT, align: "right" });
 
   // ★ KEY CROSS-SHEET LINK — Note BS-Liab row 49 G/H ← PL!G38/H38 ────────
   setCell(sheet, "B49", "Add/(Less) : Profit for the year");
@@ -230,11 +230,11 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H49", { formula: "PL!H38" }, { numFmt: MONEY_FMT, align: "right" });
 
   setCell(sheet, "B50", "Add/(Less) : Adj. for Deferred tax");
-  setCell(sheet, "G50", num(notes, "bs_liab.reserves_surplus.deferred_tax_adj_cy"), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H50", num(notes, "bs_liab.reserves_surplus.deferred_tax_adj_py"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "G50", num(notes, "bs_liab.reserves_surplus.surplus_deferred_adj_cy"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H50", num(notes, "bs_liab.reserves_surplus.surplus_deferred_adj_py"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "B51", "Add/(Less) : Excess/short provi. for Income tax");
-  setCell(sheet, "G51", num(notes, "bs_liab.reserves_surplus.excess_it_provision_cy"), { numFmt: MONEY_FMT, align: "right" });
-  setCell(sheet, "H51", num(notes, "bs_liab.reserves_surplus.excess_it_provision_py"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "G51", num(notes, "bs_liab.reserves_surplus.surplus_excess_short_cy"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H51", num(notes, "bs_liab.reserves_surplus.surplus_excess_short_py"), { numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "F52", "[b]", { bold: true });
   setCell(sheet, "G52", { formula: "SUM(G48:G51)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "H52", { formula: "SUM(H48:H51)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
@@ -244,7 +244,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H54", { formula: "+H45+H52" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 5 — Long-term borrowings (rows 60-70) ─────────────────────────
-  writeNoteBlockHeader(sheet, 60, 5, "Long-term borrowings", "BS!D18");
+  writeNoteBlockHeader(sheet, 60, getNoteNo("lt_borrowings")!, "Long-term borrowings", "BS!D18");
   setCell(sheet, "B61", "Particulars", { bold: true });
   setCell(sheet, "G61", { formula: "+G41" }, { bold: true });
   setCell(sheet, "H61", { formula: "+H41" }, { bold: true });
@@ -265,7 +265,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H70", { formula: "SUM(H63:H69)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 6 — Other long-term liabilities (rows 72-79) ──────────────────
-  writeNoteBlockHeader(sheet, 72, 6, "Other long term liabilities", "BS!D20");
+  writeNoteBlockHeader(sheet, 72, getNoteNo("other_lt_liab")!, "Other long term liabilities", "BS!D20");
   setCell(sheet, "B73", "Particulars", { bold: true });
   setCell(sheet, "G73", { formula: "+G61" }, { bold: true });
   setCell(sheet, "H73", { formula: "+H61" }, { bold: true });
@@ -283,7 +283,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H79", { formula: "SUM(H75:H78)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 7 — Long-term provisions (rows 81-87) ─────────────────────────
-  writeNoteBlockHeader(sheet, 81, 7, "Long-term provisions", "BS!D21");
+  writeNoteBlockHeader(sheet, 81, getNoteNo("lt_provisions")!, "Long-term provisions", "BS!D21");
   setCell(sheet, "B82", "Particulars", { bold: true });
   setCell(sheet, "G82", { formula: "+G73" }, { bold: true });
   setCell(sheet, "H82", { formula: "+H73" }, { bold: true });
@@ -298,7 +298,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H87", { formula: "SUM(H84:H86)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 8 — Short-term borrowings (rows 89-100) ───────────────────────
-  writeNoteBlockHeader(sheet, 89, 8, "Short-term borrowings", "BS!D24");
+  writeNoteBlockHeader(sheet, 89, getNoteNo("st_borrowings")!, "Short-term borrowings", "BS!D24");
   setCell(sheet, "B90", "Particulars", { bold: true });
   setCell(sheet, "G90", { formula: "+G82" }, { bold: true });
   setCell(sheet, "H90", { formula: "+H82" }, { bold: true });
@@ -320,7 +320,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H100", { formula: "SUM(H92:H99)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 9 — Trade Payables (rows 102-108) + ageing schedules ──────────
-  writeNoteBlockHeader(sheet, 102, 9, "Trade Payables", "BS!D25");
+  writeNoteBlockHeader(sheet, 102, getNoteNo("trade_payables")!, "Trade Payables", "BS!D25");
   setCell(sheet, "B103", "Particulars", { bold: true });
   setCell(sheet, "G103", { formula: "+G90" }, { bold: true });
   setCell(sheet, "H103", { formula: "+H90" }, { bold: true });
@@ -391,7 +391,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
     "2. As declared and certified by the management, the Company does not have any dues outstanding to MSME beyond agreed credit period."), { size: 9 });
 
   // ── Note 10 — Other current liabilities (rows 137-147) ─────────────────
-  writeNoteBlockHeader(sheet, 137, 10, "Other current liabilities", "BS!D28");
+  writeNoteBlockHeader(sheet, 137, getNoteNo("other_current_liab")!, "Other current liabilities", "BS!D28");
   setCell(sheet, "B138", "Particulars", { bold: true });
   setCell(sheet, "G138", { formula: "+G103" }, { bold: true });
   setCell(sheet, "H138", { formula: "+H103" }, { bold: true });
@@ -418,7 +418,7 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "H147", { formula: "SUM(H140:H145)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 11 — Short-term provisions (rows 149-159) ─────────────────────
-  writeNoteBlockHeader(sheet, 149, 11, "Short-term provisions", "BS!D29");
+  writeNoteBlockHeader(sheet, 149, getNoteNo("st_provisions")!, "Short-term provisions", "BS!D29");
   setCell(sheet, "B150", "Particulars", { bold: true });
   setCell(sheet, "G150", { formula: "+G138" }, { bold: true });
   setCell(sheet, "H150", { formula: "+H138" }, { bold: true });
@@ -435,8 +435,25 @@ function writeNoteBSLiab(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | nu
   setCell(sheet, "G159", { formula: "SUM(G152:G158)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
   setCell(sheet, "H159", { formula: "SUM(H152:H158)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
-  setCell(sheet, "A163", "(This space has been intentionally left blank)", { align: "center", size: 9 });
-  sheet.mergeCells("A163:H163");
+  // ── Note 4 — Deferred tax liabilities (Net) (rows 163-172) ────────────────
+  // Placed here (after Note 10) to avoid shifting all row references above.
+  // The note number (4 per Schedule III) is still correct in the header.
+  writeNoteBlockHeader(sheet, 163, getNoteNo("deferred_tax_liab")!, "Deferred tax liabilities (Net)", "BS!D19");
+  setCell(sheet, "B164", "Particulars", { bold: true });
+  setCell(sheet, "G164", { formula: "+G61" }, { bold: true });
+  setCell(sheet, "H164", { formula: "+H61" }, { bold: true });
+  setCell(sheet, "B166", "Excess of depreciation allowable under IT Act over accounts");
+  setCell(sheet, "G166", num(notes, "bs_liab.deferred_tax_liab.cy"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H166", num(notes, "bs_liab.deferred_tax_liab.py"), { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "B167", "(b) Others (specify nature)");
+  setCell(sheet, "G167", 0, { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H167", 0, { numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "B169", "Total", { bold: true });
+  setCell(sheet, "G169", { formula: "SUM(G165:G168)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+  setCell(sheet, "H169", { formula: "SUM(H165:H168)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
+
+  setCell(sheet, "A172", "(This space has been intentionally left blank)", { align: "center", size: 9 });
+  sheet.mergeCells("A172:H172");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -457,7 +474,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   sheet.mergeCells("A3:H3");
 
   // ── Note 12 — Non-current investments (rows 5-12) ──────────────────────
-  writeNoteBlockHeader(sheet, 5, 12, "Non-current investments", "BS!D40", "+BS!E5");
+  writeNoteBlockHeader(sheet, 5, getNoteNo("nc_investments")!, "Non-current investments", "BS!D40", "+BS!E5");
   setCell(sheet, "B6", "Particulars", { bold: true });
   setCell(sheet, "G6", "As at", { bold: true, align: "center" });
   setCell(sheet, "H6", "As at", { bold: true, align: "center" });
@@ -478,7 +495,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H12", { formula: "SUM(H8:H11)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 13 — Deferred tax assets (rows 14-19) ─────────────────────────
-  writeNoteBlockHeader(sheet, 14, 13, "Deferred tax assets", "BS!D41");
+  writeNoteBlockHeader(sheet, 14, getNoteNo("deferred_tax_assets")!, "Deferred tax assets", "BS!D41");
   setCell(sheet, "H14", "(Amount in `)", { align: "center", size: 9 });
   setCell(sheet, "B15", "Particulars", { bold: true });
   setCell(sheet, "G15", { formula: "+'Note BS-Liab'!G6" }, { bold: true });
@@ -491,7 +508,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H19", { formula: "SUM(H16:H17)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 14 — Long-term loans and advances (rows 21-27) ────────────────
-  writeNoteBlockHeader(sheet, 21, 14, "Long-term loans and advances", "BS!D42");
+  writeNoteBlockHeader(sheet, 21, getNoteNo("lt_loans_advances")!, "Long-term loans and advances", "BS!D42");
   setCell(sheet, "B22", "Particulars", { bold: true });
   setCell(sheet, "G22", { formula: "+G15" }, { bold: true });
   setCell(sheet, "H22", { formula: "+H15" }, { bold: true });
@@ -509,7 +526,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H27", { formula: "SUM(H23:H26)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 15 — Other non-current assets (rows 30-35) ────────────────────
-  writeNoteBlockHeader(sheet, 30, 15, "Other non-current assets", "BS!D43");
+  writeNoteBlockHeader(sheet, 30, getNoteNo("other_nc_assets")!, "Other non-current assets", "BS!D43");
   setCell(sheet, "B31", "Particulars", { bold: true });
   setCell(sheet, "G31", { formula: "+G22" }, { bold: true });
   setCell(sheet, "H31", { formula: "+H22" }, { bold: true });
@@ -524,7 +541,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H35", { formula: "SUM(H32:H33)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 16 — Current Investment (rows 37-44) ──────────────────────────
-  writeNoteBlockHeader(sheet, 37, 16, "Current Investment", "BS!D46");
+  writeNoteBlockHeader(sheet, 37, getNoteNo("current_investments")!, "Current Investment", "BS!D46");
   setCell(sheet, "B38", "Particulars", { bold: true });
   setCell(sheet, "G38", "As at", { bold: true, align: "center" });
   setCell(sheet, "H38", "As at", { bold: true, align: "center" });
@@ -542,7 +559,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H44", { formula: "SUM(H38:H42)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 17 — Inventories (rows 46-50) ─────────────────────────────────
-  writeNoteBlockHeader(sheet, 46, 17, "Inventories", "BS!D47");
+  writeNoteBlockHeader(sheet, 46, getNoteNo("inventories")!, "Inventories", "BS!D47");
   setCell(sheet, "B47", "Particulars", { bold: true });
   setCell(sheet, "G47", { formula: "+G31" }, { bold: true });
   setCell(sheet, "H47", { formula: "+H31" }, { bold: true });
@@ -556,7 +573,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "I50", "Mode of valuation shall be stated", { size: 8, align: "left" });
 
   // ── Note 18 — Trade Receivables (rows 57-78) + ageing ──────────────────
-  writeNoteBlockHeader(sheet, 57, 18, "Trade Receivables", "BS!D48");
+  writeNoteBlockHeader(sheet, 57, getNoteNo("trade_receivables")!, "Trade Receivables", "BS!D48");
   setCell(sheet, "H57", "(Amount in `)", { align: "center", size: 9 });
   setCell(sheet, "B58", "Particulars", { bold: true });
   setCell(sheet, "G58", { formula: "+G47" }, { bold: true });
@@ -626,7 +643,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "B81", "There are no \"Unbilled\" and \"Not due\" trade receivables.", { size: 9 });
 
   // ── Note 19 — Cash and bank equivalents (rows 83-92) ───────────────────
-  writeNoteBlockHeader(sheet, 83, 19, "Cash and bank equivalents", "BS!D49");
+  writeNoteBlockHeader(sheet, 83, getNoteNo("cash_bank")!, "Cash and bank equivalents", "BS!D49");
   setCell(sheet, "B84", "Particulars", { bold: true });
   setCell(sheet, "G84", { formula: "+G58" }, { bold: true });
   setCell(sheet, "H84", { formula: "+H58" }, { bold: true });
@@ -646,7 +663,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H92", { formula: "SUM(H86:H90)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 20 — Short-term loans and advances (rows 94-100) ──────────────
-  writeNoteBlockHeader(sheet, 94, 20, "Short-term loans and advances", "BS!D50");
+  writeNoteBlockHeader(sheet, 94, getNoteNo("st_loans_advances")!, "Short-term loans and advances", "BS!D50");
   setCell(sheet, "B95", "Particulars", { bold: true });
   setCell(sheet, "G95", { formula: "+G84" }, { bold: true });
   setCell(sheet, "H95", { formula: "+H84" }, { bold: true });
@@ -664,7 +681,7 @@ function writeNoteBSAsset(wb: ExcelJS.Workbook, ctx: Ctx, notes: Stage5Notes | n
   setCell(sheet, "H100", { formula: "SUM(H96:H99)" }, { bold: true, numFmt: MONEY_FMT, align: "right" });
 
   // ── Note 21 — Other current assets (rows 107-116) ──────────────────────
-  writeNoteBlockHeader(sheet, 107, 21, "Other current assets", "BS!D51");
+  writeNoteBlockHeader(sheet, 107, getNoteNo("other_current_assets")!, "Other current assets", "BS!D51");
   setCell(sheet, "B108", "Particulars", { bold: true });
   setCell(sheet, "G108", "As at", { bold: true, align: "center" });
   setCell(sheet, "H108", "As at", { bold: true, align: "center" });

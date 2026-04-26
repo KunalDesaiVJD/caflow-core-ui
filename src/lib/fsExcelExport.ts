@@ -130,7 +130,8 @@ export interface BSRowData {
   // (2) Share application money pending allotment — hardcoded 0/0 in writer
   // (3) Non-Current liabilities
   ltBorrowings:   BSLineItem;
-  // (b) Deferred tax liabilities (Net) — hardcoded 0/0, no note no, in writer
+  /** Deferred tax liabilities (Net) — Note 4 per Schedule III. */
+  dtLiab:         BSLineItem;
   otherLtLiab:    BSLineItem;
   ltProvisions:   BSLineItem;
   // (4) Current liabilities
@@ -530,12 +531,14 @@ function writeBalanceSheet(
   sheet.getCell("F18").value = data.ltBorrowings.py;
   sheet.getCell("F18").alignment = { horizontal: "right" };
 
-  // Row 19 — "(b) Deferred tax liabilities (Net)"  (no note no, hardcoded zeros)
+  // Row 19 — "(b) Deferred tax liabilities (Net)"
   sheet.getCell("B19").value = "(b) Deferred tax liabilities (Net)";
   sheet.getCell("B19").font = { bold: false, size: 9 };
-  sheet.getCell("E19").value = 0;
+  sheet.getCell("D19").value = data.dtLiab.noteNo;
+  sheet.getCell("D19").alignment = { horizontal: "center" };
+  sheet.getCell("E19").value = data.dtLiab.cy;
   sheet.getCell("E19").alignment = { horizontal: "right" };
-  sheet.getCell("F19").value = 0;
+  sheet.getCell("F19").value = data.dtLiab.py;
   sheet.getCell("F19").alignment = { horizontal: "right" };
 
   // Row 20 — "(c) Other Long term liabilities"  (capital L, lowercase t — exact)

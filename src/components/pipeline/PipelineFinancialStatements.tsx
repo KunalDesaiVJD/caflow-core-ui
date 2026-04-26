@@ -1966,29 +1966,30 @@ export default function PipelineFinancialStatements({
     let cfs: CFSRowData | null = null;
     if (!isNonCorporate) {
       bs = {
-        shareCap:        { noteNo: 3,  cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
-        reserves:        { noteNo: 4,  cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
-        ltBorrowings:    { noteNo: 5,  cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
-        otherLtLiab:     { noteNo: 7,  cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
-        ltProvisions:    { noteNo: 8,  cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
-        stBorrowings:    { noteNo: 9,  cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
-        tradePayables:   { noteNo: 10 },
+        shareCap:        { noteNo: getNoteNo("share_capital")       ?? null, cy: cyOf("BS_EQ_SC"),   py: pyOf("BS_EQ_SC")   },
+        reserves:        { noteNo: getNoteNo("reserves_surplus")     ?? null, cy: cyOf("BS_EQ_RS"),   py: pyOf("BS_EQ_RS")   },
+        ltBorrowings:    { noteNo: getNoteNo("lt_borrowings")        ?? null, cy: cyOf("BS_NCL_LTB"), py: pyOf("BS_NCL_LTB") },
+        dtLiab:          { noteNo: getNoteNo("deferred_tax_liab")    ?? null, cy: cyOf("BS_NCL_DTL"), py: pyOf("BS_NCL_DTL") },
+        otherLtLiab:     { noteNo: getNoteNo("other_lt_liab")        ?? null, cy: cyOf("BS_NCL_OLT"), py: pyOf("BS_NCL_OLT") },
+        ltProvisions:    { noteNo: getNoteNo("lt_provisions")        ?? null, cy: cyOf("BS_NCL_LTP"), py: pyOf("BS_NCL_LTP") },
+        stBorrowings:    { noteNo: getNoteNo("st_borrowings")        ?? null, cy: cyOf("BS_CL_STB"),  py: pyOf("BS_CL_STB")  },
+        tradePayables:   { noteNo: getNoteNo("trade_payables")       ?? null },
         tradePayMSME:    { cy: 0, py: 0 },
         tradePayOthers:  { cy: cyOf("BS_CL_TP"), py: pyOf("BS_CL_TP") },
-        otherCurrLiab:   { noteNo: 11, cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
-        stProvisions:    { noteNo: 12, cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
-        ppe:             { noteNo: 13, cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
-        ncInvestments:   { noteNo: 15, cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
-        dtAssets:        { noteNo: 16, cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
-        ltLoans:         { noteNo: 17, cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
-        otherNcAssets:   { noteNo: 18, cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
-        currInvestments: { noteNo: 19, cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
-        inventories:     { noteNo: 20, cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
-        tradeRec:        { noteNo: 21, cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
-        cashBank:        { noteNo: 22, cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
-        stLoans:         { noteNo: 23, cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
-        otherCurrAssets: { noteNo: 24, cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
-        sigPolicies:     { noteNo: 2 },
+        otherCurrLiab:   { noteNo: getNoteNo("other_current_liab")   ?? null, cy: cyOf("BS_CL_OCL"), py: pyOf("BS_CL_OCL") },
+        stProvisions:    { noteNo: getNoteNo("st_provisions")        ?? null, cy: cyOf("BS_CL_STP"), py: pyOf("BS_CL_STP") },
+        ppe:             { noteNo: getNoteNo("ppe")                  ?? null, cy: cyOf("BS_NCA_FA"),  py: pyOf("BS_NCA_FA")  },
+        ncInvestments:   { noteNo: getNoteNo("nc_investments")       ?? null, cy: cyOf("BS_NCA_INV"), py: pyOf("BS_NCA_INV") },
+        dtAssets:        { noteNo: getNoteNo("deferred_tax_assets")  ?? null, cy: cyOf("BS_NCA_DTA"), py: pyOf("BS_NCA_DTA") },
+        ltLoans:         { noteNo: getNoteNo("lt_loans_advances")    ?? null, cy: cyOf("BS_NCA_LLA"), py: pyOf("BS_NCA_LLA") },
+        otherNcAssets:   { noteNo: getNoteNo("other_nc_assets")      ?? null, cy: cyOf("BS_NCA_ONA"), py: pyOf("BS_NCA_ONA") },
+        currInvestments: { noteNo: getNoteNo("current_investments")  ?? null, cy: cyOf("BS_CA_CI"),   py: pyOf("BS_CA_CI")   },
+        inventories:     { noteNo: getNoteNo("inventories")          ?? null, cy: cyOf("BS_CA_INV"),  py: pyOf("BS_CA_INV")  },
+        tradeRec:        { noteNo: getNoteNo("trade_receivables")    ?? null, cy: cyOf("BS_CA_TR"),   py: pyOf("BS_CA_TR")   },
+        cashBank:        { noteNo: getNoteNo("cash_bank")            ?? null, cy: cyOf("BS_CA_CCE"),  py: pyOf("BS_CA_CCE")  },
+        stLoans:         { noteNo: getNoteNo("st_loans_advances")    ?? null, cy: cyOf("BS_CA_SLA"),  py: pyOf("BS_CA_SLA")  },
+        otherCurrAssets: { noteNo: getNoteNo("other_current_assets") ?? null, cy: cyOf("BS_CA_OCA"),  py: pyOf("BS_CA_OCA")  },
+        sigPolicies:     { noteNo: getNoteNo("reserves_surplus")     ?? null },
       };
       const expCy = cyOf("PL_EXP_MAT") + cyOf("PL_EXP_SIT") + cyOf("PL_EXP_CII")
                   + cyOf("PL_EXP_EMP") + cyOf("PL_EXP_FIN") + cyOf("PL_EXP_DEP")
@@ -2001,20 +2002,20 @@ export default function PipelineFinancialStatements({
       const excCy = cyOf("PL_EI");
       const excPy = pyOf("PL_EI");
       pl = {
-        revFromOps:         { noteNo: 25, cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
-        otherIncome:        { noteNo: 26, cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
-        costMaterials:      { noteNo: 27 },
-        purchasesStock:     { noteNo: 27, cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
-        changesInventories: { noteNo: 27, cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
-        employeeBenefits:   { noteNo: 28, cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
-        financeCosts:       { noteNo: null, cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
-        depreciation:       { noteNo: null, cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
-        otherExpenses:      { noteNo: 29, cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
+        revFromOps:         { noteNo: getNoteNo("revenue_from_ops")    ?? null, cy: cyOf("PL_REV_OPS"), py: pyOf("PL_REV_OPS") },
+        otherIncome:        { noteNo: getNoteNo("other_income")         ?? null, cy: cyOf("PL_REV_OI"),  py: pyOf("PL_REV_OI")  },
+        costMaterials:      { noteNo: getNoteNo("cost_materials")       ?? null },
+        purchasesStock:     { noteNo: getNoteNo("purchases_stock")      ?? null, cy: cyOf("PL_EXP_SIT"), py: pyOf("PL_EXP_SIT") },
+        changesInventories: { noteNo: getNoteNo("changes_inventories")  ?? null, cy: cyOf("PL_EXP_CII"), py: pyOf("PL_EXP_CII") },
+        employeeBenefits:   { noteNo: getNoteNo("employee_benefits")    ?? null, cy: cyOf("PL_EXP_EMP"), py: pyOf("PL_EXP_EMP") },
+        financeCosts:       { noteNo: getNoteNo("finance_costs")        ?? null, cy: cyOf("PL_EXP_FIN"), py: pyOf("PL_EXP_FIN") },
+        depreciation:       { noteNo: null,                                      cy: cyOf("PL_EXP_DEP"), py: pyOf("PL_EXP_DEP") },
+        otherExpenses:      { noteNo: getNoteNo("other_expenses")       ?? null, cy: cyOf("PL_EXP_OTH"), py: pyOf("PL_EXP_OTH") },
         taxExpense:         { noteNo: null },
         currentTax:         { cy: cyOf("PL_TAX_CUR"), py: pyOf("PL_TAX_CUR") },
         deferredTax:        { cy: cyOf("PL_TAX_DEF"), py: pyOf("PL_TAX_DEF") },
-        eps:                { noteNo: null },
-        shareCap:           { noteNo: 1 },
+        eps:                { noteNo: getNoteNo("eps")                  ?? null },
+        shareCap:           { noteNo: getNoteNo("share_capital")        ?? null },
         pbt:                { cy: revCy - expCy - excCy, py: revPy - expPy - excPy },
       };
       cfs = {
@@ -2041,6 +2042,7 @@ export default function PipelineFinancialStatements({
       bs.shareCap.noteNo        = ov("BS_EQ_SC",   bs.shareCap.noteNo);
       bs.reserves.noteNo        = ov("BS_EQ_RS",   bs.reserves.noteNo);
       bs.ltBorrowings.noteNo    = ov("BS_NCL_LTB", bs.ltBorrowings.noteNo);
+      bs.dtLiab.noteNo          = ov("BS_NCL_DTL", bs.dtLiab.noteNo);
       bs.otherLtLiab.noteNo     = ov("BS_NCL_OLT", bs.otherLtLiab.noteNo);
       bs.ltProvisions.noteNo    = ov("BS_NCL_LTP", bs.ltProvisions.noteNo);
       bs.stBorrowings.noteNo    = ov("BS_CL_STB",  bs.stBorrowings.noteNo);
