@@ -239,7 +239,7 @@ function CustomRowEditor({
 
 function PatternBTable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
-  customRows, hiddenRows, labelOverrides,
+  customRows, hiddenRows, labelOverrides, cySources,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote,
 }: {
@@ -250,6 +250,7 @@ function PatternBTable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
+  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
@@ -328,11 +329,37 @@ function PatternBTable({
               ) : (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
-                    <Input
-                      value={displayLabel}
-                      onChange={e => onChangeStaticLabel(row.id, e.target.value)}
-                      className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
-                    />
+                    <div className="flex items-center gap-1">
+                      <Input
+                        value={displayLabel}
+                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                        className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                      />
+                      {(cySources[row.id]?.length ?? 0) > 0 && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button type="button"
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                              title="View mapped ledgers">
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent side="right" className="w-72 p-3 text-xs">
+                            <p className="font-semibold mb-2">
+                              Mapped from Tally ({cySources[row.id].length} ledger{cySources[row.id].length > 1 ? "s" : ""}):
+                            </p>
+                            <ul className="space-y-1">
+                              {cySources[row.id].map((s, i) => (
+                                <li key={i} className="flex justify-between gap-2">
+                                  <span className="text-muted-foreground truncate">{s.ledger}</span>
+                                  <span className="shrink-0 font-medium">₹{s.amountCy.toLocaleString("en-IN")}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="p-1">
                     <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />
@@ -899,6 +926,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     customRows={d.customRows}
                     hiddenRows={d.hiddenRows ?? []}
                     labelOverrides={d.labelOverrides ?? {}}
+                    cySources={d.cy_sources ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}

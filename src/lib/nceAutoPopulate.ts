@@ -211,6 +211,9 @@ export interface NCENoteData {
   /** User-edited labels for static rows. Keyed by NoteRowDef.id.
    *  Empty string keeps the default config label. Survives re-sync. */
   labelOverrides?: Record<string, string>;
+  /** For Pattern B notes: which TB ledgers were mapped into each static row (CY only).
+   *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes. */
+  cy_sources?: Record<string, { ledger: string; amountCy: number }[]>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -276,7 +279,7 @@ function ledgerAmt(closingBalance: number): number {
 
 // Reserved keys used as JSONB metadata inside cy_data — must be filtered out
 // when reading numeric values back into the cy/py maps.
-const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides"]);
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources"]);
 
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
@@ -292,6 +295,10 @@ export function deserialiseNoteData(
     rawCy._label_overrides && typeof rawCy._label_overrides === "object"
       ? (rawCy._label_overrides as Record<string, string>)
       : {};
+  const cy_sources: Record<string, { ledger: string; amountCy: number }[]> | undefined =
+    rawCy._cy_sources && typeof rawCy._cy_sources === "object"
+      ? (rawCy._cy_sources as Record<string, { ledger: string; amountCy: number }[]>)
+      : undefined;
 
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
@@ -301,7 +308,7 @@ export function deserialiseNoteData(
   for (const [k, v] of Object.entries(rawPy)) {
     if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows, hiddenRows, labelOverrides };
+  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources };
 }
 
 export function serialiseNoteData(
@@ -313,6 +320,9 @@ export function serialiseNoteData(
       _custom_rows:     d.customRows,
       _hidden_rows:     d.hiddenRows ?? [],
       _label_overrides: d.labelOverrides ?? {},
+      ...(d.cy_sources && Object.keys(d.cy_sources).length > 0
+        ? { _cy_sources: d.cy_sources }
+        : {}),
     },
     py_data: d.py,
   };
@@ -399,9 +409,10 @@ export async function nceAutoPopulate(
     const prev = existing[noteType] ?? { cy: {}, py: {}, customRows: [] };
     const manualRows = prev.customRows.filter(r => r.source === "manual");
 
-    const newCy:    Record<string, number> = {};
-    const newPy:    Record<string, number> = {};
-    const autoRows: NCECustomRow[]         = [];
+    const newCy:         Record<string, number> = {};
+    const newPy:         Record<string, number> = {};
+    const autoRows:      NCECustomRow[]         = [];
+    const staticSources: Record<string, { ledger: string; amountCy: number }[]> = {};
 
     if (noteFs.all) {
       // ── Pattern B ──────────────────────────────────────────────────────
@@ -420,6 +431,9 @@ export async function nceAutoPopulate(
         if (matchedRowId) {
           // Accumulate directly into the static row — no custom row created
           newCy[matchedRowId] = (newCy[matchedRowId] ?? 0) + amt;
+          // Track which ledgers feed this static row (for info popover)
+          if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
+          staticSources[matchedRowId].push({ ledger: row.ledger_name, amountCy: amt });
           // PY: carry from prior-year cy_data for the same static key, if any
           if (!(matchedRowId in newPy)) {
             newPy[matchedRowId] = pyNotes[noteType]?.[matchedRowId] ?? 0;
@@ -592,6 +606,7 @@ export async function nceAutoPopulate(
       cy:         mergedCy,
       py:         mergedPy,
       customRows: [...autoRows, ...manualRows],
+      ...(Object.keys(staticSources).length > 0 ? { cy_sources: staticSources } : {}),
     };
   }
 
