@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 import {
   NOTES_CONFIG,
   NOTE_META,
@@ -50,61 +51,61 @@ import {
 const SCHEDULE_III_DIV_I: FSLineItem[] = [
   // ── BALANCE SHEET — EQUITY & LIABILITIES ──
   { code: "BS_EQ", name: "EQUITY AND LIABILITIES", noteRef: null, section: "BS_liabilities", children: [
-    { code: "BS_EQ_SC", name: "Share Capital", noteRef: 3, section: "BS_liabilities", scheduleRef: "Sch III" },
-    { code: "BS_EQ_RS", name: "Reserves and Surplus", noteRef: 4, section: "BS_liabilities", scheduleRef: "Sch III" },
+    { code: "BS_EQ_SC", name: "Share Capital", noteRef: getNoteNo("share_capital") ?? null, section: "BS_liabilities", scheduleRef: "Sch III" },
+    { code: "BS_EQ_RS", name: "Reserves and Surplus", noteRef: getNoteNo("reserves_surplus") ?? null, section: "BS_liabilities", scheduleRef: "Sch III" },
     { code: "BS_EQ_MS", name: "Money Received Against Share Warrants", noteRef: null, section: "BS_liabilities" },
   ]},
   { code: "BS_NCL", name: "NON-CURRENT LIABILITIES", noteRef: null, section: "BS_liabilities", children: [
-    { code: "BS_NCL_LTB", name: "Long-term Borrowings", noteRef: 5, section: "BS_liabilities", scheduleRef: "Sch III" },
-    { code: "BS_NCL_DTL", name: "Deferred Tax Liabilities (Net)", noteRef: 6, section: "BS_liabilities" },
-    { code: "BS_NCL_OLT", name: "Other Long-term Liabilities", noteRef: 7, section: "BS_liabilities" },
-    { code: "BS_NCL_LTP", name: "Long-term Provisions", noteRef: 8, section: "BS_liabilities" },
+    { code: "BS_NCL_LTB", name: "Long-term Borrowings", noteRef: getNoteNo("lt_borrowings") ?? null, section: "BS_liabilities", scheduleRef: "Sch III" },
+    { code: "BS_NCL_DTL", name: "Deferred Tax Liabilities (Net)", noteRef: getNoteNo("deferred_tax_liab") ?? null, section: "BS_liabilities" },
+    { code: "BS_NCL_OLT", name: "Other Long-term Liabilities", noteRef: getNoteNo("other_lt_liab") ?? null, section: "BS_liabilities" },
+    { code: "BS_NCL_LTP", name: "Long-term Provisions", noteRef: getNoteNo("lt_provisions") ?? null, section: "BS_liabilities" },
   ]},
   { code: "BS_CL", name: "CURRENT LIABILITIES", noteRef: null, section: "BS_liabilities", children: [
-    { code: "BS_CL_STB", name: "Short-term Borrowings", noteRef: 9, section: "BS_liabilities" },
-    { code: "BS_CL_TP", name: "Trade Payables", noteRef: 10, section: "BS_liabilities" },
-    { code: "BS_CL_OCL", name: "Other Current Liabilities", noteRef: 11, section: "BS_liabilities" },
-    { code: "BS_CL_STP", name: "Short-term Provisions", noteRef: 12, section: "BS_liabilities" },
+    { code: "BS_CL_STB", name: "Short-term Borrowings", noteRef: getNoteNo("st_borrowings") ?? null, section: "BS_liabilities" },
+    { code: "BS_CL_TP", name: "Trade Payables", noteRef: getNoteNo("trade_payables") ?? null, section: "BS_liabilities" },
+    { code: "BS_CL_OCL", name: "Other Current Liabilities", noteRef: getNoteNo("other_current_liab") ?? null, section: "BS_liabilities" },
+    { code: "BS_CL_STP", name: "Short-term Provisions", noteRef: getNoteNo("st_provisions") ?? null, section: "BS_liabilities" },
   ]},
   // ── BALANCE SHEET — ASSETS ──
   { code: "BS_NCA", name: "NON-CURRENT ASSETS", noteRef: null, section: "BS_assets", children: [
-    { code: "BS_NCA_FA", name: "Fixed Assets", noteRef: 13, section: "BS_assets", scheduleRef: "Sch II", children: [
-      { code: "BS_NCA_FA_TAN", name: "Tangible Assets", noteRef: 13, section: "BS_assets" },
-      { code: "BS_NCA_FA_INT", name: "Intangible Assets", noteRef: 13, section: "BS_assets" },
-      { code: "BS_NCA_FA_WIP", name: "Capital Work-in-Progress", noteRef: 14, section: "BS_assets" },
+    { code: "BS_NCA_FA", name: "Fixed Assets", noteRef: getNoteNo("ppe") ?? null, section: "BS_assets", scheduleRef: "Sch II", children: [
+      { code: "BS_NCA_FA_TAN", name: "Tangible Assets", noteRef: getNoteNo("ppe") ?? null, section: "BS_assets" },
+      { code: "BS_NCA_FA_INT", name: "Intangible Assets", noteRef: getNoteNo("ppe") ?? null, section: "BS_assets" },
+      { code: "BS_NCA_FA_WIP", name: "Capital Work-in-Progress", noteRef: null, section: "BS_assets" },
     ]},
-    { code: "BS_NCA_INV", name: "Non-current Investments", noteRef: 15, section: "BS_assets" },
-    { code: "BS_NCA_DTA", name: "Deferred Tax Assets (Net)", noteRef: 16, section: "BS_assets" },
-    { code: "BS_NCA_LLA", name: "Long-term Loans and Advances", noteRef: 17, section: "BS_assets" },
-    { code: "BS_NCA_ONA", name: "Other Non-current Assets", noteRef: 18, section: "BS_assets" },
+    { code: "BS_NCA_INV", name: "Non-current Investments", noteRef: getNoteNo("nc_investments") ?? null, section: "BS_assets" },
+    { code: "BS_NCA_DTA", name: "Deferred Tax Assets (Net)", noteRef: getNoteNo("deferred_tax_assets") ?? null, section: "BS_assets" },
+    { code: "BS_NCA_LLA", name: "Long-term Loans and Advances", noteRef: getNoteNo("lt_loans_advances") ?? null, section: "BS_assets" },
+    { code: "BS_NCA_ONA", name: "Other Non-current Assets", noteRef: getNoteNo("other_nc_assets") ?? null, section: "BS_assets" },
   ]},
   { code: "BS_CA", name: "CURRENT ASSETS", noteRef: null, section: "BS_assets", children: [
-    { code: "BS_CA_CI", name: "Current Investments", noteRef: 19, section: "BS_assets" },
-    { code: "BS_CA_INV", name: "Inventories", noteRef: 20, section: "BS_assets", children: [
-      { code: "INV_RM",    name: "Raw Materials",             noteRef: 20, section: "BS_assets" },
-      { code: "INV_WIP",   name: "Work-in-Progress",          noteRef: 20, section: "BS_assets" },
-      { code: "INV_FG",    name: "Finished Goods",            noteRef: 20, section: "BS_assets" },
-      { code: "INV_STT",   name: "Stock-in-Trade",            noteRef: 20, section: "BS_assets" },
-      { code: "INV_STOCK", name: "Stock / Other Inventories", noteRef: 20, section: "BS_assets" },
+    { code: "BS_CA_CI", name: "Current Investments", noteRef: getNoteNo("current_investments") ?? null, section: "BS_assets" },
+    { code: "BS_CA_INV", name: "Inventories", noteRef: getNoteNo("inventories") ?? null, section: "BS_assets", children: [
+      { code: "INV_RM",    name: "Raw Materials",             noteRef: getNoteNo("inventories") ?? null, section: "BS_assets" },
+      { code: "INV_WIP",   name: "Work-in-Progress",          noteRef: getNoteNo("inventories") ?? null, section: "BS_assets" },
+      { code: "INV_FG",    name: "Finished Goods",            noteRef: getNoteNo("inventories") ?? null, section: "BS_assets" },
+      { code: "INV_STT",   name: "Stock-in-Trade",            noteRef: getNoteNo("inventories") ?? null, section: "BS_assets" },
+      { code: "INV_STOCK", name: "Stock / Other Inventories", noteRef: getNoteNo("inventories") ?? null, section: "BS_assets" },
     ]},
-    { code: "BS_CA_TR", name: "Trade Receivables", noteRef: 21, section: "BS_assets" },
-    { code: "BS_CA_CCE", name: "Cash and Cash Equivalents", noteRef: 22, section: "BS_assets" },
-    { code: "BS_CA_SLA", name: "Short-term Loans and Advances", noteRef: 23, section: "BS_assets" },
-    { code: "BS_CA_OCA", name: "Other Current Assets", noteRef: 24, section: "BS_assets" },
+    { code: "BS_CA_TR", name: "Trade Receivables", noteRef: getNoteNo("trade_receivables") ?? null, section: "BS_assets" },
+    { code: "BS_CA_CCE", name: "Cash and Cash Equivalents", noteRef: getNoteNo("cash_bank") ?? null, section: "BS_assets" },
+    { code: "BS_CA_SLA", name: "Short-term Loans and Advances", noteRef: getNoteNo("st_loans_advances") ?? null, section: "BS_assets" },
+    { code: "BS_CA_OCA", name: "Other Current Assets", noteRef: getNoteNo("other_current_assets") ?? null, section: "BS_assets" },
   ]},
   // ── PROFIT & LOSS ──
   { code: "PL_REV", name: "REVENUE", noteRef: null, section: "PL_revenue", children: [
-    { code: "PL_REV_OPS", name: "Revenue from Operations", noteRef: 25, section: "PL_revenue" },
-    { code: "PL_REV_OI", name: "Other Income", noteRef: 26, section: "PL_revenue" },
+    { code: "PL_REV_OPS", name: "Revenue from Operations", noteRef: getNoteNo("revenue_from_ops") ?? null, section: "PL_revenue" },
+    { code: "PL_REV_OI", name: "Other Income", noteRef: getNoteNo("other_income") ?? null, section: "PL_revenue" },
   ]},
   { code: "PL_EXP", name: "EXPENSES", noteRef: null, section: "PL_expenses", children: [
-    { code: "PL_EXP_MAT", name: "Cost of Materials Consumed", noteRef: 27, section: "PL_expenses" },
-    { code: "PL_EXP_SIT", name: "Purchases of Stock-in-Trade", noteRef: 27, section: "PL_expenses" },
-    { code: "PL_EXP_CII", name: "Changes in Inventories of FG/WIP/SIT", noteRef: 27, section: "PL_expenses" },
-    { code: "PL_EXP_EMP", name: "Employee Benefits Expense", noteRef: 28, section: "PL_expenses" },
-    { code: "PL_EXP_FIN", name: "Finance Costs", noteRef: null, section: "PL_expenses" },
+    { code: "PL_EXP_MAT", name: "Cost of Materials Consumed", noteRef: getNoteNo("cost_materials") ?? null, section: "PL_expenses" },
+    { code: "PL_EXP_SIT", name: "Purchases of Stock-in-Trade", noteRef: getNoteNo("purchases_stock") ?? null, section: "PL_expenses" },
+    { code: "PL_EXP_CII", name: "Changes in Inventories of FG/WIP/SIT", noteRef: getNoteNo("changes_inventories") ?? null, section: "PL_expenses" },
+    { code: "PL_EXP_EMP", name: "Employee Benefits Expense", noteRef: getNoteNo("employee_benefits") ?? null, section: "PL_expenses" },
+    { code: "PL_EXP_FIN", name: "Finance Costs", noteRef: getNoteNo("finance_costs") ?? null, section: "PL_expenses" },
     { code: "PL_EXP_DEP", name: "Depreciation and Amortisation Expense", noteRef: null, section: "PL_expenses" },
-    { code: "PL_EXP_OTH", name: "Other Expenses", noteRef: 29, section: "PL_expenses" },
+    { code: "PL_EXP_OTH", name: "Other Expenses", noteRef: getNoteNo("other_expenses") ?? null, section: "PL_expenses" },
   ]},
   { code: "PL_EI",    name: "Exceptional Items",          noteRef: null, section: "PL_expenses" },
   { code: "PL_TAX",   name: "Tax Expense",                noteRef: null, section: "PL_expenses", children: [
@@ -112,8 +113,8 @@ const SCHEDULE_III_DIV_I: FSLineItem[] = [
     { code: "PL_TAX_DEF", name: "Deferred Tax",  noteRef: null, section: "PL_expenses" },
   ]},
   { code: "PL_PAT",   name: "Profit/(Loss) After Tax",    noteRef: null, section: "PL_expenses" },
-  { code: "PL_EPS_B", name: "EPS — Basic (₹)",            noteRef: null, section: "PL_expenses" },
-  { code: "PL_EPS_D", name: "EPS — Diluted (₹)",          noteRef: null, section: "PL_expenses" },
+  { code: "PL_EPS_B", name: "EPS — Basic (₹)",            noteRef: getNoteNo("eps") ?? null, section: "PL_expenses" },
+  { code: "PL_EPS_D", name: "EPS — Diluted (₹)",          noteRef: getNoteNo("eps") ?? null, section: "PL_expenses" },
 ];
 
 // ═══════════════════════════════════════
