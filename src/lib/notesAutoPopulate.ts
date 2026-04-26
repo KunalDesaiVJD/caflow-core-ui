@@ -803,8 +803,12 @@ export async function autoPopulateNotes(
   for (const section of ["bs_liab", "bs_asset", "pl"] as const) {
     const rows = NOTE_ROW_REGISTRY[section];
     for (const [rowKey, spec] of Object.entries(rows)) {
-      const cy = sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
-      const py = pyOf(section, rowKey, spec);
+      // bs_liab ledgers carry CR-convention balances (negative in the TB).
+      // Negate them so every note stores an absolute positive magnitude.
+      // bs_asset and pl rows are DR-positive — no flip needed.
+      const sectionSign = section === "bs_liab" ? -1 : 1;
+      const cy = sectionSign * sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
+      const py = sectionSign * pyOf(section, rowKey, spec);
 
       // Build per-ledger breakdown rows from COA mapping. The breakup array
       // is what drives the editable line items shown under each note (Note
