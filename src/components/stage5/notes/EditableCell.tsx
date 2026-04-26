@@ -127,11 +127,13 @@ export function EditableCell({
 // Layout primitives
 // ─────────────────────────────────────────────────────────────────────────
 
-export function NoteCard({ noteNo, title, children }: { noteNo: number | string; title: string; children: React.ReactNode }) {
+export function NoteCard({ noteNo, title, children }: { noteNo: number | string | null; title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border bg-card mb-4">
       <header className="border-b bg-muted/30 px-3 py-1.5">
-        <h3 className="text-xs font-semibold">Note {noteNo} — {title}</h3>
+        <h3 className="text-xs font-semibold">
+          {noteNo != null ? `Note ${noteNo} — ` : ""}{title}
+        </h3>
       </header>
       <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
     </section>
