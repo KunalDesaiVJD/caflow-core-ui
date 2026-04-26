@@ -4136,12 +4136,14 @@ export default function PipelineFinancialStatements({
             style={{ paddingLeft: `${item.depth * 20 + 8}px` }}
           >
             <span className={cn(isHeader && "uppercase text-[11px] tracking-wide")}>{item.name}</span>
-            {item.noteRef && !isHeader && (
-              <Badge variant="outline" className="ml-1.5 text-[8px] px-1">N{item.noteRef}</Badge>
-            )}
             {hasOverride && (
               <Badge className="ml-1.5 text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-200">M</Badge>
             )}
+          </TableCell>
+
+          {/* Note No. */}
+          <TableCell className="text-xs text-center text-muted-foreground tabular-nums">
+            {item.noteRef && !isHeader ? item.noteRef : ""}
           </TableCell>
 
           {/* CY amount + pencil */}
@@ -4525,6 +4527,7 @@ export default function PipelineFinancialStatements({
                   <TableHeader>
                     <TableRow className="bg-muted/50 group">
                       <TableHead className="text-xs">Particulars</TableHead>
+                      <TableHead className="text-xs text-center w-[8%]">Note No.</TableHead>
                       <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
                       <TableHead className="text-xs text-right">
                         <span className="flex items-center justify-end gap-1">
@@ -4629,6 +4632,7 @@ export default function PipelineFinancialStatements({
                   <TableHeader>
                     <TableRow className="bg-muted/50 group">
                       <TableHead className="text-xs">Particulars</TableHead>
+                      <TableHead className="text-xs text-center w-[8%]">Note No.</TableHead>
                       <TableHead className="text-xs text-right">CY {cyYear} (₹)</TableHead>
                       <TableHead className="text-xs text-right">
                         <span className="flex items-center justify-end gap-1">
