@@ -245,15 +245,14 @@ function deriveBaseHead(name: string): string {
     .trim();
 }
 
-/** Group key for unmatched ledgers — first significant word, lowercased.
- *  Within a single note, ledgers that share their first word are usually
- *  conceptually related (e.g. "Site Expense", "Site Survey Expense") and
- *  should be merged under one common head. */
+/** Group key for unmatched ledgers — the FULL normalised base head, lowercased.
+ *  Only ledgers that share the same base head after stripping GST/month/number
+ *  suffixes get merged (e.g. "Site Expense - 18%" + "Site Expense - URD" both
+ *  → "site expense"). Ledgers with different descriptions are NEVER merged
+ *  even if they share a first word — e.g. "Unpaid Audit Fees" and
+ *  "Unpaid Professional Fees" stay as two separate rows. */
 function groupKey(name: string): string {
-  const head = deriveBaseHead(name);
-  // First word — but skip stopwords like "to", "from"
-  const words = head.split(/\s+/).filter(w => w.length > 0);
-  return (words[0] ?? head).toLowerCase();
+  return deriveBaseHead(name).toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 /** Pick the displayed merged label from a list of base heads.
