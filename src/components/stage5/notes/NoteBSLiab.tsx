@@ -1,12 +1,6 @@
 /**
- * NoteBSLiab — Notes 3–12 (BS Liabilities side).
- * Note 6 = Deferred Tax Liabilities (Net) — matches SCHEDULE_III_DIV_I row 59.
- *
- * Each note section reads its CY/PY auto values from the Stage5Notes object
- * (populated by notesAutoPopulate) and offers inline-editable cells routed
- * through the parent's updatePath / resetPath helpers. Manual sub-row
- * break-ups are stored under the same path scope as `<noteKey>.breakup`,
- * so the auto total from the registry stays untouched.
+ * NoteBSLiab — BS Liabilities notes (share_capital→st_provisions).
+ * Note numbers come from NOTE_REGISTRY — never hardcode them here.
  */
 
 import {
@@ -14,6 +8,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
   notes:          Stage5Notes;
@@ -47,7 +42,7 @@ export default function NoteBSLiab({
 
   return (
     <div className="space-y-4">
-      <NoteCard noteNo={3} title="Share capital">
+      <NoteCard noteNo={getNoteNo("share_capital")} title="Share capital">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
 
         {/* ── AUTHORISED ───────────────────────────────────────────────────── */}
@@ -118,7 +113,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={4} title="Reserves and surplus">
+      <NoteCard noteNo={getNoteNo("reserves_surplus")} title="Reserves and surplus">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         {/* Unified breakdown: auto-populated from COA-mapped ledgers via the
             registry's template (General Reserve / Securities Premium /
@@ -145,7 +140,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={5} title="Long-term borrowings">
+      <NoteCard noteNo={getNoteNo("lt_borrowings")} title="Long-term borrowings">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         {/* Unified breakdown: COA-mapped ledgers (party names) appear as
             linked rows; legacy secured_term_loans / unsecured rows are
@@ -170,7 +165,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={6} title="Deferred tax liabilities (Net)">
+      <NoteCard noteNo={getNoteNo("deferred_tax_liab")} title="Deferred tax liabilities (Net)">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation claimed in IT Act over books"
@@ -201,7 +196,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={7} title="Other long-term liabilities">
+      <NoteCard noteNo={getNoteNo("other_lt_liab")} title="Other long-term liabilities">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.other_lt_liabilities.breakup") ?? []) as ListRow[]}
@@ -223,7 +218,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={8} title="Long-term provisions">
+      <NoteCard noteNo={getNoteNo("lt_provisions")} title="Long-term provisions">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.lt_provisions.breakup") ?? []) as ListRow[]}
@@ -245,7 +240,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={9} title="Short-term borrowings">
+      <NoteCard noteNo={getNoteNo("st_borrowings")} title="Short-term borrowings">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         {/* Unified breakdown: COA-mapped ledgers (OD / CC / WC limits, party
             names) appear as linked rows; legacy secured / unsecured rows
@@ -270,7 +265,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={10} title="Trade Payables">
+      <NoteCard noteNo={getNoteNo("trade_payables")} title="Trade Payables">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Total outstanding dues of Micro and Small Enterprises"
@@ -333,7 +328,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={11} title="Other current liabilities">
+      <NoteCard noteNo={getNoteNo("other_current_liab")} title="Other current liabilities">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.other_curr_liab.breakup") ?? []) as ListRow[]}
@@ -355,7 +350,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={12} title="Short-term provisions">
+      <NoteCard noteNo={getNoteNo("st_provisions")} title="Short-term provisions">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <ListTable
           rows={(get("bs_liab.st_provisions.breakup") ?? []) as ListRow[]}

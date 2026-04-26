@@ -12,6 +12,7 @@ import {
   type ListRow,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
   notes:        Stage5Notes;
@@ -77,12 +78,12 @@ export default function NotePL({
 
   return (
     <div className="space-y-4">
-      {renderListNote(25, "Revenue from operations",     "revenue_from_ops",
+      {renderListNote(getNoteNo("revenue_from_ops")!, "Revenue from operations", "revenue_from_ops",
         "(a) Sale of products (net of returns) / (b) Sale of services / (c) Commission")}
-      {renderListNote(26, "Other Income",                "other_income",
+      {renderListNote(getNoteNo("other_income")!, "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard noteNo={27} title="Cost of materials consumed">
+      <NoteCard noteNo={getNoteNo("cost_materials")} title="Cost of materials consumed">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Opening Stock"
@@ -125,10 +126,10 @@ export default function NotePL({
         />
       </NoteCard>
 
-      {renderListNote(27, "Purchase of stock-in-trade",  "purchases_stock",
+      {renderListNote(getNoteNo("purchases_stock")!, "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
 
-      <NoteCard noteNo={27} title="Changes in inventories of FG / WIP / SIT">
+      <NoteCard noteNo={getNoteNo("changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
         <EditableRow
@@ -200,18 +201,18 @@ export default function NotePL({
         />
       </NoteCard>
 
-      {renderListNote(28, "Employee benefits expense", "employee_benefits",
+      {renderListNote(getNoteNo("employee_benefits")!, "Employee benefits expense", "employee_benefits",
         "Salaries / Director remuneration / PF / Staff welfare")}
-      {/* Finance Costs — noteRef: null per Schedule III Div I (no note number assigned) */}
-      {renderListNote(null, "Finance Cost",    "finance_costs",
+      {/* Finance Costs — Note 28 per NOTE_REGISTRY */}
+      {renderListNote(getNoteNo("finance_costs")!, "Finance Cost", "finance_costs",
         "Interest to Bank / Other / Other borrowing cost / Interest on advance income tax")}
 
       {/* Note 29 — Other expenses; 37-head template lives in NOTE_ROW_REGISTRY */}
-      {renderListNote(29, "Other expenses", "other_expenses",
+      {renderListNote(getNoteNo("other_expenses")!, "Other expenses", "other_expenses",
         "Other expense particulars")}
 
-      {/* EPS — no note number per Schedule III */}
-      <NoteCard noteNo={null} title="Earnings per share (EPS)">
+      {/* EPS — Note 30 per NOTE_REGISTRY */}
+      <NoteCard noteNo={getNoteNo("eps")} title="Earnings per share (EPS)">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Net Profit After Tax (NPAT)"

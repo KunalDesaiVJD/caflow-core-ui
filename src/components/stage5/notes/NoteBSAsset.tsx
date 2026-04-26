@@ -9,6 +9,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
   notes:        Stage5Notes;
@@ -73,7 +74,7 @@ export default function NoteBSAsset({
 
   return (
     <div className="space-y-4">
-      <NoteCard noteNo={15} title="Non-current investments">
+      <NoteCard noteNo={getNoteNo("nc_investments")} title="Non-current investments">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <div className="text-[10px] italic text-muted-foreground">(a) Investment property / (b) Equity Instruments / (c) Other investments</div>
         <ListTable
@@ -96,7 +97,7 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      <NoteCard noteNo={16} title="Deferred tax assets (Net)">
+      <NoteCard noteNo={getNoteNo("deferred_tax_assets")} title="Deferred tax assets (Net)">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation in books over IT Act"
@@ -121,16 +122,16 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {renderSingleNote(17, "Long-term loans and advances", "lt_loans",
+      {renderSingleNote(getNoteNo("lt_loans_advances")!, "Long-term loans and advances", "lt_loans",
         "bs_asset.lt_loans.breakup", "Loan particulars")}
-      {renderSingleNote(18, "Other non-current assets", "other_nc_assets",
+      {renderSingleNote(getNoteNo("other_nc_assets")!, "Other non-current assets", "other_nc_assets",
         "bs_asset.other_nc_assets.breakup", "Particulars")}
-      {renderSingleNote(19, "Current investments", "curr_investments",
+      {renderSingleNote(getNoteNo("current_investments")!, "Current investments", "curr_investments",
         "bs_asset.curr_investments.breakup", "Investment particulars")}
-      {renderSingleNote(20, "Inventories", "inventories",
+      {renderSingleNote(getNoteNo("inventories")!, "Inventories", "inventories",
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
-      <NoteCard noteNo={21} title="Trade Receivables">
+      <NoteCard noteNo={getNoteNo("trade_receivables")} title="Trade Receivables">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Outstanding for a period exceeding 6 months"
@@ -181,11 +182,11 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {renderSingleNote(22, "Cash and bank equivalents", "cash_bank",
+      {renderSingleNote(getNoteNo("cash_bank")!, "Cash and bank equivalents", "cash_bank",
         "bs_asset.cash_bank.breakup", "(a) Cash on hand / (b) Balances with banks (Current / Deposit)")}
-      {renderSingleNote(23, "Short-term loans and advances", "st_loans",
+      {renderSingleNote(getNoteNo("st_loans_advances")!, "Short-term loans and advances", "st_loans",
         "bs_asset.st_loans.breakup", "Loan particulars")}
-      {renderSingleNote(24, "Other current assets", "other_curr_assets",
+      {renderSingleNote(getNoteNo("other_current_assets")!, "Other current assets", "other_curr_assets",
         "bs_asset.other_curr_assets.breakup", "Particulars")}
     </div>
   );
