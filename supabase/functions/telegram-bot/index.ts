@@ -244,12 +244,58 @@ interface Invoice {
   from_firm_name: string | null;
 }
 
+// ─── Telegram API helper ──────────────────────────────────────────────────────
+async function tgApiCall(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return r.json();
+}
+
+const WEBHOOK_URL = "https://hubyywmodekfdzhwiumb.supabase.co/functions/v1/telegram-bot";
+
 // ─── Main Serve ───────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
-  // Health check
+  // Health check + webhook status/setup
   if (req.method === "GET") {
+    const url = new URL(req.url);
+    const setup = url.searchParams.get("setup");
+
+    // Check current webhook
+    const info = await tgApiCall("getWebhookInfo");
+    const webhookOk = info?.result?.url === WEBHOOK_URL;
+
+    if (setup === "1" || !webhookOk) {
+      // Auto-register or re-register webhook
+      await tgApiCall("deleteWebhook", {});
+      const setRes = await tgApiCall("setWebhook", {
+        url: WEBHOOK_URL,
+        allowed_updates: ["message", "callback_query"],
+        drop_pending_updates: true,
+      });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          bot: "CAFlow Telegram Billing Bot",
+          webhook_registered: setRes.ok === true,
+          webhook_url: WEBHOOK_URL,
+          previous_url: info?.result?.url || "(none)",
+          set_webhook_result: setRes,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     return new Response(
-      JSON.stringify({ ok: true, bot: "CAFlow Telegram Billing Bot" }),
+      JSON.stringify({
+        ok: true,
+        bot: "CAFlow Telegram Billing Bot",
+        webhook_ok: webhookOk,
+        webhook_url: info?.result?.url || "(none)",
+        pending_update_count: info?.result?.pending_update_count ?? 0,
+      }),
       { headers: { "Content-Type": "application/json" } }
     );
   }
