@@ -10,7 +10,7 @@ import { IFCReportTab } from '@/components/stage7/IFCReportTab';
 import { EngagementNotesToAccounts } from '@/components/engagement/EngagementNotesToAccounts';
 import { CashFlowNotesTab } from '@/components/stage7/CashFlowNotesTab';
 import { isCompanyEntity } from '@/utils/entityUtils';
-import NotesToAccounts from '@/pages/NotesToAccounts';
+import { CorporateNTA } from '@/components/engagement/CorporateNTA';
 import EngagementHeader from '@/components/pipeline/EngagementHeader';
 import IARTab from '@/components/stage8/IARTab';
 
@@ -170,7 +170,15 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
 
       {tabs.some(t => t.id === 'notes') && (
         <TabsContent value="notes" className="mt-4">
-          <NotesToAccounts engagementIdProp={engagementId} isCorporate={true} />
+          {/* Phase 4: replaced old 19-note sidebar (pages/NotesToAccounts) with
+              the new single-page CorporateNTA editor.
+              Phase 5 guard: this tab only mounts inside CorporateStage7Tabs,
+              which is itself only rendered when isCorporate === true (see parent). */}
+          <CorporateNTA
+            engagement={engagement}
+            client={engagement?.clients}
+            onUpdate={() => {}}
+          />
         </TabsContent>
       )}
       {tabs.some(t => t.id === 'iar') && (
