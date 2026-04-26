@@ -348,6 +348,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const [intelligence, setIntelligence] = useState<{
     normalized_name: string; account_head: string;
     confidence_score: number; times_confirmed: number; times_overridden: number;
+    scope: string; is_party_name: boolean;
   }[]>([]);
   const [mappingRules, setMappingRules] = useState<MappingRule[]>([]);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -627,11 +628,21 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     const entityTypeKey = isNonCorporate ? "nce" : "corporate";
 
     // Fetch intelligence (confidence >= 60, ordered by confidence desc)
-    supabase
-      .from("coa_mapping_intelligence" as any)
-      .select("normalized_name, account_head, confidence_score, times_confirmed, times_overridden")
+    // Load GLOBAL patterns for all clients + ENGAGEMENT-SCOPED patterns for THIS client only.
+    // Party names (scope=engagement) are only applied to same-client future years,
+    // never sent to Claude as global training data.
+    const clientId = engagement?.client_id;
+    let intelQuery = (supabase as any)
+      .from("coa_mapping_intelligence")
+      .select("normalized_name, account_head, confidence_score, times_confirmed, times_overridden, scope, is_party_name")
       .eq("entity_type", entityTypeKey)
-      .gte("confidence_score", 60)
+      .gte("confidence_score", 60);
+    if (clientId) {
+      intelQuery = intelQuery.or(`scope.eq.global,and(scope.eq.engagement,client_id.eq.${clientId})`);
+    } else {
+      intelQuery = intelQuery.eq("scope", "global");
+    }
+    intelQuery
       .order("confidence_score", { ascending: false })
       .limit(500)
       .then(({ data }: any) => {
@@ -954,8 +965,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         p_firm_id:         engagement?.firm_id || null,
         p_engagement_id:   engagementId,
         p_accepted:        true,
+        p_client_id:       engagement?.client_id || null,  // scopes party names to this client
       }).then(() => {
         // Optimistically update local intelligence so next auto-map uses it
+        // is_party_name will be computed server-side; optimistic value defaults to false
         setIntelligence(prev => {
           const idx = prev.findIndex(i => i.normalized_name === norm);
           if (idx >= 0) {
@@ -968,7 +981,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           }
           return [
             ...prev,
-            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0 },
+            { normalized_name: norm, account_head: code, confidence_score: 70, times_confirmed: 1, times_overridden: 0, scope: 'global', is_party_name: false },
           ];
         });
       });
@@ -1019,9 +1032,13 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
           closing_balance: Math.round(a.balance),
           side:            a.balance >= 0 ? "Dr" : "Cr",
         }));
-        // Include high-confidence intelligence patterns so Claude uses proven mappings
+        // Include high-confidence GLOBAL intelligence patterns so Claude uses proven mappings.
+        // IMPORTANT: party names (is_party_name=true / scope=engagement) are intentionally
+        // excluded here — they must never be sent as global learned_patterns to Claude,
+        // since they are vendor/customer business names specific to one client and would
+        // confuse the AI when mapping other clients' ledgers.
         const intelAnchors = intelligence
-          .filter(i => i.confidence_score >= 80)
+          .filter(i => i.confidence_score >= 80 && !i.is_party_name && i.scope !== 'engagement')
           .slice(0, 60)
           .map(i => ({ ledger_pattern: i.normalized_name, fs_code: i.account_head, confidence: Math.round(i.confidence_score) }));
 
@@ -1580,6 +1597,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         p_engagement_id: engagementId,
         p_entity_type:   entityTypeKey,
         p_firm_id:       engagement?.firm_id || null,
+        p_client_id:     engagement?.client_id || null,  // scopes party-name patterns to this client
       }).then(({ data: synced }: any) => {
         if (synced > 0) {
           toast.success("Mapping saved", {
