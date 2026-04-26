@@ -27,6 +27,10 @@ export default function NoteBSAsset({
   const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // Smart note: only show a note number when at least one year has data.
+  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
+    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+
   // Trade Receivables ageing schemas
   const TR_ROWS = [
     { key: "undisp_good",     label: "(i) Undisputed — considered good" },
@@ -43,7 +47,7 @@ export default function NoteBSAsset({
   ];
 
   const renderSingleNote = (
-    noteNo: number,
+    noteNo: number | null,
     title: string,
     key: string,
     breakupPath: string,
@@ -74,7 +78,7 @@ export default function NoteBSAsset({
 
   return (
     <div className="space-y-4">
-      <NoteCard noteNo={getNoteNo("nc_investments")} title="Non-current investments">
+      <NoteCard noteNo={sn("nc_investments")} title="Non-current investments">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <div className="text-[10px] italic text-muted-foreground">(a) Investment property / (b) Equity Instruments / (c) Other investments</div>
         <ListTable
@@ -97,7 +101,7 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("deferred_tax_assets")} title="Deferred tax assets (Net)">
+      <NoteCard noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation in books over IT Act"
@@ -122,16 +126,16 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {renderSingleNote(getNoteNo("lt_loans_advances")!, "Long-term loans and advances", "lt_loans",
+      {renderSingleNote(sn("lt_loans", "lt_loans_advances"), "Long-term loans and advances", "lt_loans",
         "bs_asset.lt_loans.breakup", "Loan particulars")}
-      {renderSingleNote(getNoteNo("other_nc_assets")!, "Other non-current assets", "other_nc_assets",
+      {renderSingleNote(sn("other_nc_assets"), "Other non-current assets", "other_nc_assets",
         "bs_asset.other_nc_assets.breakup", "Particulars")}
-      {renderSingleNote(getNoteNo("current_investments")!, "Current investments", "curr_investments",
+      {renderSingleNote(sn("curr_investments", "current_investments"), "Current investments", "curr_investments",
         "bs_asset.curr_investments.breakup", "Investment particulars")}
-      {renderSingleNote(getNoteNo("inventories")!, "Inventories", "inventories",
+      {renderSingleNote(sn("inventories"), "Inventories", "inventories",
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
-      <NoteCard noteNo={getNoteNo("trade_receivables")} title="Trade Receivables">
+      <NoteCard noteNo={sn("trade_receivables")} title="Trade Receivables">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Outstanding for a period exceeding 6 months"
@@ -182,11 +186,11 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      {renderSingleNote(getNoteNo("cash_bank")!, "Cash and bank equivalents", "cash_bank",
+      {renderSingleNote(sn("cash_bank"), "Cash and bank equivalents", "cash_bank",
         "bs_asset.cash_bank.breakup", "(a) Cash on hand / (b) Balances with banks (Current / Deposit)")}
-      {renderSingleNote(getNoteNo("st_loans_advances")!, "Short-term loans and advances", "st_loans",
+      {renderSingleNote(sn("st_loans", "st_loans_advances"), "Short-term loans and advances", "st_loans",
         "bs_asset.st_loans.breakup", "Loan particulars")}
-      {renderSingleNote(getNoteNo("other_current_assets")!, "Other current assets", "other_curr_assets",
+      {renderSingleNote(sn("other_curr_assets", "other_current_assets"), "Other current assets", "other_curr_assets",
         "bs_asset.other_curr_assets.breakup", "Particulars")}
     </div>
   );

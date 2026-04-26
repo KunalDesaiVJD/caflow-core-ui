@@ -278,14 +278,23 @@ export function ListTable({
     { description: "", amount_cy: 0, amount_py: 0, source: "manual" },
   ]);
 
+  // Issue 3: hide linked rows where both years are zero — they clutter the note
+  // without adding information. Manual rows (user-added) are always shown so
+  // the user can see and edit what they typed, even if still at zero.
+  const displayRows = rows.filter(
+    (r) => r.source !== "linked" || (r.amount_cy || 0) !== 0 || (r.amount_py || 0) !== 0,
+  );
+
   return (
     <div className="space-y-1">
-      {rows.length === 0 && (
+      {displayRows.length === 0 && (
         <div className="text-[10px] italic text-muted-foreground py-1">No entries yet.</div>
       )}
-      {rows.map((r, i) => {
+      {displayRows.map((r, i) => {
         const isLinked = r.source === "linked";
         const isManual = r.source === "manual";
+        // Map display index back to original rows array for edits/deletes
+        const origIdx = rows.indexOf(r);
         return (
           <div key={i} className="grid grid-cols-12 gap-2 items-center">
             <div className="col-span-6 flex items-center gap-1.5">
@@ -296,7 +305,7 @@ export function ListTable({
                   placeholder={descPlaceholder}
                   isAutoFilled={isLinked}
                   isOverridden={isManual && !!r.description}
-                  onCommit={(v) => update(i, { description: String(v ?? "") })}
+                  onCommit={(v) => update(origIdx, { description: String(v ?? "") })}
                 />
               </div>
               {isLinked && (
@@ -321,7 +330,7 @@ export function ListTable({
                 value={r.amount_cy ?? 0}
                 isAutoFilled={isLinked}
                 isOverridden={isManual && (r.amount_cy ?? 0) !== 0}
-                onCommit={(v) => update(i, { amount_cy: v == null ? 0 : Number(v) })}
+                onCommit={(v) => update(origIdx, { amount_cy: v == null ? 0 : Number(v) })}
               />
             </div>
             <div className="col-span-2">
@@ -329,13 +338,13 @@ export function ListTable({
                 value={r.amount_py ?? 0}
                 isAutoFilled={isLinked}
                 isOverridden={isManual && (r.amount_py ?? 0) !== 0}
-                onCommit={(v) => update(i, { amount_py: v == null ? 0 : Number(v) })}
+                onCommit={(v) => update(origIdx, { amount_py: v == null ? 0 : Number(v) })}
               />
             </div>
             <div className="col-span-1 flex justify-end">
               <button
                 type="button"
-                onClick={() => remove(i)}
+                onClick={() => remove(origIdx)}
                 className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
                 title="Remove row"
               >

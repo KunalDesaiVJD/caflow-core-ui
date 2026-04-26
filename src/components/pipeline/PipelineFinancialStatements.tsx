@@ -196,7 +196,7 @@ const NCE_LIAB_IDS: string[] = [
 // positive (as shown), so we must negate before storing back as a manual override.
 const BS_LIABILITY_CODES = new Set([
   "BS_EQ_SC", "BS_EQ_RS",
-  "BS_NCL_LTB", "BS_NCL_OLT", "BS_NCL_LTP",
+  "BS_NCL_LTB", "BS_NCL_DTL", "BS_NCL_OLT", "BS_NCL_LTP",
   "BS_CL_STB", "BS_CL_TP", "BS_CL_OCL", "BS_CL_STP",
 ]);
 // Corporate P&L revenue-side codes — same sign convention.
@@ -245,17 +245,26 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
   // on the Balance Sheet face (Assets and E&L both show positive amounts).
   const negL = (v: number | null | undefined) => -(v || 0);
 
+  // Smart note: only show a note number when at least one year has non-zero data.
+  // Pass the RAW (pre-negation) cy/py values — the zero-check is sign-agnostic.
+  const sn = (
+    noteNo: number | null | undefined,
+    rawCy: number | null | undefined,
+    rawPy: number | null | undefined,
+  ): number | null =>
+    (rawCy || 0) !== 0 || (rawPy || 0) !== 0 ? (noteNo ?? null) : null;
+
   // Section subtotals — match Excel SUM(E10:E30) and SUM(E35:E52) ranges.
   // Negate because raw values are negative (Tally credit convention).
   const totalEL =
     negL(bs.shareCap.cy) + negL(bs.reserves.cy) +
-    negL(bs.ltBorrowings.cy) + negL(bs.otherLtLiab.cy) + negL(bs.ltProvisions.cy) +
+    negL(bs.ltBorrowings.cy) + negL(bs.dtLiab.cy) + negL(bs.otherLtLiab.cy) + negL(bs.ltProvisions.cy) +
     negL(bs.stBorrowings.cy) +
     negL(bs.tradePayMSME.cy) + negL(bs.tradePayOthers.cy) +
     negL(bs.otherCurrLiab.cy) + negL(bs.stProvisions.cy);
   const totalELpy =
     negL(bs.shareCap.py) + negL(bs.reserves.py) +
-    negL(bs.ltBorrowings.py) + negL(bs.otherLtLiab.py) + negL(bs.ltProvisions.py) +
+    negL(bs.ltBorrowings.py) + negL(bs.dtLiab.py) + negL(bs.otherLtLiab.py) + negL(bs.ltProvisions.py) +
     negL(bs.stBorrowings.py) +
     negL(bs.tradePayMSME.py) + negL(bs.tradePayOthers.py) +
     negL(bs.otherCurrLiab.py) + negL(bs.stProvisions.py);
@@ -274,24 +283,24 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     // ── EQUITY & LIABILITIES ─────────────────────────────────────────────
     { kind: "section", label: "I  EQUITY AND LIABILITIES", size: 10 },
     { kind: "subhead", label: "(1) Shareholders' funds" },
-    { kind: "item", label: "(a) Share capital",         noteNo: bs.shareCap.noteNo,    cy: negL(bs.shareCap.cy),    py: negL(bs.shareCap.py),    indent: 1, code: "BS_EQ_SC" },
-    { kind: "item", label: "(b) Reserves and surplus",  noteNo: bs.reserves.noteNo,    cy: negL(bs.reserves.cy),    py: negL(bs.reserves.py),    indent: 1, code: "BS_EQ_RS" },
+    { kind: "item", label: "(a) Share capital",         noteNo: sn(bs.shareCap.noteNo, bs.shareCap.cy, bs.shareCap.py),   cy: negL(bs.shareCap.cy),    py: negL(bs.shareCap.py),    indent: 1, code: "BS_EQ_SC" },
+    { kind: "item", label: "(b) Reserves and surplus",  noteNo: sn(bs.reserves.noteNo, bs.reserves.cy, bs.reserves.py),   cy: negL(bs.reserves.cy),    py: negL(bs.reserves.py),    indent: 1, code: "BS_EQ_RS" },
     { kind: "spacer" },
     { kind: "item", label: "(2) Share application money pending allotment", cy: 0, py: 0, size: 9 },
     { kind: "spacer" },
     { kind: "subhead", label: "(3) Non-Current liabilities" },
-    { kind: "item", label: "(a) Long-term borrowings",          noteNo: bs.ltBorrowings.noteNo, cy: negL(bs.ltBorrowings.cy), py: negL(bs.ltBorrowings.py), indent: 1, code: "BS_NCL_LTB" },
-    { kind: "item", label: "(b) Deferred tax liabilities (Net)", cy: 0, py: 0, indent: 1 },
-    { kind: "item", label: "(c) Other Long term liabilities",   noteNo: bs.otherLtLiab.noteNo,  cy: negL(bs.otherLtLiab.cy),  py: negL(bs.otherLtLiab.py),  indent: 1, code: "BS_NCL_OLT" },
-    { kind: "item", label: "(d) Long-term provisions",          noteNo: bs.ltProvisions.noteNo, cy: negL(bs.ltProvisions.cy), py: negL(bs.ltProvisions.py), indent: 1, code: "BS_NCL_LTP" },
+    { kind: "item", label: "(a) Long-term borrowings",           noteNo: sn(bs.ltBorrowings.noteNo, bs.ltBorrowings.cy, bs.ltBorrowings.py), cy: negL(bs.ltBorrowings.cy), py: negL(bs.ltBorrowings.py), indent: 1, code: "BS_NCL_LTB" },
+    { kind: "item", label: "(b) Deferred tax liabilities (Net)", noteNo: sn(bs.dtLiab.noteNo, bs.dtLiab.cy, bs.dtLiab.py),                    cy: negL(bs.dtLiab.cy),       py: negL(bs.dtLiab.py),       indent: 1, code: "BS_NCL_DTL" },
+    { kind: "item", label: "(c) Other Long term liabilities",    noteNo: sn(bs.otherLtLiab.noteNo, bs.otherLtLiab.cy, bs.otherLtLiab.py),     cy: negL(bs.otherLtLiab.cy),  py: negL(bs.otherLtLiab.py),  indent: 1, code: "BS_NCL_OLT" },
+    { kind: "item", label: "(d) Long-term provisions",           noteNo: sn(bs.ltProvisions.noteNo, bs.ltProvisions.cy, bs.ltProvisions.py),   cy: negL(bs.ltProvisions.cy), py: negL(bs.ltProvisions.py), indent: 1, code: "BS_NCL_LTP" },
     { kind: "spacer" },
     { kind: "subhead", label: "(4) Current liabilities" },
-    { kind: "item", label: "(a) Short-term borrowings",  noteNo: bs.stBorrowings.noteNo, cy: negL(bs.stBorrowings.cy), py: negL(bs.stBorrowings.py), indent: 1, code: "BS_CL_STB" },
-    { kind: "subhead", label: "(b) Trade payables", noteNo: bs.tradePayables.noteNo, indent: 1, code: "BS_CL_TP" },
+    { kind: "item", label: "(a) Short-term borrowings",  noteNo: sn(bs.stBorrowings.noteNo, bs.stBorrowings.cy, bs.stBorrowings.py), cy: negL(bs.stBorrowings.cy), py: negL(bs.stBorrowings.py), indent: 1, code: "BS_CL_STB" },
+    { kind: "subhead", label: "(b) Trade payables", noteNo: sn(bs.tradePayables.noteNo, (bs.tradePayMSME.cy ?? 0) + (bs.tradePayOthers.cy ?? 0), (bs.tradePayMSME.py ?? 0) + (bs.tradePayOthers.py ?? 0)), indent: 1, code: "BS_CL_TP" },
     { kind: "item", label: "(i) Micro and Small Enterprises", cy: negL(bs.tradePayMSME.cy),   py: negL(bs.tradePayMSME.py),   indent: 2 },
     { kind: "item", label: "(ii) Others",                     cy: negL(bs.tradePayOthers.cy), py: negL(bs.tradePayOthers.py), indent: 2, code: "BS_CL_TP" },
-    { kind: "item", label: "(c) Other current liabilities", noteNo: bs.otherCurrLiab.noteNo, cy: negL(bs.otherCurrLiab.cy), py: negL(bs.otherCurrLiab.py), indent: 1, size: 10, code: "BS_CL_OCL" },
-    { kind: "item", label: "(d) Short-term provisions",     noteNo: bs.stProvisions.noteNo,  cy: negL(bs.stProvisions.cy),  py: negL(bs.stProvisions.py),  indent: 1, code: "BS_CL_STP" },
+    { kind: "item", label: "(c) Other current liabilities", noteNo: sn(bs.otherCurrLiab.noteNo, bs.otherCurrLiab.cy, bs.otherCurrLiab.py), cy: negL(bs.otherCurrLiab.cy), py: negL(bs.otherCurrLiab.py), indent: 1, size: 10, code: "BS_CL_OCL" },
+    { kind: "item", label: "(d) Short-term provisions",     noteNo: sn(bs.stProvisions.noteNo, bs.stProvisions.cy, bs.stProvisions.py),     cy: negL(bs.stProvisions.cy),  py: negL(bs.stProvisions.py),  indent: 1, code: "BS_CL_STP" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
     { kind: "spacer" },
@@ -299,21 +308,21 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
     { kind: "section", label: "II  ASSETS", size: 10 },
     { kind: "subhead", label: "(1) Non-Current Assets" },
     { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
-    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: bs.ppe.noteNo, cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2, code: "BS_NCA_FA" },
+    { kind: "item", label: "(i) Property, plant and equipment and Intangible Assets", noteNo: sn(bs.ppe.noteNo, bs.ppe.cy, bs.ppe.py), cy: bs.ppe.cy || 0, py: bs.ppe.py || 0, indent: 2, code: "BS_NCA_FA" },
     { kind: "item", label: "(ii) Intangible assets",          cy: 0, py: 0, indent: 2 },
     { kind: "item", label: "(iii) Capital work-in-Progress",  cy: 0, py: 0, indent: 2 },
-    { kind: "item", label: "(b) Non-current investments",        noteNo: bs.ncInvestments.noteNo, cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10, code: "BS_NCA_INV" },
-    { kind: "item", label: "(c) Deferred tax assets (Net)",      noteNo: bs.dtAssets.noteNo,      cy: bs.dtAssets.cy || 0,      py: bs.dtAssets.py || 0,      indent: 1, size: 10, code: "BS_NCA_DTA" },
-    { kind: "item", label: "(d) Long-term loans and advances",   noteNo: bs.ltLoans.noteNo,       cy: bs.ltLoans.cy || 0,       py: bs.ltLoans.py || 0,       indent: 1, code: "BS_NCA_LLA" },
-    { kind: "item", label: "(e) Other non-current Assets",       noteNo: bs.otherNcAssets.noteNo, cy: bs.otherNcAssets.cy || 0, py: bs.otherNcAssets.py || 0, indent: 1, size: 10, code: "BS_NCA_ONA" },
+    { kind: "item", label: "(b) Non-current investments",        noteNo: sn(bs.ncInvestments.noteNo, bs.ncInvestments.cy, bs.ncInvestments.py), cy: bs.ncInvestments.cy || 0, py: bs.ncInvestments.py || 0, indent: 1, size: 10, code: "BS_NCA_INV" },
+    { kind: "item", label: "(c) Deferred tax assets (Net)",      noteNo: sn(bs.dtAssets.noteNo, bs.dtAssets.cy, bs.dtAssets.py),               cy: bs.dtAssets.cy || 0,      py: bs.dtAssets.py || 0,      indent: 1, size: 10, code: "BS_NCA_DTA" },
+    { kind: "item", label: "(d) Long-term loans and advances",   noteNo: sn(bs.ltLoans.noteNo, bs.ltLoans.cy, bs.ltLoans.py),                   cy: bs.ltLoans.cy || 0,       py: bs.ltLoans.py || 0,       indent: 1, code: "BS_NCA_LLA" },
+    { kind: "item", label: "(e) Other non-current Assets",       noteNo: sn(bs.otherNcAssets.noteNo, bs.otherNcAssets.cy, bs.otherNcAssets.py), cy: bs.otherNcAssets.cy || 0, py: bs.otherNcAssets.py || 0, indent: 1, size: 10, code: "BS_NCA_ONA" },
     { kind: "spacer" },
     { kind: "subhead", label: "(2) Current assets" },
-    { kind: "item", label: "(a) Current investments",          noteNo: bs.currInvestments.noteNo, cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1, code: "BS_CA_CI" },
-    { kind: "item", label: "(b) Inventories",                  noteNo: bs.inventories.noteNo,     cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1, code: "BS_CA_INV" },
-    { kind: "item", label: "(c) Trade receivables",            noteNo: bs.tradeRec.noteNo,        cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1, code: "BS_CA_TR" },
-    { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: bs.cashBank.noteNo,        cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1, code: "BS_CA_CCE" },
-    { kind: "item", label: "(e) Short-term loans and advances",noteNo: bs.stLoans.noteNo,         cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1, code: "BS_CA_SLA" },
-    { kind: "item", label: "(f) Other current assets",         noteNo: bs.otherCurrAssets.noteNo, cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1, code: "BS_CA_OCA" },
+    { kind: "item", label: "(a) Current investments",          noteNo: sn(bs.currInvestments.noteNo, bs.currInvestments.cy, bs.currInvestments.py), cy: bs.currInvestments.cy || 0, py: bs.currInvestments.py || 0, indent: 1, code: "BS_CA_CI" },
+    { kind: "item", label: "(b) Inventories",                  noteNo: sn(bs.inventories.noteNo, bs.inventories.cy, bs.inventories.py),             cy: bs.inventories.cy || 0,     py: bs.inventories.py || 0,     indent: 1, code: "BS_CA_INV" },
+    { kind: "item", label: "(c) Trade receivables",            noteNo: sn(bs.tradeRec.noteNo, bs.tradeRec.cy, bs.tradeRec.py),                     cy: bs.tradeRec.cy || 0,        py: bs.tradeRec.py || 0,        indent: 1, code: "BS_CA_TR" },
+    { kind: "item", label: "(d) Cash and bank equivalents",    noteNo: sn(bs.cashBank.noteNo, bs.cashBank.cy, bs.cashBank.py),                     cy: bs.cashBank.cy || 0,        py: bs.cashBank.py || 0,        indent: 1, code: "BS_CA_CCE" },
+    { kind: "item", label: "(e) Short-term loans and advances",noteNo: sn(bs.stLoans.noteNo, bs.stLoans.cy, bs.stLoans.py),                       cy: bs.stLoans.cy || 0,         py: bs.stLoans.py || 0,         indent: 1, code: "BS_CA_SLA" },
+    { kind: "item", label: "(f) Other current assets",         noteNo: sn(bs.otherCurrAssets.noteNo, bs.otherCurrAssets.cy, bs.otherCurrAssets.py), cy: bs.otherCurrAssets.cy || 0, py: bs.otherCurrAssets.py || 0, indent: 1, code: "BS_CA_OCA" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL ASSETS", cy: totalAssets, py: totalAssetsPy },
     { kind: "footer", label: "Significant accounting policies and estimates", noteNo: bs.sigPolicies.noteNo },
@@ -588,18 +597,18 @@ function buildPLRows(pl: PLRowData): PLDisplayRow[] {
   const epsBasicPy = profitPy / epsDivisor;
 
   return [
-    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: pl.revFromOps.noteNo, cy: negI(pl.revFromOps.cy), py: negI(pl.revFromOps.py), code: "PL_REV_OPS" },
-    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: pl.otherIncome.noteNo, cy: negI(pl.otherIncome.cy), py: negI(pl.otherIncome.py), code: "PL_REV_OI" },
+    { kind: "item",   roman: "I.",   label: "Revenue from operations", noteNo: sn(pl.revFromOps.noteNo, pl.revFromOps.cy, pl.revFromOps.py),     cy: negI(pl.revFromOps.cy), py: negI(pl.revFromOps.py), code: "PL_REV_OPS" },
+    { kind: "item",   roman: "II.",  label: "Other income",            noteNo: sn(pl.otherIncome.noteNo, pl.otherIncome.cy, pl.otherIncome.py),   cy: negI(pl.otherIncome.cy), py: negI(pl.otherIncome.py), code: "PL_REV_OI" },
     { kind: "total",  roman: "III.", label: "Total Income (I+II)",     cy: totalIncomeCy, py: totalIncomePy },
     { kind: "spacer" },
     { kind: "header", roman: "IV.",  label: "Expenses" },
     { kind: "item",   label: "Cost of materials consumed",            noteNo: pl.costMaterials.noteNo, indent: 1, code: "PL_EXP_MAT" },
-    { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: pl.purchasesStock.noteNo, cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1, code: "PL_EXP_SIT" },
-    { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: pl.changesInventories.noteNo, cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1, code: "PL_EXP_CII" },
-    { kind: "item",   label: "Employee benefits expense",             noteNo: pl.employeeBenefits.noteNo, cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1, code: "PL_EXP_EMP" },
-    { kind: "item",   label: "Finance Costs",                         noteNo: pl.financeCosts.noteNo, cy: pl.financeCosts.cy, py: pl.financeCosts.py, indent: 1, code: "PL_EXP_FIN" },
-    { kind: "item",   label: "Depreciation & Amortisation Expenses",  noteNo: pl.depreciation.noteNo, cy: pl.depreciation.cy, py: pl.depreciation.py, indent: 1, code: "PL_EXP_DEP" },
-    { kind: "item",   label: "Other expenses",                        noteNo: pl.otherExpenses.noteNo, cy: pl.otherExpenses.cy, py: pl.otherExpenses.py, indent: 1, code: "PL_EXP_OTH" },
+    { kind: "item",   label: "Purchases of Stock-in-Trade",           noteNo: sn(pl.purchasesStock.noteNo, pl.purchasesStock.cy, pl.purchasesStock.py),             cy: pl.purchasesStock.cy, py: pl.purchasesStock.py, indent: 1, code: "PL_EXP_SIT" },
+    { kind: "item",   label: "Changes in inventories of finished goods, Work-in-progress and Stock-in-Trade", noteNo: sn(pl.changesInventories.noteNo, pl.changesInventories.cy, pl.changesInventories.py), cy: pl.changesInventories.cy, py: pl.changesInventories.py, indent: 1, code: "PL_EXP_CII" },
+    { kind: "item",   label: "Employee benefits expense",             noteNo: sn(pl.employeeBenefits.noteNo, pl.employeeBenefits.cy, pl.employeeBenefits.py),         cy: pl.employeeBenefits.cy, py: pl.employeeBenefits.py, indent: 1, code: "PL_EXP_EMP" },
+    { kind: "item",   label: "Finance Costs",                         noteNo: sn(pl.financeCosts.noteNo, pl.financeCosts.cy, pl.financeCosts.py),                     cy: pl.financeCosts.cy, py: pl.financeCosts.py, indent: 1, code: "PL_EXP_FIN" },
+    { kind: "item",   label: "Depreciation & Amortisation Expenses",  noteNo: sn(pl.depreciation.noteNo, pl.depreciation.cy, pl.depreciation.py),                   cy: pl.depreciation.cy, py: pl.depreciation.py, indent: 1, code: "PL_EXP_DEP" },
+    { kind: "item",   label: "Other expenses",                        noteNo: sn(pl.otherExpenses.noteNo, pl.otherExpenses.cy, pl.otherExpenses.py),                 cy: pl.otherExpenses.cy, py: pl.otherExpenses.py, indent: 1, code: "PL_EXP_OTH" },
     { kind: "total",  label: "Total Expenses",                        cy: totalExpensesCy, py: totalExpensesPy },
     { kind: "spacer" },
     { kind: "item",   roman: "V.",   label: "Profit before exceptional and extraordinary items and tax", cy: pbExceptionalCy, py: pbExceptionalPy, bold: true },

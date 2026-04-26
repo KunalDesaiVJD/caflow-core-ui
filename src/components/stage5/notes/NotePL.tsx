@@ -30,6 +30,10 @@ export default function NotePL({
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // Smart note: only show a note number when at least one year has data.
+  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
+    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+
   // Breakup rows now come from autoPopulateNotes (notesAutoPopulate.ts):
   // each note's `.breakup` array is built from COA-mapped TB ledgers, with
   // optional Schedule-III suggestion templates merged in (e.g. Note 29's 37
@@ -78,12 +82,12 @@ export default function NotePL({
 
   return (
     <div className="space-y-4">
-      {renderListNote(getNoteNo("revenue_from_ops")!, "Revenue from operations", "revenue_from_ops",
+      {renderListNote(sn("revenue_from_ops"), "Revenue from operations", "revenue_from_ops",
         "(a) Sale of products (net of returns) / (b) Sale of services / (c) Commission")}
-      {renderListNote(getNoteNo("other_income")!, "Other Income", "other_income",
+      {renderListNote(sn("other_income"), "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard noteNo={getNoteNo("cost_materials")} title="Cost of materials consumed">
+      <NoteCard noteNo={sn("cost_materials")} title="Cost of materials consumed">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Opening Stock"
@@ -126,10 +130,10 @@ export default function NotePL({
         />
       </NoteCard>
 
-      {renderListNote(getNoteNo("purchases_stock")!, "Purchase of stock-in-trade", "purchases_stock",
+      {renderListNote(sn("purchases_stock"), "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
 
-      <NoteCard noteNo={getNoteNo("changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
+      <NoteCard noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
         <EditableRow
@@ -201,17 +205,17 @@ export default function NotePL({
         />
       </NoteCard>
 
-      {renderListNote(getNoteNo("employee_benefits")!, "Employee benefits expense", "employee_benefits",
+      {renderListNote(sn("employee_benefits"), "Employee benefits expense", "employee_benefits",
         "Salaries / Director remuneration / PF / Staff welfare")}
       {/* Finance Costs — Note 28 per NOTE_REGISTRY */}
-      {renderListNote(getNoteNo("finance_costs")!, "Finance Cost", "finance_costs",
+      {renderListNote(sn("finance_costs"), "Finance Cost", "finance_costs",
         "Interest to Bank / Other / Other borrowing cost / Interest on advance income tax")}
 
       {/* Note 29 — Other expenses; 37-head template lives in NOTE_ROW_REGISTRY */}
-      {renderListNote(getNoteNo("other_expenses")!, "Other expenses", "other_expenses",
+      {renderListNote(sn("other_expenses"), "Other expenses", "other_expenses",
         "Other expense particulars")}
 
-      {/* EPS — Note 30 per NOTE_REGISTRY */}
+      {/* EPS — Note 30 per NOTE_REGISTRY; always visible for corporate entities */}
       <NoteCard noteNo={getNoteNo("eps")} title="Earnings per share (EPS)">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow

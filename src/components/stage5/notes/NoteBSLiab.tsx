@@ -76,6 +76,12 @@ export default function NoteBSLiab({
   const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // Smart note: only show a note number when at least one year has data.
+  // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
+  // (defaults to dataKey when they match, e.g. lt_borrowings → lt_borrowings).
+  const sn = (dataKey: string, regKey: string = dataKey): number | null =>
+    cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
+
   // ── Trade Payables ageing schemas ─────────────────────────────────────────
   const TP_ROWS = [
     { key: "msme",        label: "(i) MSME" },
@@ -164,7 +170,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 1 — SHARE CAPITAL
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard noteNo={getNoteNo("share_capital")} title="Share capital">
+      <NoteCard noteNo={sn("share_capital")} title="Share capital">
 
         {/* ── Main amounts table ──────────────────────────────────────────── */}
         <div className="overflow-x-auto">
@@ -555,7 +561,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 2 — RESERVES AND SURPLUS
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard noteNo={getNoteNo("reserves_surplus")} title="Reserves and surplus">
+      <NoteCard noteNo={sn("reserves_surplus")} title="Reserves and surplus">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
 
         {/* 1. General Reserve — auto from COA mapping */}
@@ -654,7 +660,7 @@ export default function NoteBSLiab({
           NOTES 3–10 (unchanged)
       ════════════════════════════════════════════════════════════════════ */}
 
-      <NoteCard noteNo={getNoteNo("lt_borrowings")} title="Long-term borrowings">
+      <NoteCard noteNo={sn("lt_borrowings")} title="Long-term borrowings">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
@@ -676,7 +682,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("deferred_tax_liab")} title="Deferred tax liabilities (Net)">
+      <NoteCard noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Excess of depreciation claimed in IT Act over books"
@@ -707,7 +713,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("other_lt_liab")} title="Other long-term liabilities">
+      <NoteCard noteNo={sn("other_lt_liabilities", "other_lt_liab")} title="Other long-term liabilities">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_lt_liabilities.breakup") ?? []) as ListRow[]}
@@ -729,7 +735,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("lt_provisions")} title="Long-term provisions">
+      <NoteCard noteNo={sn("lt_provisions")} title="Long-term provisions">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_provisions.breakup") ?? []) as ListRow[]}
@@ -751,7 +757,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("st_borrowings")} title="Short-term borrowings">
+      <NoteCard noteNo={sn("st_borrowings")} title="Short-term borrowings">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
@@ -773,7 +779,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("trade_payables")} title="Trade Payables">
+      <NoteCard noteNo={sn("trade_payables")} title="Trade Payables">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Total outstanding dues of Micro and Small Enterprises"
@@ -836,7 +842,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("other_current_liab")} title="Other current liabilities">
+      <NoteCard noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_curr_liab.breakup") ?? []) as ListRow[]}
@@ -858,7 +864,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={getNoteNo("st_provisions")} title="Short-term provisions">
+      <NoteCard noteNo={sn("st_provisions")} title="Short-term provisions">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_provisions.breakup") ?? []) as ListRow[]}
