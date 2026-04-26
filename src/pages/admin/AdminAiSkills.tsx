@@ -365,6 +365,10 @@ type IntelRow = {
   alternatives: { account_head: string; count: number }[] | null;
   firms_affected: number;
   last_used_at: string | null;
+  // Scope control (added 2026-04-26)
+  is_party_name: boolean;
+  scope: string;           // 'global' | 'engagement'
+  client_id: string | null;
 };
 
 type CoaHead = { account_head: string; bs_pl: string | null; group_name: string | null; entity_type: string };
@@ -375,6 +379,7 @@ function CoaIntelligencePanel() {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [entity, setEntity] = useState<"all" | "corporate" | "llp" | "nce">("all");
+  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "engagement">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -395,6 +400,7 @@ function CoaIntelligencePanel() {
 
   const filtered = rows.filter((r) => {
     if (entity !== "all" && r.entity_type !== entity) return false;
+    if (scopeFilter !== "all" && (r.scope ?? "global") !== scopeFilter) return false;
     if (!q.trim()) return true;
     const qq = q.toLowerCase();
     return (
@@ -403,6 +409,18 @@ function CoaIntelligencePanel() {
       (r.account_group ?? "").toLowerCase().includes(qq)
     );
   });
+
+  // Promote an engagement-scoped pattern to global scope (admin override)
+  const promoteToGlobal = async (r: IntelRow) => {
+    if (!confirm(`Promote "${r.normalized_name}" to global scope?\nThis will make it apply to ALL clients across all firms.`)) return;
+    const { error } = await supabase
+      .from("coa_mapping_intelligence" as any)
+      .update({ scope: "global", is_party_name: false, client_id: null })
+      .eq("id", r.id);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`Promoted to global: ${r.normalized_name}`);
+    load();
+  };
 
   const remap = async (r: IntelRow, h: CoaHead) => {
     const { error } = await supabase
@@ -436,12 +454,15 @@ function CoaIntelligencePanel() {
         <CardTitle className="text-sm flex items-center gap-2">
           <Zap size={14} className="text-violet-600" />
           Cross-Client COA Mapping Intelligence
-          <Badge variant="outline">{rows.length} learned patterns</Badge>
+          <Badge variant="outline">{rows.filter(r => (r.scope ?? 'global') === 'global').length} global patterns</Badge>
+          <Badge variant="outline" className="border-amber-400 text-amber-700">{rows.filter(r => r.scope === 'engagement').length} client-scoped</Badge>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Every time a user confirms or overrides a COA mapping, it is recorded here and reused across all future engagements — for every firm, every client. Remap an entry to override the learned suggestion.
+          When a user confirms or overrides a COA mapping, it is recorded here.{" "}
+          <span className="text-green-700 font-medium">Global patterns</span> (generic ledger/account names) apply across all firms and clients and are used to train Claude.{" "}
+          <span className="text-amber-700 font-medium">Client-scoped patterns</span> (vendor/customer/party business names) are restricted to the same client in future years and are never sent to Claude as global training data.
         </p>
-        <div className="flex gap-2 pt-2">
+        <div className="flex gap-2 pt-2 flex-wrap">
           <div className="relative flex-1 max-w-md">
             <Search size={14} className="absolute left-3 top-3 text-muted-foreground" />
             <Input className="pl-9" placeholder="Search ledger name or account head…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -451,6 +472,11 @@ function CoaIntelligencePanel() {
             <option value="corporate">Corporate</option>
             <option value="llp">LLP</option>
             <option value="nce">NCE</option>
+          </select>
+          <select value={scopeFilter} onChange={(e) => setScopeFilter(e.target.value as any)} className="border rounded-md px-3 text-sm bg-background">
+            <option value="all">All scopes</option>
+            <option value="global">🌐 Global only</option>
+            <option value="engagement">🔒 Client-scoped only</option>
           </select>
         </div>
       </CardHeader>
@@ -464,44 +490,78 @@ function CoaIntelligencePanel() {
             <TableHeader>
               <TableRow>
                 <TableHead>Ledger pattern</TableHead>
+                <TableHead>Scope</TableHead>
                 <TableHead>Entity</TableHead>
                 <TableHead>Current mapping</TableHead>
                 <TableHead>BS/PL</TableHead>
                 <TableHead className="text-right">Confidence</TableHead>
                 <TableHead className="text-right">Confirms / Overrides</TableHead>
                 <TableHead className="text-right">Firms</TableHead>
-                <TableHead className="w-[170px]"></TableHead>
+                <TableHead className="w-[200px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.slice(0, 500).map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-mono text-xs">{r.normalized_name}</TableCell>
-                  <TableCell><Badge variant="outline" className="text-xs">{r.entity_type.toUpperCase()}</Badge></TableCell>
-                  <TableCell>
-                    <div className="font-medium text-sm">{r.account_head}</div>
-                    {r.account_group && <div className="text-xs text-muted-foreground">{r.account_group}</div>}
-                  </TableCell>
-                  <TableCell>{r.bs_pl ? <Badge variant="outline">{r.bs_pl}</Badge> : "-"}</TableCell>
-                  <TableCell className="text-right">
-                    <Badge className={r.confidence_score >= 85 ? "bg-green-600 text-white" : r.confidence_score >= 65 ? "bg-amber-500 text-white" : "bg-muted text-foreground"}>
-                      {Math.round(r.confidence_score)}%
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    <span className="text-green-700">{r.times_confirmed}</span>
-                    <span className="text-muted-foreground"> / </span>
-                    <span className="text-rose-700">{r.times_overridden}</span>
-                  </TableCell>
-                  <TableCell className="text-right">{r.firms_affected}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 justify-end">
-                      <IntelRemapPopover r={r} heads={heads.filter((h) => h.entity_type === r.entity_type)} onPick={remap} />
-                      <Button size="sm" variant="ghost" onClick={() => remove(r)} className="text-destructive"><Trash2 size={14} /></Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {filtered.slice(0, 500).map((r) => {
+                const isParty = r.is_party_name;
+                const isEngagement = (r.scope ?? "global") === "engagement";
+                return (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <div className="font-mono text-xs">{r.normalized_name}</div>
+                      {isParty && (
+                        <div className="text-[10px] text-amber-600 mt-0.5">
+                          👤 Party/business name — client-scoped only
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {isEngagement ? (
+                        <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-50">
+                          🔒 Client
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs border-green-500 text-green-700 bg-green-50">
+                          🌐 Global
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell><Badge variant="outline" className="text-xs">{r.entity_type.toUpperCase()}</Badge></TableCell>
+                    <TableCell>
+                      <div className="font-medium text-sm">{r.account_head}</div>
+                      {r.account_group && <div className="text-xs text-muted-foreground">{r.account_group}</div>}
+                    </TableCell>
+                    <TableCell>{r.bs_pl ? <Badge variant="outline">{r.bs_pl}</Badge> : "-"}</TableCell>
+                    <TableCell className="text-right">
+                      <Badge className={r.confidence_score >= 85 ? "bg-green-600 text-white" : r.confidence_score >= 65 ? "bg-amber-500 text-white" : "bg-muted text-foreground"}>
+                        {Math.round(r.confidence_score)}%
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      <span className="text-green-700">{r.times_confirmed}</span>
+                      <span className="text-muted-foreground"> / </span>
+                      <span className="text-rose-700">{r.times_overridden}</span>
+                    </TableCell>
+                    <TableCell className="text-right">{r.firms_affected}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 justify-end flex-wrap">
+                        {isEngagement && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs text-green-700 border-green-400 px-2"
+                            title="Promote to global — applies to all clients"
+                            onClick={() => promoteToGlobal(r)}
+                          >
+                            🌐
+                          </Button>
+                        )}
+                        <IntelRemapPopover r={r} heads={heads.filter((h) => h.entity_type === r.entity_type)} onPick={remap} />
+                        <Button size="sm" variant="ghost" onClick={() => remove(r)} className="text-destructive"><Trash2 size={14} /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
