@@ -3,22 +3,31 @@
  *
  * Stage 8 → Notes to Accounts — Corporate entity single-page editor.
  *
- * Layout:
- *   • Note 1  — Corporate Information (overview paragraph, inline editable fields)
- *   • Note 2  — Significant Accounting Policies (18 default + add/delete)
- *   • General Notes (9 default + add/delete)
- *   • Toolbar: Save All | Reset to Defaults | Print
+ * Layout
+ * ──────
+ *  Toolbar  : Save All | Reset to Defaults (w/ confirm) | Print
+ *  Title    : "Note No: 1 — DISCLOSURE OF ACCOUNTING POLICIES &
+ *              NOTES FORMING PART OF THE ANNUAL ACCOUNTS"
+ *  Section (a) : Overview of the Reporting Entity
+ *                – company name (from client master, read-only)
+ *                – incorporation date  → DateField (overrideable)
+ *                – CIN                → from client master
+ *                – registered address → EditableInline
+ *                – business activity  → EditableInline
+ *  Section (b) : Significant Accounting Policies
+ *                – 2.1 … 2.18 (editable AutoGrowTextarea, × delete w/ confirm)
+ *                – 2.19 General Notes (9 rows, × delete w/ confirm)
+ *                – + Add Policy / + Add General Note
  *
- * Data is persisted to audit_engagements.stage8_nta_data (JSONB).
- * Empty body strings fall back to NTA_POLICY_DEFAULTS / NTA_GENERAL_NOTES_DEFAULTS
- * at render time; the DB is never bloated with default text.
+ * Persistence  : audit_engagements.stage8_nta_data (JSONB)
+ *                Empty body "" → falls back to NTA_POLICY_DEFAULTS / NTA_GENERAL_NOTES_DEFAULTS
  */
 
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, RotateCcw, Printer, Plus, Trash2, Loader2 } from "lucide-react";
+import { Save, RotateCcw, Printer, Plus, Loader2 } from "lucide-react";
 import {
   NTA_POLICY_META,
   NTA_POLICY_DEFAULTS,
@@ -45,8 +54,22 @@ function getActYear(dateStr: string | null | undefined): string {
   return yr >= 2014 ? "2013" : "1956";
 }
 
+/** Format ISO date as "dd Month yyyy" in Indian locale. */
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit", month: "long", year: "numeric",
+  });
+}
+
 const DEFAULT_DATA: Stage8NtaData = {
-  overview: { registered_address_override: null, business_activity_override: null },
+  overview: {
+    registered_address_override:  null,
+    business_activity_override:   null,
+    incorporation_date_override:  null,
+  },
   policies: NTA_POLICY_META.map(m => ({ id: m.id, title: m.title, body: "" })),
   general_notes: Array.from({ length: 9 }, (_, i) => ({ id: i + 1, body: "" })),
 };
@@ -57,6 +80,7 @@ function initData(raw: any): Stage8NtaData {
     overview: {
       registered_address_override: raw.overview?.registered_address_override ?? null,
       business_activity_override:  raw.overview?.business_activity_override  ?? null,
+      incorporation_date_override: raw.overview?.incorporation_date_override ?? null,
     },
     policies: Array.isArray(raw.policies) && raw.policies.length
       ? raw.policies
@@ -70,8 +94,8 @@ function initData(raw: any): Stage8NtaData {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /**
- * Renders as plain text; clicking activates an <input> for inline editing.
- * Commits on blur or Enter; reverts on Escape.
+ * Inline-editable text: plain span → <input> on click.
+ * Commits on blur / Enter; reverts on Escape.
  */
 function EditableInline({
   value,
@@ -85,7 +109,7 @@ function EditableInline({
   className?: string;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft]     = useState(value);
+  const [draft,   setDraft]   = useState(value);
 
   useEffect(() => { setDraft(value); }, [value]);
 
@@ -106,7 +130,6 @@ function EditableInline({
       />
     );
   }
-
   return (
     <span
       role="button"
@@ -119,6 +142,62 @@ function EditableInline({
       } ${className}`}
     >
       {value || placeholder}
+    </span>
+  );
+}
+
+/**
+ * Inline date picker: displays as formatted text; clicking activates
+ * a native <input type="date"> for override selection.
+ */
+function DateField({
+  value,
+  onChange,
+  placeholder = "click to set date",
+  className = "",
+}: {
+  value: string;           // ISO YYYY-MM-DD
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(value);
+
+  useEffect(() => { setDraft(value); }, [value]);
+
+  const commit = (v: string) => { onChange(v); setEditing(false); };
+
+  if (editing) {
+    return (
+      <input
+        type="date"
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={e => {
+          if (e.key === "Enter")  { e.preventDefault(); commit(draft); }
+          if (e.key === "Escape") { setDraft(value); setEditing(false); }
+        }}
+        className={`border-b border-primary outline-none bg-transparent px-0.5 ${className}`}
+      />
+    );
+  }
+
+  const display = fmtDate(value);
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={e => e.key === "Enter" && setEditing(true)}
+      title="Click to change date"
+      className={`cursor-pointer rounded hover:bg-amber-50 underline decoration-dotted underline-offset-2 ${
+        display ? "" : "text-muted-foreground italic"
+      } ${className}`}
+    >
+      {display || placeholder}
     </span>
   );
 }
@@ -157,6 +236,20 @@ function AutoGrowTextarea({
   );
 }
 
+/** Small × delete button (Unicode multiplication sign). */
+function DeleteBtn({ onClick, title = "Delete" }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="print:hidden shrink-0 w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors text-base leading-none select-none"
+    >
+      ×
+    </button>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function CorporateNTA({ engagement, client, onUpdate }: Props) {
@@ -164,24 +257,25 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   const [saving, setSaving] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Re-initialise when the user switches to a different engagement
+  // Re-initialise when the user switches engagement
   useEffect(() => {
     setData(initData(engagement?.stage8_nta_data));
   }, [engagement?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cleanup timer on unmount
+  // Cleanup on unmount
   useEffect(() => () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); }, []);
 
-  // ── Derived client / overview values ──────────────────────────────────────
-  const companyName    = (client?.name ?? client?.client_name ?? "") as string;
-  const cin            = (client?.cin ?? "") as string;
-  const incDateRaw     = (client?.date_of_incorporation ?? "") as string;
-  const actYear        = getActYear(incDateRaw);
-  const regAddress     = (data.overview.registered_address_override ?? client?.registered_office  ?? "") as string;
-  const bizActivity    = (data.overview.business_activity_override  ?? client?.business_activity  ?? "") as string;
-  const incDateDisplay = incDateRaw
-    ? new Date(incDateRaw).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })
-    : "____";
+  // ── Derived values ─────────────────────────────────────────────────────────
+  const companyName = (client?.name ?? client?.client_name ?? "") as string;
+  const cin         = (client?.cin ?? "") as string;
+
+  // Incorporation date: use override if set, else fall back to client master
+  const incDateIso  = (data.overview.incorporation_date_override
+    ?? client?.date_of_incorporation ?? "") as string;
+  const actYear     = getActYear(incDateIso);
+
+  const regAddress  = (data.overview.registered_address_override  ?? client?.registered_office  ?? "") as string;
+  const bizActivity = (data.overview.business_activity_override   ?? client?.business_activity  ?? "") as string;
 
   // ── Persistence ────────────────────────────────────────────────────────────
 
@@ -235,6 +329,7 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   }
 
   function deletePolicy(idx: number) {
+    if (!window.confirm(`Delete policy "${data.policies[idx]?.title}"? This cannot be undone.`)) return;
     setData(prev => {
       const policies = prev.policies.filter((_, i) => i !== idx);
       const next = { ...prev, policies };
@@ -245,11 +340,10 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
 
   function addPolicy(title: string) {
     setData(prev => {
-      // Generate an ID like "2.19", "2.20", …
-      const nextNum = prev.policies.length + 1;
-      const newId   = `2.${nextNum}`;
+      const nextNum  = prev.policies.length + 1;
+      const newId    = `2.${nextNum}`;
       const policies = [...prev.policies, { id: newId, title: title.trim(), body: "" }];
-      const next = { ...prev, policies };
+      const next     = { ...prev, policies };
       scheduleSave(next);
       return next;
     });
@@ -265,8 +359,8 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   }
 
   function deleteGeneralNote(idx: number) {
+    if (!window.confirm(`Delete general note ${idx + 1}? This cannot be undone.`)) return;
     setData(prev => {
-      // Re-number after deletion
       const general_notes = prev.general_notes
         .filter((_, i) => i !== idx)
         .map((n, i) => ({ ...n, id: i + 1 }));
@@ -278,7 +372,10 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
 
   function addGeneralNote() {
     setData(prev => {
-      const general_notes = [...prev.general_notes, { id: prev.general_notes.length + 1, body: "" }];
+      const general_notes = [
+        ...prev.general_notes,
+        { id: prev.general_notes.length + 1, body: "" },
+      ];
       const next = { ...prev, general_notes };
       scheduleSave(next);
       return next;
@@ -286,25 +383,30 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
   }
 
   function resetToDefaults() {
+    if (!window.confirm(
+      "Reset ALL policies and general notes to factory defaults?\n\n" +
+      "Any custom text you have entered will be replaced. This cannot be undone.",
+    )) return;
     const fresh = structuredClone(DEFAULT_DATA);
     setData(fresh);
     scheduleSave(fresh);
     toast.info("Reset to defaults — auto-saving…");
   }
 
-  // ── Add-policy inline form state ───────────────────────────────────────────
-  const [showAddPolicy,   setShowAddPolicy]   = useState(false);
-  const [newPolicyTitle,  setNewPolicyTitle]  = useState("");
+  // ── Add-policy inline form ─────────────────────────────────────────────────
+  const [showAddPolicy,  setShowAddPolicy]  = useState(false);
+  const [newPolicyTitle, setNewPolicyTitle] = useState("");
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6 pb-16 print:pb-0">
+    <div className="space-y-5 pb-16 print:pb-0">
 
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between print:hidden">
-        <h2 className="text-lg font-semibold text-foreground">Notes to Accounts — Note 1</h2>
         <div className="flex items-center gap-2">
           {saving && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+        </div>
+        <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={resetToDefaults} disabled={saving}>
             <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset to Defaults
           </Button>
@@ -320,18 +422,34 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
         </div>
       </div>
 
-      {/* ── Note 1 — Corporate Information ──────────────────────────────── */}
+      {/* ── Note title ──────────────────────────────────────────────────── */}
+      <div className="border-b pb-3">
+        <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-0.5">
+          Note No: 1
+        </p>
+        <h2 className="text-sm font-bold uppercase tracking-wide text-foreground leading-snug">
+          DISCLOSURE OF ACCOUNTING POLICIES &amp; NOTES FORMING PART OF THE ANNUAL ACCOUNTS
+        </h2>
+      </div>
+
+      {/* ── Section (a) — Overview ───────────────────────────────────────── */}
       <section className="border rounded-lg p-5 space-y-3 bg-card">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Note 1 — Corporate Information
+          Section (a) — Overview of the Reporting Entity
         </h3>
+
         <div className="text-sm leading-relaxed text-foreground space-y-2">
           <p>
             <span className="font-semibold">{companyName || "[Company Name]"}</span>
-            {" "}(hereinafter referred to as "the Company") is a company incorporated under the
-            Companies Act,{" "}
+            {" "}(hereinafter referred to as "the Company") is a company incorporated
+            under the Companies Act,{" "}
             <span className="font-semibold">{actYear}</span> on{" "}
-            <span className="font-semibold">{incDateDisplay}</span>
+            <DateField
+              value={incDateIso}
+              onChange={v => updateOverview("incorporation_date_override", v)}
+              placeholder="click to set incorporation date"
+              className="font-semibold"
+            />
             {cin && (
               <>
                 {" "}with CIN{" "}
@@ -339,6 +457,7 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
               </>
             )}.
           </p>
+
           <p>
             The Registered Office of the Company is situated at{" "}
             <EditableInline
@@ -348,6 +467,7 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
               className="font-medium"
             />.
           </p>
+
           <p>
             The principal business activity of the Company is{" "}
             <EditableInline
@@ -360,18 +480,18 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
         </div>
       </section>
 
-      {/* ── Note 2 — Significant Accounting Policies ────────────────────── */}
+      {/* ── Section (b) — Significant Accounting Policies + 2.19 ─────────── */}
       <section className="border rounded-lg p-5 space-y-5 bg-card">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Note 2 — Significant Accounting Policies
+          Section (b) — Significant Accounting Policies
         </h3>
 
+        {/* Policies 2.1 – 2.18 (+ any user-added) */}
         {data.policies.map((policy, idx) => (
           <div
             key={`${policy.id}-${idx}`}
             className="border-b last:border-b-0 pb-4 last:pb-0 space-y-1.5"
           >
-            {/* Policy header row */}
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <span className="text-xs font-semibold text-muted-foreground w-8 shrink-0 pt-0.5">
@@ -383,16 +503,12 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
                   className="text-sm font-medium text-foreground"
                 />
               </div>
-              <button
+              <DeleteBtn
                 onClick={() => deletePolicy(idx)}
-                title="Remove this policy"
-                className="print:hidden mt-0.5 p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+                title={`Delete policy ${policy.id}`}
+              />
             </div>
 
-            {/* Policy body */}
             <div className="pl-10">
               <AutoGrowTextarea
                 value={resolvePolicy(policy.id, policy.body)}
@@ -404,8 +520,44 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
           </div>
         ))}
 
-        {/* Add-policy form / button */}
-        <div className="print:hidden pl-0">
+        {/* ── 2.19 General Notes ────────────────────────────────────────── */}
+        <div className="border rounded-md p-4 space-y-3 bg-muted/20">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            2.19 — General Notes
+          </p>
+
+          {data.general_notes.map((note, idx) => (
+            <div
+              key={note.id}
+              className="flex gap-3 items-start border-b last:border-b-0 pb-2.5 last:pb-0"
+            >
+              <span className="text-sm font-semibold text-muted-foreground w-5 pt-2 shrink-0 select-none">
+                {note.id}.
+              </span>
+              <div className="flex-1 min-w-0">
+                <AutoGrowTextarea
+                  value={resolveGeneralNote(idx, note.body)}
+                  onChange={v => updateGeneralNote(idx, v)}
+                  placeholder={NTA_GENERAL_NOTES_DEFAULTS[idx] ?? "Enter note text…"}
+                  className="text-sm"
+                />
+              </div>
+              <DeleteBtn
+                onClick={() => deleteGeneralNote(idx)}
+                title={`Delete general note ${note.id}`}
+              />
+            </div>
+          ))}
+
+          <div className="print:hidden pt-1">
+            <Button variant="outline" size="sm" onClick={addGeneralNote}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add General Note
+            </Button>
+          </div>
+        </div>
+
+        {/* ── Add-policy form / button ───────────────────────────────────── */}
+        <div className="print:hidden">
           {showAddPolicy ? (
             <div className="flex gap-2 items-center">
               <input
@@ -451,45 +603,6 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
               <Plus className="w-3.5 h-3.5 mr-1" /> Add Policy
             </Button>
           )}
-        </div>
-      </section>
-
-      {/* ── General Notes ───────────────────────────────────────────────── */}
-      <section className="border rounded-lg p-5 space-y-4 bg-card">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          General Notes
-        </h3>
-
-        {data.general_notes.map((note, idx) => (
-          <div
-            key={note.id}
-            className="flex gap-3 items-start border-b last:border-b-0 pb-3 last:pb-0"
-          >
-            <span className="text-sm font-semibold text-muted-foreground w-6 pt-2 shrink-0 select-none">
-              {note.id}.
-            </span>
-            <div className="flex-1 min-w-0">
-              <AutoGrowTextarea
-                value={resolveGeneralNote(idx, note.body)}
-                onChange={v => updateGeneralNote(idx, v)}
-                placeholder={NTA_GENERAL_NOTES_DEFAULTS[idx] ?? "Enter note text…"}
-                className="text-sm"
-              />
-            </div>
-            <button
-              onClick={() => deleteGeneralNote(idx)}
-              title="Remove this note"
-              className="print:hidden mt-2 p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        ))}
-
-        <div className="print:hidden">
-          <Button variant="outline" size="sm" onClick={addGeneralNote}>
-            <Plus className="w-3.5 h-3.5 mr-1" /> Add Note
-          </Button>
         </div>
       </section>
 

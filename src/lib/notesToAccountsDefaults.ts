@@ -114,8 +114,10 @@ export interface NtaGeneralNote {
 }
 
 export interface NtaOverview {
-  registered_address_override: string | null;
-  business_activity_override:  string | null;
+  registered_address_override:  string | null;
+  business_activity_override:   string | null;
+  /** ISO YYYY-MM-DD; overrides client.date_of_incorporation when set */
+  incorporation_date_override:  string | null;
 }
 
 export interface Stage8NtaData {
