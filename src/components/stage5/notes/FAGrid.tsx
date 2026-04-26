@@ -15,6 +15,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EditableCell, formatINR } from "./EditableCell";
 import type { FARow, Stage5Notes } from "@/lib/notesAutoPopulate";
+import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
   rows:       FARow[];
@@ -74,7 +75,7 @@ export default function FAGrid({ rows, pyRows, onChange }: Props) {
   return (
     <div className="rounded-lg border bg-card mb-4">
       <header className="border-b bg-muted/30 px-3 py-1.5 flex items-center justify-between">
-        <h3 className="text-xs font-semibold">Note 13 — Property, Plant &amp; Equipment and Intangible Assets (AS-10)</h3>
+        <h3 className="text-xs font-semibold">Note {getNoteNo("ppe")} — Property, Plant &amp; Equipment and Intangible Assets (AS-10)</h3>
         <Button type="button" variant="outline" size="sm" onClick={add} className="h-6 text-[10px] gap-1">
           <Plus size={11} /> Add Asset
         </Button>
