@@ -147,7 +147,8 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
         // partner_id FK is also stored when available — we use whichever is populated.
         .select("id, client_id, financial_year, audit_type, audit_firm_id, partner_id, partner_name, status")
         .eq("financial_year", selectedFY)
-        .neq("status", "archived");
+        .neq("status", "archived")
+        .or("is_py_shell.is.null,is_py_shell.eq.false"); // exclude PY shell engagements
       if (!isSuperadmin) engQ = engQ.eq("firm_id", firmId);
       const { data: engData } = await engQ;
 

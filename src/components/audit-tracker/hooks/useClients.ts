@@ -20,7 +20,8 @@ export function useClients(firmId: string, isSuperadmin?: boolean) {
       let engQ = supabase
         .from("audit_engagements")
         .select("client_id")
-        .neq("status", "archived");
+        .neq("status", "archived")
+        .or("is_py_shell.is.null,is_py_shell.eq.false") as any; // exclude PY shell engagements
       if (!isSuperadmin && firmId) engQ = engQ.eq("firm_id", firmId);
       const { data: engRows } = await engQ;
 
