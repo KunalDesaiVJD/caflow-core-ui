@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -18,14 +18,28 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Calculator, Lock, LockOpen, Plus, Trash2, ArrowRight, AlertTriangle,
-CheckCircle2, Settings, Info, Loader2, Pencil, X, FileText, Download } from 'lucide-react';
+CheckCircle2, Settings, Info, Loader2, Pencil, X, FileText, Download,
+Tag, Link2, RefreshCw, ArrowUpDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// ── Phase 1: Correct default FY on page open ──────────────────────────────
+// Indian FY runs Apr 1 – Mar 31. Auditors typically work on the year that
+// just ended (e.g., in April 2026 they are auditing FY 2025-26).
+function getDefaultAuditFY(): string {
+  const now   = new Date();
+  const year  = now.getFullYear();
+  const month = now.getMonth() + 1; // 1-12
+  // If Apr-Dec → FY that just ended = (year-1)-(year). Jan-Mar → (year-2)-(year-1).
+  const fyStart = month >= 4 ? year - 1 : year - 2;
+  return `${fyStart}-${String(fyStart + 1).slice(-2)}`;
+}
+
 const FY_OPTIONS = (() => {
   const opts: string[] = [];
   const currentYear = new Date().getFullYear();
+  // Include one future FY for planning; go back to 2001
   for (let y = currentYear + 1; y >= 2001; y--) {
     opts.push(`${y}-${String(y + 1).slice(-2)}`);
   }
@@ -101,7 +115,7 @@ const qc = useQueryClient();
 const [clientId,     setClientId]     = useState('');
 const [clientSearch, setClientSearch] = useState('');
 const [clientOpen,   setClientOpen]   = useState(false);
-const [fy,           setFy]           = useState(FY_OPTIONS[0]);
+const [fy,           setFy]           = useState(getDefaultAuditFY);
 const [activeTab, setActiveTab] = useState('register');
 const [showAdd,     setShowAdd]     = useState(false);
 const [showDispose, setShowDispose] = useState<string | null>(null);
@@ -124,6 +138,14 @@ const [scheduleView, setScheduleView] = useState<'asset'|'category'>('asset');
 const [showCarryForward, setShowCarryForward] = useState(false);
 const [carryingForward, setCarryingForward] = useState(false);
 const [unlocking, setUnlocking] = useState(false);
+
+// ── Phase 2: PPE Ledger Tagging ───────────────────────────────────────────
+// ppeTags: ledger_id → category_id (null = tagged as PPE but no cat match yet)
+// Persisted in localStorage per client+FY so tags survive page refresh.
+const [ppeTags, setPpeTags] = useState<Record<string, string | null>>({});
+
+// ── Phase 3: Note 11 push ─────────────────────────────────────────────────
+const [pushingNote11, setPushingNote11] = useState(false);
 
 const [na, setNa] = useState({
 asset_name:'', category_id:'', location:'', date_of_purchase:'',
@@ -254,6 +276,75 @@ const { data } = await supabase
 return data || [];
 },
 enabled: !!assets?.length,
+});
+
+// ── Phase 2-4: Engagement lookup for this client+FY ──────────────────────
+const { data: engagement } = useQuery({
+queryKey: ['dep-engagement', clientId, fy],
+queryFn: async () => {
+  const { data } = await supabase
+    .from('audit_engagements')
+    .select('id, financial_year, status')
+    .eq('client_id', clientId)
+    .eq('financial_year', fy)
+    .or('is_py_shell.is.null,is_py_shell.eq.false')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data || null;
+},
+enabled: !!clientId && !!fy,
+});
+
+// ── Phase 2: Tally TB — PPE ledgers for tagging ───────────────────────────
+const { data: tbLedgers } = useQuery({
+queryKey: ['dep-tb-ledgers', engagement?.id],
+queryFn: async () => {
+  const { data } = await supabase
+    .from('trial_balance_snapshots')
+    .select('id, ledger_name, primary_group, account_type, closing_balance, hierarchy_level')
+    .eq('engagement_id', engagement!.id)
+    .or(
+      'primary_group.ilike.%Fixed Asset%,' +
+      'primary_group.ilike.%Tangible%,' +
+      'primary_group.ilike.%Intangible%,' +
+      'account_type.eq.Fixed Assets'
+    )
+    .order('primary_group')
+    .order('ledger_name');
+  return (data || []) as any[];
+},
+enabled: !!engagement?.id,
+});
+
+// ── Phase 2: localStorage sync for ppeTags ───────────────────────────────
+const ppTagsKey = clientId && fy ? `ppe-tags-v1-${clientId}-${fy}` : '';
+useEffect(() => {
+  if (!ppTagsKey) { setPpeTags({}); return; }
+  try {
+    const stored = localStorage.getItem(ppTagsKey);
+    setPpeTags(stored ? JSON.parse(stored) : {});
+  } catch { setPpeTags({}); }
+}, [ppTagsKey]);
+
+const savePpeTags = (tags: Record<string, string | null>) => {
+  setPpeTags(tags);
+  if (ppTagsKey) localStorage.setItem(ppTagsKey, JSON.stringify(tags));
+};
+
+// ── Phase 4: Note 11 data from nce_ppe_schedule ───────────────────────────
+const { data: note11Rows, refetch: refetchNote11 } = useQuery({
+queryKey: ['dep-note11', engagement?.id, fy],
+queryFn: async () => {
+  const { data } = await supabase
+    .from('nce_ppe_schedule')
+    .select('*')
+    .eq('engagement_id', engagement!.id)
+    .eq('financial_year', fy)
+    .order('sort_order');
+  return (data || []) as any[];
+},
+enabled: !!engagement?.id && !!fy,
 });
 
 const isLocked = useMemo(() => assets?.some((a:any) => a.is_locked) ?? false, [assets]);
@@ -528,6 +619,56 @@ try {
   qc.invalidateQueries({ queryKey: ['dep-assets', clientId, fy] });
 } catch(e: any) { toast.error(e.message); }
 finally { setUnlocking(false); }
+};
+
+// ── Phase 3: Push depreciation register summary → Note 11 (nce_ppe_schedule) ─
+const handlePushToNote11 = async () => {
+if (!engagement?.id) {
+  toast.error('No engagement found for this client and FY. Ensure an audit engagement exists.');
+  return;
+}
+if (!summary?.length) {
+  toast.error('No category summary to push. Add assets and run Calculate Depreciation first.');
+  return;
+}
+const uncalc = (assets || []).filter((a: any) => a.depreciation_for_year == null);
+if (uncalc.length > 0) {
+  toast.error(`${uncalc.length} asset(s) have no depreciation calculated yet. Run Calculate Depreciation first.`);
+  return;
+}
+setPushingNote11(true);
+try {
+  // Clear existing Note 11 rows for this engagement+FY
+  const { error: delErr } = await supabase
+    .from('nce_ppe_schedule')
+    .delete()
+    .eq('engagement_id', engagement.id)
+    .eq('financial_year', fy);
+  if (delErr) throw delErr;
+
+  // Build rows from the category-wise summary
+  const rows = summary.map((s: any, idx: number) => ({
+    engagement_id:    engagement.id,
+    financial_year:   fy,
+    asset_category:   s.asset_class || 'A',
+    asset_name:       s.category_name,
+    rate_pct:         s.wdv_rate ?? s.slm_rate ?? null,
+    opening_balance:  Math.round((s.gross_block_opening - s.acc_dep_opening) * 100) / 100,
+    additions_pre:    Math.round(s.additions * 100) / 100,
+    additions_post:   0,
+    total:            Math.round(s.gross_block_closing * 100) / 100,
+    depreciation:     Math.round(s.depreciation * 100) / 100,
+    closing_balance:  Math.round(s.net_block * 100) / 100,
+    sort_order:       idx + 1,
+  }));
+
+  const { error: insErr } = await supabase.from('nce_ppe_schedule').insert(rows as any);
+  if (insErr) throw insErr;
+
+  toast.success(`Note 11 updated — ${rows.length} category row(s) pushed to Financial Statements.`);
+  refetchNote11();
+} catch (e: any) { toast.error(e.message || 'Push failed'); }
+finally { setPushingNote11(false); }
 };
 
 const dispMut = useMutation({
@@ -1026,6 +1167,8 @@ return (
     <TabsTrigger value='summary'>Block-wise Summary</TabsTrigger>
     <TabsTrigger value='additions'>Additions Log{additionsLog?.length ? <Badge variant='secondary' className='ml-1 text-[10px]'>{additionsLog.length}</Badge> : null}</TabsTrigger>
     <TabsTrigger value='disposals'>Disposal Log</TabsTrigger>
+    <TabsTrigger value='ppe-tags' className='gap-1'><Tag size={12}/>PPE Tagging{Object.keys(ppeTags).length ? <Badge variant='secondary' className='ml-1 text-[10px]'>{Object.keys(ppeTags).length}</Badge> : null}</TabsTrigger>
+    <TabsTrigger value='reconciliation' className='gap-1'><ArrowUpDown size={12}/>Reconciliation</TabsTrigger>
   </TabsList>
 
   {/* ═══ ASSET REGISTER TAB ═══ */}
@@ -1493,9 +1636,23 @@ return (
   {/* ═══ BLOCK-WISE SUMMARY TAB ═══ */}
   <TabsContent value='summary'>
     <Card>
-      <CardHeader>
-        <CardTitle className='text-base'>Block-wise Summary — {fy}</CardTitle>
-        <CardDescription className='text-xs'>Category-wise | Schedule II format | Click + to expand assets</CardDescription>
+      <CardHeader className='flex flex-row items-start justify-between'>
+        <div>
+          <CardTitle className='text-base'>Block-wise Summary — {fy}</CardTitle>
+          <CardDescription className='text-xs'>Category-wise | Schedule II format | Click + to expand assets</CardDescription>
+        </div>
+        {/* Phase 3: Push to Note 11 */}
+        <Button
+          size='sm'
+          variant='outline'
+          className='gap-1.5 shrink-0'
+          onClick={handlePushToNote11}
+          disabled={pushingNote11 || !summary?.length || !engagement?.id}
+          title={!engagement?.id ? 'No audit engagement found for this client+FY' : 'Push register totals to Note 11 (PPE Schedule) in Financial Statements'}
+        >
+          {pushingNote11 ? <Loader2 size={13} className='animate-spin'/> : <Link2 size={13}/>}
+          {pushingNote11 ? 'Pushing…' : 'Push to Note 11'}
+        </Button>
       </CardHeader>
       <CardContent className='p-0'>
         <Table>
@@ -1666,6 +1823,259 @@ return (
             })}
           </TableBody>
         </Table>
+      </CardContent>
+    </Card>
+  </TabsContent>
+
+  {/* ═══ PHASE 2: PPE LEDGER TAGGING TAB ═══ */}
+  <TabsContent value='ppe-tags'>
+    <Card>
+      <CardHeader>
+        <CardTitle className='text-base flex items-center gap-2'><Tag size={15}/>PPE Ledger Tagging — {fy}</CardTitle>
+        <CardDescription className='text-xs'>
+          Map each Tally Fixed Asset ledger to a depreciation category. Used for "Check A" validation in Reconciliation.
+          {!engagement?.id && <span className='ml-2 text-amber-600 font-medium'>⚠ No audit engagement found for {fy} — sync Tally first.</span>}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className='p-0'>
+        {!tbLedgers?.length ? (
+          <div className='py-16 text-center text-muted-foreground space-y-2'>
+            <Tag size={36} className='mx-auto opacity-20'/>
+            <p className='font-medium text-foreground'>No Fixed Asset ledgers found in Tally TB for {fy}</p>
+            <p className='text-sm'>Sync Tally data first (TB must include Fixed Assets group ledgers).</p>
+            {!engagement?.id && <p className='text-xs text-amber-600'>Also ensure an audit engagement exists for this client and FY.</p>}
+          </div>
+        ) : (
+          <Table>
+            <TableHeader><TableRow className='bg-muted/50 text-xs'>
+              <TableHead>Tally Ledger Name</TableHead>
+              <TableHead>Primary Group</TableHead>
+              <TableHead className='text-right'>TB Closing Balance (₹)</TableHead>
+              <TableHead className='w-60'>Map to Category</TableHead>
+              <TableHead className='w-20 text-center'>Status</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {tbLedgers.map((l: any) => {
+                const taggedCatId = ppeTags[l.id];
+                const taggedCat   = (cats || []).find((c: any) => c.id === taggedCatId);
+                return (
+                  <TableRow key={l.id} className={taggedCatId !== undefined ? 'bg-emerald-50/40 dark:bg-emerald-950/10' : ''}>
+                    <TableCell className='font-medium text-sm'>{l.ledger_name || '—'}</TableCell>
+                    <TableCell className='text-xs text-muted-foreground'>{l.primary_group || '—'}</TableCell>
+                    <TableCell className='text-right tabular-nums text-sm font-semibold'>
+                      {l.closing_balance != null ? fmt(Math.abs(l.closing_balance)) : '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={taggedCatId ?? '__none__'}
+                        onValueChange={(v) => {
+                          const newTags = { ...ppeTags, [l.id]: v === '__none__' ? null : v };
+                          savePpeTags(newTags);
+                        }}
+                      >
+                        <SelectTrigger className='h-8 text-xs'>
+                          <SelectValue placeholder='Select category…'/>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value='__none__'>— Not mapped —</SelectItem>
+                          {(cats || []).map((c: any) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className='text-center'>
+                      {taggedCatId !== undefined ? (
+                        taggedCatId === null
+                          ? <Badge variant='outline' className='text-[9px] border-amber-400 text-amber-700'>Tagged (no cat)</Badge>
+                          : <Badge variant='outline' className='text-[9px] border-emerald-400 text-emerald-700 gap-0.5'><CheckCircle2 size={9}/>Mapped</Badge>
+                      ) : (
+                        <Badge variant='outline' className='text-[9px] text-muted-foreground'>Untagged</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+        {tbLedgers?.length ? (
+          <div className='px-4 py-3 border-t text-xs text-muted-foreground flex items-center gap-4'>
+            <span>Mapped: <strong>{Object.values(ppeTags).filter(v => v !== null && v !== undefined).length}</strong> / {tbLedgers.length}</span>
+            <span>•</span>
+            <span>Tags auto-saved to browser. Switch FY to load that year's tags.</span>
+            <Button
+              variant='ghost' size='sm' className='ml-auto h-7 text-xs gap-1'
+              onClick={() => { savePpeTags({}); toast.success('PPE tags cleared for this FY.'); }}
+            >
+              <X size={11}/>Clear all tags
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  </TabsContent>
+
+  {/* ═══ PHASE 4: RECONCILIATION TAB ═══ */}
+  <TabsContent value='reconciliation'>
+    <Card>
+      <CardHeader className='flex flex-row items-start justify-between'>
+        <div>
+          <CardTitle className='text-base flex items-center gap-2'><ArrowUpDown size={15}/>3-Way Reconciliation — {fy}</CardTitle>
+          <CardDescription className='text-xs'>
+            Compares Depreciation Register (WDV) · Tally TB (PPE ledgers) · Note 11 (Financial Statements) per category.
+            Tag ledgers in the PPE Tagging tab and push to Note 11 in Block-wise Summary first.
+          </CardDescription>
+        </div>
+        <Button variant='outline' size='sm' className='gap-1 shrink-0' onClick={() => { refetchNote11(); qc.invalidateQueries({ queryKey: ['dep-tb-ledgers', engagement?.id] }); }}>
+          <RefreshCw size={12}/>Refresh
+        </Button>
+      </CardHeader>
+      <CardContent className='p-0'>
+        {(() => {
+          // Build category-level reconciliation rows
+          const rows: {
+            catName: string;
+            regWdv: number;          // Depreciation register WDV closing (from summary)
+            tbBalance: number | null;// TB closing balance sum for tagged ledgers
+            note11Wdv: number | null;// Note 11 closing balance
+          }[] = [];
+
+          // Map category name → register WDV from summary
+          for (const s of (summary || [])) {
+            const regWdv = Math.round(s.net_block * 100) / 100;
+
+            // TB: sum closing_balance of all ledgers tagged to this category
+            const taggedLedgerIds = Object.entries(ppeTags)
+              .filter(([, catId]) => catId === (cats || []).find((c: any) => c.name === s.category_name)?.id)
+              .map(([lid]) => lid);
+            const tbBalance = taggedLedgerIds.length === 0 ? null :
+              (tbLedgers || [])
+                .filter((l: any) => taggedLedgerIds.includes(l.id))
+                .reduce((sum: number, l: any) => sum + Math.abs(l.closing_balance ?? 0), 0);
+
+            // Note 11: find matching row by category name
+            const n11Row = (note11Rows || []).find((r: any) =>
+              r.asset_name?.toLowerCase() === s.category_name.toLowerCase());
+            const note11Wdv = n11Row ? (n11Row.closing_balance ?? null) : null;
+
+            rows.push({ catName: s.category_name, regWdv, tbBalance, note11Wdv });
+          }
+
+          if (!rows.length) {
+            return (
+              <div className='py-16 text-center text-muted-foreground space-y-2'>
+                <ArrowUpDown size={36} className='mx-auto opacity-20'/>
+                <p className='font-medium text-foreground'>No data to reconcile</p>
+                <p className='text-sm'>Add assets, run Calculate Depreciation, tag PPE ledgers and push to Note 11 first.</p>
+              </div>
+            );
+          }
+
+          const allGreen = rows.every(r =>
+            r.tbBalance !== null && r.note11Wdv !== null &&
+            Math.abs(r.regWdv - r.tbBalance) < 1 &&
+            Math.abs(r.regWdv - r.note11Wdv) < 1
+          );
+
+          return (
+            <>
+              {allGreen && (
+                <Alert className='m-4 border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20'>
+                  <CheckCircle2 size={14} className='text-emerald-600 mr-2'/>
+                  <AlertDescription className='text-emerald-700 dark:text-emerald-300 text-sm font-medium'>
+                    ✅ All 3 checks pass — Register, Tally TB and Note 11 are fully reconciled for FY {fy}.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <Table>
+                <TableHeader><TableRow className='bg-muted/50 text-xs'>
+                  <TableHead>Category</TableHead>
+                  <TableHead className='text-right'>Register WDV (A)</TableHead>
+                  <TableHead className='text-right'>Tally TB (B)</TableHead>
+                  <TableHead className='text-right'>A–B Diff</TableHead>
+                  <TableHead className='text-right'>Note 11 WDV (C)</TableHead>
+                  <TableHead className='text-right'>A–C Diff</TableHead>
+                  <TableHead className='text-center w-24'>Check A</TableHead>
+                  <TableHead className='text-center w-24'>Check B</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rows.map((r, i) => {
+                    const diffAB   = r.tbBalance !== null ? Math.round((r.regWdv - r.tbBalance) * 100) / 100 : null;
+                    const diffAC   = r.note11Wdv !== null ? Math.round((r.regWdv - r.note11Wdv) * 100) / 100 : null;
+                    const checkA   = diffAB !== null && Math.abs(diffAB) < 1;
+                    const checkB   = diffAC !== null && Math.abs(diffAC) < 1;
+                    return (
+                      <TableRow key={i} className={cn(
+                        i % 2 === 0 ? 'bg-muted/10' : '',
+                        (!checkA && r.tbBalance !== null) || (!checkB && r.note11Wdv !== null)
+                          ? 'bg-red-50 dark:bg-red-950/10' : ''
+                      )}>
+                        <TableCell className='font-medium text-sm'>{r.catName}</TableCell>
+                        <TableCell className='text-right tabular-nums text-sm font-semibold'>{fmt(r.regWdv)}</TableCell>
+                        <TableCell className='text-right tabular-nums text-sm'>
+                          {r.tbBalance !== null ? fmt(r.tbBalance) : <span className='text-muted-foreground text-xs italic'>—tag ledgers—</span>}
+                        </TableCell>
+                        <TableCell className={cn('text-right tabular-nums text-sm', diffAB !== null && Math.abs(diffAB) >= 1 ? 'text-red-600 font-semibold' : 'text-muted-foreground')}>
+                          {diffAB !== null ? (Math.abs(diffAB) < 1 ? '—' : fmt(diffAB)) : '—'}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums text-sm'>
+                          {r.note11Wdv !== null ? fmt(r.note11Wdv) : <span className='text-muted-foreground text-xs italic'>—push Note 11—</span>}
+                        </TableCell>
+                        <TableCell className={cn('text-right tabular-nums text-sm', diffAC !== null && Math.abs(diffAC) >= 1 ? 'text-red-600 font-semibold' : 'text-muted-foreground')}>
+                          {diffAC !== null ? (Math.abs(diffAC) < 1 ? '—' : fmt(diffAC)) : '—'}
+                        </TableCell>
+                        <TableCell className='text-center'>
+                          {r.tbBalance === null
+                            ? <Badge variant='outline' className='text-[9px] text-muted-foreground'>No tag</Badge>
+                            : checkA
+                            ? <Badge variant='outline' className='text-[9px] border-emerald-400 text-emerald-700 gap-0.5'><CheckCircle2 size={9}/>Pass</Badge>
+                            : <Badge variant='outline' className='text-[9px] border-red-400 text-red-700 gap-0.5'><AlertTriangle size={9}/>Fail</Badge>}
+                        </TableCell>
+                        <TableCell className='text-center'>
+                          {r.note11Wdv === null
+                            ? <Badge variant='outline' className='text-[9px] text-muted-foreground'>No data</Badge>
+                            : checkB
+                            ? <Badge variant='outline' className='text-[9px] border-emerald-400 text-emerald-700 gap-0.5'><CheckCircle2 size={9}/>Pass</Badge>
+                            : <Badge variant='outline' className='text-[9px] border-red-400 text-red-700 gap-0.5'><AlertTriangle size={9}/>Fail</Badge>}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {/* Grand totals row */}
+                  {(() => {
+                    const gtReg   = rows.reduce((s, r) => s + r.regWdv, 0);
+                    const gtTb    = rows.some(r => r.tbBalance !== null)
+                      ? rows.reduce((s, r) => s + (r.tbBalance ?? 0), 0) : null;
+                    const gtN11   = rows.some(r => r.note11Wdv !== null)
+                      ? rows.reduce((s, r) => s + (r.note11Wdv ?? 0), 0) : null;
+                    const gtDiffAB = gtTb !== null ? Math.round((gtReg - gtTb) * 100) / 100 : null;
+                    const gtDiffAC = gtN11 !== null ? Math.round((gtReg - gtN11) * 100) / 100 : null;
+                    return (
+                      <TableRow className='bg-muted font-bold border-t-2 border-border text-sm'>
+                        <TableCell>TOTAL</TableCell>
+                        <TableCell className='text-right tabular-nums'>{fmt(gtReg)}</TableCell>
+                        <TableCell className='text-right tabular-nums'>{gtTb !== null ? fmt(gtTb) : '—'}</TableCell>
+                        <TableCell className={cn('text-right tabular-nums', gtDiffAB !== null && Math.abs(gtDiffAB) >= 1 ? 'text-red-600' : 'text-muted-foreground')}>
+                          {gtDiffAB !== null ? (Math.abs(gtDiffAB) < 1 ? '—' : fmt(gtDiffAB)) : '—'}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>{gtN11 !== null ? fmt(gtN11) : '—'}</TableCell>
+                        <TableCell className={cn('text-right tabular-nums', gtDiffAC !== null && Math.abs(gtDiffAC) >= 1 ? 'text-red-600' : 'text-muted-foreground')}>
+                          {gtDiffAC !== null ? (Math.abs(gtDiffAC) < 1 ? '—' : fmt(gtDiffAC)) : '—'}
+                        </TableCell>
+                        <TableCell colSpan={2}/>
+                      </TableRow>
+                    );
+                  })()}
+                </TableBody>
+              </Table>
+              <div className='px-4 py-2 text-xs text-muted-foreground border-t'>
+                <strong>Check A</strong> = Register WDV vs Tally TB balance (requires PPE ledger tags). &nbsp;
+                <strong>Check B</strong> = Register WDV vs Note 11 WDV (requires pushing to Note 11 first).
+              </div>
+            </>
+          );
+        })()}
       </CardContent>
     </Card>
   </TabsContent>
