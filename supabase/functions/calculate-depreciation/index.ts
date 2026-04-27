@@ -157,8 +157,22 @@ Deno.serve(async (req) => {
           } else {
             // ── WDV method ─────────────────────────────────────────────
             const wdvRate = parseFloat(cat.wdv_rate) || 0;
+            // Rate = 0 means non-depreciable (e.g. Land added before N/A method existed)
+            // — carry block forward with zero depreciation instead of erroring.
             if (wdvRate === 0) {
-              errors.push(`${asset.asset_name}: ${cat.name} has no WDV rate`);
+              const gbC = parseFloat(asset.gross_block_opening) || 0;
+              const adC = parseFloat(asset.additions_during_year) || 0;
+              const diC = parseFloat(asset.disposals_during_year) || 0;
+              await sb.from('fa_assets').update({
+                depreciation_for_year: 0, dep_on_opening_block: 0, dep_on_additions: 0,
+                gross_block_closing: gbC + adC - diC,
+                accumulated_dep_closing: parseFloat(asset.accumulated_dep_opening) || 0,
+                wdv_closing: gbC + adC - diC,
+                is_fully_depreciated: false,
+                depreciation_method_used: 'WDV',
+                dep_formula_json: { method: 'WDV', status: 'zero_rate', formula_text: 'WDV rate is 0% — no depreciation charged (non-depreciable asset or unconfigured rate).' },
+              }).eq('id', asset.id);
+              results.push({ asset_id: asset.id, asset_name: asset.asset_name, status: 'ok', method: 'WDV', depreciation: 0, wdv_closing: gbC + adC - diC });
               continue;
             }
 

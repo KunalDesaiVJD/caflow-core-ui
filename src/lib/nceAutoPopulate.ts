@@ -349,10 +349,10 @@ export async function nceAutoPopulate(
   // tally_trial_balance uses closing_balance (magnitude) + balance_type ("Dr"/"Cr")
   const { data: tbRows } = await supabase
     .from("tally_trial_balance")
-    .select("ledger_name, closing_balance, balance_type")
+    .select("ledger_name, closing_balance, balance_type, parent_group")
     .eq("engagement_id", engagementId);
 
-  type TBRow = { ledger_name: string; closing_balance: number; balance_type: string };
+  type TBRow = { ledger_name: string; closing_balance: number; balance_type: string; parent_group?: string | null };
   const tb: TBRow[] = (tbRows ?? []) as TBRow[];
 
   // ── 3. Load CY FS totals (fallback for notes with no TB ledger matches) ─
@@ -418,7 +418,7 @@ export async function nceAutoPopulate(
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
       // Stage 1: split each ledger into "matched-static" or "unmatched"
-      const unmatchedB: { ledger: string; amt: number }[] = [];
+      const unmatchedB: { ledger: string; amt: number; parentGroup?: string }[] = [];
 
       for (const row of tb) {
         const mapped = coaMapping[row.ledger_name];
@@ -438,26 +438,33 @@ export async function nceAutoPopulate(
             newPy[matchedRowId] = pyNotes[noteType]?.[matchedRowId] ?? 0;
           }
         } else {
-          unmatchedB.push({ ledger: row.ledger_name, amt });
+          unmatchedB.push({ ledger: row.ledger_name, amt, parentGroup: row.parent_group ?? undefined });
         }
       }
 
-      // Stage 2: group unmatched ledgers by common head (first word) and
-      // create one merged custom row per group. Singletons keep their full
-      // ledger name; groups of 2+ get a merged label and a `sources` array.
-      const groupsB = new Map<string, { ledger: string; amt: number }[]>();
+      // Stage 2: group unmatched ledgers.
+      // Priority: use Tally parent_group when available (e.g. "Purchase Accounts"
+      // → all purchase ledgers merge into one row labelled by the group).
+      // Fallback: group by common name head (strips GST-rate / month suffixes).
+      const groupsB = new Map<string, { ledger: string; amt: number; parentGroup?: string }[]>();
       for (const um of unmatchedB) {
-        const k = groupKey(um.ledger);
+        // Use parent_group key when non-trivial (not the ledger's own name)
+        const pg = (um as any).parentGroup;
+        const k = (pg && pg.trim()) ? pg.trim().toLowerCase() : groupKey(um.ledger);
         if (!groupsB.has(k)) groupsB.set(k, []);
         groupsB.get(k)!.push(um);
       }
       let idx = 0;
-      for (const ledgers of groupsB.values()) {
+      for (const [groupK, ledgers] of groupsB.entries()) {
         const totalAmt = ledgers.reduce((s, l) => s + l.amt, 0);
+        // When grouped by parent_group, use the parent group name as label
+        // (cleaned up: "Purchase Accounts" → "Purchase Accounts").
+        // When grouped by name similarity, pick the most common base head.
+        const hasPg = ledgers.length > 1 && ledgers[0].parentGroup;
         const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
-        const label = ledgers.length === 1
-          ? ledgers[0].ledger
-          : pickMergedLabel(baseHeads);
+        const label = hasPg
+          ? (ledgers[0].parentGroup as string)
+          : (ledgers.length === 1 ? ledgers[0].ledger : pickMergedLabel(baseHeads));
         const id = makeCustomId(label, idx++);
         newCy[id] = totalAmt;
         newPy[id] = pyNotes[noteType]?.[id] ?? 0;
@@ -514,26 +521,26 @@ export async function nceAutoPopulate(
           if (isST && !(matchedRowId + "_st" in newPy))
             newPy[matchedRowId + "_st"] = pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0;
         } else {
-          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST });
+          unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined });
         }
       }
 
-      // Group unmatched Pattern-A ledgers by common head and merge.
-      // Pattern A complication: each ledger contributes to LT or ST. The
-      // merged row sums LT-side and ST-side independently and `sources[]`
-      // tags each contributor with its column.
+      // Group unmatched Pattern-A ledgers by parent_group (primary) or common
+      // name head (fallback). LT/ST sides are summed independently per group.
       const groupsA = new Map<string, typeof unmatchedA>();
       for (const um of unmatchedA) {
-        const k = groupKey(um.ledger);
+        const pg = (um as any).parentGroup;
+        const k = (pg && pg.trim()) ? pg.trim().toLowerCase() : groupKey(um.ledger);
         if (!groupsA.has(k)) groupsA.set(k, []);
         groupsA.get(k)!.push(um);
       }
       let idx = 0;
-      for (const ledgers of groupsA.values()) {
+      for (const [, ledgers] of groupsA.entries()) {
+        const hasPg = ledgers.length > 1 && (ledgers[0] as any).parentGroup;
         const baseHeads = ledgers.map(l => deriveBaseHead(l.ledger));
-        const label = ledgers.length === 1
-          ? ledgers[0].ledger
-          : pickMergedLabel(baseHeads);
+        const label = hasPg
+          ? ((ledgers[0] as any).parentGroup as string)
+          : (ledgers.length === 1 ? ledgers[0].ledger : pickMergedLabel(baseHeads));
         const id = makeCustomId(label, idx++);
 
         let totalLt = 0, totalSt = 0;

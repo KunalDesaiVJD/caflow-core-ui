@@ -29,7 +29,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Info, Search, CornerUpRight } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Info, Search, CornerUpRight, Minus } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
@@ -70,7 +70,7 @@ function newCustomId(): string {
   return "custom_" + Math.random().toString(36).slice(2, 10);
 }
 
-// ─── Note card (always open) ──────────────────────────────────────────────────
+// ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
   noteNumber, title, autoCount, manualCount, children,
@@ -81,10 +81,23 @@ function NoteCard({
   manualCount: number;
   children:   React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
   return (
     <div className="border rounded-lg overflow-hidden bg-background">
-      {/* Header strip — matches corporate NoteCard style */}
-      <div className="bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap">
+      {/* Header strip — click to collapse/expand */}
+      <div
+        className="bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap cursor-pointer select-none hover:bg-muted/60 transition-colors"
+        onClick={() => setOpen(o => !o)}
+      >
+        {/* +/- toggle */}
+        <button
+          type="button"
+          className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
+          tabIndex={-1}
+          aria-label={open ? "Collapse" : "Expand"}
+        >
+          {open ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+        </button>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Note {noteNumber}
         </span>
@@ -100,7 +113,7 @@ function NoteCard({
           </Badge>
         )}
       </div>
-      {children}
+      {open && children}
     </div>
   );
 }
