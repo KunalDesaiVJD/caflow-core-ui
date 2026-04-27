@@ -625,6 +625,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   const firmFRN          = firmDetails?.icai_firm_reg_no || firmDetails?.icai_reg_no || "[FRN]";
   const firmAddr         = firmDetails?.address as any;
   const firmCity         = firmAddr?.city || firmAddr?.district || firmDetails?.state || "[City]";
+  // partnerDetails is loaded async from users table; fall back to engagement.partner_name
+  // which is always stored at engagement-creation time (no async required).
+  const partnerAutoName   = partnerDetails?.name || engagement?.partner_name || "";
   const partnerMembership = partnerDetails?.icai_reg_no || "[Membership No.]";
   const assesseePlace    = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
   const selectedCount    = notes.filter((n) => n.selected).length;
@@ -738,7 +741,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`B${r}`).value = "FRN:";
     ws.getCell(`C${r}`).value = firmFRN;
     r += 2;
-    ws.getCell(`B${r}`).value = sig.partnerNameOverride || partnerDetails?.name || "[Partner Name]";
+    ws.getCell(`B${r}`).value = sig.partnerNameOverride || partnerAutoName || "[Partner Name]";
     ws.getCell(`B${r}`).font = { bold: true };
     r++;
     ws.getCell(`B${r}`).value = "Partner";
@@ -1105,9 +1108,9 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
               <div className="space-y-1">
                 <Label className="text-xs">Partner Name</Label>
                 <Input
-                  value={sig.partnerNameOverride || partnerDetails?.name || ""}
+                  value={sig.partnerNameOverride || partnerAutoName}
                   onChange={(e) => setS("partnerNameOverride", e.target.value)}
-                  placeholder={partnerDetails?.name || "Partner name"}
+                  placeholder={partnerAutoName || "Partner name"}
                 />
               </div>
               <p className="text-xs text-muted-foreground">Partner</p>
