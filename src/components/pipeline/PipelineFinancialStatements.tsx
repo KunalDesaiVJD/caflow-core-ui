@@ -1151,6 +1151,11 @@ export default function PipelineFinancialStatements({
   const isNonCorporate: boolean = NON_CORPORATE_TYPES.some(
     t => t.toLowerCase() === entityType.toLowerCase()
   );
+  // Cash-Flow Statement applicability — driven by Stage 1 questionnaire answer
+  // ("Does the company prepare Cash Flow Statement?"). When set to "no", the
+  // Cash Flow tab is hidden in the Financial Statements view. Default = true.
+  const cfApplicable: boolean =
+    (engagement?.questionnaire_answers as any)?.cash_flow_applicable !== "no";
 
   // Active row tree and flat list — swaps between NCE and corporate at runtime.
   // The corporate constants (SCHEDULE_III_DIV_I, FLAT_ITEMS) are never mutated.
@@ -4453,7 +4458,7 @@ export default function PipelineFinancialStatements({
             <TabsTrigger value="recon" className="gap-1.5">
               <AlertTriangle size={14} /> PY Reconciliation
             </TabsTrigger>
-            {!isNonCorporate && (
+            {!isNonCorporate && cfApplicable && (
               <TabsTrigger value="cf" className="gap-1.5">
                 <Droplets size={14} /> Cash Flow
               </TabsTrigger>
@@ -4746,7 +4751,7 @@ export default function PipelineFinancialStatements({
           {/* Phase UI-4: Pixel-perfect on-screen Cash Flow Statement using
               fsDisplayData.bs / .pl / .cfs from UI-1. Mirrors writeCashFlow()
               in src/lib/fsExcelExport.ts (AS-3 Indirect Method). */}
-          {!isNonCorporate && (
+          {!isNonCorporate && cfApplicable && (
             <TabsContent value="cf" className="mt-3">
               {fsDisplayData.bs && fsDisplayData.pl && fsDisplayData.cfs ? (
                 <>

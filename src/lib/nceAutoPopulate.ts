@@ -586,12 +586,25 @@ export async function nceAutoPopulate(
       }
     }
 
-    // Restore existing static-row user values (non-custom keys)
-    for (const [k, v] of Object.entries(prev.cy)) {
-      if (!k.startsWith("custom_") && !(k in mergedCy)) mergedCy[k] = v;
-    }
-    for (const [k, v] of Object.entries(prev.py)) {
-      if (!k.startsWith("custom_") && !(k in mergedPy)) mergedPy[k] = v;
+    // Restore existing static-row user values (non-custom keys) — but ONLY
+    // when auto-populate didn't find any fresh data this run. Reasoning: a
+    // successful re-sync means COA + TB are the canonical source of truth, so
+    // any stale static-row amounts saved from an earlier run must be cleared.
+    // Otherwise the note total drifts above the BS line-item total (e.g.
+    // partner-loan custom rows correctly sum to ₹5.37 cr but the stale
+    // "Other unsecured loans" static row adds another ₹3.45 cr → ₹8.82 cr).
+    //
+    // When auto-populate produces NO data (cold-start, no COA yet), we still
+    // preserve prior user-typed amounts so first-time setup doesn't lose work.
+    const autoProducedData =
+      autoRows.length > 0 || Object.keys(newCy).length > 0;
+    if (!autoProducedData) {
+      for (const [k, v] of Object.entries(prev.cy)) {
+        if (!k.startsWith("custom_") && !(k in mergedCy)) mergedCy[k] = v;
+      }
+      for (const [k, v] of Object.entries(prev.py)) {
+        if (!k.startsWith("custom_") && !(k in mergedPy)) mergedPy[k] = v;
+      }
     }
 
     // Apply prior-year CY as PY for static rows if not already set
