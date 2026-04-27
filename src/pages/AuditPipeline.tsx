@@ -294,32 +294,22 @@ export default function AuditPipeline() {
       }
 
       // Build per-client flags from active services (source 5).
-      // Accept the row if:
-      //   a) linked_module is any audit/tax/statutory/compliance variant, OR
-      //   b) category name contains "audit" OR "tax" keywords, OR
-      //   c) no category at all (left-join returned null) — treat as audit service.
-      // This is intentionally broad: if a client has a service that looks audit/tax-adjacent
-      // in ANY way they should surface in the dropdown. Firms use many naming conventions
-      // ("Tax Audit Services", "Statutory Compliance", "Taxation", "Income Tax Audit", etc.).
-      const AUDIT_MODULES = new Set(["audit", "statutory", "tax", "tax_audit", "compliance", "income_tax"]);
+      // SIMPLE RULE: if a client has ANY active service, they are eligible.
+      // Do not filter by category name or linked_module — any client the firm
+      // has set up services for should appear in the Create Engagement dropdown.
       const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
       for (const row of (auditSvcRes.data ?? []) as any[]) {
         if (!row.client_id) continue;
+        if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
+        // Best-effort classification for audit-type hints; defaults to hasStat
         const cat = row.service_categories;
         const n   = ((cat?.name as string) ?? "").toLowerCase();
         const lm  = ((cat?.linked_module as string) ?? "").toLowerCase();
-        const isAuditModule  = AUDIT_MODULES.has(lm);
-        const isAuditByName  = n.includes("audit") || n.includes("tax");
-        const noCategoryInfo = !cat; // left-join returned no category row
-        if (!isAuditModule && !isAuditByName && !noCategoryInfo) continue;
-        if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-        // Classify which audit type this service represents
-        if (n.includes("internal"))                                serviceMap[row.client_id].hasInternal = true;
+        if (n.includes("internal"))                                             serviceMap[row.client_id].hasInternal = true;
         else if (n.includes("tax") || lm === "tax" || lm === "tax_audit" || lm === "income_tax")
-                                                                   serviceMap[row.client_id].hasTax = true;
-        else if (n.includes("statutory") || lm === "statutory")    serviceMap[row.client_id].hasStat = true;
-        else if (n.includes("stock"))                              { /* stock audit — no separate flag yet */ }
-        else                                                        serviceMap[row.client_id].hasStat = true; // default
+                                                                                serviceMap[row.client_id].hasTax = true;
+        else if (n.includes("statutory") || lm === "statutory" || lm === "audit") serviceMap[row.client_id].hasStat = true;
+        else                                                                     serviceMap[row.client_id].hasStat = true; // any service → treat as stat
       }
 
       return (allFirmClients as any[])
@@ -343,6 +333,8 @@ export default function AuditPipeline() {
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
+            // true for ANY client with at least one active service (Vatsal fix)
+            has_any_service:             !!serviceMap[c.id],
           };
         })
         .filter(c => {
@@ -351,7 +343,8 @@ export default function AuditPipeline() {
             c.statutory_audit_applicable || c.tax_audit_applicable ||
             c.internal_audit_applicable  || c.stock_audit_applicable ||
             c.has_statutory_service      || c.has_tax_audit_service  ||
-            c.has_internal_audit_service;
+            c.has_internal_audit_service ||
+            (c as any).has_any_service;  // any active service → show in dropdown
           if (!hasAuditFlag) return false;
           // Draft clients: only show if they have Audit classification and a name
           // (wizard-created clients that saved audit setup but haven't fully activated yet)

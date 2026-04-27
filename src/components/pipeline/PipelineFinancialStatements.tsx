@@ -760,6 +760,298 @@ function CorporatePLView({
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Phase UI-5 — NCE Balance Sheet + P&L (pixel-perfect, matches corporate quality)
+// ─────────────────────────────────────────────────────────────────────────
+
+// NCE liability-side codes (stored as Tally credit = NEGATIVE; displayed positive)
+const NCE_LIABILITY_CODES = new Set([
+  "NCE_CAP", "NCE_LTB", "NCE_OLTL", "NCE_LTP",
+  "NCE_STB", "NCE_TP",  "NCE_OCL",  "NCE_STP",
+]);
+const NCE_INCOME_CODES = new Set(["NCE_REV_OPS", "NCE_REV_OTH"]);
+
+function buildNCEBSRows(
+  cy: Record<string, number>,
+  py: Record<string, number>,
+): BSDisplayRow[] {
+  const negL  = (c: string) => -(cy[c] || 0);
+  const negLpy= (c: string) => -(py[c] || 0);
+  const pos   = (c: string) =>   cy[c] || 0;
+  const pospy = (c: string) =>   py[c] || 0;
+
+  const totalEL  = -(cy["NCE_EL"]  || 0);
+  const totalELpy= -(py["NCE_EL"]  || 0);
+  const totalAst =   cy["NCE_AST"] || 0;
+  const totalAstPy=  py["NCE_AST"] || 0;
+
+  return [
+    { kind: "section", label: "EQUITY AND LIABILITIES", size: 10 },
+    { kind: "subhead", label: "(1) Owners' Funds" },
+    { kind: "item", label: "(a) Owners' Capital Account",      noteNo: sn(2,  cy["NCE_CAP"],  py["NCE_CAP"]),  cy: negL("NCE_CAP"),  py: negLpy("NCE_CAP"),  indent: 1, code: "NCE_CAP" },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(2) Non-Current Liabilities" },
+    { kind: "item", label: "(a) Long-term borrowings",         noteNo: sn(3,  cy["NCE_LTB"],  py["NCE_LTB"]),  cy: negL("NCE_LTB"),  py: negLpy("NCE_LTB"),  indent: 1, code: "NCE_LTB" },
+    { kind: "item", label: "(b) Other long-term liabilities",  noteNo: sn(4,  cy["NCE_OLTL"], py["NCE_OLTL"]), cy: negL("NCE_OLTL"), py: negLpy("NCE_OLTL"), indent: 1, code: "NCE_OLTL" },
+    { kind: "item", label: "(c) Long-term provisions",         noteNo: sn(5,  cy["NCE_LTP"],  py["NCE_LTP"]),  cy: negL("NCE_LTP"),  py: negLpy("NCE_LTP"),  indent: 1, code: "NCE_LTP" },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(3) Current Liabilities" },
+    { kind: "item", label: "(a) Short-term borrowings",        noteNo: sn(6,  cy["NCE_STB"],  py["NCE_STB"]),  cy: negL("NCE_STB"),  py: negLpy("NCE_STB"),  indent: 1, code: "NCE_STB" },
+    { kind: "item", label: "(b) Trade payables",               noteNo: sn(7,  cy["NCE_TP"],   py["NCE_TP"]),   cy: negL("NCE_TP"),   py: negLpy("NCE_TP"),   indent: 1, code: "NCE_TP" },
+    { kind: "item", label: "(c) Other current liabilities",    noteNo: sn(8,  cy["NCE_OCL"],  py["NCE_OCL"]),  cy: negL("NCE_OCL"),  py: negLpy("NCE_OCL"),  indent: 1, code: "NCE_OCL" },
+    { kind: "item", label: "(d) Short-term provisions",        noteNo: sn(9,  cy["NCE_STP"],  py["NCE_STP"]),  cy: negL("NCE_STP"),  py: negLpy("NCE_STP"),  indent: 1, code: "NCE_STP" },
+    { kind: "spacer" },
+    { kind: "total", label: "TOTAL EQUITY AND LIABILITIES", cy: totalEL, py: totalELpy },
+    { kind: "spacer" },
+    { kind: "section", label: "ASSETS", size: 10 },
+    { kind: "subhead", label: "(1) Non-Current Assets" },
+    { kind: "item", label: "(a)(i)   Property, plant and equipment",   noteNo: sn(10, cy["NCE_PPE"],   py["NCE_PPE"]),   cy: pos("NCE_PPE"),   py: pospy("NCE_PPE"),   indent: 1, code: "NCE_PPE" },
+    { kind: "item", label: "(a)(ii)  Capital work-in-progress",        noteNo: sn(11, cy["NCE_CWIP"],  py["NCE_CWIP"]),  cy: pos("NCE_CWIP"),  py: pospy("NCE_CWIP"),  indent: 1, code: "NCE_CWIP" },
+    { kind: "item", label: "(a)(iii) Intangible assets",               noteNo: sn(12, cy["NCE_INTG"],  py["NCE_INTG"]),  cy: pos("NCE_INTG"),  py: pospy("NCE_INTG"),  indent: 1, code: "NCE_INTG" },
+    { kind: "item", label: "(b) Non-current investments",              noteNo: sn(13, cy["NCE_NCINV"], py["NCE_NCINV"]), cy: pos("NCE_NCINV"), py: pospy("NCE_NCINV"), indent: 1, code: "NCE_NCINV" },
+    { kind: "item", label: "(c) Long-term loans and advances",         noteNo: sn(14, cy["NCE_LTLA"],  py["NCE_LTLA"]),  cy: pos("NCE_LTLA"),  py: pospy("NCE_LTLA"),  indent: 1, code: "NCE_LTLA" },
+    { kind: "item", label: "(d) Other non-current assets",             noteNo: sn(15, cy["NCE_ONCA"],  py["NCE_ONCA"]),  cy: pos("NCE_ONCA"),  py: pospy("NCE_ONCA"),  indent: 1, code: "NCE_ONCA" },
+    { kind: "spacer" },
+    { kind: "subhead", label: "(2) Current Assets" },
+    { kind: "item", label: "(a) Current investments",                  noteNo: sn(16, cy["NCE_CINV"],  py["NCE_CINV"]),  cy: pos("NCE_CINV"),  py: pospy("NCE_CINV"),  indent: 1, code: "NCE_CINV" },
+    { kind: "item", label: "(b) Inventories",                          noteNo: sn(17, cy["NCE_STCK"],  py["NCE_STCK"]),  cy: pos("NCE_STCK"),  py: pospy("NCE_STCK"),  indent: 1, code: "NCE_STCK" },
+    { kind: "item", label: "(c) Trade receivables",                    noteNo: sn(18, cy["NCE_TR"],    py["NCE_TR"]),    cy: pos("NCE_TR"),    py: pospy("NCE_TR"),    indent: 1, code: "NCE_TR" },
+    { kind: "item", label: "(d) Cash and bank balances",               noteNo: sn(19, cy["NCE_CASH"],  py["NCE_CASH"]),  cy: pos("NCE_CASH"),  py: pospy("NCE_CASH"),  indent: 1, code: "NCE_CASH" },
+    { kind: "item", label: "(e) Short-term loans and advances",        noteNo: sn(20, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
+    { kind: "item", label: "(f) Other current assets",                 noteNo: sn(21, cy["NCE_OCA"],   py["NCE_OCA"]),   cy: pos("NCE_OCA"),   py: pospy("NCE_OCA"),   indent: 1, code: "NCE_OCA" },
+    { kind: "spacer" },
+    { kind: "total", label: "TOTAL ASSETS", cy: totalAst, py: totalAstPy },
+    { kind: "spacer" },
+    { kind: "footer", label: "Summary of Significant Accounting Policies", noteNo: 1 },
+  ];
+}
+
+function buildNCEPLRows(
+  cy:  Record<string, number>,
+  py:  Record<string, number>,
+): PLDisplayRow[] {
+  const negI  = (c: string) => -(cy[c] || 0);  // income stored as credit (negative)
+  const negIpy= (c: string) => -(py[c] || 0);
+  const pos   = (c: string) =>   cy[c] || 0;
+  const pospy = (c: string) =>   py[c] || 0;
+
+  // NCE_PL_INC is sum of income codes (negative), NCE_PL_EXP is sum of expense codes (positive)
+  const totalIncomeCy = negI("NCE_PL_INC");
+  const totalIncomePy = negIpy("NCE_PL_INC");
+  // COGS + CII combined (match Excel "(a) Cost of goods sold" single row)
+  const cogsCy = pos("NCE_COGS") + pos("NCE_CII");
+  const cogsPy = pospy("NCE_COGS") + pospy("NCE_CII");
+
+  return [
+    { kind: "header", label: "INCOME" },
+    { kind: "item", roman: "I.",   label: "Revenue from operations", noteNo: sn(22, cy["NCE_REV_OPS"], py["NCE_REV_OPS"]), cy: negI("NCE_REV_OPS"),  py: negIpy("NCE_REV_OPS"),  code: "NCE_REV_OPS" },
+    { kind: "item", roman: "II.",  label: "Other income",            noteNo: sn(23, cy["NCE_REV_OTH"], py["NCE_REV_OTH"]), cy: negI("NCE_REV_OTH"),  py: negIpy("NCE_REV_OTH"),  code: "NCE_REV_OTH" },
+    { kind: "total", roman: "III.", label: "Total Income (I + II)", cy: totalIncomeCy, py: totalIncomePy },
+    { kind: "spacer" },
+    { kind: "header", roman: "IV.", label: "Expenses" },
+    { kind: "item", label: "(a) Cost of goods sold",           noteNo: sn(24, cogsCy, cogsPy),                              cy: cogsCy,               py: cogsPy,                 indent: 1, code: "NCE_COGS" },
+    { kind: "item", label: "(b) Employee benefits expense",    noteNo: sn(25, cy["NCE_EMP_EXP"],  py["NCE_EMP_EXP"]),  cy: pos("NCE_EMP_EXP"),  py: pospy("NCE_EMP_EXP"),  indent: 1, code: "NCE_EMP_EXP" },
+    { kind: "item", label: "(c) Finance costs",                noteNo: sn(26, cy["NCE_FIN_COST"], py["NCE_FIN_COST"]), cy: pos("NCE_FIN_COST"), py: pospy("NCE_FIN_COST"), indent: 1, code: "NCE_FIN_COST" },
+    { kind: "item", label: "(d) Depreciation and amortisation",noteNo: sn(27, cy["NCE_DEPR"],     py["NCE_DEPR"]),     cy: pos("NCE_DEPR"),     py: pospy("NCE_DEPR"),     indent: 1, code: "NCE_DEPR" },
+    { kind: "item", label: "(e) Other expenses",               noteNo: sn(28, cy["NCE_OTH_EXP"],  py["NCE_OTH_EXP"]), cy: pos("NCE_OTH_EXP"),  py: pospy("NCE_OTH_EXP"),  indent: 1, code: "NCE_OTH_EXP" },
+    { kind: "total", label: "Total Expenses (IV)", cy: pos("NCE_PL_EXP"), py: pospy("NCE_PL_EXP") },
+    { kind: "spacer" },
+    { kind: "item", roman: "V.",    label: "Profit/(loss) before exceptional items, partners' remuneration and tax", cy: pos("NCE_PROF_V"),   py: pospy("NCE_PROF_V"),   bold: true },
+    { kind: "item", roman: "VI.",   label: "Exceptional items",                                                       cy: pos("NCE_EXCEP"),    py: pospy("NCE_EXCEP") },
+    { kind: "item", roman: "VII.",  label: "Profit before extraordinary items and tax",                               cy: pos("NCE_PROF_VII"), py: pospy("NCE_PROF_VII"), bold: true },
+    { kind: "item", roman: "VIII.", label: "Extraordinary items",                                                     cy: pos("NCE_EXTORD"),   py: pospy("NCE_EXTORD") },
+    { kind: "item", roman: "IX.",   label: "Profit before partners' remuneration and tax",                           cy: pos("NCE_PROF_IX"),  py: pospy("NCE_PROF_IX"),  bold: true },
+    { kind: "item", roman: "X.",    label: "Partners' remuneration",  noteNo: sn(29, cy["NCE_PART_REM"], py["NCE_PART_REM"]), cy: pos("NCE_PART_REM"), py: pospy("NCE_PART_REM"), code: "NCE_PART_REM" },
+    { kind: "item", roman: "XI.",   label: "Profit before tax (IX − X)",                                             cy: pos("NCE_PROF_XI"),  py: pospy("NCE_PROF_XI"),  bold: true },
+    { kind: "header", roman: "XII.", label: "Tax expense:" },
+    { kind: "item", label: "(1) Current tax",                            cy: pos("NCE_CUR_TAX"),   py: pospy("NCE_CUR_TAX"),   indent: 2, code: "NCE_CUR_TAX" },
+    { kind: "item", label: "(2) Short/excess provision for earlier years",cy: pos("NCE_PRIOR_TAX"),py: pospy("NCE_PRIOR_TAX"), indent: 2, code: "NCE_PRIOR_TAX" },
+    { kind: "spacer" },
+    { kind: "total", roman: "XIII.", label: "Profit / (Loss) for the year (XI − XII)", cy: pos("NCE_NET_PROF"), py: pospy("NCE_NET_PROF") },
+  ];
+}
+
+interface NCEBalanceSheetViewProps {
+  cyAmounts:  Record<string, number>;
+  pyAmounts:  Record<string, number>;
+  cyYear:     number;
+  pyYear:     number;
+  entityName: string;
+  pyLocked?:  boolean;
+  onCommitCY?: (code: string, value: number | null) => void;
+  onCommitPY?: (code: string, value: number | null) => void;
+}
+
+function NCEBalanceSheetView({
+  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY,
+}: NCEBalanceSheetViewProps) {
+  const rows = buildNCEBSRows(cyAmounts, pyAmounts);
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      <div className="text-center border-b bg-muted/30 py-2 px-3">
+        <div className="font-bold text-sm">{entityName}</div>
+        <div className="text-xs mt-0.5">Balance Sheet as at 31st March, {cyYear}</div>
+        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-muted/50 border-b">
+            <th className="text-left font-semibold py-2 px-3 w-[55%]">Particulars</th>
+            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
+            <th className="text-right font-semibold py-2 px-3 w-[18%]">As at<br />31st March, {cyYear}</th>
+            <th className="text-right font-semibold py-2 px-3 w-[19%]">
+              <span className="inline-flex flex-col items-end gap-0.5">
+                <span>As at<br />31st March, {pyYear}</span>
+                {pyLocked && <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => {
+            if (row.kind === "spacer")  return <tr key={idx}><td colSpan={4} className="h-2" /></tr>;
+            if (row.kind === "section") return (
+              <tr key={idx} className="bg-muted/20">
+                <td colSpan={4} className="font-bold py-1.5 px-3 text-[13px]">{row.label}</td>
+              </tr>
+            );
+            if (row.kind === "subhead") return (
+              <tr key={idx}>
+                <td className="font-semibold py-1 px-3" style={{ paddingLeft: 12 + (row.indent || 0) * 16 }}>{row.label}</td>
+                <td colSpan={3} />
+              </tr>
+            );
+            if (row.kind === "total")   return (
+              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+                <td className="font-bold py-1.5 px-3 uppercase text-[12px]" colSpan={2}>{row.label}</td>
+                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
+                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+              </tr>
+            );
+            if (row.kind === "footer")  return (
+              <tr key={idx}>
+                <td className="font-semibold py-1 px-3 text-[11px] italic text-muted-foreground" colSpan={3}>{row.label}</td>
+                <td className="text-center py-1 px-2 text-muted-foreground italic">{row.noteNo ?? ""}</td>
+              </tr>
+            );
+            // item row
+            const indentPx = (row.indent || 0) * 16;
+            const editableCY = !!row.code && !!onCommitCY;
+            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            // NCE liabilities stored negative → user enters positive → store negated
+            const isLiab = NCE_LIABILITY_CODES.has(row.code ?? "");
+            return (
+              <tr key={idx} className="hover:bg-muted/10">
+                <td className="py-0.5 px-3 text-[11px]" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
+                  {editableCY
+                    ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isLiab ? -v : v)} />
+                    : formatINR(row.cy)}
+                </td>
+                <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
+                  {editablePY
+                    ? <EditableMoneyCell value={row.py} onCommit={(v) => onCommitPY!(row.code!, v === null ? null : isLiab ? -v : v)} />
+                    : formatINR(row.py)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface NCEPLViewProps {
+  cyAmounts:  Record<string, number>;
+  pyAmounts:  Record<string, number>;
+  cyYear:     number;
+  pyYear:     number;
+  entityName: string;
+  pyLocked?:  boolean;
+  onCommitCY?: (code: string, value: number | null) => void;
+  onCommitPY?: (code: string, value: number | null) => void;
+}
+
+function NCEPLView({
+  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY,
+}: NCEPLViewProps) {
+  const rows = buildNCEPLRows(cyAmounts, pyAmounts);
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      <div className="text-center border-b bg-muted/30 py-2 px-3">
+        <div className="font-bold text-sm">{entityName}</div>
+        <div className="text-xs mt-0.5">
+          Statement of Profit &amp; Loss Account for the year ended 31st March, {cyYear}
+        </div>
+        <div className="text-[10px] text-muted-foreground italic mt-0.5">(Amount in ₹)</div>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-muted/50 border-b">
+            <th className="text-center font-semibold py-2 px-1 w-[5%]"></th>
+            <th className="text-left font-semibold py-2 px-3 w-[50%]">Particulars</th>
+            <th className="text-center font-semibold py-2 px-2 w-[8%]">Note No.</th>
+            <th className="text-right font-semibold py-2 px-3 w-[18%]">
+              For the year ended<br />31st March, {cyYear}
+            </th>
+            <th className="text-right font-semibold py-2 px-3 w-[19%]">
+              <span className="inline-flex flex-col items-end gap-0.5">
+                <span>For the year ended<br />31st March, {pyYear}</span>
+                {pyLocked && <Badge className="text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-300 gap-0.5"><Lock size={7} /> Finalized</Badge>}
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => {
+            if (row.kind === "spacer") return <tr key={idx}><td colSpan={5} className="h-2" /></tr>;
+            if (row.kind === "header") return (
+              <tr key={idx} className="bg-muted/20">
+                <td className="text-center font-bold py-1 px-1 text-[12px]">{row.roman || ""}</td>
+                <td colSpan={4} className="font-bold py-1 px-3 text-[12px]">{row.label}</td>
+              </tr>
+            );
+            if (row.kind === "total")  return (
+              <tr key={idx} className="border-t-2 border-foreground/40 bg-muted/30">
+                <td className="text-center font-bold py-1.5 px-1 text-[12px]">{row.roman || ""}</td>
+                <td className="font-bold py-1.5 px-3 text-[12px]">{row.label}</td>
+                <td />
+                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.cy)}</td>
+                <td className="text-right font-bold tabular-nums py-1.5 px-3">{formatINR(row.py)}</td>
+              </tr>
+            );
+            // item row
+            const indentPx = (row.indent || 0) * 16;
+            const boldCls = row.bold ? "font-bold" : "";
+            const editableCY = !!row.code && !!onCommitCY;
+            const editablePY = !!row.code && !!onCommitPY && !pyLocked;
+            const isInc = NCE_INCOME_CODES.has(row.code ?? "");
+            return (
+              <tr key={idx} className="hover:bg-muted/10">
+                <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
+                <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                  {editableCY
+                    ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isInc ? -v : v)} />
+                    : (row.cy === undefined ? "" : formatINR(row.cy))}
+                </td>
+                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                  {editablePY
+                    ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommitPY!(row.code!, v === null ? null : isInc ? -v : v)} />
+                    : (row.py === undefined ? "" : formatINR(row.py))}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Phase UI-4 — Cash Flow Statement (in-UI render, AS-3 Indirect Method)
 // ─────────────────────────────────────────────────────────────────────────
 // Mirrors writeCashFlow() in src/lib/fsExcelExport.ts row-by-row.
@@ -4598,6 +4890,35 @@ export default function PipelineFinancialStatements({
                   onChangeDate={setSigDate}
                 />
               </>
+            ) : isNonCorporate ? (
+              <>
+                <NCEBalanceSheetView
+                  cyAmounts={computedAmounts}
+                  pyAmounts={mergedPY}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  entityName={engagement?.clients?.name || ""}
+                  pyLocked={pyLocked}
+                  onCommitCY={(code, value) => {
+                    setManualOverrides(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      return next;
+                    });
+                  }}
+                  onCommitPY={(code, value) => {
+                    setPyManualAmounts(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = value;
+                      return next;
+                    });
+                    setPyManualDirty(true);
+                  }}
+                />
+                {nceSignatureBlock}
+              </>
             ) : (
               <div className="rounded-lg border overflow-hidden">
                 <Table>
@@ -4621,23 +4942,19 @@ export default function PipelineFinancialStatements({
                   </TableHeader>
                   <TableBody>
                     {renderFSRows(
-                      activeFlatItems.filter(i =>
-                        isNonCorporate
-                          ? i.section.startsWith("NCE_BS_")
-                          : i.section.startsWith("BS_")
-                      )
+                      activeFlatItems.filter(i => i.section.startsWith("BS_"))
                     )}
                   </TableBody>
                 </Table>
               </div>
             )}
-            {!activeBsBalanced && (
+            {!isNonCorporate && !activeBsBalanced && (
               <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
                 <AlertTriangle size={13} />
                 Balance Sheet is out of balance by ₹{Math.abs(activeBsDiff).toLocaleString("en-IN")}. Check COA mapping or apply manual overrides.
               </div>
             )}
-            {nceSignatureBlock}
+            {!isNonCorporate && nceSignatureBlock}
           </TabsContent>
 
           {/* ── P&L Statement ── */}
@@ -4703,6 +5020,35 @@ export default function PipelineFinancialStatements({
                   onChangeDate={setSigDate}
                 />
               </>
+            ) : isNonCorporate ? (
+              <>
+                <NCEPLView
+                  cyAmounts={computedAmounts}
+                  pyAmounts={mergedPY}
+                  cyYear={cyYear}
+                  pyYear={pyYear}
+                  entityName={engagement?.clients?.name || ""}
+                  pyLocked={pyLocked}
+                  onCommitCY={(code, value) => {
+                    setManualOverrides(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = { amount: value, reason: prev[code]?.reason || "(inline edit)" };
+                      return next;
+                    });
+                  }}
+                  onCommitPY={(code, value) => {
+                    setPyManualAmounts(prev => {
+                      const next = { ...prev };
+                      if (value === null) delete next[code];
+                      else next[code] = value;
+                      return next;
+                    });
+                    setPyManualDirty(true);
+                  }}
+                />
+                {nceSignatureBlock}
+              </>
             ) : (
               <div className="rounded-lg border overflow-hidden">
                 <Table>
@@ -4728,17 +5074,13 @@ export default function PipelineFinancialStatements({
                   </TableHeader>
                   <TableBody>
                     {renderFSRows(
-                      activeFlatItems.filter(i =>
-                        isNonCorporate
-                          ? i.section.startsWith("NCE_PL_")
-                          : i.section.startsWith("PL_")
-                      )
+                      activeFlatItems.filter(i => i.section.startsWith("PL_"))
                     )}
                   </TableBody>
                 </Table>
               </div>
             )}
-            {nceSignatureBlock}
+            {!isNonCorporate && nceSignatureBlock}
           </TabsContent>
 
           {/* ── Cash Flow (corporate only) ── */}
