@@ -293,17 +293,24 @@ export default function AuditPipeline() {
         };
       }
 
-      // Build per-client flags from active services (source 5)
+      // Build per-client flags from active services (source 5).
+      // Accept the row if linked_module === "audit" OR if the category name
+      // itself signals audit (handles firms where linked_module wasn't set).
       const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
       for (const row of (auditSvcRes.data ?? []) as any[]) {
         const cat = row.service_categories;
-        if (!cat || cat.linked_module !== "audit") continue;
+        if (!cat) continue;
+        const n = ((cat.name as string) ?? "").toLowerCase();
+        const isAuditModule = cat.linked_module === "audit";
+        const isAuditByName = n.includes("statutory") || n.includes("tax audit") ||
+                              n.includes("internal audit") || n.includes("stock audit") ||
+                              n.includes("audit");
+        if (!isAuditModule && !isAuditByName) continue;
         if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-        const n = (cat.name as string).toLowerCase();
         if (n.includes("statutory"))     serviceMap[row.client_id].hasStat = true;
         else if (n.includes("tax"))      serviceMap[row.client_id].hasTax = true;
         else if (n.includes("internal")) serviceMap[row.client_id].hasInternal = true;
-        else                             serviceMap[row.client_id].hasTax = true;
+        else                             serviceMap[row.client_id].hasStat = true;
       }
 
       return (allFirmClients as any[])

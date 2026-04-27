@@ -44,7 +44,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
   const { auditFirms } = useFirms(firmId);
 
   // ── Planning staff (only these employees show as calendar columns) ─────────
-  const { staff: planningStaff, addStaff, removeStaff } = usePlanningStaff(firmId, isSuperadmin);
+  const { staff: planningStaff, addStaff, removeStaff, reorderStaff } = usePlanningStaff(firmId, isSuperadmin);
 
   const {
     entries, comms, loading,
@@ -111,6 +111,7 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
             onDeleteEntry={handleDelete}
             onAddStaff={addStaff}
             onRemoveStaff={removeStaff}
+            onReorderStaff={reorderStaff}
           />
         </TabsContent>
 

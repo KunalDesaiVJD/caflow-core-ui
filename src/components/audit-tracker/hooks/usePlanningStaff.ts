@@ -15,7 +15,29 @@ export interface PlanningStaffMember {
   name:    string;
 }
 
-const LS_KEY = (firmId: string) => `planning_staff_${firmId}`;
+const LS_KEY       = (firmId: string) => `planning_staff_${firmId}`;
+const LS_ORDER_KEY = (firmId: string) => `planning_staff_order_${firmId}`;
+
+/** Load saved column order (array of user_ids) from localStorage. */
+function loadSavedOrder(firmId: string): string[] {
+  try {
+    const raw = localStorage.getItem(LS_ORDER_KEY(firmId));
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+/** Apply a saved order (array of user_ids) to a staff array.
+ *  Members not in the order are appended at the end alphabetically. */
+function applyOrder(members: PlanningStaffMember[], order: string[]): PlanningStaffMember[] {
+  if (!order.length) return members;
+  const orderMap = new Map(order.map((uid, i) => [uid, i]));
+  return [...members].sort((a, b) => {
+    const ia = orderMap.has(a.user_id) ? orderMap.get(a.user_id)! : 9999;
+    const ib = orderMap.has(b.user_id) ? orderMap.get(b.user_id)! : 9999;
+    if (ia !== ib) return ia - ib;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 export function usePlanningStaff(firmId: string, isSuperadmin?: boolean) {
   const [staff,   setStaff]   = useState<PlanningStaffMember[]>([]);
@@ -37,20 +59,20 @@ export function usePlanningStaff(firmId: string, isSuperadmin?: boolean) {
       setUseLs(true);
       try {
         const raw = localStorage.getItem(LS_KEY(firmId));
-        setStaff(raw ? JSON.parse(raw) : []);
+        const members: PlanningStaffMember[] = raw ? JSON.parse(raw) : [];
+        setStaff(applyOrder(members, loadSavedOrder(firmId)));
       } catch { setStaff([]); }
       setLoading(false);
       return;
     }
 
     setUseLs(false);
-    setStaff(
-      (data || []).map((r: any) => ({
-        id:      r.id,
-        user_id: r.user_id,
-        name:    r.users?.name || "Unknown",
-      }))
-    );
+    const members = (data || []).map((r: any) => ({
+      id:      r.id,
+      user_id: r.user_id,
+      name:    r.users?.name || "Unknown",
+    }));
+    setStaff(applyOrder(members, loadSavedOrder(firmId)));
     setLoading(false);
   }, [firmId]);
 
@@ -61,7 +83,7 @@ export function usePlanningStaff(firmId: string, isSuperadmin?: boolean) {
 
     if (useLs) {
       const entry: PlanningStaffMember = { id: crypto.randomUUID(), user_id: userId, name: userName };
-      const next = [...staff, entry].sort((a, b) => a.name.localeCompare(b.name));
+      const next = applyOrder([...staff, entry], loadSavedOrder(firmId));
       setStaff(next);
       localStorage.setItem(LS_KEY(firmId), JSON.stringify(next));
       return;
@@ -90,5 +112,12 @@ export function usePlanningStaff(firmId: string, isSuperadmin?: boolean) {
     await load();
   }
 
-  return { staff, loading, addStaff, removeStaff };
+  /** Persist a new column order (drag-and-drop result). */
+  function reorderStaff(newOrder: PlanningStaffMember[]) {
+    setStaff(newOrder);
+    const orderIds = newOrder.map(s => s.user_id);
+    localStorage.setItem(LS_ORDER_KEY(firmId), JSON.stringify(orderIds));
+  }
+
+  return { staff, loading, addStaff, removeStaff, reorderStaff };
 }

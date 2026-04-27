@@ -87,7 +87,32 @@ export function useAuditPlanning(firmId: string, userId?: string, isSuperadmin?:
       .order("created_at", { ascending: false });
     if (!isSuperadmin) commQ = commQ.eq("firm_id", firmId);
     const { data: commData } = await commQ;
-    setComms((commData as CommEntry[]) || []);
+    const existingComms = (commData as CommEntry[]) || [];
+
+    // Back-fill: any planning entry that has no matching audit_communication row
+    // (e.g. entries created before the auto-create logic was added, or where the
+    // insert silently failed) gets one created now.
+    const linkedPlanIds = new Set(existingComms.map(c => c.planning_id).filter(Boolean));
+    const missing = ((planData as PlanEntry[]) || []).filter(
+      p => p.client_name && p.client_name.toLowerCase() !== "leave" && !linkedPlanIds.has(p.id)
+    );
+    if (missing.length > 0) {
+      const inserts = missing.map(p => ({
+        firm_id:            firmId,
+        planning_id:        p.id,
+        client_name:        p.client_name,
+        audit_planned_from: p.planned_from,
+        audit_planned_to:   p.planned_to,
+        remarks:            "Auto-created from Planning Calendar",
+      }));
+      const { data: newComms } = await supabase
+        .from("audit_communication")
+        .insert(inserts)
+        .select();
+      if (newComms) existingComms.push(...(newComms as CommEntry[]));
+    }
+
+    setComms(existingComms);
     setLoading(false);
   }, [firmId, isSuperadmin]);
 

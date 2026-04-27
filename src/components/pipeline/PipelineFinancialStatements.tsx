@@ -230,6 +230,17 @@ function formatINR(n: number | null | undefined): string {
   return v < 0 ? `(${abs})` : abs;
 }
 
+// Smart note: only show a note number when at least one year has non-zero data.
+// Pass the RAW (pre-negation) cy/py values — the zero-check is sign-agnostic.
+// Module-level so both buildBSRows and buildPLRows can reference it.
+function sn(
+  noteNo: number | null | undefined,
+  rawCy:  number | null | undefined,
+  rawPy:  number | null | undefined,
+): number | null {
+  return (rawCy || 0) !== 0 || (rawPy || 0) !== 0 ? (noteNo ?? null) : null;
+}
+
 // Single BS row spec — keeps the renderer declarative and easy to compare to
 // writeBalanceSheet() in src/lib/fsExcelExport.ts.
 type BSDisplayRow =
@@ -245,15 +256,6 @@ function buildBSRows(bs: BSRowData): BSDisplayRow[] {
   // For display, negate all liability-side values so they appear as positive figures
   // on the Balance Sheet face (Assets and E&L both show positive amounts).
   const negL = (v: number | null | undefined) => -(v || 0);
-
-  // Smart note: only show a note number when at least one year has non-zero data.
-  // Pass the RAW (pre-negation) cy/py values — the zero-check is sign-agnostic.
-  const sn = (
-    noteNo: number | null | undefined,
-    rawCy: number | null | undefined,
-    rawPy: number | null | undefined,
-  ): number | null =>
-    (rawCy || 0) !== 0 || (rawPy || 0) !== 0 ? (noteNo ?? null) : null;
 
   // Section subtotals — match Excel SUM(E10:E30) and SUM(E35:E52) ranges.
   // Negate because raw values are negative (Tally credit convention).

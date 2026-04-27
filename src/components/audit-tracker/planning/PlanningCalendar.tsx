@@ -203,16 +203,17 @@ function WeekCell({ dateISO, employee, entries, onClick }: CellProps) {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  entries:         PlanEntry[];
-  loading:         boolean;
-  clients:         ClientOption[];
-  users:           UserOption[];          // all firm users (for add-employee picker)
-  planningStaff:   PlanningStaffMember[]; // only these show as calendar columns
-  onAddEntry:      (data: PlanSaveData) => Promise<void>;
-  onUpdateEntry:   (id: string, data: Partial<PlanEntry>) => Promise<void>;
-  onDeleteEntry:   (id: string) => Promise<void>;
-  onAddStaff:      (userId: string, userName: string) => Promise<void>;
-  onRemoveStaff:   (staffId: string) => Promise<void>;
+  entries:          PlanEntry[];
+  loading:          boolean;
+  clients:          ClientOption[];
+  users:            UserOption[];          // all firm users (for add-employee picker)
+  planningStaff:    PlanningStaffMember[]; // only these show as calendar columns
+  onAddEntry:       (data: PlanSaveData) => Promise<void>;
+  onUpdateEntry:    (id: string, data: Partial<PlanEntry>) => Promise<void>;
+  onDeleteEntry:    (id: string) => Promise<void>;
+  onAddStaff:       (userId: string, userName: string) => Promise<void>;
+  onRemoveStaff:    (staffId: string) => Promise<void>;
+  onReorderStaff:   (newOrder: PlanningStaffMember[]) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -220,7 +221,7 @@ interface Props {
 export default function PlanningCalendar({
   entries, loading, clients, users, planningStaff,
   onAddEntry, onUpdateEntry, onDeleteEntry,
-  onAddStaff, onRemoveStaff,
+  onAddStaff, onRemoveStaff, onReorderStaff,
 }: Props) {
   const now = new Date();
 
@@ -257,6 +258,33 @@ export default function PlanningCalendar({
       : availableToAdd,
     [availableToAdd, addEmpSearch]
   );
+
+  // ── Column drag-to-reorder ────────────────────────────────────────────────────
+  const dragFromIdx = useRef<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  function handleColDragStart(idx: number) {
+    dragFromIdx.current = idx;
+  }
+  function handleColDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    setDragOverIdx(idx);
+  }
+  function handleColDrop(e: React.DragEvent, toIdx: number) {
+    e.preventDefault();
+    const fromIdx = dragFromIdx.current;
+    if (fromIdx === null || fromIdx === toIdx) { setDragOverIdx(null); return; }
+    const next = [...planningStaff];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    onReorderStaff(next);
+    dragFromIdx.current = null;
+    setDragOverIdx(null);
+  }
+  function handleColDragEnd() {
+    dragFromIdx.current = null;
+    setDragOverIdx(null);
+  }
 
   // ── Per-column filters ────────────────────────────────────────────────────────
   const [columnFilters,    setColumnFilters]    = useState<Record<string, string>>({});
@@ -470,11 +498,19 @@ export default function PlanningCalendar({
                 <th className="sticky left-0 z-30 bg-indigo-700 border border-indigo-600 px-2 py-2.5 text-left w-[90px] min-w-[90px]">
                   Date
                 </th>
-                {/* Employee columns — only planning staff */}
-                {planningStaff.map(s => (
+                {/* Employee columns — only planning staff; draggable to reorder */}
+                {planningStaff.map((s, colIdx) => (
                   <th key={s.user_id}
-                    className="border border-indigo-600 px-1 py-1 text-center w-[90px] min-w-[90px]"
-                    title={s.name}>
+                    draggable
+                    onDragStart={() => handleColDragStart(colIdx)}
+                    onDragOver={e => handleColDragOver(e, colIdx)}
+                    onDrop={e => handleColDrop(e, colIdx)}
+                    onDragEnd={handleColDragEnd}
+                    className={cn(
+                      "border border-indigo-600 px-1 py-1 text-center w-[90px] min-w-[90px] cursor-grab active:cursor-grabbing transition-colors",
+                      dragOverIdx === colIdx && dragFromIdx.current !== colIdx && "bg-indigo-500"
+                    )}
+                    title={`${s.name} — drag to reorder`}>
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <span className="truncate text-[11px]">{s.name.split(" ")[0].toUpperCase()}</span>
                       <button
