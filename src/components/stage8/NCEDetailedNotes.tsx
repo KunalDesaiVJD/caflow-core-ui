@@ -29,7 +29,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Info } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Info, Search, CornerUpRight } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
@@ -140,6 +140,64 @@ function SourceBadge({ source }: { source: "auto" | "manual" }) {
     : <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 text-amber-600 border-amber-300">Manual</Badge>;
 }
 
+// ─── Searchable "Move to..." combobox ────────────────────────────────────────
+
+function MoveToCombobox({
+  options, onSelect,
+}: { options: { id: string; label: string }[]; onSelect: (id: string) => void }) {
+  const [open,   setOpen]   = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() =>
+    search
+      ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+      : options,
+    [options, search]
+  );
+
+  return (
+    <Popover open={open} onOpenChange={v => { setOpen(v); if (!v) setSearch(""); }}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="h-6 text-[10px] px-1.5 w-[110px] shrink-0 border rounded flex items-center justify-between gap-1 bg-background hover:bg-muted transition-colors"
+        >
+          <span className="truncate text-muted-foreground">Move to…</span>
+          <Search className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="start" className="w-60 p-1.5">
+        <div className="relative mb-1">
+          <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+          <Input
+            autoFocus
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search heading…"
+            className="h-6 text-xs pl-6"
+          />
+        </div>
+        <div className="max-h-48 overflow-auto space-y-0.5">
+          {filtered.length === 0 ? (
+            <p className="text-xs text-muted-foreground px-2 py-1 italic">No match</p>
+          ) : (
+            filtered.map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted transition-colors"
+                onMouseDown={e => { e.preventDefault(); onSelect(opt.id); setOpen(false); setSearch(""); }}
+              >
+                {opt.label}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Custom-row inline editor ─────────────────────────────────────────────────
 
 function CustomRowEditor({
@@ -197,18 +255,7 @@ function CustomRowEditor({
             </Popover>
           )}
           {headingOptions.length > 0 && (
-            <Select value="" onValueChange={onPromote}>
-              <SelectTrigger className="h-6 text-[10px] px-1.5 w-[110px] shrink-0">
-                <SelectValue placeholder="Move to…" />
-              </SelectTrigger>
-              <SelectContent>
-                {headingOptions.map(opt => (
-                  <SelectItem key={opt.id} value={opt.id} className="text-xs">
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MoveToCombobox options={headingOptions} onSelect={onPromote} />
           )}
         </div>
       </TableCell>
@@ -241,7 +288,7 @@ function PatternBTable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
   customRows, hiddenRows, labelOverrides, cySources,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote,
+  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -259,6 +306,7 @@ function PatternBTable({
   onHideStatic: (id: string) => void;
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
+  onEjectSource:(rowId: string, ledger: string, amount: number) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -344,15 +392,28 @@ function PatternBTable({
                               <Info className="h-3.5 w-3.5" />
                             </button>
                           </PopoverTrigger>
-                          <PopoverContent side="right" className="w-72 p-3 text-xs">
-                            <p className="font-semibold mb-2">
+                          <PopoverContent side="right" className="w-80 p-3 text-xs">
+                            <p className="font-semibold mb-1">
                               Mapped from Tally ({cySources[row.id].length} ledger{cySources[row.id].length > 1 ? "s" : ""}):
+                            </p>
+                            <p className="text-[10px] text-muted-foreground mb-2">
+                              Click <CornerUpRight className="inline h-2.5 w-2.5 mx-0.5" /> to eject a ledger as its own separate row.
                             </p>
                             <ul className="space-y-1">
                               {cySources[row.id].map((s, i) => (
-                                <li key={i} className="flex justify-between gap-2">
-                                  <span className="text-muted-foreground truncate">{s.ledger}</span>
+                                <li key={i} className="flex items-center justify-between gap-2 group">
+                                  <span className="text-muted-foreground truncate flex-1">{s.ledger}</span>
                                   <span className="shrink-0 font-medium">₹{s.amountCy.toLocaleString("en-IN")}</span>
+                                  {cySources[row.id].length > 1 && (
+                                    <button
+                                      type="button"
+                                      title={`Eject "${s.ledger}" as separate row`}
+                                      onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                                      className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                      <CornerUpRight className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 </li>
                               ))}
                             </ul>
@@ -464,6 +525,27 @@ function PatternATable({
     [config, hiddenRows, labelOverrides],
   );
 
+  // For each sectionTag total, build the set of static-row IDs that belong
+  // to that section (all non-header, non-total rows between the previous total
+  // and this one). Used to exclude sibling static rows from the "Move to..."
+  // dropdown when a custom row is already in that section.
+  const sectionStaticIds = useMemo(() => {
+    const result: Record<string, Set<string>> = {};
+    let sectionStart = 0;
+    config.rows.forEach((r, i) => {
+      if (r.isTotal && r.sectionTag) {
+        const ids = new Set<string>();
+        for (let j = sectionStart; j < i; j++) {
+          const sr = config.rows[j];
+          if (!sr.isSectionHeader && !sr.isTotal) ids.add(sr.id);
+        }
+        result[r.sectionTag] = ids;
+        sectionStart = i + 1;
+      }
+    });
+    return result;
+  }, [config]);
+
   return (
     <Table>
       <TableHeader>
@@ -491,6 +573,10 @@ function PatternATable({
             : idx === grandTotalIdx
               ? (customBySection["_global"] ?? [])
               : [];
+          // headingOptions for sectionRows: exclude static rows in the same section
+          const sectionHeadingOptions = row.sectionTag
+            ? headingOptions.filter(opt => !sectionStaticIds[row.sectionTag!]?.has(opt.id))
+            : headingOptions;
           const attachedHere = !row.isSectionHeader && !row.isTotal
             ? customRows.filter(cr => cr.attachedTo === row.id)
             : [];
@@ -514,7 +600,7 @@ function PatternATable({
                   onChangePySt={v => onChangePy(cr.id + "_st", v)}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions}
+                  headingOptions={sectionHeadingOptions}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
                 />
               ))}
@@ -804,6 +890,33 @@ export function NCEDetailedNotes({ engagementId }: Props) {
     toast.success("Attached under selected heading");
   }, [scheduleSave]);
 
+  // Eject a mapped Tally ledger from a static row → new custom row
+  const handleEjectSource = useCallback((noteType: string, rowId: string, ledger: string, amount: number) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      // 1. Remove ledger from cy_sources
+      const newCySources = { ...(cur.cy_sources ?? {}) };
+      const remaining = (newCySources[rowId] ?? []).filter(s => s.ledger !== ledger);
+      if (remaining.length === 0) delete newCySources[rowId];
+      else newCySources[rowId] = remaining;
+      // 2. Subtract amount from static row's CY
+      const newCy = { ...cur.cy, [rowId]: Math.max(0, (cur.cy[rowId] ?? 0) - amount) };
+      // 3. Create new custom row with that ledger name + amount
+      const newId = newCustomId();
+      const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
+      newCy[newId] = amount;
+      const next = { ...prev, [noteType]: {
+        ...cur,
+        cy: newCy,
+        cy_sources: newCySources,
+        customRows: [...cur.customRows, newRow],
+      }};
+      scheduleSave(next);
+      return next;
+    });
+    toast.success(`"${ledger}" moved to a separate row`);
+  }, [scheduleSave]);
+
   // ── Re-sync ─────────────────────────────────────────────────────────────
   const handleResync = useCallback(async () => {
     const ok = window.confirm(
@@ -935,6 +1048,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
+                    onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
                   />
                 )}
               </div>

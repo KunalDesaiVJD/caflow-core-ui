@@ -259,7 +259,23 @@ export default function PlanningCalendar({
   );
 
   // ── Per-column filters ────────────────────────────────────────────────────────
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [columnFilters,    setColumnFilters]    = useState<Record<string, string>>({});
+  const [openColDropdown,  setOpenColDropdown]  = useState<string | null>(null);
+
+  // Unique client names assigned to each employee (across all entries)
+  const empClientOptions = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const entry of entries) {
+      if (!entry.client_name || entry.client_name.toLowerCase() === "leave") continue;
+      for (const empId of (entry.employee_ids || [])) {
+        if (!map[empId]) map[empId] = [];
+        if (!map[empId].includes(entry.client_name)) map[empId].push(entry.client_name);
+      }
+    }
+    // Sort each list alphabetically
+    Object.keys(map).forEach(k => map[k].sort());
+    return map;
+  }, [entries]);
 
   function setColFilter(empId: string, val: string) {
     setColumnFilters(p => ({ ...p, [empId]: val }));
@@ -469,19 +485,50 @@ export default function PlanningCalendar({
                         <XIcon size={10} />
                       </button>
                     </div>
-                    {/* Per-column client filter */}
+                    {/* Per-column client filter with dropdown */}
                     <div className="relative" onClick={e => e.stopPropagation()}>
-                      <Filter size={8} className="absolute left-1 top-1/2 -translate-y-1/2 text-indigo-300 pointer-events-none" />
+                      <Filter size={8} className="absolute left-1 top-1/2 -translate-y-1/2 text-indigo-300 pointer-events-none z-10" />
+                      {columnFilters[s.user_id] && (
+                        <button
+                          type="button"
+                          onClick={() => { setColFilter(s.user_id, ""); setOpenColDropdown(null); }}
+                          className="absolute right-0.5 top-1/2 -translate-y-1/2 text-yellow-300 hover:text-white z-10"
+                        >
+                          <XIcon size={7} />
+                        </button>
+                      )}
                       <input
                         type="text"
                         value={columnFilters[s.user_id] || ""}
-                        onChange={e => setColFilter(s.user_id, e.target.value)}
+                        onChange={e => { setColFilter(s.user_id, e.target.value); setOpenColDropdown(s.user_id); }}
+                        onFocus={() => setOpenColDropdown(s.user_id)}
+                        onBlur={() => setTimeout(() => setOpenColDropdown(null), 150)}
                         placeholder="filter…"
                         className={cn(
-                          "w-full h-5 pl-3.5 pr-1 text-[9px] rounded bg-indigo-800 border border-indigo-500 text-white placeholder-indigo-400 focus:outline-none focus:border-yellow-300",
+                          "w-full h-5 pl-3.5 pr-3 text-[9px] rounded bg-indigo-800 border border-indigo-500 text-white placeholder-indigo-400 focus:outline-none focus:border-yellow-300",
                           columnFilters[s.user_id] && "border-yellow-300 bg-indigo-900"
                         )}
                       />
+                      {/* Client options dropdown */}
+                      {openColDropdown === s.user_id && (empClientOptions[s.user_id] ?? []).length > 0 && (
+                        <div className="absolute top-full left-0 z-50 mt-0.5 w-max min-w-full max-w-[200px] bg-white border border-border rounded shadow-lg max-h-40 overflow-auto">
+                          {(empClientOptions[s.user_id] ?? [])
+                            .filter(c => !columnFilters[s.user_id] || c.toLowerCase().includes((columnFilters[s.user_id] || "").toLowerCase()))
+                            .map(clientName => (
+                              <div
+                                key={clientName}
+                                onMouseDown={e => { e.preventDefault(); setColFilter(s.user_id, clientName); setOpenColDropdown(null); }}
+                                className={cn(
+                                  "px-2 py-1 text-[10px] cursor-pointer hover:bg-indigo-50 text-foreground truncate",
+                                  columnFilters[s.user_id] === clientName && "bg-indigo-50 font-semibold"
+                                )}
+                              >
+                                {clientName}
+                              </div>
+                            ))
+                          }
+                        </div>
+                      )}
                     </div>
                   </th>
                 ))}
