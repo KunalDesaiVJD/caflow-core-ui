@@ -14,17 +14,11 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
-} from "@/components/ui/sheet";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Users, Clock, AlertTriangle, CheckCircle2, FileCheck, Ban, MinusCircle,
-  Printer, AlertCircle, Plus, Upload, Copy, Pencil, Trash2, Search,
+  Printer, AlertCircle, TrendingUp,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -37,21 +31,6 @@ interface TdsFiling {
   date_of_filing: string | null; acknowledgment_number: string | null;
   tan: string | null; created_at: string | null;
   last_updated_by: string | null; last_updated_at: string | null;
-}
-
-interface AuditLogEntry {
-  id: string; filing_id: string | null; firm_id: string | null;
-  action_type: string; old_value: string | null; new_value: string | null;
-  changed_by: string | null; changed_by_name: string | null;
-  changed_at: string | null; remark: string | null;
-}
-
-interface RateRecord {
-  id: string; assessment_year: string; form_type: string;
-  section_code: string; nature_of_payment: string | null;
-  threshold_individual: number | null; threshold_company: number | null;
-  rate_individual: number | null; rate_company: number | null;
-  rate_no_pan: number | null; is_active: boolean;
 }
 
 interface Props {
@@ -118,15 +97,15 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
   NIL: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
 };
 
-const AY_OPTIONS = Array.from({ length: 8 }, (_, i) => { const s = 2023 + i; return `${s}-${String(s + 1).slice(2)}`; });
+const TERMINAL_STATUSES = new Set([
+  "Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL",
+]);
 
 export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
   const { toast } = useToast();
   const smartDefault = useMemo(() => getSmartDefaultQuarter(), []);
 
   const [filings, setFilings] = useState<TdsFiling[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [rates, setRates] = useState<RateRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -135,15 +114,6 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const [quarterFilter, setQuarterFilter] = useState(smartDefault.quarter);
   const [clientFilter, setClientFilter] = useState("all");
   const [clientFilterSearch, setClientFilterSearch] = useState("");
-
-  // Rate Master state (embedded)
-  const [rateAY, setRateAY] = useState("2026-27");
-  const [rateFormTab, setRateFormTab] = useState("26Q");
-  const [rateSearch, setRateSearch] = useState("");
-  const [rateEditOpen, setRateEditOpen] = useState(false);
-  const [editingRate, setEditingRate] = useState<RateRecord | null>(null);
-  const [rateFormData, setRateFormData] = useState<Record<string, any>>({});
-  const [rateSaving, setRateSaving] = useState(false);
 
   const [deletedClientIds, setDeletedClientIds] = useState<Set<string>>(new Set());
 
@@ -170,23 +140,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       for (const dc of (delClients || [])) delIds.add(dc.id);
     }
     setDeletedClientIds(delIds);
-
-    // Audit logs
-    let logQ = supabase.from("tds_filing_audit_log").select("*").order("changed_at", { ascending: false }).limit(15);
-    if (!isSuperadmin && firmId) logQ = logQ.eq("firm_id", firmId);
-    const { data: logsData } = await logQ;
-
-    // Rates for embedded panel
-    let rateQ = supabase.from("tds_rate_master").select("id, assessment_year, form_type, section_code, nature_of_payment, threshold_individual, threshold_company, rate_individual, rate_company, rate_no_pan, is_active")
-      .eq("assessment_year", rateAY).eq("form_type", rateFormTab).eq("is_active", true).order("section_code");
-    if (!isSuperadmin && firmId) rateQ = rateQ.eq("firm_id", firmId);
-    const { data: rateData } = await rateQ;
-
     setFilings(allFilings);
-    setAuditLogs((logsData || []) as AuditLogEntry[]);
-    setRates((rateData || []) as RateRecord[]);
     setLoading(false);
-  }, [resolveFirmId, isSuperadmin, fyFilter, clientFilter, rateAY, rateFormTab]);
+  }, [resolveFirmId, isSuperadmin, fyFilter, clientFilter]);
 
   // Re-fetch when refreshKey changes (e.g. user returns from TDS Workspace to Dashboard)
   useEffect(() => { fetchAll(); }, [fetchAll, refreshKey]);
@@ -208,11 +164,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   // ═══ KPI Stats ═══
   const stats = useMemo(() => {
     const activeClientIds = new Set(filteredFilings.map(f => f.client_id));
-    const notTerminal = filteredFilings.filter(f =>
-      !["Not Applicable", "NIL", "Filed", "Submitted", "Processed", "Accepted"].includes(f.work_status)
-    );
+    const notTerminal = filteredFilings.filter(f => !TERMINAL_STATUSES.has(f.work_status));
     const overdue = filteredFilings.filter(f => {
-      if (["Filed", "Submitted", "Processed", "Accepted", "Not Applicable", "NIL"].includes(f.work_status)) return false;
+      if (TERMINAL_STATUSES.has(f.work_status)) return false;
       const form = f.tds_forms?.[0];
       const due = getDueDate(f.financial_year, f.quarter, form);
       return due < today;
@@ -250,67 +204,88 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     return clientFilings;
   }, [filings, fyFilter, formTab, clientFilter, deletedClientIds]);
 
-  // ═══ Rate Master filtering ═══
-  const filteredRates = useMemo(() => {
-    if (!rateSearch) return rates;
-    const s = rateSearch.toLowerCase();
-    return rates.filter(r => r.section_code.toLowerCase().includes(s) || (r.nature_of_payment || "").toLowerCase().includes(s));
-  }, [rates, rateSearch]);
-
-  // Rate CRUD
-  const openRateEdit = (r?: RateRecord) => {
-    if (r) {
-      setEditingRate(r);
-      setRateFormData({ ...r });
-    } else {
-      setEditingRate(null);
-      setRateFormData({
-        assessment_year: rateAY, form_type: rateFormTab, section_code: "",
-        nature_of_payment: "", threshold_individual: 0, threshold_company: 0,
-        rate_individual: 0, rate_company: 0, rate_no_pan: 20, is_active: true,
-      });
-    }
-    setRateEditOpen(true);
-  };
-
-  const saveRate = async () => {
-    setRateSaving(true);
-    const firmId = await resolveFirmId();
-    try {
-      if (editingRate) {
-        await supabase.from("tds_rate_master").update({
-          section_code: rateFormData.section_code,
-          nature_of_payment: rateFormData.nature_of_payment,
-          threshold_individual: Number(rateFormData.threshold_individual) || 0,
-          threshold_company: Number(rateFormData.threshold_company) || 0,
-          rate_individual: Number(rateFormData.rate_individual) || 0,
-          rate_company: Number(rateFormData.rate_company) || 0,
-          rate_no_pan: Number(rateFormData.rate_no_pan) || 20,
-        } as any).eq("id", editingRate.id);
-      } else {
-        await supabase.from("tds_rate_master").insert({
-          ...rateFormData,
-          financial_year: `${parseInt(rateAY) - 1}-${rateAY.slice(0, 2)}`,
-          firm_id: firmId,
-          surcharge_applicable: false, cess_applicable: false,
-          effective_from: `${parseInt(rateAY) - 1}-04-01`,
-        } as any);
+  // ═══ Pending Compliance Alerts ═══
+  // Overdue or due within the next 14 days (not yet filed) for the selected FY
+  const pendingAlerts = useMemo(() => {
+    type Alert = {
+      id: string; clientName: string; quarter: string; form: string;
+      status: string; dueDate: Date; daysOverdue: number; daysLeft: number;
+    };
+    const alerts: Alert[] = [];
+    const fyFilings = filings.filter(f => {
+      if (deletedClientIds.has(f.client_id)) return false;
+      if (f.financial_year !== fyFilter) return false;
+      if (TERMINAL_STATUSES.has(f.work_status)) return false;
+      if (clientFilter !== "all" && f.client_id !== clientFilter) return false;
+      return true;
+    });
+    for (const f of fyFilings) {
+      const form = f.tds_forms?.[0] || "26Q";
+      const dueDate = getDueDate(f.financial_year, f.quarter, form);
+      const diffMs = dueDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      if (diffDays <= 14) {
+        const client = clients.find(c => c.id === f.client_id);
+        alerts.push({
+          id: f.id,
+          clientName: client?.name || "Unknown",
+          quarter: f.quarter,
+          form,
+          status: f.work_status,
+          dueDate,
+          daysOverdue: diffDays < 0 ? Math.abs(diffDays) : 0,
+          daysLeft: diffDays >= 0 ? diffDays : 0,
+        });
       }
-      toast({ title: editingRate ? "Rate updated" : "Rate added" });
-      setRateEditOpen(false);
-      fetchAll();
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
     }
-    setRateSaving(false);
-  };
+    return alerts.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+  }, [filings, fyFilter, clientFilter, deletedClientIds, clients, today]);
 
-  const deleteRate = async (id: string) => {
-    if (!confirm("Delete this rate entry?")) return;
-    await supabase.from("tds_rate_master").delete().eq("id", id);
-    toast({ title: "Rate deleted" });
-    fetchAll();
-  };
+  // ═══ Client FY Filing Summary ═══
+  // Shows per-client, per-quarter data entry status for the selected FY
+  const clientFySummary = useMemo(() => {
+    const fyFilings = filings.filter(f => {
+      if (deletedClientIds.has(f.client_id)) return false;
+      if (f.financial_year !== fyFilter) return false;
+      if (clientFilter !== "all" && f.client_id !== clientFilter) return false;
+      return true;
+    });
+    const byClient: Record<string, {
+      clientName: string;
+      byQuarter: Record<string, TdsFiling[]>;
+      lastUpdated: string | null;
+    }> = {};
+    for (const f of fyFilings) {
+      if (!byClient[f.client_id]) {
+        const client = clients.find(c => c.id === f.client_id);
+        byClient[f.client_id] = {
+          clientName: client?.name || "Unknown",
+          byQuarter: {},
+          lastUpdated: null,
+        };
+      }
+      if (!byClient[f.client_id].byQuarter[f.quarter]) {
+        byClient[f.client_id].byQuarter[f.quarter] = [];
+      }
+      byClient[f.client_id].byQuarter[f.quarter].push(f);
+      const ts = f.last_updated_at || f.created_at;
+      if (ts && (!byClient[f.client_id].lastUpdated || ts > byClient[f.client_id].lastUpdated!)) {
+        byClient[f.client_id].lastUpdated = ts;
+      }
+    }
+    return Object.entries(byClient)
+      .map(([clientId, data]) => ({
+        clientId,
+        clientName: data.clientName,
+        byQuarter: data.byQuarter,
+        quartersWithData: Object.keys(data.byQuarter).length,
+        quartersComplete: Object.values(data.byQuarter).filter(qf =>
+          qf.some(f => TERMINAL_STATUSES.has(f.work_status))
+        ).length,
+        lastUpdated: data.lastUpdated,
+      }))
+      .sort((a, b) => a.clientName.localeCompare(b.clientName));
+  }, [filings, fyFilter, clientFilter, deletedClientIds, clients]);
 
   // Checklist print
   const generateChecklist = () => {
@@ -387,6 +362,20 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   };
 
   const isDueDateCurrent = (q: string) => q === smartDefault.quarter && fyFilter === smartDefault.fy;
+
+  // Quarter status badge for the summary table
+  const getQStatusBadge = (qFilings: TdsFiling[] | undefined) => {
+    if (!qFilings || qFilings.length === 0) return <span className="text-[10px] text-muted-foreground">—</span>;
+    // Pick the "best" status if multiple forms
+    const statuses = qFilings.map(f => STATUS_ABBREV[f.work_status] || "NS");
+    const priority = ["PC", "FL", "QS", "UP", "DR", "NIL", "NA", "NS"];
+    const best = priority.find(p => statuses.includes(p)) || "NS";
+    return (
+      <Badge className={cn("text-[9px] px-1.5 py-0 font-mono", STATUS_BADGE_COLORS[best])}>
+        {best}
+      </Badge>
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -466,7 +455,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
         ))}
       </div>
 
-      {/* ═══ ROW 3: Matrix (left) + Due Dates & Rate Master (right) ═══ */}
+      {/* ═══ ROW 3: Matrix (left) + Due Dates & Compliance Alerts (right) ═══ */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         {/* Filing Status Matrix */}
         <Card className="xl:col-span-2">
@@ -545,7 +534,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
           </CardContent>
         </Card>
 
-        {/* Right Column: Due Dates + Rate Master */}
+        {/* Right Column: Due Dates + Compliance Alerts */}
         <div className="space-y-4">
           {/* Due Date Reference */}
           <Card>
@@ -587,161 +576,140 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             </CardContent>
           </Card>
 
-          {/* Embedded Rate Master */}
+          {/* Compliance Alerts */}
           <Card>
             <CardHeader className="py-2.5 px-4">
-              <CardTitle className="text-sm font-semibold">Rate Master</CardTitle>
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <AlertTriangle size={14} className="text-amber-600" /> Compliance Alerts
+                {pendingAlerts.length > 0 && (
+                  <Badge className="ml-auto bg-destructive text-destructive-foreground text-[10px] px-1.5 py-0">
+                    {pendingAlerts.length}
+                  </Badge>
+                )}
+              </CardTitle>
+              <p className="text-[10px] text-muted-foreground">Overdue or due within 14 days — FY {fyFilter}</p>
             </CardHeader>
-            <CardContent className="p-3 pt-0 space-y-2">
-              <div className="flex gap-2 items-end">
-                <Select value={rateAY} onValueChange={setRateAY}>
-                  <SelectTrigger className="w-[100px] h-7 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>{AY_OPTIONS.map(ay => <SelectItem key={ay} value={ay}>AY {ay}</SelectItem>)}</SelectContent>
-                </Select>
-                <Tabs value={rateFormTab} onValueChange={setRateFormTab}>
-                  <TabsList className="h-7">
-                    {ALL_FORMS.map(f => <TabsTrigger key={f} value={f} className="text-[10px] px-2 h-6">{f}</TabsTrigger>)}
-                  </TabsList>
-                </Tabs>
-              </div>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input value={rateSearch} onChange={e => setRateSearch(e.target.value)} placeholder="Search section..." className="h-7 text-xs pl-7" />
+            <CardContent className="p-0">
+              {pendingAlerts.length === 0 ? (
+                <div className="flex items-center gap-2 px-4 py-5 text-sm text-emerald-600">
+                  <CheckCircle2 size={15} />
+                  <span>All filings on track for FY {fyFilter}</span>
                 </div>
-                <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" onClick={() => openRateEdit()}>
-                  <Plus size={10} /> Add
-                </Button>
-              </div>
-              <div className="overflow-y-auto max-h-[200px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-[9px]">Section</TableHead>
-                      <TableHead className="text-[9px]">Nature</TableHead>
-                      <TableHead className="text-[9px] text-right">Rate%</TableHead>
-                      <TableHead className="text-[9px] text-right">No-PAN%</TableHead>
-                      <TableHead className="text-[9px] w-[50px]"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredRates.length === 0 ? (
-                      <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground text-xs py-4">No rates</TableCell></TableRow>
-                    ) : filteredRates.map(r => (
-                      <TableRow key={r.id}>
-                        <TableCell className="text-[10px] font-mono">{r.section_code}</TableCell>
-                        <TableCell className="text-[10px] max-w-[120px] truncate">{r.nature_of_payment}</TableCell>
-                        <TableCell className="text-[10px] text-right">{r.rate_individual}%</TableCell>
-                        <TableCell className="text-[10px] text-right">{r.rate_no_pan}%</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex gap-0.5 justify-end">
-                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => openRateEdit(r)}>
-                              <Pencil size={10} />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-5 w-5 text-destructive" onClick={() => deleteRate(r.id)}>
-                              <Trash2 size={10} />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              ) : (
+                <div className="divide-y max-h-[240px] overflow-y-auto">
+                  {pendingAlerts.slice(0, 12).map(alert => (
+                    <div
+                      key={alert.id}
+                      className="px-3 py-2 flex items-start gap-2 hover:bg-muted/50 cursor-pointer transition-colors"
+                      onClick={() => onNavigate?.("data-entry", { client: clients.find(c => c.name === alert.clientName)?.id || "", quarter: alert.quarter })}
+                    >
+                      <div className={cn("shrink-0 mt-0.5", alert.daysOverdue > 0 ? "text-destructive" : "text-amber-500")}>
+                        <AlertCircle size={12} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium truncate leading-tight">{alert.clientName}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {alert.quarter} · {alert.form} ·{" "}
+                          {alert.daysOverdue > 0
+                            ? <span className="text-destructive font-semibold">{alert.daysOverdue}d overdue</span>
+                            : alert.daysLeft === 0
+                              ? <span className="text-destructive font-semibold">Due today!</span>
+                              : <span className="text-amber-600 font-semibold">Due in {alert.daysLeft}d</span>
+                          }
+                        </p>
+                      </div>
+                      <Badge className={cn("text-[9px] shrink-0 font-mono", STATUS_BADGE_COLORS[STATUS_ABBREV[alert.status] || "NS"])}>
+                        {STATUS_ABBREV[alert.status] || "NS"}
+                      </Badge>
+                    </div>
+                  ))}
+                  {pendingAlerts.length > 12 && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">
+                      +{pendingAlerts.length - 12} more alerts
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* ═══ ROW 4: Recent Activity ═══ */}
+      {/* ═══ ROW 4: Client FY Filing Summary ═══ */}
       <Card>
-        <CardHeader className="py-2.5 px-4">
-          <CardTitle className="text-sm font-semibold">Recent Activity</CardTitle>
+        <CardHeader className="py-2.5 px-4 flex flex-row items-start justify-between">
+          <div>
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <TrendingUp size={14} className="text-blue-600" />
+              FY {fyFilter} — Client Filing Summary
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Quarter-wise data coverage for every client in the selected financial year
+            </p>
+          </div>
+          <Badge variant="outline" className="text-[10px] shrink-0 mt-0.5">
+            {clientFySummary.length} client{clientFySummary.length !== 1 ? "s" : ""}
+          </Badge>
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-[10px]">Action</TableHead>
-                  <TableHead className="text-[10px]">Change</TableHead>
-                  <TableHead className="text-[10px]">User</TableHead>
-                  <TableHead className="text-[10px]">Date & Time</TableHead>
-                  <TableHead className="text-[10px]">Remark</TableHead>
+                  <TableHead className="text-[10px] sticky left-0 bg-background z-10 min-w-[160px]">Client</TableHead>
+                  {QUARTER_OPTIONS.map(q => (
+                    <TableHead key={q} className="text-[10px] text-center">{q}</TableHead>
+                  ))}
+                  <TableHead className="text-[10px] text-center">Coverage</TableHead>
+                  <TableHead className="text-[10px]">Last Updated</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {auditLogs.length === 0 ? (
+                {clientFySummary.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground text-sm py-6">
-                      No recent activity recorded
+                    <TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-8">
+                      No filing data found for FY {fyFilter}
                     </TableCell>
                   </TableRow>
-                ) : auditLogs.map(log => (
-                    <TableRow key={log.id}>
-                      <TableCell><Badge variant="secondary" className="text-[10px]">{log.action_type}</Badge></TableCell>
-                      <TableCell className="text-sm">
-                        {log.old_value || log.new_value ? (
-                          <><span className="text-muted-foreground">{log.old_value || "—"}</span><span className="mx-1">→</span><span className="font-medium">{log.new_value || "—"}</span></>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm">{log.changed_by_name || "System"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {log.changed_at ? format(new Date(log.changed_at), "dd MMM yyyy, hh:mm a") : "—"}
-                      </TableCell>
-                      <TableCell className="text-xs max-w-[150px] truncate">{log.remark || "—"}</TableCell>
-                    </TableRow>
-                  ))}
+                ) : (
+                  clientFySummary.map(row => {
+                    const coveragePct = Math.round((row.quartersWithData / 4) * 100);
+                    const allDone = row.quartersComplete === row.quartersWithData && row.quartersWithData > 0;
+                    return (
+                      <TableRow key={row.clientId}>
+                        <TableCell className="font-medium text-sm sticky left-0 bg-background z-10 max-w-[180px]">
+                          <span className="truncate block">{row.clientName}</span>
+                        </TableCell>
+                        {QUARTER_OPTIONS.map(q => (
+                          <TableCell key={q} className="text-center">
+                            {getQStatusBadge(row.byQuarter[q])}
+                          </TableCell>
+                        ))}
+                        <TableCell className="text-center">
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="w-16 bg-muted rounded-full h-1.5">
+                              <div
+                                className={cn("h-1.5 rounded-full transition-all", allDone ? "bg-emerald-500" : coveragePct > 0 ? "bg-blue-500" : "bg-muted-foreground/30")}
+                                style={{ width: `${coveragePct}%` }}
+                              />
+                            </div>
+                            <span className="text-[9px] text-muted-foreground">
+                              {row.quartersWithData}/4 qtrs
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-[10px] text-muted-foreground whitespace-nowrap">
+                          {row.lastUpdated ? format(new Date(row.lastUpdated), "dd MMM yy, hh:mm a") : "—"}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
               </TableBody>
             </Table>
           </div>
         </CardContent>
       </Card>
-
-      {/* ═══ Rate Edit Dialog ═══ */}
-      <Dialog open={rateEditOpen} onOpenChange={setRateEditOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editingRate ? "Edit Rate" : "Add Rate Section"}</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Section Code</Label>
-              <Input value={rateFormData.section_code || ""} onChange={e => setRateFormData(p => ({ ...p, section_code: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="col-span-2 space-y-1">
-              <Label className="text-xs">Nature of Payment</Label>
-              <Input value={rateFormData.nature_of_payment || ""} onChange={e => setRateFormData(p => ({ ...p, nature_of_payment: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Threshold Ind (₹)</Label>
-              <Input type="number" value={rateFormData.threshold_individual ?? ""} onChange={e => setRateFormData(p => ({ ...p, threshold_individual: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Threshold Co (₹)</Label>
-              <Input type="number" value={rateFormData.threshold_company ?? ""} onChange={e => setRateFormData(p => ({ ...p, threshold_company: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Rate Ind %</Label>
-              <Input type="number" step="0.1" value={rateFormData.rate_individual ?? ""} onChange={e => setRateFormData(p => ({ ...p, rate_individual: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Rate Co %</Label>
-              <Input type="number" step="0.1" value={rateFormData.rate_company ?? ""} onChange={e => setRateFormData(p => ({ ...p, rate_company: e.target.value }))} className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">No-PAN Rate %</Label>
-              <Input type="number" step="0.1" value={rateFormData.rate_no_pan ?? ""} onChange={e => setRateFormData(p => ({ ...p, rate_no_pan: e.target.value }))} className="h-8 text-xs" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRateEditOpen(false)}>Cancel</Button>
-            <Button onClick={saveRate} disabled={rateSaving || !rateFormData.section_code}>
-              {rateSaving ? "Saving..." : editingRate ? "Update" : "Add Section"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
