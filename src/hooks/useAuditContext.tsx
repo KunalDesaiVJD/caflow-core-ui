@@ -35,7 +35,12 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     }
     setLoading(true);
     try {
-    let engQuery: any = supabase.from("audit_engagements").select("*, clients(name, entity_type)");
+    // Exclude PY shell engagements — they are temporary records used only for
+    // prior-year Tally sync and must never appear in any UI dropdown or list.
+    let engQuery: any = supabase
+      .from("audit_engagements")
+      .select("*, clients(name, entity_type)")
+      .or("is_py_shell.is.null,is_py_shell.eq.false");
     let clientQuery: any = supabase
       .from("clients")
       .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type")
