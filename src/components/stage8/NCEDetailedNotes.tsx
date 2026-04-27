@@ -29,7 +29,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
@@ -87,7 +87,7 @@ function NoteCard({
     if (collapseControl !== undefined) setOpen(!collapseControl);
   }, [collapseControl]);
   return (
-    <div className="border rounded-lg overflow-hidden bg-background">
+    <div id={`nce-note-${noteNumber}`} className="border rounded-lg overflow-hidden bg-background">
       {/* Header strip — click to collapse/expand */}
       <div
         className="bg-muted/40 px-4 py-2 border-b flex items-center gap-2 flex-wrap cursor-pointer select-none hover:bg-muted/60 transition-colors"
@@ -157,59 +157,107 @@ function SourceBadge({ source }: { source: "auto" | "manual" }) {
     : <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 text-amber-600 border-amber-300">Manual</Badge>;
 }
 
-// ─── Searchable "Move to..." combobox ────────────────────────────────────────
+// ─── Row actions menu (⋮) — Move to / Add separate row / Delete ──────────────
 
-function MoveToCombobox({
-  options, onSelect,
-}: { options: { id: string; label: string }[]; onSelect: (id: string) => void }) {
-  const [open,   setOpen]   = useState(false);
-  const [search, setSearch] = useState("");
+function RowActionsMenu({
+  headingOptions, onPromote, onDelete, onAddRow,
+}: {
+  headingOptions: { id: string; label: string }[];
+  onPromote:      (id: string) => void;
+  onDelete:       () => void;
+  onAddRow?:      () => void;
+}) {
+  const [open,     setOpen]     = useState(false);
+  const [showMove, setShowMove] = useState(false);
+  const [search,   setSearch]   = useState("");
 
   const filtered = useMemo(() =>
     search
-      ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
-      : options,
-    [options, search]
+      ? headingOptions.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+      : headingOptions,
+    [headingOptions, search],
   );
 
+  const closeAll = () => { setOpen(false); setShowMove(false); setSearch(""); };
+
   return (
-    <Popover open={open} onOpenChange={v => { setOpen(v); if (!v) setSearch(""); }}>
+    <Popover open={open} onOpenChange={v => { setOpen(v); if (!v) { setShowMove(false); setSearch(""); } }}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="h-6 text-[10px] px-1.5 w-[110px] shrink-0 border rounded flex items-center justify-between gap-1 bg-background hover:bg-muted transition-colors"
+          title="Row actions"
+          className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
         >
-          <span className="truncate text-muted-foreground">Move to…</span>
-          <Search className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+          <MoreVertical className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="w-60 p-1.5">
-        <div className="relative mb-1">
-          <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
-          <Input
-            autoFocus
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search heading…"
-            className="h-6 text-xs pl-6"
-          />
-        </div>
-        <div className="max-h-48 overflow-auto space-y-0.5">
-          {filtered.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-2 py-1 italic">No match</p>
-          ) : (
-            filtered.map(opt => (
+      <PopoverContent side="bottom" align="end" className="w-52 p-1">
+        {showMove ? (
+          /* Move-to search panel */
+          <>
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted flex items-center gap-1 mb-0.5"
+              onClick={() => { setShowMove(false); setSearch(""); }}
+            >
+              ← Back
+            </button>
+            <div className="relative mb-1 px-0.5">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+              <Input
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search heading…"
+                className="h-6 text-xs pl-6"
+              />
+            </div>
+            <div className="max-h-40 overflow-auto space-y-0.5">
+              {filtered.length === 0 ? (
+                <p className="text-xs text-muted-foreground px-2 py-1 italic">No match</p>
+              ) : filtered.map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted transition-colors"
+                  onMouseDown={e => { e.preventDefault(); onPromote(opt.id); closeAll(); }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          /* Main action list */
+          <div className="space-y-0.5">
+            {headingOptions.length > 0 && (
               <button
-                key={opt.id}
                 type="button"
-                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted transition-colors"
-                onMouseDown={e => { e.preventDefault(); onSelect(opt.id); setOpen(false); setSearch(""); }}
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+                onClick={() => setShowMove(true)}
               >
-                {opt.label}
+                <CornerUpRight className="h-3 w-3 shrink-0" /> Move to…
               </button>
-            ))
-          )}
-        </div>
+            )}
+            {onAddRow && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+                onClick={() => { onAddRow(); closeAll(); }}
+              >
+                <Plus className="h-3 w-3 shrink-0" /> Add separate row
+              </button>
+            )}
+            <div className="border-t my-0.5" />
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 rounded text-xs hover:bg-red-50 text-destructive flex items-center gap-1.5 transition-colors"
+              onClick={() => { onDelete(); closeAll(); }}
+            >
+              <Trash2 className="h-3 w-3 shrink-0" /> Delete row
+            </button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -221,7 +269,7 @@ function CustomRowEditor({
   row, cyVal, pyVal, isPatternA,
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
-  onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource,
+  onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -234,6 +282,7 @@ function CustomRowEditor({
   headingOptions: { id: string; label: string }[];
   onPromote: (staticId: string) => void;
   onEjectCustomSource?: (ledger: string, amountCy: number) => void;
+  onAddRow?: () => void;
 }) {
   const hasSources = (row.sources?.length ?? 0) > 0;
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -263,9 +312,6 @@ function CustomRowEditor({
               placeholder="Row description"
             />
             <SourceBadge source={row.source} />
-            {headingOptions.length > 0 && (
-              <MoveToCombobox options={headingOptions} onSelect={onPromote} />
-            )}
           </div>
         </TableCell>
         {isPatternA ? (
@@ -282,10 +328,12 @@ function CustomRowEditor({
           </>
         )}
         <TableCell className="p-1 text-center w-8">
-          <button type="button" onClick={onDelete}
-            className="text-muted-foreground hover:text-destructive transition-colors">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <RowActionsMenu
+            headingOptions={headingOptions}
+            onPromote={onPromote}
+            onDelete={onDelete}
+            onAddRow={onAddRow}
+          />
         </TableCell>
       </TableRow>
 
@@ -438,6 +486,7 @@ function PatternBTable({
                       headingOptions={allHeadingOptions.filter(o => o.id !== cr.id)}
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                      onAddRow={onAddRow}
                     />
                     {customSubRows.map(sub => (
                       <CustomRowEditor
@@ -456,6 +505,7 @@ function PatternBTable({
                         headingOptions={allHeadingOptions.filter(o => o.id !== sub.id)}
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                        onAddRow={onAddRow}
                       />
                     ))}
                   </Fragment>
@@ -559,6 +609,7 @@ function PatternBTable({
                   headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                  onAddRow={onAddRow}
                 />
               ))}
             </>
@@ -730,6 +781,7 @@ function PatternATable({
                       headingOptions={sectionHeadingOptions.filter(o => o.id !== cr.id)}
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                      onAddRow={onAddRow}
                     />
                     {customSubRows.map(sub => (
                       <CustomRowEditor
@@ -751,6 +803,7 @@ function PatternATable({
                         headingOptions={sectionHeadingOptions.filter(o => o.id !== sub.id)}
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                        onAddRow={onAddRow}
                       />
                     ))}
                   </Fragment>
@@ -874,6 +927,7 @@ function PatternATable({
                   headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                  onAddRow={onAddRow}
                 />
               ))}
             </>
@@ -1113,15 +1167,23 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       // 1. Remove ledger from cy_sources
       const newCySources = { ...(cur.cy_sources ?? {}) };
+      const sourceEntry = (newCySources[rowId] ?? []).find(s => s.ledger === ledger);
+      const column = (sourceEntry as any)?.column as string | undefined;
       const remaining = (newCySources[rowId] ?? []).filter(s => s.ledger !== ledger);
       if (remaining.length === 0) delete newCySources[rowId];
       else newCySources[rowId] = remaining;
-      // 2. Subtract amount from static row's CY
-      const newCy = { ...cur.cy, [rowId]: Math.max(0, (cur.cy[rowId] ?? 0) - amount) };
+      // 2. Subtract amount from static row's CY (plain + Pattern-A suffixed keys)
+      const newCy = { ...cur.cy };
+      newCy[rowId] = Math.max(0, (cur.cy[rowId] ?? 0) - amount);
+      if (column === "lt") newCy[rowId + "_lt"] = Math.max(0, (cur.cy[rowId + "_lt"] ?? 0) - amount);
+      if (column === "st") newCy[rowId + "_st"] = Math.max(0, (cur.cy[rowId + "_st"] ?? 0) - amount);
       // 3. Create new custom row with that ledger name + amount
       const newId = newCustomId();
       const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
       newCy[newId] = amount;
+      // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
+      if (column === "lt") newCy[newId + "_lt"] = amount;
+      if (column === "st") newCy[newId + "_st"] = amount;
       const next = { ...prev, [noteType]: {
         ...cur,
         cy: newCy,
@@ -1138,17 +1200,26 @@ export function NCEDetailedNotes({ engagementId }: Props) {
   const handleEjectCustomSource = useCallback((noteType: string, customRowId: string, ledger: string, amountCy: number) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      // Find the source entry to get its column (Pattern A: "lt" | "st")
+      const sourceEntry = cur.customRows.find(r => r.id === customRowId)?.sources?.find(s => s.ledger === ledger);
+      const column = (sourceEntry as any)?.column as string | undefined;
       // Remove the ledger from the custom row's sources[]
       const updatedRows = cur.customRows.map(r => {
         if (r.id !== customRowId) return r;
         const newSources = (r.sources ?? []).filter(s => s.ledger !== ledger);
         return { ...r, sources: newSources };
       });
-      // Subtract from the merged row's CY amount
-      const newCy = { ...cur.cy, [customRowId]: Math.max(0, (cur.cy[customRowId] ?? 0) - amountCy) };
+      // Subtract from the merged row's CY amount (plain + Pattern-A suffixed keys)
+      const newCy = { ...cur.cy };
+      newCy[customRowId] = Math.max(0, (cur.cy[customRowId] ?? 0) - amountCy);
+      if (column === "lt") newCy[customRowId + "_lt"] = Math.max(0, (cur.cy[customRowId + "_lt"] ?? 0) - amountCy);
+      if (column === "st") newCy[customRowId + "_st"] = Math.max(0, (cur.cy[customRowId + "_st"] ?? 0) - amountCy);
       // Create new standalone custom row for this ledger
       const newId = newCustomId();
       newCy[newId] = amountCy;
+      // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
+      if (column === "lt") newCy[newId + "_lt"] = amountCy;
+      if (column === "st") newCy[newId + "_st"] = amountCy;
       const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
       const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow] } };
       scheduleSave(next);

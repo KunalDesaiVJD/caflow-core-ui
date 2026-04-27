@@ -865,7 +865,19 @@ export async function autoPopulateNotes(
       // bs_asset and pl rows are DR-positive — no flip needed.
       const sectionSign = section === "bs_liab" ? -1 : 1;
       const cy = sectionSign * sumLedgersByFsCodes(tb, mapping, spec.fsCodes);
-      const py = sectionSign * pyOf(section, rowKey, spec);
+      // PY: prior year stage5_notes already stores sign-corrected POSITIVE values,
+      // so we must NOT apply sectionSign again (double-negation bug).
+      // Only the fa_financial_statements fallback path needs the sectionSign flip
+      // because fa_financial_statements stores TB-signed values.
+      let py: number;
+      const priorStage5Py = pyNotes?.[section]?.[rowKey]?.cy;
+      if (typeof priorStage5Py === "number" && Number.isFinite(priorStage5Py)) {
+        // Already sign-corrected — use directly.
+        py = priorStage5Py;
+      } else {
+        // FS fallback: sum raw fa_financial_statements amounts and apply sign.
+        py = sectionSign * pyOf(section, rowKey, spec);
+      }
 
       // Build per-ledger breakdown rows from COA mapping. The breakup array
       // is what drives the editable line items shown under each note (Note

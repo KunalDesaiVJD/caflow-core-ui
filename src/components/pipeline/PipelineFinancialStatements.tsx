@@ -895,10 +895,12 @@ interface NCEBalanceSheetViewProps {
   pyLocked?:  boolean;
   onCommitCY?: (code: string, value: number | null) => void;
   onCommitPY?: (code: string, value: number | null) => void;
+  /** Navigate to NCE Notes tab scrolled to a specific note number */
+  onNavigateToNote?: (noteNo: number) => void;
 }
 
 function NCEBalanceSheetView({
-  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY,
+  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
 }: NCEBalanceSheetViewProps) {
   const rows = buildNCEBSRows(cyAmounts, pyAmounts);
   return (
@@ -958,7 +960,19 @@ function NCEBalanceSheetView({
             return (
               <tr key={idx} className="hover:bg-muted/10">
                 <td className="py-0.5 px-3 text-[11px]" style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">
+                  {row.noteNo != null && onNavigateToNote ? (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToNote(row.noteNo!)}
+                      className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium"
+                      title={`Go to Note ${row.noteNo}`}
+                    >
+                      {row.noteNo}
+                      <ArrowRight className="h-2.5 w-2.5" />
+                    </button>
+                  ) : (row.noteNo ?? "")}
+                </td>
                 <td className="text-right tabular-nums py-0.5 px-1 text-[11px]">
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isLiab ? -v : v)} />
@@ -987,10 +1001,12 @@ interface NCEPLViewProps {
   pyLocked?:  boolean;
   onCommitCY?: (code: string, value: number | null) => void;
   onCommitPY?: (code: string, value: number | null) => void;
+  /** Navigate to NCE Notes tab scrolled to a specific note number */
+  onNavigateToNote?: (noteNo: number) => void;
 }
 
 function NCEPLView({
-  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY,
+  cyAmounts, pyAmounts, cyYear, pyYear, entityName, pyLocked, onCommitCY, onCommitPY, onNavigateToNote,
 }: NCEPLViewProps) {
   const rows = buildNCEPLRows(cyAmounts, pyAmounts);
   return (
@@ -1047,7 +1063,19 @@ function NCEPLView({
               <tr key={idx} className="hover:bg-muted/10">
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
-                <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
+                <td className="text-center py-0.5 px-2 text-muted-foreground">
+                  {row.noteNo != null && onNavigateToNote ? (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToNote(row.noteNo!)}
+                      className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium"
+                      title={`Go to Note ${row.noteNo}`}
+                    >
+                      {row.noteNo}
+                      <ArrowRight className="h-2.5 w-2.5" />
+                    </button>
+                  ) : (row.noteNo ?? "")}
+                </td>
                 <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v === null ? null : isInc ? -v : v)} />
@@ -1586,6 +1614,9 @@ export default function PipelineFinancialStatements({
   const [fetchingPyTally,     setFetchingPyTally]     = useState(false);
   const [fetchPyTallyDialog,  setFetchPyTallyDialog]  = useState(false);
   const [fetchPyTallyPreview, setFetchPyTallyPreview] = useState<Record<string, number> | null>(null);
+
+  // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
+  const [activeTab, setActiveTab] = useState("bs");
 
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
@@ -4853,7 +4884,7 @@ export default function PipelineFinancialStatements({
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <Tabs defaultValue="bs">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
             <TabsTrigger value="bs" className="gap-1.5">
               <BarChart3 size={14} /> Balance Sheet
@@ -4972,6 +5003,12 @@ export default function PipelineFinancialStatements({
                       return next;
                     });
                     setPyManualDirty(true);
+                  }}
+                  onNavigateToNote={(noteNo) => {
+                    setActiveTab("notes");
+                    setTimeout(() => {
+                      document.getElementById(`nce-note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 150);
                   }}
                 />
                 {nceSignatureBlock}
@@ -5130,6 +5167,12 @@ export default function PipelineFinancialStatements({
                       return next;
                     });
                     setPyManualDirty(true);
+                  }}
+                  onNavigateToNote={(noteNo) => {
+                    setActiveTab("notes");
+                    setTimeout(() => {
+                      document.getElementById(`nce-note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 150);
                   }}
                 />
                 {nceSignatureBlock}
