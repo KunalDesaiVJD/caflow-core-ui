@@ -338,7 +338,7 @@ export function buildClauseValues(
   const noteRef18 = cl18._noteRef ? String(cl18._noteRef).trim() : "";
   const annxText18 = noteRef18 ? `As Per Annexure (Note ${noteRef18})` : "As Per Annexure";
   if (ax && deprRows.length > 0) {
-    const ANX_DEPR_START = 36; // display row 37 → 0-idx 36
+    const ANX_DEPR_START = 28; // display row 29 → 0-idx 28 (first empty data row in ANX_03 Clause 18 section)
     // Column layout in ANX_3CD_Main for clause 18 (0-indexed):
     //   A(0) = Sr.No.  ← written by writeSrNos; do NOT also map 'block' here
     //   B(1) = Block of assets
