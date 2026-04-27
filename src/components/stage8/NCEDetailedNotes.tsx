@@ -29,7 +29,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Info, Search, CornerUpRight, Minus } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import {
   NoteConfig, NoteRowDef, NOTES_CONFIG, computeDisplayData,
@@ -73,15 +73,19 @@ function newCustomId(): string {
 // ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
-  noteNumber, title, autoCount, manualCount, children,
+  noteNumber, title, autoCount, manualCount, children, collapseControl,
 }: {
   noteNumber: string;
   title:      string;
   autoCount:  number;
   manualCount: number;
   children:   React.ReactNode;
+  collapseControl?: boolean;
 }) {
   const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (collapseControl !== undefined) setOpen(!collapseControl);
+  }, [collapseControl]);
   return (
     <div className="border rounded-lg overflow-hidden bg-background">
       {/* Header strip — click to collapse/expand */}
@@ -217,7 +221,7 @@ function CustomRowEditor({
   row, cyVal, pyVal, isPatternA,
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
-  onChangeLabel, onDelete, headingOptions, onPromote,
+  onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -229,69 +233,110 @@ function CustomRowEditor({
   onChangeLabel: (s: string) => void; onDelete: () => void;
   headingOptions: { id: string; label: string }[];
   onPromote: (staticId: string) => void;
+  onEjectCustomSource?: (ledger: string, amountCy: number) => void;
 }) {
-  const merged = row.sources && row.sources.length > 1;
+  const hasSources = (row.sources?.length ?? 0) > 0;
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const colCount = isPatternA ? 6 : 4;
   return (
-    <TableRow className="bg-blue-50/30 hover:bg-blue-50/50">
-      <TableCell className={cn("p-1", isPatternA && "border-r")}>
-        <div className="flex items-center gap-1 min-w-0">
-          <Input
-            value={row.label}
-            onChange={e => onChangeLabel(e.target.value)}
-            className="h-6 text-xs px-1.5 min-w-[120px]"
-            placeholder="Row description"
-          />
-          <SourceBadge source={row.source} />
-          {merged && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button"
-                  className="text-blue-600 hover:text-blue-800 shrink-0"
-                  title="View merged ledgers">
-                  <Info className="h-3.5 w-3.5" />
+    <>
+      <TableRow className="bg-blue-50/30 hover:bg-blue-50/50">
+        <TableCell className={cn("p-1", isPatternA && "border-r")}>
+          <div className="flex items-center gap-1 min-w-0">
+            {/* +/- toggle for merged/source ledgers */}
+            {hasSources ? (
+              <button
+                type="button"
+                className="w-5 h-5 flex items-center justify-center rounded border border-blue-300 bg-background text-blue-600 hover:bg-blue-50 shrink-0"
+                onClick={() => setSourcesOpen(o => !o)}
+                title={sourcesOpen ? "Collapse source ledgers" : "Expand source ledgers"}
+              >
+                {sourcesOpen ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+              </button>
+            ) : (
+              <div className="w-5 shrink-0" />
+            )}
+            <Input
+              value={row.label}
+              onChange={e => onChangeLabel(e.target.value)}
+              className="h-6 text-xs px-1.5 min-w-[120px]"
+              placeholder="Row description"
+            />
+            <SourceBadge source={row.source} />
+            {headingOptions.length > 0 && (
+              <MoveToCombobox options={headingOptions} onSelect={onPromote} />
+            )}
+          </div>
+        </TableCell>
+        {isPatternA ? (
+          <>
+            <TableCell className="p-1"><NumInput value={cyLtVal} onChange={onChangeCyLt} /></TableCell>
+            <TableCell className="p-1 border-r"><NumInput value={pyLtVal} onChange={onChangePyLt} /></TableCell>
+            <TableCell className="p-1"><NumInput value={cyStVal} onChange={onChangeCySt} /></TableCell>
+            <TableCell className="p-1"><NumInput value={pyStVal} onChange={onChangePySt} /></TableCell>
+          </>
+        ) : (
+          <>
+            <TableCell className="p-1"><NumInput value={cyVal} onChange={onChangeCy} /></TableCell>
+            <TableCell className="p-1"><NumInput value={pyVal} onChange={onChangePy} /></TableCell>
+          </>
+        )}
+        <TableCell className="p-1 text-center w-8">
+          <button type="button" onClick={onDelete}
+            className="text-muted-foreground hover:text-destructive transition-colors">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </TableCell>
+      </TableRow>
+
+      {/* Inline source-ledger sub-rows */}
+      {hasSources && sourcesOpen && row.sources!.map((s, i) => (
+        <TableRow key={i} className="bg-blue-50/10 hover:bg-blue-50/20">
+          <TableCell className={cn("py-0.5 pl-10 pr-1 text-xs text-muted-foreground", isPatternA && "border-r")}>
+            <div className="flex items-center gap-1.5">
+              <span className="truncate flex-1 italic">
+                {s.ledger}
+                {s.column && (
+                  <span className="text-[9px] uppercase ml-1 font-semibold not-italic">
+                    [{s.column}]
+                  </span>
+                )}
+              </span>
+              {onEjectCustomSource && row.sources!.length > 1 && (
+                <button
+                  type="button"
+                  title={`Move "${s.ledger}" to its own row`}
+                  onClick={() => onEjectCustomSource(s.ledger, s.amountCy)}
+                  className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                >
+                  <CornerUpRight className="h-3 w-3" />
                 </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-2 text-xs" align="start">
-                <div className="font-semibold mb-1">Merged ledgers ({row.sources!.length}):</div>
-                <ul className="space-y-0.5">
-                  {row.sources!.map((s, i) => (
-                    <li key={i} className="flex justify-between gap-2">
-                      <span className="truncate">
-                        {s.ledger}
-                        {s.column && <span className="text-muted-foreground ml-1">[{s.column.toUpperCase()}]</span>}
-                      </span>
-                      <span className="tabular-nums shrink-0">{fmtNum(s.amountCy)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </PopoverContent>
-            </Popover>
+              )}
+            </div>
+          </TableCell>
+          {isPatternA ? (
+            <>
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "lt" ? fmtNum(s.amountCy) : "—"}
+              </TableCell>
+              <TableCell className="py-0.5 border-r" />
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {s.column === "st" ? fmtNum(s.amountCy) : "—"}
+              </TableCell>
+              <TableCell className="py-0.5" />
+            </>
+          ) : (
+            <>
+              <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                {fmtNum(s.amountCy)}
+              </TableCell>
+              <TableCell className="py-0.5" />
+            </>
           )}
-          {headingOptions.length > 0 && (
-            <MoveToCombobox options={headingOptions} onSelect={onPromote} />
-          )}
-        </div>
-      </TableCell>
-      {isPatternA ? (
-        <>
-          <TableCell className="p-1"><NumInput value={cyLtVal} onChange={onChangeCyLt} /></TableCell>
-          <TableCell className="p-1 border-r"><NumInput value={pyLtVal} onChange={onChangePyLt} /></TableCell>
-          <TableCell className="p-1"><NumInput value={cyStVal} onChange={onChangeCySt} /></TableCell>
-          <TableCell className="p-1"><NumInput value={pyStVal} onChange={onChangePySt} /></TableCell>
-        </>
-      ) : (
-        <>
-          <TableCell className="p-1"><NumInput value={cyVal} onChange={onChangeCy} /></TableCell>
-          <TableCell className="p-1"><NumInput value={pyVal} onChange={onChangePy} /></TableCell>
-        </>
-      )}
-      <TableCell className="p-1 text-center w-8">
-        <button type="button" onClick={onDelete}
-          className="text-muted-foreground hover:text-destructive transition-colors">
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </TableCell>
-    </TableRow>
+          <TableCell className="py-0.5" />
+        </TableRow>
+      ))}
+    </>
   );
 }
 
@@ -301,7 +346,7 @@ function PatternBTable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
   customRows, hiddenRows, labelOverrides, cySources,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource,
+  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -320,12 +365,20 @@ function PatternBTable({
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
   onEjectSource:(rowId: string, ledger: string, amount: number) => void;
+  onEjectCustomSource:(customRowId: string, ledger: string, amount: number) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+  // Track which static rows have their source-ledger list expanded
+  const [openSources, setOpenSources] = useState<Set<string>>(new Set());
+  const toggleSources = (id: string) => setOpenSources(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const headingOptions = useMemo(
     () => config.rows
       .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
@@ -371,6 +424,7 @@ function PatternBTable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={headingOptions}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
 
@@ -391,48 +445,24 @@ function PatternBTable({
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
                     <div className="flex items-center gap-1">
+                      {/* +/- expand for mapped Tally ledgers */}
+                      {(cySources[row.id]?.length ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
+                          onClick={() => toggleSources(row.id)}
+                          title={openSources.has(row.id) ? "Collapse mapped ledgers" : "Expand mapped ledgers"}
+                        >
+                          {openSources.has(row.id) ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+                        </button>
+                      ) : (
+                        <div className="w-5 shrink-0" />
+                      )}
                       <Input
                         value={displayLabel}
                         onChange={e => onChangeStaticLabel(row.id, e.target.value)}
                         className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
                       />
-                      {(cySources[row.id]?.length ?? 0) > 0 && (
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <button type="button"
-                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                              title="View mapped ledgers">
-                              <Info className="h-3.5 w-3.5" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent side="right" className="w-80 p-3 text-xs">
-                            <p className="font-semibold mb-1">
-                              Mapped from Tally ({cySources[row.id].length} ledger{cySources[row.id].length > 1 ? "s" : ""}):
-                            </p>
-                            <p className="text-[10px] text-muted-foreground mb-2">
-                              Click <CornerUpRight className="inline h-2.5 w-2.5 mx-0.5" /> to eject a ledger as its own separate row.
-                            </p>
-                            <ul className="space-y-1">
-                              {cySources[row.id].map((s, i) => (
-                                <li key={i} className="flex items-center justify-between gap-2 group">
-                                  <span className="text-muted-foreground truncate flex-1">{s.ledger}</span>
-                                  <span className="shrink-0 font-medium">₹{s.amountCy.toLocaleString("en-IN")}</span>
-                                  {cySources[row.id].length > 1 && (
-                                    <button
-                                      type="button"
-                                      title={`Eject "${s.ledger}" as separate row`}
-                                      onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                                      className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors opacity-0 group-hover:opacity-100"
-                                    >
-                                      <CornerUpRight className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </PopoverContent>
-                        </Popover>
-                      )}
                     </div>
                   </TableCell>
                   <TableCell className="p-1">
@@ -451,6 +481,34 @@ function PatternBTable({
                 </TableRow>
               )}
 
+              {/* Inline source-ledger sub-rows for static rows */}
+              {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
+                cySources[row.id]?.map((s, i) => (
+                  <TableRow key={i} className="bg-muted/5 hover:bg-muted/10">
+                    <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate flex-1 italic">{s.ledger}</span>
+                        {cySources[row.id].length > 1 && (
+                          <button
+                            type="button"
+                            title={`Move "${s.ledger}" to its own row`}
+                            onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                            className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                          >
+                            <CornerUpRight className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {fmtNum(s.amountCy)}
+                    </TableCell>
+                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5" />
+                  </TableRow>
+                ))
+              }
+
               {/* Custom rows attached under this static row */}
               {attachedHere.map(cr => (
                 <CustomRowEditor
@@ -468,6 +526,7 @@ function PatternBTable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
             </>
@@ -494,7 +553,7 @@ function PatternATable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
   customRows, hiddenRows, labelOverrides, cySources,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource,
+  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -513,12 +572,20 @@ function PatternATable({
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
   onEjectSource:(rowId: string, ledger: string, amount: number) => void;
+  onEjectCustomSource:(customRowId: string, ledger: string, amount: number) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
     [config, rawCy, rawPy, customRows],
   );
   const grandTotalIdx = config.rows.reduce((last, row, i) => row.isTotal ? i : last, -1);
+  // Track which static rows have their source-ledger list expanded
+  const [openSources, setOpenSources] = useState<Set<string>>(new Set());
+  const toggleSources = (id: string) => setOpenSources(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   // Group custom rows by section (for section-aware insertion in Pattern A).
   // Attached rows are excluded — they're rendered beneath their parent static row.
@@ -617,6 +684,7 @@ function PatternATable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={sectionHeadingOptions}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
 
@@ -639,50 +707,24 @@ function PatternATable({
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1 border-r", indentCls(row.indent))}>
                     <div className="flex items-center gap-1">
+                      {/* +/- expand for mapped Tally ledgers */}
+                      {(cySources[row.id]?.length ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
+                          onClick={() => toggleSources(row.id)}
+                          title={openSources.has(row.id) ? "Collapse mapped ledgers" : "Expand mapped ledgers"}
+                        >
+                          {openSources.has(row.id) ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+                        </button>
+                      ) : (
+                        <div className="w-5 shrink-0" />
+                      )}
                       <Input
                         value={displayLabel}
                         onChange={e => onChangeStaticLabel(row.id, e.target.value)}
                         className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
                       />
-                      {(cySources[row.id]?.length ?? 0) > 0 && (
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <button type="button"
-                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                              title="View mapped ledgers">
-                              <Info className="h-3.5 w-3.5" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent side="right" className="w-80 p-3 text-xs">
-                            <p className="font-semibold mb-1">
-                              Mapped from Tally ({cySources[row.id].length} ledger{cySources[row.id].length > 1 ? "s" : ""}):
-                            </p>
-                            <p className="text-[10px] text-muted-foreground mb-2">
-                              Click <CornerUpRight className="inline h-2.5 w-2.5 mx-0.5" /> to eject a ledger as its own separate row.
-                            </p>
-                            <ul className="space-y-1">
-                              {cySources[row.id].map((s, i) => (
-                                <li key={i} className="flex items-center justify-between gap-2 group">
-                                  <span className="text-muted-foreground truncate flex-1">{s.ledger}
-                                    {(s as any).column && <span className="ml-1 text-[9px] uppercase">[{(s as any).column}]</span>}
-                                  </span>
-                                  <span className="shrink-0 font-medium">₹{s.amountCy.toLocaleString("en-IN")}</span>
-                                  {cySources[row.id].length > 1 && (
-                                    <button
-                                      type="button"
-                                      title={`Eject "${s.ledger}" as separate row`}
-                                      onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                                      className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors opacity-0 group-hover:opacity-100"
-                                    >
-                                      <CornerUpRight className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </PopoverContent>
-                        </Popover>
-                      )}
                     </div>
                   </TableCell>
                   <TableCell className="p-1">
@@ -707,6 +749,43 @@ function PatternATable({
                 </TableRow>
               )}
 
+              {/* Inline source-ledger sub-rows for Pattern A static rows */}
+              {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
+                cySources[row.id]?.map((s, i) => (
+                  <TableRow key={i} className="bg-muted/5 hover:bg-muted/10">
+                    <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground border-r">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate flex-1 italic">
+                          {s.ledger}
+                          {(s as any).column && (
+                            <span className="text-[9px] uppercase ml-1 font-semibold not-italic">[{(s as any).column}]</span>
+                          )}
+                        </span>
+                        {cySources[row.id].length > 1 && (
+                          <button
+                            type="button"
+                            title={`Move "${s.ledger}" to its own row`}
+                            onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                            className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                          >
+                            <CornerUpRight className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {(s as any).column === "lt" || !(s as any).column ? fmtNum(s.amountCy) : "—"}
+                    </TableCell>
+                    <TableCell className="py-0.5 border-r" />
+                    <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
+                      {(s as any).column === "st" ? fmtNum(s.amountCy) : "—"}
+                    </TableCell>
+                    <TableCell className="py-0.5" />
+                    <TableCell className="py-0.5" />
+                  </TableRow>
+                ))
+              }
+
               {/* Custom rows attached under this static row */}
               {attachedHere.map(cr => (
                 <CustomRowEditor
@@ -727,6 +806,7 @@ function PatternATable({
                   onDelete={() => onDeleteRow(cr.id)}
                   headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
             </>
@@ -750,11 +830,13 @@ function PatternATable({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function NCEDetailedNotes({ engagementId }: Props) {
-  const [noteData,  setNoteData]  = useState<Record<string, NCENoteData>>({});
-  const [loading,   setLoading]   = useState(true);
-  const [saving,    setSaving]    = useState(false);
-  const [syncing,   setSyncing]   = useState(false);
-  const [eng,       setEng]       = useState<any>(null);
+  const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [syncing,     setSyncing]     = useState(false);
+  const [eng,         setEng]         = useState<any>(null);
+  // undefined = uncontrolled; true = all collapsed; false = all expanded
+  const [collapseAll, setCollapseAll] = useState<boolean | undefined>(undefined);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const financialYear = (eng?.financial_year as string) || "";
@@ -985,6 +1067,29 @@ export function NCEDetailedNotes({ engagementId }: Props) {
     toast.success(`"${ledger}" moved to a separate row`);
   }, [scheduleSave]);
 
+  // Eject a source ledger from a CUSTOM (auto/merged) row → new standalone custom row
+  const handleEjectCustomSource = useCallback((noteType: string, customRowId: string, ledger: string, amountCy: number) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      // Remove the ledger from the custom row's sources[]
+      const updatedRows = cur.customRows.map(r => {
+        if (r.id !== customRowId) return r;
+        const newSources = (r.sources ?? []).filter(s => s.ledger !== ledger);
+        return { ...r, sources: newSources };
+      });
+      // Subtract from the merged row's CY amount
+      const newCy = { ...cur.cy, [customRowId]: Math.max(0, (cur.cy[customRowId] ?? 0) - amountCy) };
+      // Create new standalone custom row for this ledger
+      const newId = newCustomId();
+      newCy[newId] = amountCy;
+      const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
+      const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow] } };
+      scheduleSave(next);
+      return next;
+    });
+    toast.success(`"${ledger}" moved to its own row`);
+  }, [scheduleSave]);
+
   // ── Re-sync ─────────────────────────────────────────────────────────────
   const handleResync = useCallback(async () => {
     const ok = window.confirm(
@@ -1056,11 +1161,29 @@ export function NCEDetailedNotes({ engagementId }: Props) {
           <span className="text-blue-600 font-medium">Blue = Auto</span> (re-synced from TB) ·{" "}
           <span className="text-amber-600 font-medium">Amber = Manual</span> (preserved)
         </span>
-        <Button size="sm" onClick={handleSave} disabled={saving}
-          className="ml-auto h-7 text-xs gap-1.5">
-          {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-          Save All Notes
-        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            type="button" size="sm" variant="ghost"
+            onClick={() => setCollapseAll(false)}
+            className="h-7 text-xs gap-1"
+            title="Expand all note cards"
+          >
+            <Plus className="w-3 h-3" /> Expand All
+          </Button>
+          <Button
+            type="button" size="sm" variant="ghost"
+            onClick={() => setCollapseAll(true)}
+            className="h-7 text-xs gap-1"
+            title="Collapse all note cards"
+          >
+            <Minus className="w-3 h-3" /> Collapse All
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={saving}
+            className="h-7 text-xs gap-1.5">
+            {saving ? <Loader2 className="animate-spin h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+            Save All Notes
+          </Button>
+        </div>
       </div>
 
       {/* All notes — always open */}
@@ -1080,6 +1203,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
               title={noteTitle}
               autoCount={autoCount}
               manualCount={manuCount}
+              collapseControl={collapseAll}
             >
               <div className="overflow-x-auto">
                 {nc.pattern === "A" ? (
@@ -1100,6 +1224,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                     onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
+                    onEjectCustomSource={(cid, ledger, amt) => handleEjectCustomSource(nc.noteType, cid, ledger, amt)}
                   />
                 ) : (
                   <PatternBTable
@@ -1119,6 +1244,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                     onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
+                    onEjectCustomSource={(cid, ledger, amt) => handleEjectCustomSource(nc.noteType, cid, ledger, amt)}
                   />
                 )}
               </div>
