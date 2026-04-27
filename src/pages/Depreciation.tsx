@@ -284,14 +284,14 @@ enabled: !!assets?.length,
 const { data: engagement } = useQuery({
 queryKey: ['dep-engagement', clientId, fy],
 queryFn: async () => {
+  // Note: audit_engagements has no created_at column; filter by client+FY+not-py-shell
+  // should yield at most one regular engagement, so maybeSingle() is used directly.
   const { data, error } = await supabase
     .from('audit_engagements')
     .select('id, financial_year, status')
     .eq('client_id', clientId)
     .eq('financial_year', fy)
     .neq('is_py_shell', true)
-    .order('created_at', { ascending: false })
-    .limit(1)
     .maybeSingle();
   if (error) console.error('[dep-engagement] query error:', error.message, error);
   return data || null;
