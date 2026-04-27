@@ -124,9 +124,15 @@ const SCHEDULE_III_DIV_I: FSLineItem[] = [
 function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: number })[] {
   const result: (FSLineItem & { depth: number })[] = [];
   for (const item of items) {
-    result.push({ ...item, depth });
-    if (item.children) {
+    if (item.showTotalLast && item.children?.length) {
+      // Children first, then the parent total row (e.g. "III. Total Income")
       result.push(...flattenTree(item.children, depth + 1));
+      result.push({ ...item, depth });
+    } else {
+      result.push({ ...item, depth });
+      if (item.children) {
+        result.push(...flattenTree(item.children, depth + 1));
+      }
     }
   }
   return result;
@@ -2128,8 +2134,9 @@ export default function PipelineFinancialStatements({
   const corpBsBalanced    = Math.abs(bsDiff) < 1;
   const activeBsDiff      = isNonCorporate ? nceBsDiff      : bsDiff;
   const activeBsBalanced  = isNonCorporate ? nceBsBalanced  : corpBsBalanced;
-  const activeTotalAssets = isNonCorporate ? nceTotalAssets : totalAssets;
-  const activeNetProfit   = isNonCorporate ? nceNetProfit   : netProfit;
+  const activeTotalAssets      = isNonCorporate ? nceTotalAssets      : totalAssets;
+  const activeTotalLiabilities = isNonCorporate ? nceTotalLiabilities : totalLiabilities;
+  const activeNetProfit        = isNonCorporate ? nceNetProfit        : netProfit;
 
   // ─── NCE Signature — derived values ─────────────────────────────────────
   // Partner name comes from the engagement (Stage 1 form selection). The
@@ -2847,10 +2854,14 @@ export default function PipelineFinancialStatements({
     };
 
     // EQUITY AND LIABILITIES
-    const topLiab = bsItems.find(i => i.code === "NCE_EL" || i.code === "BS_EL");
-    const topAst  = bsItems.find(i => i.code === "NCE_AST" || i.code === "BS_AST");
+    const topLiab    = bsItems.find(i => i.code === "NCE_EL" || i.code === "BS_EL");
+    const topAst     = bsItems.find(i => i.code === "NCE_AST" || i.code === "BS_AST");
+    // For NCE entities the section-divider item carries the plain label;
+    // for corporate entities fall back to the node name (unchanged).
+    const liabHdrName = bsItems.find(i => i.code === "NCE_EL_HDR")?.name || topLiab?.name || "";
+    const astHdrName  = bsItems.find(i => i.code === "NCE_AST_HDR")?.name  || topAst?.name  || "";
     if (topLiab) {
-      writeSectionHeader(topLiab.name);
+      writeSectionHeader(liabHdrName);
       const groups = bsItems.filter(i => i.depth === 1 && i.section === topLiab.section && i.code !== topLiab.code);
       for (const g of groups) {
         writeGroupHeader(g.name);
@@ -2869,7 +2880,7 @@ export default function PipelineFinancialStatements({
     }
     // ASSETS
     if (topAst) {
-      writeSectionHeader(topAst.name);
+      writeSectionHeader(astHdrName);
       const groups = (topAst.children || []);
       for (const g of groups) {
         writeGroupHeader(g.name);
@@ -4141,7 +4152,20 @@ export default function PipelineFinancialStatements({
   // ─── FS row renderer ───
   const renderFSRows = (items: (FSLineItem & { depth: number })[]) =>
     items.map(item => {
+      // ── Section-divider row (e.g. "EQUITY AND LIABILITIES", "ASSETS") ─────
+      if (item.isDivider) {
+        return (
+          <TableRow key={item.code} className="bg-muted/60">
+            <TableCell colSpan={5} className="text-xs font-bold uppercase tracking-wide py-1.5 px-2">
+              {item.name}
+            </TableCell>
+          </TableRow>
+        );
+      }
+
       const isHeader = !!(item.children && item.children.length > 0);
+      // showTotalLast items appear at the END of their group — render as a total row
+      const isTotalRow = !!item.showTotalLast;
       const rawAmount = computedAmounts[item.code] || 0;
       const rawPy     = mergedPY[item.code] || 0;
       // ── Sign convention: Tally stores credit balances as NEGATIVE ──────────
@@ -4162,16 +4186,20 @@ export default function PipelineFinancialStatements({
         <TableRow
           key={item.code}
           className={cn(
-            isHeader && "bg-muted/40 font-semibold",
-            !isHeader && "hover:bg-muted/20",
+            isTotalRow && "border-t-2 border-foreground/30 bg-muted/50 font-bold",
+            !isTotalRow && isHeader && "bg-muted/40 font-semibold",
+            !isTotalRow && !isHeader && "hover:bg-muted/20",
           )}
         >
           {/* Particulars */}
           <TableCell
             className="text-xs"
-            style={{ paddingLeft: `${item.depth * 20 + 8}px` }}
+            style={{ paddingLeft: `${isTotalRow ? 8 : item.depth * 20 + 8}px` }}
           >
-            <span className={cn(isHeader && "uppercase text-[11px] tracking-wide")}>{item.name}</span>
+            <span className={cn(
+              isTotalRow  && "uppercase text-[11px] tracking-wide",
+              !isTotalRow && isHeader && "uppercase text-[11px] tracking-wide",
+            )}>{item.name}</span>
             {hasOverride && (
               <Badge className="ml-1.5 text-[8px] px-1 bg-amber-100 text-amber-700 border-amber-200">M</Badge>
             )}
@@ -4179,7 +4207,7 @@ export default function PipelineFinancialStatements({
 
           {/* Note No. */}
           <TableCell className="text-xs text-center text-muted-foreground tabular-nums">
-            {item.noteRef && !isHeader ? item.noteRef : ""}
+            {item.noteRef && !isHeader && !isTotalRow ? item.noteRef : ""}
           </TableCell>
 
           {/* CY amount + pencil */}
@@ -4192,7 +4220,7 @@ export default function PipelineFinancialStatements({
               ) : (
                 <span className="text-muted-foreground">—</span>
               )}
-              {!isHeader && (
+              {!isHeader && !isTotalRow && (
                 <button
                   className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-0.5 rounded hover:bg-muted ml-1"
                   title={item.code && INV_PL_CODES.has(item.code) && hasInvMapping
@@ -4430,7 +4458,7 @@ export default function PipelineFinancialStatements({
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
             <p className={cn("text-2xl font-bold", activeBsBalanced ? "text-primary" : "text-destructive")}>
@@ -4443,6 +4471,12 @@ export default function PipelineFinancialStatements({
           <CardContent className="p-3 text-center">
             <p className="text-2xl font-bold text-foreground">₹{Math.abs(activeTotalAssets).toLocaleString("en-IN")}</p>
             <p className="text-[10px] text-muted-foreground uppercase">Total Assets</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3 text-center">
+            <p className="text-2xl font-bold text-foreground">₹{Math.abs(activeTotalLiabilities).toLocaleString("en-IN")}</p>
+            <p className="text-[10px] text-muted-foreground uppercase">Total Equity + Liabilities</p>
           </CardContent>
         </Card>
         <Card>

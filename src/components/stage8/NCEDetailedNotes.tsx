@@ -479,9 +479,9 @@ function PatternBTable({
 
 function PatternATable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
-  customRows, hiddenRows, labelOverrides,
+  customRows, hiddenRows, labelOverrides, cySources,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
-  onHideStatic, onChangeStaticLabel, onPromote,
+  onHideStatic, onChangeStaticLabel, onPromote, onEjectSource,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -490,6 +490,7 @@ function PatternATable({
   customRows:   NCECustomRow[];
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
+  cySources:    Record<string, { ledger: string; amountCy: number }[]>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
@@ -498,6 +499,7 @@ function PatternATable({
   onHideStatic: (id: string) => void;
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
+  onEjectSource:(rowId: string, ledger: string, amount: number) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -623,11 +625,52 @@ function PatternATable({
               ) : (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1 border-r", indentCls(row.indent))}>
-                    <Input
-                      value={displayLabel}
-                      onChange={e => onChangeStaticLabel(row.id, e.target.value)}
-                      className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
-                    />
+                    <div className="flex items-center gap-1">
+                      <Input
+                        value={displayLabel}
+                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                        className="h-6 text-xs px-1.5 border-transparent hover:border-input focus:border-input bg-transparent"
+                      />
+                      {(cySources[row.id]?.length ?? 0) > 0 && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button type="button"
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                              title="View mapped ledgers">
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent side="right" className="w-80 p-3 text-xs">
+                            <p className="font-semibold mb-1">
+                              Mapped from Tally ({cySources[row.id].length} ledger{cySources[row.id].length > 1 ? "s" : ""}):
+                            </p>
+                            <p className="text-[10px] text-muted-foreground mb-2">
+                              Click <CornerUpRight className="inline h-2.5 w-2.5 mx-0.5" /> to eject a ledger as its own separate row.
+                            </p>
+                            <ul className="space-y-1">
+                              {cySources[row.id].map((s, i) => (
+                                <li key={i} className="flex items-center justify-between gap-2 group">
+                                  <span className="text-muted-foreground truncate flex-1">{s.ledger}
+                                    {(s as any).column && <span className="ml-1 text-[9px] uppercase">[{(s as any).column}]</span>}
+                                  </span>
+                                  <span className="shrink-0 font-medium">₹{s.amountCy.toLocaleString("en-IN")}</span>
+                                  {cySources[row.id].length > 1 && (
+                                    <button
+                                      type="button"
+                                      title={`Eject "${s.ledger}" as separate row`}
+                                      onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                                      className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                      <CornerUpRight className="h-3 w-3" />
+                                    </button>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="p-1">
                     <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />
@@ -776,6 +819,18 @@ export function NCEDetailedNotes({ engagementId }: Props) {
             toast.success("Notes populated from COA mapping");
           } else {
             if (!cancelled) setNoteData(built);
+            // Back-fill cy_sources for engagements saved before the feature was added
+            const needsCySources = Object.values(built).some(
+              d => Object.keys(d.cy ?? {}).some(k => !k.startsWith("custom_")) &&
+                   (!d.cy_sources || Object.keys(d.cy_sources).length === 0)
+            );
+            if (needsCySources) {
+              // Silent background refresh — don't block the UI
+              nceAutoPopulate(engagementId, built).then(refreshed => {
+                if (!cancelled) setNoteData(refreshed);
+                persistNotes(refreshed, fy).catch(() => {});
+              }).catch(() => {}); // best-effort
+            }
           }
         } else {
           // First visit — auto-populate
@@ -1022,6 +1077,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     customRows={d.customRows}
                     hiddenRows={d.hiddenRows ?? []}
                     labelOverrides={d.labelOverrides ?? {}}
+                    cySources={d.cy_sources ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}
@@ -1030,6 +1086,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
+                    onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
                   />
                 ) : (
                   <PatternBTable

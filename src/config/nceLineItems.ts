@@ -18,6 +18,11 @@ export interface FSLineItem {
   section: string;
   children?: FSLineItem[];
   scheduleRef?: string;
+  /** Render as a pure section-divider label row — no amounts, no note ref. */
+  isDivider?: boolean;
+  /** When true, flattenTree outputs children BEFORE this node so it appears
+   *  as a "TOTAL" row at the bottom of its group instead of a header at top. */
+  showTotalLast?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -25,7 +30,11 @@ export interface FSLineItem {
 // ═══════════════════════════════════════════════════════════
 export const NCE_FS_ITEMS: FSLineItem[] = [
   // ── BALANCE SHEET — EQUITY AND LIABILITIES ──
-  { code: "NCE_EL", name: "EQUITY AND LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", children: [
+  // NCE_EL_HDR: pure section-divider label (no amounts).
+  // NCE_EL: accumulates child totals via computeTotal(); showTotalLast so it
+  //         renders as "TOTAL EQUITY AND LIABILITIES" at the bottom of the section.
+  { code: "NCE_EL_HDR", name: "EQUITY AND LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", isDivider: true },
+  { code: "NCE_EL", name: "TOTAL EQUITY AND LIABILITIES", noteRef: null, section: "NCE_BS_liabilities", showTotalLast: true, children: [
     { code: "NCE_OWN", name: "(1) Owners Funds", noteRef: null, section: "NCE_BS_liabilities", children: [
       { code: "NCE_CAP", name: "(a) Owners' Capital Account", noteRef: 2, section: "NCE_BS_liabilities" },
     ]},
@@ -43,7 +52,8 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   ]},
 
   // ── BALANCE SHEET — ASSETS ──
-  { code: "NCE_AST", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", children: [
+  { code: "NCE_AST_HDR", name: "ASSETS", noteRef: null, section: "NCE_BS_assets", isDivider: true },
+  { code: "NCE_AST", name: "TOTAL ASSETS", noteRef: null, section: "NCE_BS_assets", showTotalLast: true, children: [
     { code: "NCE_NCA", name: "(1) Non-Current Assets", noteRef: null, section: "NCE_BS_assets", children: [
       { code: "NCE_PPE",   name: "(a)(i)  Property, plant and equipment", noteRef: 10, section: "NCE_BS_assets" },
       { code: "NCE_CWIP",  name: "(a)(ii) Capital work-in-progress",      noteRef: 11, section: "NCE_BS_assets" },
@@ -66,13 +76,14 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_ACCTPOL", name: "Summary of Significant Accounting Policies", noteRef: 1, section: "NCE_BS_footnote" },
 
   // ── PROFIT & LOSS — INCOME ──
-  { code: "NCE_PL_INC", name: "III. Total Income (I + II)", noteRef: null, section: "NCE_PL_income", children: [
+  // showTotalLast: children (I, II) render first; parent total (III) renders after.
+  { code: "NCE_PL_INC", name: "III. Total Income (I + II)", noteRef: null, section: "NCE_PL_income", showTotalLast: true, children: [
     { code: "NCE_REV_OPS", name: "I.  Revenue from operations", noteRef: 22, section: "NCE_PL_income" },
     { code: "NCE_REV_OTH", name: "II. Other income",            noteRef: 23, section: "NCE_PL_income" },
   ]},
 
   // ── PROFIT & LOSS — EXPENSES ──
-  { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", children: [
+  { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", showTotalLast: true, children: [
     { code: "NCE_COGS",     name: "(a) Cost of goods sold / purchases",  noteRef: 24, section: "NCE_PL_expenses" },
     { code: "NCE_CII",      name: "(b) Changes in inventories of stock", noteRef: 24, section: "NCE_PL_expenses" },
     { code: "NCE_EMP_EXP",  name: "(c) Employee benefits expense",      noteRef: 25, section: "NCE_PL_expenses" },
@@ -89,7 +100,8 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_PROF_IX",  name: "IX.   Profit before partners' remuneration and tax",                         noteRef: null, section: "NCE_PL_profit" },
   { code: "NCE_PART_REM", name: "X.    Partners' remuneration",                                               noteRef: 29,   section: "NCE_PL_profit" },
   { code: "NCE_PROF_XI",  name: "XI.   Profit before tax (IX − X)",                                          noteRef: null, section: "NCE_PL_profit" },
-  { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", children: [
+  // showTotalLast: sub-items render first; tax total renders after.
+  { code: "NCE_TAX", name: "XII.  Tax expense", noteRef: null, section: "NCE_PL_profit", showTotalLast: true, children: [
     { code: "NCE_CUR_TAX",   name: "(1) Current tax",                             noteRef: null, section: "NCE_PL_profit" },
     { code: "NCE_PRIOR_TAX", name: "(2) Short/excess provision for earlier years", noteRef: null, section: "NCE_PL_profit" },
   ]},

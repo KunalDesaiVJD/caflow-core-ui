@@ -258,15 +258,15 @@ export default function AuditPipeline() {
           .select("client_id")
           .ilike("new_classification", "Audit")
           .in("client_id", clientIds),
-        // Source 2: audit setup flags — no IN clause; RLS already scopes to the firm.
-        // Avoids large URL for firms with many clients and ensures every FY row is included.
+        // Source 2: audit setup flags — IN clause scopes to firm clients (safer than RLS-only).
         supabase
           .from("client_fy_audit_setup")
-          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable"),
-        // Source 5: active audit services
+          .select("client_id, statutory_audit_applicable, tax_audit_applicable, internal_audit_applicable, stock_audit_applicable")
+          .in("client_id", clientIds),
+        // Source 5: active audit services — LEFT join so services with no category still appear.
         supabase
           .from("client_services")
-          .select("client_id, is_active, service_categories!inner(name, linked_module)")
+          .select("client_id, is_active, service_categories(name, linked_module)")
           .in("client_id", clientIds)
           .eq("is_active", true),
       ]);
@@ -294,23 +294,27 @@ export default function AuditPipeline() {
       }
 
       // Build per-client flags from active services (source 5).
-      // Accept the row if linked_module === "audit" OR if the category name
-      // itself signals audit (handles firms where linked_module wasn't set).
+      // Accept the row if:
+      //   a) linked_module === "audit", OR
+      //   b) category name contains "audit"-related keywords, OR
+      //   c) no category at all (left-join returned null) — treat as audit service
+      //      since it was explicitly added to an audit-enabled client.
       const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
       for (const row of (auditSvcRes.data ?? []) as any[]) {
+        if (!row.client_id) continue;
         const cat = row.service_categories;
-        if (!cat) continue;
-        const n = ((cat.name as string) ?? "").toLowerCase();
-        const isAuditModule = cat.linked_module === "audit";
-        const isAuditByName = n.includes("statutory") || n.includes("tax audit") ||
-                              n.includes("internal audit") || n.includes("stock audit") ||
-                              n.includes("audit");
-        if (!isAuditModule && !isAuditByName) continue;
+        const n   = ((cat?.name as string) ?? "").toLowerCase();
+        const isAuditModule  = cat?.linked_module === "audit";
+        const isAuditByName  = n.includes("statutory") || n.includes("tax audit") ||
+                               n.includes("internal audit") || n.includes("stock audit") ||
+                               n.includes("audit");
+        const noCategoryInfo = !cat; // left-join produced no category row
+        if (!isAuditModule && !isAuditByName && !noCategoryInfo) continue;
         if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
         if (n.includes("statutory"))     serviceMap[row.client_id].hasStat = true;
-        else if (n.includes("tax"))      serviceMap[row.client_id].hasTax = true;
         else if (n.includes("internal")) serviceMap[row.client_id].hasInternal = true;
-        else                             serviceMap[row.client_id].hasStat = true;
+        else if (n.includes("tax"))      serviceMap[row.client_id].hasTax = true;
+        else                             serviceMap[row.client_id].hasStat = true; // default to statutory
       }
 
       return (allFirmClients as any[])

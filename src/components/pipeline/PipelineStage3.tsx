@@ -178,9 +178,14 @@ const AUTO_MAP_RULES: { keywords: string[]; code: string; confidence: "high" | "
 function flattenTree(items: FSLineItem[], depth = 0): (FSLineItem & { depth: number })[] {
   const result: (FSLineItem & { depth: number })[] = [];
   for (const item of items) {
-    result.push({ ...item, depth });
-    if (item.children) {
+    if (item.showTotalLast && item.children?.length) {
       result.push(...flattenTree(item.children, depth + 1));
+      result.push({ ...item, depth });
+    } else {
+      result.push({ ...item, depth });
+      if (item.children) {
+        result.push(...flattenTree(item.children, depth + 1));
+      }
     }
   }
   return result;
@@ -274,7 +279,8 @@ function matchParentGroup(
 
 // NCE variants — computed once at module level from the shared config
 const NCE_FLAT_ITEMS = flattenTree(NCE_FS_ITEMS);
-const NCE_LEAF_ITEMS = NCE_FLAT_ITEMS.filter(i => !i.children || i.children.length === 0);
+// Exclude isDivider items (pure section labels with no mappable amounts)
+const NCE_LEAF_ITEMS = NCE_FLAT_ITEMS.filter(i => !i.isDivider && (!i.children || i.children.length === 0));
 
 // ═══════════════════════════════════════
 // Props

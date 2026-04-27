@@ -12,7 +12,7 @@
  *  - Each row has Save (✓) and Delete buttons
  *  - Dirty rows show a blue save button; clean rows show a grey edit indicator
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Badge }    from "@/components/ui/badge";
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  Check, ChevronsUpDown, Plus, Save, Loader2, Trash2, X, History,
+  Check, ChevronsUpDown, Plus, Save, Loader2, Trash2, X, History, Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CommEntry, PlanEntry } from "../hooks/useAuditPlanning";
@@ -141,6 +141,19 @@ function ClientCell({ value, clientId, clients, onChange }: ClientCellProps) {
 
 export default function CommunicationTable({ comms, entries, clients, onAdd, onUpdate, onRemove }: Props) {
   const [rows, setRows] = useState<DraftRow[]>([]);
+  // ── Search / filter ───────────────────────────────────────────────────────
+  const [filterText, setFilterText] = useState("");
+
+  const visibleRows = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(r =>
+      (r.clientName  || "").toLowerCase().includes(q) ||
+      (r.contactPerson || "").toLowerCase().includes(q) ||
+      (r.remarks     || "").toLowerCase().includes(q)
+    );
+  }, [rows, filterText]);
+
   // ── Version history modal ─────────────────────────────────────────────────
   const [historyRowId,    setHistoryRowId]    = useState<string | null>(null);
   const [historyRowLabel, setHistoryRowLabel] = useState<string | null>(null);
@@ -239,13 +252,38 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
   return (
     <div className="border rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="bg-indigo-600 text-white px-4 py-2.5 flex items-center justify-between">
-        <span className="text-sm font-semibold">Communication Log</span>
-        <Button size="sm" variant="outline"
-          className="h-7 text-xs border-white/40 text-white hover:bg-white/10 gap-1"
-          onClick={handleAddRow}>
-          <Plus size={11} /> Add Row
-        </Button>
+      <div className="bg-indigo-600 text-white px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-sm font-semibold shrink-0">Communication Log</span>
+        {/* Search filter */}
+        <div className="relative flex-1 min-w-[160px] max-w-[260px]">
+          <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/60 pointer-events-none" />
+          <input
+            type="text"
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+            placeholder="Search client, person, remarks…"
+            className="w-full h-7 pl-6 pr-6 text-[11px] rounded bg-white/10 border border-white/30 text-white placeholder-white/50 focus:outline-none focus:border-white/70"
+          />
+          {filterText && (
+            <button
+              type="button"
+              onClick={() => setFilterText("")}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-white/60 hover:text-white"
+            >
+              <X size={10} />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {filterText && (
+            <span className="text-[10px] text-white/70">{visibleRows.length} result{visibleRows.length !== 1 ? "s" : ""}</span>
+          )}
+          <Button size="sm" variant="outline"
+            className="h-7 text-xs border-white/40 text-white hover:bg-white/10 gap-1"
+            onClick={handleAddRow}>
+            <Plus size={11} /> Add Row
+          </Button>
+        </div>
       </div>
 
       {/* Table */}
@@ -269,15 +307,20 @@ export default function CommunicationTable({ comms, entries, clients, onAdd, onU
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {visibleRows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">
-                  No communication entries yet.{" "}
-                  <button onClick={handleAddRow} className="text-indigo-600 underline">Add first row</button>
+                  {filterText ? (
+                    <span>No results for "<strong>{filterText}</strong>". <button onClick={() => setFilterText("")} className="text-indigo-600 underline">Clear filter</button></span>
+                  ) : (
+                    <span>No communication entries yet.{" "}
+                      <button onClick={handleAddRow} className="text-indigo-600 underline">Add first row</button>
+                    </span>
+                  )}
                 </td>
               </tr>
             ) : (
-              rows.map(row => (
+              visibleRows.map(row => (
                 <tr key={row.id}
                   className={cn(
                     "align-top transition-colors",
