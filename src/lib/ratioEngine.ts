@@ -170,7 +170,7 @@ export function computeAllRatios(inputs: RatioInputs): RatioResult[] {
         ? "N.A."
         : r.unit === "%"
         ? `${(r.computed * 100).toFixed(2)}%`
-        : r.computed.toFixed(2),
+        : `${r.computed.toFixed(2)} Times`,
   }));
 }
 

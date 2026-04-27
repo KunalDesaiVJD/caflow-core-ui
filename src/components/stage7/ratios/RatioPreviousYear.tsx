@@ -10,9 +10,10 @@
  */
 
 import { useMemo } from "react";
+import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeAllRatios, type RatioInputs } from "@/lib/ratioEngine";
-import { type Stage7Ratios } from "@/lib/ratioAutoPopulate";
+import { type Stage7Ratios, type CustomRatio } from "@/lib/ratioAutoPopulate";
 import { RatioInput, formatIndian } from "./RatioInput";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -121,12 +122,12 @@ const RATIO_DEFS: RatioRowDef[] = [
 function sumFields(inputs: RatioInputs, fields?: Field[]): number | null {
   if (!fields || fields.length === 0) return null;
   let total = 0;
+  let hasValue = false;
   for (const f of fields) {
     const v = inputs[f];
-    if (v == null) return null;
-    total += v as number;
+    if (v != null) { total += v as number; hasValue = true; }
   }
-  return Math.round(total * 100) / 100;
+  return hasValue ? Math.round(total * 100) / 100 : null;
 }
 
 // ── Cell wrappers ─────────────────────────────────────────────────────────────
@@ -162,9 +163,12 @@ const TD = ({ children, className, colSpan, rowSpan }: {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 interface Props {
-  ratios:        Stage7Ratios;
-  fy:            string;   // CY FY string, e.g. "2025-26" — PY derived from it
-  onFieldChange: (field: Field, value: number | null) => void;
+  ratios:               Stage7Ratios;
+  fy:                   string;   // CY FY string, e.g. "2025-26" — PY derived from it
+  onFieldChange:        (field: Field, value: number | null) => void;
+  onCustomRatioChange:  (id: string, changes: Partial<CustomRatio>) => void;
+  onAddCustomRatio:     () => void;
+  onDeleteCustomRatio:  (id: string) => void;
 }
 
 function prevFY(fy: string): string {
@@ -174,12 +178,15 @@ function prevFY(fy: string): string {
   const endRaw = parts[1];
   const prevStart = startY - 1;
   const prevEnd   = endRaw.length === 2
-    ? String(prevStart).slice(-2)
+    ? String(prevStart + 1).slice(-2)
     : String(prevStart + 1);
   return `${prevStart}-${prevEnd}`;
 }
 
-export function RatioPreviousYear({ ratios, fy, onFieldChange }: Props) {
+export function RatioPreviousYear({
+  ratios, fy, onFieldChange,
+  onCustomRatioChange, onAddCustomRatio, onDeleteCustomRatio,
+}: Props) {
   const inputs  = ratios.py;
   const results = useMemo(() => computeAllRatios(inputs), [inputs]);
   const pyFY    = prevFY(fy);
@@ -300,9 +307,6 @@ export function RatioPreviousYear({ ratios, fy, onFieldChange }: Props) {
                           )}
                         >
                           {result.display}
-                          <span className="block text-[9px] font-normal text-slate-400">
-                            {result.unit}
-                          </span>
                         </TD>
                       )}
                     </tr>
@@ -315,6 +319,74 @@ export function RatioPreviousYear({ ratios, fy, onFieldChange }: Props) {
               </>
             );
           })}
+          {/* ── Custom ratios (PY values) ──────────────────────────────────── */}
+          {(ratios.custom_ratios ?? []).map((cr, idx) => {
+            const no = 11 + idx + 1;
+            const pyNum = cr.py.numerator;
+            const pyDen = cr.py.denominator;
+            const computed =
+              pyNum != null && pyDen != null && pyDen !== 0
+                ? cr.unit === "%" ? (pyNum / pyDen) * 100 : pyNum / pyDen
+                : null;
+            const display =
+              computed == null ? "N.A."
+              : cr.unit === "%" ? `${computed.toFixed(2)}%`
+              : `${computed.toFixed(2)} Times`;
+            return (
+              <>
+                <tr key={`cr-${cr.id}`}>
+                  <td colSpan={7} className="border-t-2 border-slate-300 p-0 h-0" />
+                </tr>
+                <tr key={`cr-${cr.id}-data`} className="align-middle">
+                  <TD className="text-center font-semibold">{no}</TD>
+                  {/* Name (read-only in PY sub-tab — edit from CY tab) + delete */}
+                  <TD>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[11px] font-medium">{cr.name}</span>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className="text-[9px] text-slate-400">
+                          {cr.unit === "%" ? "%" : "Times"}
+                        </span>
+                        <button
+                          onClick={() => onDeleteCustomRatio(cr.id)}
+                          className="ml-auto text-[9px] text-red-400 hover:text-red-600"
+                          title="Delete ratio"
+                        >✕ Delete</button>
+                      </div>
+                    </div>
+                  </TD>
+                  <TD className="text-slate-600">{cr.numeratorLabel}</TD>
+                  <TD className="py-0.5 pr-1">
+                    <RatioInput
+                      value={pyNum}
+                      onChange={(v) => onCustomRatioChange(cr.id, { py: { ...cr.py, numerator: v } })}
+                    />
+                  </TD>
+                  <TD className="text-slate-600">{cr.denominatorLabel}</TD>
+                  <TD className="py-0.5 pr-1">
+                    <RatioInput
+                      value={pyDen}
+                      onChange={(v) => onCustomRatioChange(cr.id, { py: { ...cr.py, denominator: v } })}
+                    />
+                  </TD>
+                  <TD className={cn("text-center font-semibold", computed == null && "text-slate-400")}>
+                    {display}
+                  </TD>
+                </tr>
+              </>
+            );
+          })}
+          {/* Add custom ratio (same button — keeps CY/PY in sync) */}
+          <tr>
+            <td colSpan={7} className="py-2 px-4 border-t-2 border-slate-300">
+              <button
+                onClick={onAddCustomRatio}
+                className="flex items-center gap-1 text-[11px] text-primary hover:text-primary/70 font-medium"
+              >
+                <Plus className="h-3 w-3" /> Add Custom Ratio
+              </button>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>

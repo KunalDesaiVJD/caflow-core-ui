@@ -28,6 +28,7 @@ import { getNoteNo }   from "@/lib/noteNumberRegistry";
 import {
   type Stage7Ratios,
   type RatioInputs,
+  type CustomRatio,
   DEFAULT_STAGE7_RATIOS,
   loadStage7Ratios,
   saveStage7Ratios,
@@ -175,6 +176,52 @@ export function RatiosTab({ engagementId, engagement }: Props) {
     });
   }, [triggerSave]);
 
+  // ── Custom ratio handlers ─────────────────────────────────────────────────
+  const handleAddCustomRatio = useCallback(() => {
+    const newRatio: CustomRatio = {
+      id: Date.now().toString(),
+      name: "New Ratio",
+      unit: "times",
+      numeratorLabel: "Numerator",
+      denominatorLabel: "Denominator",
+      cy: { numerator: null, denominator: null },
+      py: { numerator: null, denominator: null },
+      commentary: "",
+    };
+    setRatios((prev) => {
+      const updated: Stage7Ratios = {
+        ...prev,
+        custom_ratios: [...(prev.custom_ratios ?? []), newRatio],
+      };
+      triggerSave(updated);
+      return updated;
+    });
+  }, [triggerSave]);
+
+  const handleCustomRatioChange = useCallback((id: string, changes: Partial<CustomRatio>) => {
+    setRatios((prev) => {
+      const updated: Stage7Ratios = {
+        ...prev,
+        custom_ratios: (prev.custom_ratios ?? []).map((r) =>
+          r.id === id ? { ...r, ...changes } : r,
+        ),
+      };
+      triggerSave(updated);
+      return updated;
+    });
+  }, [triggerSave]);
+
+  const handleDeleteCustomRatio = useCallback((id: string) => {
+    setRatios((prev) => {
+      const updated: Stage7Ratios = {
+        ...prev,
+        custom_ratios: (prev.custom_ratios ?? []).filter((r) => r.id !== id),
+      };
+      triggerSave(updated);
+      return updated;
+    });
+  }, [triggerSave]);
+
   // ── Print ─────────────────────────────────────────────────────────────────
   const handlePrint = async () => {
     if (!printRef.current) return;
@@ -266,6 +313,12 @@ export function RatiosTab({ engagementId, engagement }: Props) {
               ratios={ratios}
               fy={fy}
               onCommentaryChange={handleCommentaryChange}
+              onCustomRatioChange={handleCustomRatioChange}
+              onCustomRatioCommentaryChange={(id, text) =>
+                handleCustomRatioChange(id, { commentary: text })
+              }
+              onAddCustomRatio={handleAddCustomRatio}
+              onDeleteCustomRatio={handleDeleteCustomRatio}
             />
           </TabsContent>
 
@@ -276,6 +329,9 @@ export function RatiosTab({ engagementId, engagement }: Props) {
               fy={fy}
               onFieldChange={handleCYChange}
               onOverrideReset={handleCYReset}
+              onCustomRatioChange={handleCustomRatioChange}
+              onAddCustomRatio={handleAddCustomRatio}
+              onDeleteCustomRatio={handleDeleteCustomRatio}
             />
           </TabsContent>
 
@@ -285,6 +341,9 @@ export function RatiosTab({ engagementId, engagement }: Props) {
               ratios={ratios}
               fy={fy}
               onFieldChange={handlePYChange}
+              onCustomRatioChange={handleCustomRatioChange}
+              onAddCustomRatio={handleAddCustomRatio}
+              onDeleteCustomRatio={handleDeleteCustomRatio}
             />
           </TabsContent>
         </Tabs>

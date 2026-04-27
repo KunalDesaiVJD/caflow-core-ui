@@ -9,9 +9,10 @@
  */
 
 import { useMemo } from "react";
+import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeAllRatios, computeVariance, type RatioResult } from "@/lib/ratioEngine";
-import { type Stage7Ratios } from "@/lib/ratioAutoPopulate";
+import { type Stage7Ratios, type CustomRatio } from "@/lib/ratioAutoPopulate";
 import { getNoteNo } from "@/lib/noteNumberRegistry";
 import { formatIndian } from "./RatioInput";
 
@@ -29,7 +30,7 @@ function prevFY(fy: string): string {
   const endRaw = parts[1];
   const prevStart = startY - 1;
   const prevEnd   = endRaw.length === 2
-    ? String(prevStart).slice(-2)
+    ? String(prevStart + 1).slice(-2)
     : String(prevStart + 1);
   return `${prevStart}-${prevEnd}`;
 }
@@ -55,6 +56,10 @@ interface Props {
   ratios: Stage7Ratios;
   fy:     string;   // e.g. "2025-26"
   onCommentaryChange: (ratioId: number, text: string) => void;
+  onCustomRatioChange: (id: string, changes: Partial<CustomRatio>) => void;
+  onCustomRatioCommentaryChange: (id: string, text: string) => void;
+  onAddCustomRatio: () => void;
+  onDeleteCustomRatio: (id: string) => void;
 }
 
 const TH = ({ children, className }: { children?: React.ReactNode; className?: string }) => (
@@ -84,7 +89,10 @@ const TD = ({ children, className, colSpan, rowSpan }: {
   </td>
 );
 
-export function RatioSummary({ ratios, fy, onCommentaryChange }: Props) {
+export function RatioSummary({
+  ratios, fy, onCommentaryChange,
+  onCustomRatioCommentaryChange, onAddCustomRatio, onDeleteCustomRatio,
+}: Props) {
   const noteNo = getNoteNo("ratios") ?? 31;
   const cyResults: RatioResult[] = useMemo(() => computeAllRatios(ratios.cy), [ratios.cy]);
   const pyResults: RatioResult[] = useMemo(() => computeAllRatios(ratios.py), [ratios.py]);
@@ -174,6 +182,82 @@ export function RatioSummary({ ratios, fy, onCommentaryChange }: Props) {
               </>
             );
           })}
+          {/* ── Custom ratios ─────────────────────────────────────────────── */}
+          {(ratios.custom_ratios ?? []).map((cr, idx) => {
+            const no = 11 + idx + 1;
+            const cyNum = cr.cy.numerator;
+            const cyDen = cr.cy.denominator;
+            const pyNum = cr.py.numerator;
+            const pyDen = cr.py.denominator;
+            const calcRatio = (n: number | null, d: number | null) =>
+              n != null && d != null && d !== 0
+                ? cr.unit === "%" ? (n / d) * 100 : n / d
+                : null;
+            const cyComp = calcRatio(cyNum, cyDen);
+            const pyComp = calcRatio(pyNum, pyDen);
+            const cyDisp = cyComp == null ? "N.A." : cr.unit === "%" ? `${cyComp.toFixed(2)}%` : `${cyComp.toFixed(2)} Times`;
+            const pyDisp = pyComp == null ? "N.A." : cr.unit === "%" ? `${pyComp.toFixed(2)}%` : `${pyComp.toFixed(2)} Times`;
+            const varStr = computeVariance(cyComp, pyComp);
+            const varCls = varClass(cyComp, pyComp);
+            return (
+              <>
+                {/* Numerator row */}
+                <tr key={`cr-${cr.id}-num`} className="even:bg-slate-50/40">
+                  <TD rowSpan={2} className="text-center font-semibold">
+                    <div className="flex flex-col items-center gap-1">
+                      <span>{no}</span>
+                      <button
+                        onClick={() => onDeleteCustomRatio(cr.id)}
+                        title="Delete ratio"
+                        className="text-[9px] text-red-400 hover:text-red-600 leading-none"
+                      >✕</button>
+                    </div>
+                  </TD>
+                  <TD rowSpan={2} className="font-medium">{cr.name}</TD>
+                  <TD className="text-slate-600">{cr.numeratorLabel}</TD>
+                  <TD className="text-right font-mono tabular-nums">{formatIndian(cyNum)}</TD>
+                  <TD rowSpan={2} className={cn("text-center font-semibold", cyComp == null && "text-slate-400")}>{cyDisp}</TD>
+                  <TD rowSpan={2} className={cn("text-center font-semibold", pyComp == null && "text-slate-400")}>{pyDisp}</TD>
+                  <TD rowSpan={2} className={cn("text-center", varCls)}>{varStr}</TD>
+                </tr>
+                {/* Denominator row */}
+                <tr key={`cr-${cr.id}-den`} className="even:bg-slate-50/40">
+                  <TD className="text-slate-600">{cr.denominatorLabel}</TD>
+                  <TD className="text-right font-mono tabular-nums">{formatIndian(cyDen)}</TD>
+                </tr>
+                {/* Commentary row */}
+                <tr key={`cr-${cr.id}-cmt`} className="bg-slate-50/60">
+                  <TD colSpan={7} className="py-1.5">
+                    <div className="flex items-start gap-2">
+                      <span className="shrink-0 text-[10px] font-semibold uppercase text-slate-500 mt-1">Text:</span>
+                      <textarea
+                        value={cr.commentary}
+                        onChange={(e) => onCustomRatioCommentaryChange(cr.id, e.target.value)}
+                        placeholder="Add commentary on movement…"
+                        rows={2}
+                        className={cn(
+                          "flex-1 resize-none rounded border border-slate-200 bg-white px-2 py-1",
+                          "text-xs text-slate-700 placeholder-slate-400",
+                          "focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30",
+                        )}
+                      />
+                    </div>
+                  </TD>
+                </tr>
+              </>
+            );
+          })}
+          {/* Add custom ratio button */}
+          <tr>
+            <td colSpan={7} className="py-2 px-4 border-t-2 border-slate-300">
+              <button
+                onClick={onAddCustomRatio}
+                className="flex items-center gap-1 text-[11px] text-primary hover:text-primary/70 font-medium"
+              >
+                <Plus className="h-3 w-3" /> Add Custom Ratio
+              </button>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>

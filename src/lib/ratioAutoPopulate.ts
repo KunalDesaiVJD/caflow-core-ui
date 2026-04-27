@@ -106,6 +106,21 @@ const FS_ALL_EXPENSES: string[] = [
 // Stage7Ratios — the shape persisted in audit_engagements.stage7_ratios
 // ═════════════════════════════════════════════════════════════════════════
 
+/**
+ * A single user-defined custom ratio added beyond the 11 standard ones.
+ * Stored inline with its CY and PY numerator/denominator values.
+ */
+export interface CustomRatio {
+  id: string;                          // unique key (Date.now string)
+  name: string;                        // "MY CUSTOM RATIO"
+  unit: "times" | "%";
+  numeratorLabel: string;
+  denominatorLabel: string;
+  cy: { numerator: number | null; denominator: number | null };
+  py: { numerator: number | null; denominator: number | null };
+  commentary: string;
+}
+
 export interface Stage7Ratios {
   /** Raw input fields for Current Year */
   cy: RatioInputs;
@@ -118,6 +133,8 @@ export interface Stage7Ratios {
    * manually set. autoPopulateRatios will NOT overwrite these paths.
    */
   manual_overrides: string[];
+  /** User-defined ratios beyond the standard 11 (persisted in JSONB). */
+  custom_ratios: CustomRatio[];
 }
 
 const DEFAULT_COMMENTARY: Stage7Ratios["commentary"] = Array.from(
@@ -130,6 +147,7 @@ export const DEFAULT_STAGE7_RATIOS: Stage7Ratios = {
   py:                blankRatioInputs(),
   commentary:        DEFAULT_COMMENTARY,
   manual_overrides:  [],
+  custom_ratios:     [],
 };
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -152,6 +170,7 @@ export async function loadStage7Ratios(engagementId: string): Promise<Stage7Rati
       py:               { ...blankRatioInputs(), ...(raw.py  ?? {}) },
       commentary:       Array.isArray(raw.commentary)       ? raw.commentary       : DEFAULT_COMMENTARY,
       manual_overrides: Array.isArray(raw.manual_overrides) ? raw.manual_overrides : [],
+      custom_ratios:    Array.isArray(raw.custom_ratios)    ? raw.custom_ratios    : [],
     };
   }
   return JSON.parse(JSON.stringify(DEFAULT_STAGE7_RATIOS));

@@ -4474,9 +4474,6 @@ export default function PipelineFinancialStatements({
             <TabsTrigger value="pl" className="gap-1.5">
               <FileSpreadsheet size={14} /> P&L Statement
             </TabsTrigger>
-            <TabsTrigger value="recon" className="gap-1.5">
-              <AlertTriangle size={14} /> PY Reconciliation
-            </TabsTrigger>
             {!isNonCorporate && cfApplicable && (
               <TabsTrigger value="cf" className="gap-1.5">
                 <Droplets size={14} /> Cash Flow
@@ -4704,72 +4701,6 @@ export default function PipelineFinancialStatements({
               </div>
             )}
             {nceSignatureBlock}
-          </TabsContent>
-
-          {/* ── PY Reconciliation ── */}
-          {/* Tally PY computed from CY opening balances against prior audited FS */}
-          <TabsContent value="recon" className="mt-3">
-            <Alert className="mb-3">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="text-xs">Match PY with Last Year's Audit Report</AlertTitle>
-              <AlertDescription className="text-xs">
-                Column A: PY derived from opening balances on CY trial balance (via COA mapping).
-                Column B: PY from prior engagement's audited fa_financial_statements.
-                Differences indicate either a new/changed mapping in CY or a prior-period adjustment.
-              </AlertDescription>
-            </Alert>
-            <div className="rounded-lg border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className="text-xs">Line Item</TableHead>
-                    <TableHead className="text-xs text-right">PY (from Opening) (₹)</TableHead>
-                    <TableHead className="text-xs text-right">PY (from Audited FS) (₹)</TableHead>
-                    <TableHead className="text-xs text-right">Δ (₹)</TableHead>
-                    <TableHead className="text-xs text-center w-16">Tallied</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {activeFlatItems
-                    .filter(i => i.section.startsWith(isNonCorporate ? "NCE_BS_" : "BS_"))
-                    .filter(i => !i.children || i.children.length === 0)
-                    .map(i => {
-                      const fromOpening = computedAmountsPY[i.code] || 0;
-                      const fromAudited = pyAmounts[i.code]         || 0;
-                      const diff  = fromOpening - fromAudited;
-                      const match = Math.abs(diff) < 1;
-                      if (Math.abs(fromOpening) < 0.005 && Math.abs(fromAudited) < 0.005) return null;
-                      return (
-                        <TableRow key={i.code} className={cn(!match && "bg-amber-50/60")}>
-                          <TableCell className="text-xs" style={{ paddingLeft: `${i.depth * 16 + 8}px` }}>
-                            {i.name}
-                            {i.noteRef && <Badge variant="outline" className="ml-1.5 text-[8px] px-1">N{i.noteRef}</Badge>}
-                          </TableCell>
-                          <TableCell className="text-right text-xs font-mono tabular-nums">
-                            {fromOpening !== 0 ? `₹${Math.abs(fromOpening).toLocaleString("en-IN")}` : "—"}
-                          </TableCell>
-                          <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
-                            {fromAudited !== 0 ? `₹${Math.abs(fromAudited).toLocaleString("en-IN")}` : "—"}
-                          </TableCell>
-                          <TableCell className={cn(
-                            "text-right text-xs font-mono tabular-nums",
-                            match ? "text-muted-foreground" : "text-destructive font-semibold"
-                          )}>
-                            {Math.abs(diff) < 0.005 ? "—" : `₹${Math.abs(diff).toLocaleString("en-IN")}`}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            {match ? (
-                              <span className="text-primary text-sm">✓</span>
-                            ) : (
-                              <span className="text-destructive text-sm">✗</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                </TableBody>
-              </Table>
-            </div>
           </TabsContent>
 
           {/* ── Cash Flow (corporate only) ── */}

@@ -8,10 +8,11 @@
  */
 
 import { useMemo } from "react";
+import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeAllRatios, type RatioInputs } from "@/lib/ratioEngine";
 import { AUTO_LINK_MAP }                       from "@/lib/ratioEngine";
-import { type Stage7Ratios, markOverride, clearOverride } from "@/lib/ratioAutoPopulate";
+import { type Stage7Ratios, type CustomRatio, markOverride, clearOverride } from "@/lib/ratioAutoPopulate";
 import { RatioInput, formatIndian }            from "./RatioInput";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -127,12 +128,12 @@ const AUTO_KEYS = new Set(AUTO_LINK_MAP.map(e => e.key));
 function sumFields(inputs: RatioInputs, fields?: Field[]): number | null {
   if (!fields || fields.length === 0) return null;
   let total = 0;
+  let hasValue = false;
   for (const f of fields) {
     const v = inputs[f];
-    if (v == null) return null;       // any missing = null total
-    total += v as number;
+    if (v != null) { total += v as number; hasValue = true; }
   }
-  return Math.round(total * 100) / 100;
+  return hasValue ? Math.round(total * 100) / 100 : null;
 }
 
 // ── Cell components ──────────────────────────────────────────────────────────
@@ -168,13 +169,19 @@ const TD = ({ children, className, colSpan, rowSpan }: {
 // ── Main Component ───────────────────────────────────────────────────────────
 
 interface Props {
-  ratios:          Stage7Ratios;
-  fy:              string;
-  onFieldChange:   (field: Field, value: number | null) => void;
-  onOverrideReset: (field: Field) => void;
+  ratios:               Stage7Ratios;
+  fy:                   string;
+  onFieldChange:        (field: Field, value: number | null) => void;
+  onOverrideReset:      (field: Field) => void;
+  onCustomRatioChange:  (id: string, changes: Partial<CustomRatio>) => void;
+  onAddCustomRatio:     () => void;
+  onDeleteCustomRatio:  (id: string) => void;
 }
 
-export function RatioCurrentYear({ ratios, fy, onFieldChange, onOverrideReset }: Props) {
+export function RatioCurrentYear({
+  ratios, fy, onFieldChange, onOverrideReset,
+  onCustomRatioChange, onAddCustomRatio, onDeleteCustomRatio,
+}: Props) {
   const inputs    = ratios.cy;
   const overrides = new Set(
     ratios.manual_overrides
@@ -383,9 +390,6 @@ export function RatioCurrentYear({ ratios, fy, onFieldChange, onOverrideReset }:
                           )}
                         >
                           {result.display}
-                          <span className="block text-[9px] font-normal text-slate-400">
-                            {result.unit}
-                          </span>
                         </TD>
                       )}
                     </tr>
@@ -399,6 +403,106 @@ export function RatioCurrentYear({ ratios, fy, onFieldChange, onOverrideReset }:
               </>
             );
           })}
+          {/* ── Custom ratios ─────────────────────────────────────────────── */}
+          {(ratios.custom_ratios ?? []).map((cr, idx) => {
+            const no = 11 + idx + 1;
+            const cyNum = cr.cy.numerator;
+            const cyDen = cr.cy.denominator;
+            const computed =
+              cyNum != null && cyDen != null && cyDen !== 0
+                ? cr.unit === "%" ? (cyNum / cyDen) * 100 : cyNum / cyDen
+                : null;
+            const display =
+              computed == null ? "N.A."
+              : cr.unit === "%" ? `${computed.toFixed(2)}%`
+              : `${computed.toFixed(2)} Times`;
+            return (
+              <>
+                <tr key={`cr-${cr.id}`} className="align-middle">
+                  {/* Row separator */}
+                  <td colSpan={7} className="border-t-2 border-slate-300 p-0 h-0" />
+                </tr>
+                <tr key={`cr-${cr.id}-data`} className="align-middle">
+                  <TD className="text-center font-semibold">{no}</TD>
+                  {/* Name + unit + delete */}
+                  <TD>
+                    <div className="flex flex-col gap-0.5">
+                      <input
+                        value={cr.name}
+                        onChange={(e) => onCustomRatioChange(cr.id, { name: e.target.value })}
+                        className="w-full text-[11px] font-medium bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                        placeholder="Ratio name…"
+                      />
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <select
+                          value={cr.unit}
+                          onChange={(e) => onCustomRatioChange(cr.id, { unit: e.target.value as "times" | "%" })}
+                          className="text-[9px] border border-slate-200 rounded px-1 bg-white text-slate-600"
+                        >
+                          <option value="times">Times</option>
+                          <option value="%">%</option>
+                        </select>
+                        <button
+                          onClick={() => onDeleteCustomRatio(cr.id)}
+                          className="ml-auto text-[9px] text-red-400 hover:text-red-600"
+                          title="Delete ratio"
+                        >✕ Delete</button>
+                      </div>
+                    </div>
+                  </TD>
+                  {/* Numerator label + amount */}
+                  <TD>
+                    <input
+                      value={cr.numeratorLabel}
+                      onChange={(e) => onCustomRatioChange(cr.id, { numeratorLabel: e.target.value })}
+                      className="w-full text-[11px] text-slate-600 bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                      placeholder="Numerator label…"
+                    />
+                  </TD>
+                  <TD className="py-0.5 pr-1">
+                    <RatioInput
+                      value={cyNum}
+                      isAuto={false}
+                      isOverridden={false}
+                      onChange={(v) => onCustomRatioChange(cr.id, { cy: { ...cr.cy, numerator: v } })}
+                    />
+                  </TD>
+                  {/* Denominator label + amount */}
+                  <TD>
+                    <input
+                      value={cr.denominatorLabel}
+                      onChange={(e) => onCustomRatioChange(cr.id, { denominatorLabel: e.target.value })}
+                      className="w-full text-[11px] text-slate-600 bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                      placeholder="Denominator label…"
+                    />
+                  </TD>
+                  <TD className="py-0.5 pr-1">
+                    <RatioInput
+                      value={cyDen}
+                      isAuto={false}
+                      isOverridden={false}
+                      onChange={(v) => onCustomRatioChange(cr.id, { cy: { ...cr.cy, denominator: v } })}
+                    />
+                  </TD>
+                  {/* Computed ratio */}
+                  <TD className={cn("text-center font-semibold", computed == null && "text-slate-400")}>
+                    {display}
+                  </TD>
+                </tr>
+              </>
+            );
+          })}
+          {/* Add custom ratio */}
+          <tr>
+            <td colSpan={7} className="py-2 px-4 border-t-2 border-slate-300">
+              <button
+                onClick={onAddCustomRatio}
+                className="flex items-center gap-1 text-[11px] text-primary hover:text-primary/70 font-medium"
+              >
+                <Plus className="h-3 w-3" /> Add Custom Ratio
+              </button>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>
