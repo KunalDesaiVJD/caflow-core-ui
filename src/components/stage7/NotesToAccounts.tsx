@@ -661,44 +661,40 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     const ws = wb.addWorksheet("Notes to Accounts", {
       views: [{ showGridLines: false }],
     });
+    // Column layout matches template: B=note no, C=assessee sig, D=note text, H=CA firm sig
     ws.columns = [
-      { width: 2 },    // A spacer
-      { width: 10 },   // B  "Note N"
-      { width: 32 },   // C  title
-      { width: 80 },   // D  body text
+      { width: 2  },  // A  spacer
+      { width: 6  },  // B  note number
+      { width: 30 },  // C  assessee signature block
+      { width: 70 },  // D  note body text
+      { width: 4  },  // E  spacer
+      { width: 4  },  // F  spacer
+      { width: 4  },  // G  spacer
+      { width: 32 },  // H  CA firm signature block
     ];
 
     let r = 2;
+    // Entity name — merged B:H, bold, centered
     ws.getCell(`B${r}`).value = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font = { bold: true, size: 13 };
-    ws.mergeCells(`B${r}:D${r}`);
+    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center" };
     r++;
+    // Sub-heading
     ws.getCell(`B${r}`).value =
-      `Notes forming part of the Financial Statements for the year ended 31st March, ${auditYear}`;
+      `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font = { bold: true, size: 11 };
-    ws.mergeCells(`B${r}:D${r}`);
+    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center" };
-    r++;
-    ws.getCell(`B${r}`).value = "Note: Summary of Significant Accounting Policies";
-    ws.getCell(`B${r}`).font = { italic: true, size: 10 };
-    ws.mergeCells(`B${r}:D${r}`);
+    r += 2;
+    // Section label — "Note :" in B, title in D (matches template layout)
+    ws.getCell(`B${r}`).value = "Note :";
+    ws.getCell(`B${r}`).font = { bold: true };
+    ws.getCell(`D${r}`).value = "Summary of Significant Accounting Policies";
+    ws.getCell(`D${r}`).font = { bold: true };
     r += 2;
 
-    // Column header row
-    ws.getCell(`B${r}`).value = "Note";
-    ws.getCell(`C${r}`).value = "Title";
-    ws.getCell(`D${r}`).value = "Particulars";
-    for (const a of ["B", "C", "D"]) {
-      ws.getCell(`${a}${r}`).font = { bold: true };
-      ws.getCell(`${a}${r}`).alignment = { horizontal: "center", vertical: "middle" };
-      ws.getCell(`${a}${r}`).border = {
-        top:    { style: "thin" }, bottom: { style: "thin" },
-        left:   { style: "thin" }, right:  { style: "thin" },
-      };
-    }
-    r++;
-
+    // Notes — no header row, no borders, blank row between each (matches template)
     const selectedNotes = notes.filter(n => n.selected);
     selectedNotes.forEach((note, idx) => {
       const num = idx + 1;
@@ -713,54 +709,51 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
         body += "\n\n" + resolveTokens(header.note3VariantText);
       }
 
-      ws.getCell(`B${r}`).value = `Note ${num}`;
+      // Col B = note number only (no "Note" prefix), col D = body text
+      ws.getCell(`B${r}`).value = num;
       ws.getCell(`B${r}`).font = { bold: true };
       ws.getCell(`B${r}`).alignment = { vertical: "top", horizontal: "center" };
-      ws.getCell(`C${r}`).value = note.title;
-      ws.getCell(`C${r}`).font = { bold: true };
-      ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
       ws.getCell(`D${r}`).value = body;
       ws.getCell(`D${r}`).alignment = { vertical: "top", wrapText: true };
-      for (const a of ["B", "C", "D"]) {
-        ws.getCell(`${a}${r}`).border = {
-          top:    { style: "thin" }, bottom: { style: "thin" },
-          left:   { style: "thin" }, right:  { style: "thin" },
-        };
-      }
-      // Auto-ish row height — Excel wraps on 80-char col D, so estimate lines
+      // Auto row height based on text length
       const lines = Math.max(
         1,
         Math.ceil(body.length / 90) + (body.match(/\n/g)?.length ?? 0),
       );
       ws.getRow(r).height = Math.max(18, lines * 15);
       r++;
+      r++; // blank row between notes (matches template)
     });
 
-    r += 2;
-    // Signature block
-    ws.getCell(`B${r}`).value = "For,";
-    ws.getCell(`C${r}`).value = firmName;
+    r += 1;
+    // ── Signature block — two-column layout matching template ──────────────
+    // Col C (3) = assessee / client side (left)
+    // Col H (8) = CA firm side (right)
+    const assesseeName = sig.assesseeNameOverride || displayEntityName;
+    const partnerDisplay = sig.partnerNameOverride || partnerAutoName || "[Partner Name]";
+
+    ws.getCell(`C${r}`).value = `For, ${assesseeName}`;
     ws.getCell(`C${r}`).font = { bold: true };
+    ws.getCell(`H${r}`).value = `For ${firmName}`;
+    ws.getCell(`H${r}`).font = { bold: true };
     r++;
-    ws.getCell(`B${r}`).value = "Chartered Accountants";
-    ws.getCell(`B${r}`).font = { italic: true };
+    ws.getCell(`H${r}`).value = "Chartered Accountants";
+    ws.getCell(`H${r}`).font = { italic: true };
     r++;
-    ws.getCell(`B${r}`).value = "FRN:";
-    ws.getCell(`C${r}`).value = firmFRN;
-    r += 2;
-    ws.getCell(`B${r}`).value = sig.partnerNameOverride || partnerAutoName || "[Partner Name]";
-    ws.getCell(`B${r}`).font = { bold: true };
+    ws.getCell(`H${r}`).value = `FRN: ${firmFRN}`;
+    r += 2; // gap for signature
+    ws.getCell(`C${r}`).value = "x__________________";
     r++;
-    ws.getCell(`B${r}`).value = "Partner";
+    ws.getCell(`C${r}`).value = "Signature of assessee";
+    ws.getCell(`C${r}`).font = { color: { argb: "FF888888" }, size: 9 };
+    ws.getCell(`H${r}`).value = partnerDisplay;
+    ws.getCell(`H${r}`).font = { bold: true };
     r++;
-    ws.getCell(`B${r}`).value = "Membership No.";
-    ws.getCell(`C${r}`).value = partnerMembership;
+    ws.getCell(`C${r}`).value = `Place: ${assesseePlace}`;
+    ws.getCell(`H${r}`).value = "Partner";
     r++;
-    ws.getCell(`B${r}`).value = "Place:";
-    ws.getCell(`C${r}`).value = firmCity;
-    r++;
-    ws.getCell(`B${r}`).value = "Date:";
-    ws.getCell(`C${r}`).value = sig.sigDate || "";
+    ws.getCell(`C${r}`).value = `Date : ${sig.assesseeDate || ""}`;
+    ws.getCell(`H${r}`).value = `Membership No.: ${partnerMembership}`;
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], {
