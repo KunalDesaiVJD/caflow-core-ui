@@ -65,6 +65,19 @@ const INV_CODES_SET = new Set(Object.keys(INV_DUAL_MAP));
 // P&L codes that are auto-computed from inventory dual-posting — locked from manual override
 const INV_PL_CODES  = new Set(Object.values(INV_DUAL_MAP));
 
+// Detects Tally's special "Profit & Loss A/c" ledger by any of its common names.
+// In Tally, this ledger carries the CLOSING retained-earnings balance (opening +
+// current-year profit).  When mapped to a BS code it must use opening_balance only;
+// the current-year net profit is auto-credited to BS_EQ_RS separately.
+const isTallyPLAccount = (name: string): boolean => {
+  const n = name.toLowerCase().trim();
+  if (n === "profit & loss a/c" || n === "profit and loss a/c" ||
+      n === "p & l a/c"         || n === "p&l a/c"             ||
+      n === "profit & loss account" || n === "profit and loss account" ||
+      n === "p & l account") return true;
+  return /^profit\s*[&and]+\s*loss(\s*(a\/c|account))?$/i.test(name.trim());
+};
+
 // ═══════════════════════════════════════
 // Schedule III Line Item Definitions  (corporate)
 // ═══════════════════════════════════════
@@ -1297,6 +1310,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
         amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
+      } else if (isTallyPLAccount(acct.account_name) && mapping.code.startsWith("BS_")) {
+        // ── P&L A/c on Balance Sheet: use OPENING balance (prior retained earnings) ──
+        // Tally's "Profit & Loss A/c" closing balance = opening + current-year profit.
+        // Using closing here double-counts net profit that is already in PL_REV/PL_EXP.
+        // Net profit is auto-credited to BS_EQ_RS after computeTotal (below).
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + (acct.opening_balance ?? 0);
       } else {
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
       }
@@ -1320,6 +1339,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
     for (const item of activeTree) {
       computeTotal(item);
+    }
+
+    // ── Auto-flow net P&L to BS_EQ_RS for corporate entities ─────────────────
+    // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
+    // live in P&L codes.  The current-year net profit must be credited to Reserves &
+    // Surplus so the Balance Sheet balances — mirrors the closing journal entry.
+    if (!isNonCorporate) {
+      const rev   = amounts["PL_REV"] || 0; // negative (credit)
+      const exp   = amounts["PL_EXP"] || 0; // positive (debit)
+      const netPL = Math.round((-rev - exp) * 100) / 100;
+      if (Math.abs(netPL) > 0.005) {
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+        // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change
+        for (const item of activeTree) {
+          computeTotal(item);
+        }
+      }
     }
 
     return amounts;
