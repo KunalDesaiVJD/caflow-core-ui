@@ -17,13 +17,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { RefreshCw, Printer, Loader2, Calculator } from "lucide-react";
+import { RefreshCw, FileSpreadsheet, Loader2, Calculator } from "lucide-react";
 import { Button }   from "@/components/ui/button";
 import {
   Tabs, TabsContent, TabsList, TabsTrigger,
 } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { exportToPdf } from "@/lib/exportUtils";
 import { getNoteNo }   from "@/lib/noteNumberRegistry";
 import {
   type Stage7Ratios,
@@ -65,8 +64,8 @@ export function RatiosTab({ engagementId, engagement }: Props) {
   const [saving,      setSaving]      = useState(false);
   const [lastSynced,  setLastSynced]  = useState<string | null>(null);
   const [activeTab,   setActiveTab]   = useState("summary");
+  const [exporting,   setExporting]   = useState(false);
 
-  const printRef  = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load on mount ─────────────────────────────────────────────────────────
@@ -222,18 +221,40 @@ export function RatiosTab({ engagementId, engagement }: Props) {
     });
   }, [triggerSave]);
 
-  // ── Print ─────────────────────────────────────────────────────────────────
-  const handlePrint = async () => {
-    if (!printRef.current) return;
+  // ── Excel export (3 sheets matching Ratio.xlsx template) ─────────────────
+  const handleExportExcel = useCallback(async () => {
+    setExporting(true);
     try {
-      await exportToPdf(
-        printRef.current,
-        `Ratios_Note${noteNo}_${fy}.pdf`,
-      );
+      const ExcelJS   = (await import("exceljs")).default;
+      const wb        = new ExcelJS.Workbook();
+      wb.creator      = "CAFlow";
+      wb.created      = new Date();
+      const cyYear    = engagement?.fy_end
+        ? new Date(engagement.fy_end).getFullYear()
+        : new Date().getFullYear();
+      const pyYear    = cyYear - 1;
+      const companyName = engagement?.clients?.name || engagement?.client_name || "";
+      const { writeRatiosSheets } = await import("@/lib/fsRatiosWriter");
+      writeRatiosSheets(wb, { cyYear, pyYear, companyName }, ratios);
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob   = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement("a");
+      a.href     = url;
+      a.download = `Ratios_${companyName || "Ratios"}_${fy || "FY"}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Ratio Excel exported");
     } catch {
-      toast.error("PDF export failed");
+      toast.error("Excel export failed");
+    } finally {
+      setExporting(false);
     }
-  };
+  }, [ratios, engagement, fy]);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) {
@@ -289,17 +310,21 @@ export function RatiosTab({ engagementId, engagement }: Props) {
           <Button
             variant="outline"
             size="sm"
-            onClick={handlePrint}
+            onClick={handleExportExcel}
+            disabled={exporting}
             className="gap-1.5 text-xs"
           >
-            <Printer className="h-3.5 w-3.5" />
-            Print Ratios
+            {exporting
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <FileSpreadsheet className="h-3.5 w-3.5" />
+            }
+            Export Excel
           </Button>
         </div>
       </div>
 
       {/* Sub-tabs */}
-      <div ref={printRef}>
+      <div>
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-4">
             <TabsTrigger value="summary">Ratio</TabsTrigger>

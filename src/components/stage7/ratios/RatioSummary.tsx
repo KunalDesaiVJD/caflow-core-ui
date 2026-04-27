@@ -213,8 +213,22 @@ export function RatioSummary({
                       >✕</button>
                     </div>
                   </TD>
-                  <TD rowSpan={2} className="font-medium">{cr.name}</TD>
-                  <TD className="text-slate-600">{cr.numeratorLabel}</TD>
+                  <TD rowSpan={2} className="font-medium">
+                    <input
+                      value={cr.name}
+                      onChange={(e) => onCustomRatioChange(cr.id, { name: e.target.value })}
+                      className="w-full text-[11px] font-medium bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                      placeholder="Ratio name…"
+                    />
+                  </TD>
+                  <TD className="text-slate-600">
+                    <input
+                      value={cr.numeratorLabel}
+                      onChange={(e) => onCustomRatioChange(cr.id, { numeratorLabel: e.target.value })}
+                      className="w-full text-[11px] text-slate-600 bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                      placeholder="Numerator label…"
+                    />
+                  </TD>
                   <TD className="text-right font-mono tabular-nums">{formatIndian(cyNum)}</TD>
                   <TD rowSpan={2} className={cn("text-center font-semibold", cyComp == null && "text-slate-400")}>{cyDisp}</TD>
                   <TD rowSpan={2} className={cn("text-center font-semibold", pyComp == null && "text-slate-400")}>{pyDisp}</TD>
@@ -222,7 +236,14 @@ export function RatioSummary({
                 </tr>
                 {/* Denominator row */}
                 <tr key={`cr-${cr.id}-den`} className="even:bg-slate-50/40">
-                  <TD className="text-slate-600">{cr.denominatorLabel}</TD>
+                  <TD className="text-slate-600">
+                    <input
+                      value={cr.denominatorLabel}
+                      onChange={(e) => onCustomRatioChange(cr.id, { denominatorLabel: e.target.value })}
+                      className="w-full text-[11px] text-slate-600 bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-primary px-0"
+                      placeholder="Denominator label…"
+                    />
+                  </TD>
                   <TD className="text-right font-mono tabular-nums">{formatIndian(cyDen)}</TD>
                 </tr>
                 {/* Commentary row */}

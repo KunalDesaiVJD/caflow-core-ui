@@ -22,15 +22,9 @@ import AuditStatusGrid         from "./audit-status/AuditStatusGrid";
 import type { PlanEntry }      from "./hooks/useAuditPlanning";
 import type { PlanSaveData }   from "./planning/PlanningEntryDialog";
 
-// Assessment Year → Financial Year  (e.g. "2027-28" → "2026-27")
-function ayToFy(ay: string): string {
-  const [start] = ay.split("-");
-  return `${Number(start) - 1}-${String(Number(start)).slice(-2)}`;
-}
+const DEFAULT_FY = "2025-26";
 
-const DEFAULT_AY = "2025-26";
-
-const ASSESSMENT_YEARS = ["2026-27", "2025-26", "2024-25", "2023-24", "2022-23"];
+const FINANCIAL_YEARS = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"];
 
 interface Props {
   firmId:       string;
@@ -52,9 +46,8 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
     addComm, updateComm, removeComm,
   } = useAuditPlanning(firmId, userId, isSuperadmin);
 
-  // ── Audit Status: AY selector ──────────────────────────────────────────────
-  const [selectedAY, setSelectedAY] = useState(DEFAULT_AY);
-  const selectedFY = ayToFy(selectedAY);
+  // ── Audit Status: FY selector ──────────────────────────────────────────────
+  const [selectedFY, setSelectedFY] = useState(DEFAULT_FY);
 
   // ── Audit Status client filter ─────────────────────────────────────────────
   const [selectedClientId,   setSelectedClientId]   = useState<string | null>(null);
@@ -118,23 +111,22 @@ export default function AuditTrackerLayout({ firmId, userId, isSuperadmin }: Pro
         {/* ── Tab 2: Audit Status ── */}
         <TabsContent value="status" className="mt-4 space-y-3">
 
-          {/* ── Filter bar: AY selector + client filter ── */}
+          {/* ── Filter bar: FY selector + client filter ── */}
           <div className="flex flex-wrap items-center gap-3">
 
-            {/* Assessment Year */}
+            {/* Financial Year */}
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Assessment Year</span>
-              <Select value={selectedAY} onValueChange={setSelectedAY}>
+              <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Financial Year</span>
+              <Select value={selectedFY} onValueChange={setSelectedFY}>
                 <SelectTrigger className="h-8 text-xs w-[110px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ASSESSMENT_YEARS.map(ay => (
-                    <SelectItem key={ay} value={ay} className="text-xs">AY {ay}</SelectItem>
+                  {FINANCIAL_YEARS.map(fy => (
+                    <SelectItem key={fy} value={fy} className="text-xs">FY {fy}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <span className="text-[11px] text-muted-foreground">→ FY {selectedFY}</span>
             </div>
 
             <div className="h-5 w-px bg-border" />

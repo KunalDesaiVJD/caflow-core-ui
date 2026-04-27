@@ -199,17 +199,12 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
       </div>
 
       {/* ── Two-tab shell ──────────────────────────────────────────────────── */}
-      {/* Tab order: [FORM 3CD]  [FORM 3CB / FORM 3CA]                        */}
+      {/* Tab order: [FORM 3CB / FORM 3CA]  [FORM 3CD]                        */}
       <Tabs defaultValue="form" className="w-full">
 
         <TabsList className="h-auto gap-1 mb-4">
 
-          {/* Tab 1 — Form 3CD */}
-          <TabsTrigger value="3cd" className="text-xs">
-            FORM 3CD
-          </TabsTrigger>
-
-          {/* Tab 2 — Form 3CB or 3CA (determined by engagement setup) */}
+          {/* Tab 1 — Form 3CB or 3CA (determined by engagement setup) */}
           <TabsTrigger value="form" className="text-xs gap-1.5">
             {formTabLabel}
             {!loading && formRequired === true && (
@@ -222,6 +217,11 @@ export default function Form3Reports({ engagementIdProp }: Props = {}) {
                 Optional
               </Badge>
             )}
+          </TabsTrigger>
+
+          {/* Tab 2 — Form 3CD */}
+          <TabsTrigger value="3cd" className="text-xs">
+            FORM 3CD
           </TabsTrigger>
 
         </TabsList>
