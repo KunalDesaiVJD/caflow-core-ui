@@ -219,15 +219,15 @@ export default function AuditPipeline() {
   // always matches the Audit Dashboard:
   //   1. clients.statutory_audit_applicable / clients.tax_audit_type  (ClientDetail direct saves)
   //   2. client_fy_audit_setup boolean flags  (wizard-based setup)
-  // SIMPLE RULE: show ALL active (non-draft, non-deleted) firm clients in the
-  // Create Engagement dropdown. Setup/service data is fetched only to pre-fill
-  // the Audit Type field — it no longer gates who appears in the list.
+  // Show clients where at least one audit type is enabled on their profile,
+  // OR where any client_fy_audit_setup row exists (catches clients whose
+  // setup was saved but whose individual flags may still be pending).
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // Fetch all non-deleted clients for this firm
+      // Fetch all non-deleted, non-draft clients for this firm
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, is_draft")
@@ -333,12 +333,22 @@ export default function AuditPipeline() {
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
             has_any_service:             !!serviceMap[c.id],
+            // true if ANY client_fy_audit_setup row exists for this client
             has_any_audit_setup:         !!setupMap[c.id],
           };
         })
-        // No eligibility gate — all active firm clients appear in the dropdown.
-        // Setup/service flags are kept only for pre-filling the Audit Type field.
-        .filter(c => Boolean((c.name as string)?.trim()));
+        .filter(c => {
+          if (!Boolean((c.name as string)?.trim())) return false;
+          // Show if at least one audit type is enabled on the client profile,
+          // OR if the client has any audit setup row (even with all flags false)
+          return (
+            c.statutory_audit_applicable ||
+            c.tax_audit_applicable       ||
+            c.internal_audit_applicable  ||
+            c.stock_audit_applicable     ||
+            (c as any).has_any_audit_setup
+          );
+        });
     },
     enabled: !!user?.id,
   });
