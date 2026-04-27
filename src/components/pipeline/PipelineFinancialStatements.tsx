@@ -2145,9 +2145,11 @@ export default function PipelineFinancialStatements({
       if (Math.abs(netPL) > 0.005) {
         // Credit net profit to Reserves (negative = credit in Tally sign convention)
         amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
-        // Re-run computeTotal on BS_EQ so the parent total picks up the change
-        const bsEqNode = (activeTree as FSLineItem[]).find(i => i.code === "BS_EQ");
-        if (bsEqNode) computeTotal(bsEqNode);
+        // Re-run the full tree so every parent (BS_EQ → BS root) picks up the change.
+        // Calling only computeTotal(bsEqNode) leaves the BS root total stale.
+        for (const item of (activeTree as FSLineItem[])) {
+          computeTotal(item);
+        }
       }
     }
 
