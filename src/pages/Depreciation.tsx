@@ -300,10 +300,16 @@ enabled: !!clientId && !!fy,
 });
 
 // ── Phase 2: Tally TB — PPE ledgers for tagging ───────────────────────────
+// Two sync paths write to different tables:
+//   • Web  sync (Stage 5 in-browser) → trial_balance_snapshots  (primary_group)
+//   • Node sync (desktop sync-step)  → tally_trial_balance      (parent_group)
+// Try the snapshot table first; fall back to tally_trial_balance so firms
+// that ran the desktop sync still see their FA ledgers in PPE Tagging.
 const { data: tbLedgers } = useQuery({
 queryKey: ['dep-tb-ledgers', engagement?.id],
 queryFn: async () => {
-  const { data } = await supabase
+  // ── Primary: trial_balance_snapshots ──────────────────────────────────
+  const { data: snapData } = await supabase
     .from('trial_balance_snapshots')
     .select('id, ledger_name, primary_group, account_type, closing_balance, hierarchy_level')
     .eq('engagement_id', engagement!.id)
@@ -315,7 +321,24 @@ queryFn: async () => {
     )
     .order('primary_group')
     .order('ledger_name');
-  return (data || []) as any[];
+  if (snapData && snapData.length > 0) return snapData as any[];
+
+  // ── Fallback: tally_trial_balance (desktop / node sync) ──────────────
+  const { data: ttbData } = await supabase
+    .from('tally_trial_balance')
+    .select('id, ledger_name, parent_group, closing_balance, balance_type')
+    .eq('engagement_id', engagement!.id)
+    .ilike('parent_group', '%Fixed Asset%')
+    .order('ledger_name');
+  // Normalise to the same shape the PPE Tagging UI expects
+  return ((ttbData || []) as any[]).map((r: any) => ({
+    id:              r.id,
+    ledger_name:     r.ledger_name,
+    primary_group:   r.parent_group,
+    account_type:    'Fixed Assets',
+    closing_balance: r.closing_balance,
+    hierarchy_level: null,
+  }));
 },
 enabled: !!engagement?.id,
 });
