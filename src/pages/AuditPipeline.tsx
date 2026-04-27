@@ -333,8 +333,10 @@ export default function AuditPipeline() {
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
-            // true for ANY client with at least one active service (Vatsal fix)
+            // true for ANY client with at least one active service
             has_any_service:             !!serviceMap[c.id],
+            // true for ANY client that has ANY audit setup row (even if all flags false)
+            has_any_audit_setup:         !!setupMap[c.id],
           };
         })
         .filter(c => {
@@ -344,7 +346,8 @@ export default function AuditPipeline() {
             c.internal_audit_applicable  || c.stock_audit_applicable ||
             c.has_statutory_service      || c.has_tax_audit_service  ||
             c.has_internal_audit_service ||
-            (c as any).has_any_service;  // any active service → show in dropdown
+            (c as any).has_any_service   ||
+            (c as any).has_any_audit_setup; // any audit setup row → show in dropdown
           if (!hasAuditFlag) return false;
           // Draft clients: only show if they have Audit classification and a name
           // (wizard-created clients that saved audit setup but haven't fully activated yet)
