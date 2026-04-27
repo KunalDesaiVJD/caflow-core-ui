@@ -134,6 +134,9 @@ const [editAsset, setEditAsset] = useState<any>(null);
 const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 const [scheduleView, setScheduleView] = useState<'asset'|'category'>('asset');
 
+// Reconciliation mode toggle: 'gross' = Gross Block vs TB, 'net' = WDV/Net Block vs TB
+const [recoMode, setRecoMode] = useState<'gross' | 'net'>('gross');
+
 // Carry forward & unlock state
 const [showCarryForward, setShowCarryForward] = useState(false);
 const [carryingForward, setCarryingForward] = useState(false);
@@ -1949,13 +1952,29 @@ return (
         <div>
           <CardTitle className='text-base flex items-center gap-2'><ArrowUpDown size={15}/>3-Way Reconciliation — {fy}</CardTitle>
           <CardDescription className='text-xs'>
-            Compares Depreciation Register (WDV) · Tally TB (PPE ledgers) · Note 11 (Financial Statements) per category.
-            Tag ledgers in the PPE Tagging tab and push to Note 11 in Block-wise Summary first.
+            {recoMode === 'gross'
+              ? 'Gross Block mode: Register Gross Block vs Tally TB (both gross — should match). Tag PPE ledgers and push to Note 11 first.'
+              : 'Net Block (WDV) mode: Register WDV vs Tally TB (gross) — difference = Acc. Dep. Tag PPE ledgers and push to Note 11 first.'}
           </CardDescription>
         </div>
-        <Button variant='outline' size='sm' className='gap-1 shrink-0' onClick={() => { refetchNote11(); qc.invalidateQueries({ queryKey: ['dep-tb-ledgers', engagement?.id] }); }}>
-          <RefreshCw size={12}/>Refresh
-        </Button>
+        <div className='flex items-center gap-2 shrink-0'>
+          {/* Reco mode toggle */}
+          <div className='flex rounded-md border overflow-hidden text-xs font-medium'>
+            <button
+              onClick={() => setRecoMode('gross')}
+              className={cn('px-3 py-1.5 transition-colors',
+                recoMode === 'gross' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted')}
+            >Gross Block</button>
+            <button
+              onClick={() => setRecoMode('net')}
+              className={cn('px-3 py-1.5 border-l transition-colors',
+                recoMode === 'net' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted')}
+            >Net Block (WDV)</button>
+          </div>
+          <Button variant='outline' size='sm' className='gap-1' onClick={() => { refetchNote11(); qc.invalidateQueries({ queryKey: ['dep-tb-ledgers', engagement?.id] }); }}>
+            <RefreshCw size={12}/>Refresh
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className='p-0'>
         {(() => {
@@ -1967,9 +1986,11 @@ return (
             note11Wdv: number | null;// Note 11 closing balance
           }[] = [];
 
-          // Map category name → register WDV from summary
+          // Map category name → register value from summary (Gross or Net depending on mode)
           for (const s of (summary || [])) {
-            const regWdv = Math.round(s.net_block * 100) / 100;
+            const regWdv = recoMode === 'gross'
+              ? Math.round(s.gross_block_closing * 100) / 100
+              : Math.round(s.net_block * 100) / 100;
 
             // TB: sum closing_balance of all ledgers tagged to this category
             const taggedLedgerIds = Object.entries(ppeTags)
@@ -2017,8 +2038,10 @@ return (
               <Table>
                 <TableHeader><TableRow className='bg-muted/50 text-xs'>
                   <TableHead>Category</TableHead>
-                  <TableHead className='text-right'>Register WDV (A)</TableHead>
-                  <TableHead className='text-right'>Tally TB (B)</TableHead>
+                  <TableHead className='text-right'>
+                    {recoMode === 'gross' ? 'Register Gross Block (A)' : 'Register WDV (A)'}
+                  </TableHead>
+                  <TableHead className='text-right'>Tally TB Gross (B)</TableHead>
                   <TableHead className='text-right'>A–B Diff</TableHead>
                   <TableHead className='text-right'>Note 11 WDV (C)</TableHead>
                   <TableHead className='text-right'>A–C Diff</TableHead>
@@ -2096,8 +2119,11 @@ return (
                 </TableBody>
               </Table>
               <div className='px-4 py-2 text-xs text-muted-foreground border-t'>
-                <strong>Check A</strong> = Register WDV vs Tally TB balance (requires PPE ledger tags). &nbsp;
-                <strong>Check B</strong> = Register WDV vs Note 11 WDV (requires pushing to Note 11 first).
+                {recoMode === 'gross'
+                  ? <><strong>Check A</strong> = Register Gross Block vs Tally TB Gross (both gross — should be ~0). &nbsp;
+                    <strong>Check B</strong> = Register Gross Block vs Note 11 WDV (expects difference = Acc. Dep.).</>
+                  : <><strong>Check A</strong> = Register WDV vs Tally TB balance (requires PPE ledger tags). &nbsp;
+                    <strong>Check B</strong> = Register WDV vs Note 11 WDV (requires pushing to Note 11 first).</>}
               </div>
             </>
           );
