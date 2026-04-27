@@ -60,6 +60,7 @@ interface Props {
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
   onNavigate?: (section: string, filters?: Record<string, string>) => void;
+  refreshKey?: number;
 }
 
 const CURRENT_FY_START = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
@@ -119,7 +120,7 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
 
 const AY_OPTIONS = Array.from({ length: 8 }, (_, i) => { const s = 2023 + i; return `${s}-${String(s + 1).slice(2)}`; });
 
-export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate }: Props) {
+export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNavigate, refreshKey }: Props) {
   const { toast } = useToast();
   const smartDefault = useMemo(() => getSmartDefaultQuarter(), []);
 
@@ -133,6 +134,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   const [fyFilter, setFyFilter] = useState(smartDefault.fy);
   const [quarterFilter, setQuarterFilter] = useState(smartDefault.quarter);
   const [clientFilter, setClientFilter] = useState("all");
+  const [clientFilterSearch, setClientFilterSearch] = useState("");
 
   // Rate Master state (embedded)
   const [rateAY, setRateAY] = useState("2026-27");
@@ -186,7 +188,8 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     setLoading(false);
   }, [resolveFirmId, isSuperadmin, fyFilter, clientFilter, rateAY, rateFormTab]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  // Re-fetch when refreshKey changes (e.g. user returns from TDS Workspace to Dashboard)
+  useEffect(() => { fetchAll(); }, [fetchAll, refreshKey]);
 
   const today = new Date();
 
@@ -426,11 +429,22 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
           </div>
           <div className="space-y-0.5">
             <Label className="text-[10px]">Client</Label>
-            <Select value={clientFilter} onValueChange={setClientFilter}>
+            <Select value={clientFilter} onValueChange={v => { setClientFilter(v); setClientFilterSearch(""); }}>
               <SelectTrigger className="w-[180px] h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
+                <div className="px-2 pb-1 pt-1 sticky top-0 bg-popover z-10">
+                  <Input
+                    placeholder="Search…"
+                    value={clientFilterSearch}
+                    onChange={e => setClientFilterSearch(e.target.value)}
+                    onKeyDown={e => e.stopPropagation()}
+                    className="h-6 text-xs"
+                  />
+                </div>
                 <SelectItem value="all">All Clients</SelectItem>
-                {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                {clients
+                  .filter(c => !clientFilterSearch || (c.name || "").toLowerCase().includes(clientFilterSearch.toLowerCase()))
+                  .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

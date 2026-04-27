@@ -2686,27 +2686,19 @@ export default function PipelineFinancialStatements({
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
 
       // ── Find FY-1 engagement ─────────────────────────────────────────────
-      // Prefer is_py_shell=true (created by sync-py.js / auto-created during sync)
+      // Prefer is_py_shell=true (PY shell from sync-py.js), fall back to any
+      // FY-1 engagement. Use order(created_at desc) so a PY shell (created
+      // more recently) wins over an older regular engagement when both exist.
       let pyEngId: string | null = null;
-      const { data: shellEng } = await (supabase.from as any)("audit_engagements")
+      const { data: pyEngRow } = await supabase
+        .from("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
-        .eq("is_py_shell", true)
+        .order("created_at" as any, { ascending: false })
+        .limit(1)
         .maybeSingle();
-      if ((shellEng as any)?.id) {
-        pyEngId = (shellEng as any).id;
-      } else {
-        // Fallback: any regular FY-1 engagement (for clients that ran setup before PY shell redesign)
-        const { data: prevEng } = await supabase
-          .from("audit_engagements")
-          .select("id")
-          .eq("client_id", engagement.client_id)
-          .eq("financial_year", prevFy)
-          .is("deleted_at" as any, null)
-          .maybeSingle();
-        pyEngId = (prevEng as any)?.id ?? null;
-      }
+      pyEngId = (pyEngRow as any)?.id ?? null;
 
       // ── Paginated TB fetcher ─────────────────────────────────────────────
       async function fetchEngTB(engId: string): Promise<any[]> {
@@ -5033,9 +5025,9 @@ export default function PipelineFinancialStatements({
                 <div className="flex items-center gap-2 text-xs text-blue-800 dark:text-blue-300">
                   <Database className="h-3.5 w-3.5 shrink-0" />
                   <span>
-                    {noPriorEngagement
+                    {priorEngagement === null
                       ? <><strong>PY not yet synced.</strong> Run sync-py.bat for FY {pyYear - 1}-{String(pyYear).slice(-2)}, then click Fetch.</>
-                      : <>Prior year Tally data is available. Click <strong>Fetch PY from FY-1 Tally</strong> to auto-populate PY comparative figures.</>
+                      : <>Prior year Tally data available. Click <strong>Fetch PY from FY-1 Tally</strong> to auto-populate PY comparative figures.</>
                     }
                   </span>
                 </div>
@@ -5044,7 +5036,7 @@ export default function PipelineFinancialStatements({
                   variant="outline"
                   className="h-7 text-xs gap-1.5 border-blue-400 text-blue-700 hover:bg-blue-100 dark:border-blue-600 dark:text-blue-300 shrink-0 ml-3"
                   onClick={fetchPyPLFromTally}
-                  disabled={fetchingPyTally || noPriorEngagement}
+                  disabled={fetchingPyTally || priorEngagement === null}
                 >
                   {fetchingPyTally
                     ? <><span className="animate-spin inline-block">↻</span> Fetching…</>

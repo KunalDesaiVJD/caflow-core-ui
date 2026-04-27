@@ -259,6 +259,7 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const { toast } = useToast();
 
   const [selClient, setSelClient] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
   const [selFy, setSelFy] = useState(DEFAULT_FY);
   const [selQuarter, setSelQuarter] = useState(getCurrentQuarter());
   const [selForm, setSelForm] = useState("26Q");
@@ -1186,9 +1187,26 @@ export function TdsDataEntry({ clients, users, isSuperadmin, resolveFirmId }: Pr
         <div className="flex flex-wrap gap-3 items-end">
           <div className="space-y-1">
             <Label className="text-xs">Client</Label>
-            <Select value={selClient} onValueChange={setSelClient}>
+            <Select value={selClient} onValueChange={v => { setSelClient(v); setClientSearch(""); }}>
               <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-              <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                <div className="px-2 pb-1 pt-1 sticky top-0 bg-popover z-10">
+                  <Input
+                    placeholder="Search client…"
+                    value={clientSearch}
+                    onChange={e => setClientSearch(e.target.value)}
+                    onKeyDown={e => e.stopPropagation()}
+                    className="h-7 text-xs"
+                  />
+                </div>
+                {clients
+                  .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase()))
+                  .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)
+                }
+                {clients.filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
+                  <div className="py-4 text-center text-xs text-muted-foreground">No clients found</div>
+                )}
+              </SelectContent>
             </Select>
           </div>
           <div className="space-y-1">

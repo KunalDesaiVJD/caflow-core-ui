@@ -1,3 +1,4 @@
+Initialising login role...
 export type Json =
   | string
   | number
@@ -11,6 +12,31 @@ export type Database = {
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "14.4"
+  }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
@@ -334,6 +360,60 @@ export type Database = {
           },
         ]
       }
+      audit_communication: {
+        Row: {
+          audit_planned_from: string | null
+          audit_planned_to: string | null
+          client_name: string | null
+          contact_no: string | null
+          contact_person: string | null
+          created_at: string | null
+          firm_id: string | null
+          id: string
+          planning_id: string | null
+          remarks: string | null
+        }
+        Insert: {
+          audit_planned_from?: string | null
+          audit_planned_to?: string | null
+          client_name?: string | null
+          contact_no?: string | null
+          contact_person?: string | null
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          planning_id?: string | null
+          remarks?: string | null
+        }
+        Update: {
+          audit_planned_from?: string | null
+          audit_planned_to?: string | null
+          client_name?: string | null
+          contact_no?: string | null
+          contact_person?: string | null
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          planning_id?: string | null
+          remarks?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_communication_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_communication_planning_id_fkey"
+            columns: ["planning_id"]
+            isOneToOne: false
+            referencedRelation: "audit_planning"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_engagements: {
         Row: {
           active_tabs: Json | null
@@ -344,17 +424,32 @@ export type Database = {
           bundle_url: string | null
           caro_applicable: boolean | null
           caro_responses: Json | null
+          cash_flow_applicable: boolean | null
           cash_flow_method: string | null
           client_id: string | null
           coa_mapping: Json | null
           entity_type: string | null
           entity_type_logic: string | null
           final_locked: boolean | null
+          finalized_at: string | null
+          finalized_by: string | null
           financial_year: string | null
           firm_id: string | null
+          form_3ca_act_other_text: string | null
+          form_3ca_applicable_act: string | null
+          form_3ca_paragraphs: Json | null
+          form_3ca_report_date: string | null
+          form_3ca_signature_date: string | null
+          form_3ca_udin: string | null
+          form_3cb_paragraphs: Json | null
+          form_3cb_signature_date: string | null
+          form_3cb_udin: string | null
           form_3cd: Json | null
           fs_preparation_mode: string | null
           id: string
+          ifc_applicable: boolean | null
+          is_finalized: boolean
+          is_py_shell: boolean
           manager_id: string | null
           materiality: Json | null
           notes_finalized: boolean | null
@@ -362,11 +457,18 @@ export type Database = {
           notes_to_accounts: Json | null
           parent_engagement_id: string | null
           partner_id: string | null
+          partner_name: string | null
           period_label: string | null
           pipeline_stage: number | null
           planned_end: string | null
           planned_start: string | null
           preliminary_complete: boolean | null
+          prior_year_tb_imported_at: string | null
+          prior_year_tb_snapshot: Json | null
+          py_manual_amounts: Json
+          py_manual_annexures: Json
+          py_setup_completed: boolean
+          py_source: string | null
           questionnaire_answers: Json | null
           re_evaluate_scrutiny: boolean | null
           requires_3ca: boolean | null
@@ -382,7 +484,11 @@ export type Database = {
           signed_at: string | null
           signed_by: string | null
           stage_statuses: Json | null
+          stage5_notes: Json | null
+          stage7_ratios: Json | null
+          stage8_nta_data: Json | null
           status: string | null
+          tb_node_overrides: Json | null
           team_members: string[] | null
           udin: string | null
         }
@@ -395,17 +501,32 @@ export type Database = {
           bundle_url?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
+          cash_flow_applicable?: boolean | null
           cash_flow_method?: string | null
           client_id?: string | null
           coa_mapping?: Json | null
           entity_type?: string | null
           entity_type_logic?: string | null
           final_locked?: boolean | null
+          finalized_at?: string | null
+          finalized_by?: string | null
           financial_year?: string | null
           firm_id?: string | null
+          form_3ca_act_other_text?: string | null
+          form_3ca_applicable_act?: string | null
+          form_3ca_paragraphs?: Json | null
+          form_3ca_report_date?: string | null
+          form_3ca_signature_date?: string | null
+          form_3ca_udin?: string | null
+          form_3cb_paragraphs?: Json | null
+          form_3cb_signature_date?: string | null
+          form_3cb_udin?: string | null
           form_3cd?: Json | null
           fs_preparation_mode?: string | null
           id?: string
+          ifc_applicable?: boolean | null
+          is_finalized?: boolean
+          is_py_shell?: boolean
           manager_id?: string | null
           materiality?: Json | null
           notes_finalized?: boolean | null
@@ -413,11 +534,18 @@ export type Database = {
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
+          partner_name?: string | null
           period_label?: string | null
           pipeline_stage?: number | null
           planned_end?: string | null
           planned_start?: string | null
           preliminary_complete?: boolean | null
+          prior_year_tb_imported_at?: string | null
+          prior_year_tb_snapshot?: Json | null
+          py_manual_amounts?: Json
+          py_manual_annexures?: Json
+          py_setup_completed?: boolean
+          py_source?: string | null
           questionnaire_answers?: Json | null
           re_evaluate_scrutiny?: boolean | null
           requires_3ca?: boolean | null
@@ -433,7 +561,11 @@ export type Database = {
           signed_at?: string | null
           signed_by?: string | null
           stage_statuses?: Json | null
+          stage5_notes?: Json | null
+          stage7_ratios?: Json | null
+          stage8_nta_data?: Json | null
           status?: string | null
+          tb_node_overrides?: Json | null
           team_members?: string[] | null
           udin?: string | null
         }
@@ -446,17 +578,32 @@ export type Database = {
           bundle_url?: string | null
           caro_applicable?: boolean | null
           caro_responses?: Json | null
+          cash_flow_applicable?: boolean | null
           cash_flow_method?: string | null
           client_id?: string | null
           coa_mapping?: Json | null
           entity_type?: string | null
           entity_type_logic?: string | null
           final_locked?: boolean | null
+          finalized_at?: string | null
+          finalized_by?: string | null
           financial_year?: string | null
           firm_id?: string | null
+          form_3ca_act_other_text?: string | null
+          form_3ca_applicable_act?: string | null
+          form_3ca_paragraphs?: Json | null
+          form_3ca_report_date?: string | null
+          form_3ca_signature_date?: string | null
+          form_3ca_udin?: string | null
+          form_3cb_paragraphs?: Json | null
+          form_3cb_signature_date?: string | null
+          form_3cb_udin?: string | null
           form_3cd?: Json | null
           fs_preparation_mode?: string | null
           id?: string
+          ifc_applicable?: boolean | null
+          is_finalized?: boolean
+          is_py_shell?: boolean
           manager_id?: string | null
           materiality?: Json | null
           notes_finalized?: boolean | null
@@ -464,11 +611,18 @@ export type Database = {
           notes_to_accounts?: Json | null
           parent_engagement_id?: string | null
           partner_id?: string | null
+          partner_name?: string | null
           period_label?: string | null
           pipeline_stage?: number | null
           planned_end?: string | null
           planned_start?: string | null
           preliminary_complete?: boolean | null
+          prior_year_tb_imported_at?: string | null
+          prior_year_tb_snapshot?: Json | null
+          py_manual_amounts?: Json
+          py_manual_annexures?: Json
+          py_setup_completed?: boolean
+          py_source?: string | null
           questionnaire_answers?: Json | null
           re_evaluate_scrutiny?: boolean | null
           requires_3ca?: boolean | null
@@ -484,7 +638,11 @@ export type Database = {
           signed_at?: string | null
           signed_by?: string | null
           stage_statuses?: Json | null
+          stage5_notes?: Json | null
+          stage7_ratios?: Json | null
+          stage8_nta_data?: Json | null
           status?: string | null
+          tb_node_overrides?: Json | null
           team_members?: string[] | null
           udin?: string | null
         }
@@ -735,6 +893,67 @@ export type Database = {
           },
         ]
       }
+      audit_planning: {
+        Row: {
+          client_id: string | null
+          client_name: string | null
+          created_at: string | null
+          created_by: string | null
+          employee_ids: string[] | null
+          employee_names: string[] | null
+          firm_id: string | null
+          id: string
+          planned_from: string
+          planned_to: string
+        }
+        Insert: {
+          client_id?: string | null
+          client_name?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          employee_ids?: string[] | null
+          employee_names?: string[] | null
+          firm_id?: string | null
+          id?: string
+          planned_from: string
+          planned_to: string
+        }
+        Update: {
+          client_id?: string | null
+          client_name?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          employee_ids?: string[] | null
+          employee_names?: string[] | null
+          firm_id?: string | null
+          id?: string
+          planned_from?: string
+          planned_to?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_planning_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_planning_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_planning_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_preliminary_answers: {
         Row: {
           activated_tabs: Json | null
@@ -857,6 +1076,112 @@ export type Database = {
           },
         ]
       }
+      audit_status: {
+        Row: {
+          accounting_data: string | null
+          audit_employees: string | null
+          audit_report_prepared_by: string | null
+          audit_status: string | null
+          audit_status_other: string | null
+          checked_by: string | null
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm: string | null
+          firm_id: string | null
+          id: string
+          partner: string | null
+          party_name: string | null
+          physical_audit_conducted: string | null
+          physical_report_received_date: string | null
+          prepared_by: string | null
+          remarks: string | null
+          report_print_date: string | null
+          scanned: string | null
+          udin_date: string | null
+          udin_statutory_audit: string | null
+          udin_tax_audit: string | null
+          uploaded_by: string | null
+        }
+        Insert: {
+          accounting_data?: string | null
+          audit_employees?: string | null
+          audit_report_prepared_by?: string | null
+          audit_status?: string | null
+          audit_status_other?: string | null
+          checked_by?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm?: string | null
+          firm_id?: string | null
+          id?: string
+          partner?: string | null
+          party_name?: string | null
+          physical_audit_conducted?: string | null
+          physical_report_received_date?: string | null
+          prepared_by?: string | null
+          remarks?: string | null
+          report_print_date?: string | null
+          scanned?: string | null
+          udin_date?: string | null
+          udin_statutory_audit?: string | null
+          udin_tax_audit?: string | null
+          uploaded_by?: string | null
+        }
+        Update: {
+          accounting_data?: string | null
+          audit_employees?: string | null
+          audit_report_prepared_by?: string | null
+          audit_status?: string | null
+          audit_status_other?: string | null
+          checked_by?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm?: string | null
+          firm_id?: string | null
+          id?: string
+          partner?: string | null
+          party_name?: string | null
+          physical_audit_conducted?: string | null
+          physical_report_received_date?: string | null
+          prepared_by?: string | null
+          remarks?: string | null
+          report_print_date?: string | null
+          scanned?: string | null
+          udin_date?: string | null
+          udin_statutory_audit?: string | null
+          udin_tax_audit?: string | null
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_status_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_status_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_status_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_workpapers: {
         Row: {
           conclusion: string | null
@@ -894,6 +1219,329 @@ export type Database = {
             columns: ["engagement_id"]
             isOneToOne: false
             referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_worksheet_history: {
+        Row: {
+          changed_at: string
+          changed_by: string | null
+          changed_by_name: string | null
+          engagement_id: string
+          field_name: string | null
+          id: string
+          new_value: string | null
+          old_value: string | null
+          page_label: string | null
+          section_name: string
+        }
+        Insert: {
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          engagement_id: string
+          field_name?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          page_label?: string | null
+          section_name: string
+        }
+        Update: {
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          engagement_id?: string
+          field_name?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          page_label?: string | null
+          section_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_worksheet_history_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_worksheet_history_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_worksheet_items: {
+        Row: {
+          assigned_name: string | null
+          assigned_to: string | null
+          completed_at: string | null
+          created_at: string | null
+          due_date: string | null
+          engagement_id: string
+          firm_id: string | null
+          id: string
+          is_done: boolean | null
+          particulars: string | null
+          priority: string | null
+          remarks: string | null
+          sheet_type: string
+          sr_no: number | null
+          status: string | null
+          updated_at: string | null
+          work_done: string | null
+        }
+        Insert: {
+          assigned_name?: string | null
+          assigned_to?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          engagement_id: string
+          firm_id?: string | null
+          id?: string
+          is_done?: boolean | null
+          particulars?: string | null
+          priority?: string | null
+          remarks?: string | null
+          sheet_type: string
+          sr_no?: number | null
+          status?: string | null
+          updated_at?: string | null
+          work_done?: string | null
+        }
+        Update: {
+          assigned_name?: string | null
+          assigned_to?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          due_date?: string | null
+          engagement_id?: string
+          firm_id?: string | null
+          id?: string
+          is_done?: boolean | null
+          particulars?: string | null
+          priority?: string | null
+          remarks?: string | null
+          sheet_type?: string
+          sr_no?: number | null
+          status?: string | null
+          updated_at?: string | null
+          work_done?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_worksheet_items_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_worksheet_items_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_worksheet_items_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit_worksheet_master: {
+        Row: {
+          checklist_sheet_json: Json | null
+          created_at: string | null
+          engagement_id: string
+          firm_id: string | null
+          id: string
+          int_address: string | null
+          int_audit_firm: string | null
+          int_client_name: string | null
+          int_entity_type: string | null
+          int_financial_year: string | null
+          int_master_json: Json | null
+          int_methodology: string | null
+          int_objectives: string | null
+          int_pan: string | null
+          int_partner_name: string | null
+          int_period_from: string | null
+          int_period_label: string | null
+          int_period_to: string | null
+          int_scope: string | null
+          int_team_members: string | null
+          queries_notes: string | null
+          queries_verified: boolean | null
+          queries_verified_at: string | null
+          queries_verified_by: string | null
+          query_sheet_json: Json | null
+          special_attention_json: Json | null
+          statutory_master_json: Json | null
+          tax_accounting_method: string | null
+          tax_address: string | null
+          tax_auditor_address: string | null
+          tax_auditor_firm: string | null
+          tax_cin: string | null
+          tax_client_name: string | null
+          tax_entity_type: string | null
+          tax_financial_year: string | null
+          tax_form_type: string | null
+          tax_gstin: string | null
+          tax_icai_reg: string | null
+          tax_master_json: Json | null
+          tax_pan: string | null
+          tax_partner_icai: string | null
+          tax_partner_name: string | null
+          tax_period_from: string | null
+          tax_period_to: string | null
+          tax_prev_year_from: string | null
+          tax_prev_year_to: string | null
+          tax_remarks: string | null
+          tax_section: string | null
+          tax_turnover: number | null
+          tax_udin: string | null
+          updated_at: string | null
+          worksheet_json: Json | null
+        }
+        Insert: {
+          checklist_sheet_json?: Json | null
+          created_at?: string | null
+          engagement_id: string
+          firm_id?: string | null
+          id?: string
+          int_address?: string | null
+          int_audit_firm?: string | null
+          int_client_name?: string | null
+          int_entity_type?: string | null
+          int_financial_year?: string | null
+          int_master_json?: Json | null
+          int_methodology?: string | null
+          int_objectives?: string | null
+          int_pan?: string | null
+          int_partner_name?: string | null
+          int_period_from?: string | null
+          int_period_label?: string | null
+          int_period_to?: string | null
+          int_scope?: string | null
+          int_team_members?: string | null
+          queries_notes?: string | null
+          queries_verified?: boolean | null
+          queries_verified_at?: string | null
+          queries_verified_by?: string | null
+          query_sheet_json?: Json | null
+          special_attention_json?: Json | null
+          statutory_master_json?: Json | null
+          tax_accounting_method?: string | null
+          tax_address?: string | null
+          tax_auditor_address?: string | null
+          tax_auditor_firm?: string | null
+          tax_cin?: string | null
+          tax_client_name?: string | null
+          tax_entity_type?: string | null
+          tax_financial_year?: string | null
+          tax_form_type?: string | null
+          tax_gstin?: string | null
+          tax_icai_reg?: string | null
+          tax_master_json?: Json | null
+          tax_pan?: string | null
+          tax_partner_icai?: string | null
+          tax_partner_name?: string | null
+          tax_period_from?: string | null
+          tax_period_to?: string | null
+          tax_prev_year_from?: string | null
+          tax_prev_year_to?: string | null
+          tax_remarks?: string | null
+          tax_section?: string | null
+          tax_turnover?: number | null
+          tax_udin?: string | null
+          updated_at?: string | null
+          worksheet_json?: Json | null
+        }
+        Update: {
+          checklist_sheet_json?: Json | null
+          created_at?: string | null
+          engagement_id?: string
+          firm_id?: string | null
+          id?: string
+          int_address?: string | null
+          int_audit_firm?: string | null
+          int_client_name?: string | null
+          int_entity_type?: string | null
+          int_financial_year?: string | null
+          int_master_json?: Json | null
+          int_methodology?: string | null
+          int_objectives?: string | null
+          int_pan?: string | null
+          int_partner_name?: string | null
+          int_period_from?: string | null
+          int_period_label?: string | null
+          int_period_to?: string | null
+          int_scope?: string | null
+          int_team_members?: string | null
+          queries_notes?: string | null
+          queries_verified?: boolean | null
+          queries_verified_at?: string | null
+          queries_verified_by?: string | null
+          query_sheet_json?: Json | null
+          special_attention_json?: Json | null
+          statutory_master_json?: Json | null
+          tax_accounting_method?: string | null
+          tax_address?: string | null
+          tax_auditor_address?: string | null
+          tax_auditor_firm?: string | null
+          tax_cin?: string | null
+          tax_client_name?: string | null
+          tax_entity_type?: string | null
+          tax_financial_year?: string | null
+          tax_form_type?: string | null
+          tax_gstin?: string | null
+          tax_icai_reg?: string | null
+          tax_master_json?: Json | null
+          tax_pan?: string | null
+          tax_partner_icai?: string | null
+          tax_partner_name?: string | null
+          tax_period_from?: string | null
+          tax_period_to?: string | null
+          tax_prev_year_from?: string | null
+          tax_prev_year_to?: string | null
+          tax_remarks?: string | null
+          tax_section?: string | null
+          tax_turnover?: number | null
+          tax_udin?: string | null
+          updated_at?: string | null
+          worksheet_json?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_worksheet_master_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_worksheet_master_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_worksheet_master_queries_verified_by_fkey"
+            columns: ["queries_verified_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -1015,6 +1663,84 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_reminder_rules: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          day_of_month: number | null
+          filter_groups: Json | null
+          filter_status: string | null
+          firm_id: string | null
+          frequency: string | null
+          id: string
+          is_active: boolean | null
+          last_run_at: string | null
+          name: string
+          rule_type: string
+          send_to_client: boolean | null
+          send_to_responsible: boolean | null
+          template_type: string | null
+          trigger_days: number | null
+          trigger_direction: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          day_of_month?: number | null
+          filter_groups?: Json | null
+          filter_status?: string | null
+          firm_id?: string | null
+          frequency?: string | null
+          id?: string
+          is_active?: boolean | null
+          last_run_at?: string | null
+          name: string
+          rule_type?: string
+          send_to_client?: boolean | null
+          send_to_responsible?: boolean | null
+          template_type?: string | null
+          trigger_days?: number | null
+          trigger_direction?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          day_of_month?: number | null
+          filter_groups?: Json | null
+          filter_status?: string | null
+          firm_id?: string | null
+          frequency?: string | null
+          id?: string
+          is_active?: boolean | null
+          last_run_at?: string | null
+          name?: string
+          rule_type?: string
+          send_to_client?: boolean | null
+          send_to_responsible?: boolean | null
+          template_type?: string | null
+          trigger_days?: number | null
+          trigger_direction?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_reminder_rules_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_reminder_rules_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
             referencedColumns: ["id"]
           },
         ]
@@ -1417,6 +2143,56 @@ export type Database = {
           },
         ]
       }
+      client_classification_history: {
+        Row: {
+          changed_at: string | null
+          changed_by: string | null
+          client_id: string
+          effective_from_fy: string
+          id: string
+          new_classification: string
+          notes: string | null
+          old_classification: string | null
+          previous_classification: string | null
+          responsible_person: string | null
+          responsible_person_id: string | null
+        }
+        Insert: {
+          changed_at?: string | null
+          changed_by?: string | null
+          client_id: string
+          effective_from_fy: string
+          id?: string
+          new_classification: string
+          notes?: string | null
+          old_classification?: string | null
+          previous_classification?: string | null
+          responsible_person?: string | null
+          responsible_person_id?: string | null
+        }
+        Update: {
+          changed_at?: string | null
+          changed_by?: string | null
+          client_id?: string
+          effective_from_fy?: string
+          id?: string
+          new_classification?: string
+          notes?: string | null
+          old_classification?: string | null
+          previous_classification?: string | null
+          responsible_person?: string | null
+          responsible_person_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_classification_history_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_fy_audit_setup: {
         Row: {
           audit_billing_amount: number | null
@@ -1474,7 +2250,9 @@ export type Database = {
           client_id: string
           created_at: string | null
           financial_year: string
+          firm_id: string | null
           id: string
+          responsible_person_id: string | null
           updated_at: string | null
         }
         Insert: {
@@ -1483,7 +2261,9 @@ export type Database = {
           client_id: string
           created_at?: string | null
           financial_year: string
+          firm_id?: string | null
           id?: string
+          responsible_person_id?: string | null
           updated_at?: string | null
         }
         Update: {
@@ -1492,7 +2272,9 @@ export type Database = {
           client_id?: string
           created_at?: string | null
           financial_year?: string
+          firm_id?: string | null
           id?: string
+          responsible_person_id?: string | null
           updated_at?: string | null
         }
         Relationships: [
@@ -1508,6 +2290,13 @@ export type Database = {
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_fy_classifications_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
             referencedColumns: ["id"]
           },
         ]
@@ -1831,9 +2620,12 @@ export type Database = {
           business_activity: string | null
           caro_applicable: boolean | null
           cin: string | null
+          classification: string | null
           client_classification: Json | null
           compliance_flags: Json | null
+          contact_person: string | null
           created_at: string | null
+          customer_id: string | null
           date_of_incorporation: string | null
           deleted_at: string | null
           dsc_expiry_date: string | null
@@ -1842,6 +2634,8 @@ export type Database = {
           entity_type: string | null
           firm_id: string | null
           gstin: string[] | null
+          gstin_addresses: Json
+          gstin_states: Json
           id: string
           internal_audit_applicable: boolean | null
           is_active: boolean | null
@@ -1852,14 +2646,14 @@ export type Database = {
           registered_office: string | null
           registered_state: string | null
           responsible_person_id: string | null
+          source: string
           statutory_audit_applicable: boolean | null
           stock_audit_applicable: boolean | null
+          tally_company_name: string | null
           tan_number: string | null
           tax_audit_type: string | null
           user_id: string | null
           work_group_type: string | null
-          /** GAP-7: origin tracking — 'manual' | 'import'. Requires migration: ALTER TABLE clients ADD COLUMN source text DEFAULT 'manual'; */
-          source: string | null
         }
         Insert: {
           address?: string | null
@@ -1868,9 +2662,12 @@ export type Database = {
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
+          classification?: string | null
           client_classification?: Json | null
           compliance_flags?: Json | null
+          contact_person?: string | null
           created_at?: string | null
+          customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
           dsc_expiry_date?: string | null
@@ -1879,6 +2676,8 @@ export type Database = {
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
+          gstin_addresses?: Json
+          gstin_states?: Json
           id?: string
           internal_audit_applicable?: boolean | null
           is_active?: boolean | null
@@ -1889,13 +2688,14 @@ export type Database = {
           registered_office?: string | null
           registered_state?: string | null
           responsible_person_id?: string | null
+          source?: string
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
+          tally_company_name?: string | null
           tan_number?: string | null
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null
-          source?: string | null
         }
         Update: {
           address?: string | null
@@ -1904,9 +2704,12 @@ export type Database = {
           business_activity?: string | null
           caro_applicable?: boolean | null
           cin?: string | null
+          classification?: string | null
           client_classification?: Json | null
           compliance_flags?: Json | null
+          contact_person?: string | null
           created_at?: string | null
+          customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
           dsc_expiry_date?: string | null
@@ -1915,6 +2718,8 @@ export type Database = {
           entity_type?: string | null
           firm_id?: string | null
           gstin?: string[] | null
+          gstin_addresses?: Json
+          gstin_states?: Json
           id?: string
           internal_audit_applicable?: boolean | null
           is_active?: boolean | null
@@ -1925,13 +2730,14 @@ export type Database = {
           registered_office?: string | null
           registered_state?: string | null
           responsible_person_id?: string | null
+          source?: string
           statutory_audit_applicable?: boolean | null
           stock_audit_applicable?: boolean | null
+          tally_company_name?: string | null
           tan_number?: string | null
           tax_audit_type?: string | null
           user_id?: string | null
           work_group_type?: string | null
-          source?: string | null
         }
         Relationships: [
           {
@@ -1957,32 +2763,207 @@ export type Database = {
           },
         ]
       }
-      coa_mappings: {
+      coa_mapping_intelligence: {
         Row: {
           account_group: string | null
+          account_head: string
+          alternatives: Json
           bs_pl: string | null
-          firm_id: string | null
+          client_id: string | null
+          confidence_score: number
+          created_at: string
+          entity_type: string
+          firms_affected: number
           id: string
-          raw_ledger_name: string | null
-          standard_head: string | null
+          is_party_name: boolean
+          last_engagement_id: string | null
+          last_firm_id: string | null
+          last_used_at: string
+          normalized_name: string
+          scope: string
+          times_confirmed: number
+          times_overridden: number
+          updated_at: string
         }
         Insert: {
           account_group?: string | null
+          account_head: string
+          alternatives?: Json
           bs_pl?: string | null
-          firm_id?: string | null
+          client_id?: string | null
+          confidence_score?: number
+          created_at?: string
+          entity_type: string
+          firms_affected?: number
           id?: string
-          raw_ledger_name?: string | null
-          standard_head?: string | null
+          is_party_name?: boolean
+          last_engagement_id?: string | null
+          last_firm_id?: string | null
+          last_used_at?: string
+          normalized_name: string
+          scope?: string
+          times_confirmed?: number
+          times_overridden?: number
+          updated_at?: string
         }
         Update: {
           account_group?: string | null
+          account_head?: string
+          alternatives?: Json
           bs_pl?: string | null
-          firm_id?: string | null
+          client_id?: string | null
+          confidence_score?: number
+          created_at?: string
+          entity_type?: string
+          firms_affected?: number
           id?: string
-          raw_ledger_name?: string | null
-          standard_head?: string | null
+          is_party_name?: boolean
+          last_engagement_id?: string | null
+          last_firm_id?: string | null
+          last_used_at?: string
+          normalized_name?: string
+          scope?: string
+          times_confirmed?: number
+          times_overridden?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      coa_mapping_rules: {
+        Row: {
+          active: boolean
+          client_id: string | null
+          created_at: string
+          created_by: string | null
+          entity_type: string | null
+          firm_id: string
+          fs_code: string
+          fs_name: string | null
+          id: string
+          match_type: string
+          match_value: string
+          note: string | null
+          priority: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          entity_type?: string | null
+          firm_id: string
+          fs_code: string
+          fs_name?: string | null
+          id?: string
+          match_type?: string
+          match_value: string
+          note?: string | null
+          priority?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          entity_type?: string | null
+          firm_id?: string
+          fs_code?: string
+          fs_name?: string | null
+          id?: string
+          match_type?: string
+          match_value?: string
+          note?: string | null
+          priority?: number
+          updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "coa_mapping_rules_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coa_mapping_rules_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      coa_mappings: {
+        Row: {
+          account_group: string | null
+          alternatives: Json
+          bs_pl: string | null
+          confidence: number | null
+          created_at: string
+          engagement_id: string | null
+          entity_type: string | null
+          firm_id: string | null
+          id: string
+          ledger_id: string | null
+          original_suggestion: string | null
+          raw_ledger_name: string | null
+          reasoning: string | null
+          source: string | null
+          standard_head: string | null
+          status: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          account_group?: string | null
+          alternatives?: Json
+          bs_pl?: string | null
+          confidence?: number | null
+          created_at?: string
+          engagement_id?: string | null
+          entity_type?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_id?: string | null
+          original_suggestion?: string | null
+          raw_ledger_name?: string | null
+          reasoning?: string | null
+          source?: string | null
+          standard_head?: string | null
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          account_group?: string | null
+          alternatives?: Json
+          bs_pl?: string | null
+          confidence?: number | null
+          created_at?: string
+          engagement_id?: string | null
+          entity_type?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_id?: string | null
+          original_suggestion?: string | null
+          raw_ledger_name?: string | null
+          reasoning?: string | null
+          source?: string | null
+          standard_head?: string | null
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coa_mappings_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "coa_mappings_firm_id_fkey"
             columns: ["firm_id"]
@@ -2335,6 +3316,99 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      email_templates: {
+        Row: {
+          body_html: string
+          created_at: string | null
+          created_by: string | null
+          firm_id: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          subject: string
+          type: string
+          updated_at: string | null
+          variables: Json | null
+        }
+        Insert: {
+          body_html: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          subject: string
+          type: string
+          updated_at?: string | null
+          variables?: Json | null
+        }
+        Update: {
+          body_html?: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          subject?: string
+          type?: string
+          updated_at?: string | null
+          variables?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_templates_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_templates_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      engagements: {
+        Row: {
+          client_id: string | null
+          created_at: string | null
+          engagement_type: string | null
+          financial_year: string | null
+          firm_id: string | null
+          from_date: string | null
+          id: string
+          status: string | null
+          to_date: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_type?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          from_date?: string | null
+          id?: string
+          status?: string | null
+          to_date?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_type?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          from_date?: string | null
+          id?: string
+          status?: string | null
+          to_date?: string | null
+        }
+        Relationships: []
       }
       fa_asset_additions: {
         Row: {
@@ -2849,6 +3923,7 @@ export type Database = {
           invoice_template_id: string | null
           is_active: boolean | null
           is_audit_firm: boolean | null
+          legal_name_changes: Json
           letterhead_url: string | null
           logo_url: string | null
           max_clients: number | null
@@ -2886,6 +3961,7 @@ export type Database = {
           invoice_template_id?: string | null
           is_active?: boolean | null
           is_audit_firm?: boolean | null
+          legal_name_changes?: Json
           letterhead_url?: string | null
           logo_url?: string | null
           max_clients?: number | null
@@ -2923,6 +3999,7 @@ export type Database = {
           invoice_template_id?: string | null
           is_active?: boolean | null
           is_audit_firm?: boolean | null
+          legal_name_changes?: Json
           letterhead_url?: string | null
           logo_url?: string | null
           max_clients?: number | null
@@ -3090,6 +4167,68 @@ export type Database = {
             foreignKeyName: "form_3cd_engagement_id_fkey"
             columns: ["engagement_id"]
             isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      iar_data: {
+        Row: {
+          audit_trail_text: string | null
+          branch_text: string | null
+          created_at: string | null
+          emphasis_text: string | null
+          emphasis_toggle: boolean | null
+          engagement_id: string
+          going_concern_std: boolean | null
+          going_concern_text: string | null
+          id: string
+          kam_text: string | null
+          kam_toggle: boolean | null
+          litigation_rows: Json | null
+          opinion_type: string
+          qualification_para: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          audit_trail_text?: string | null
+          branch_text?: string | null
+          created_at?: string | null
+          emphasis_text?: string | null
+          emphasis_toggle?: boolean | null
+          engagement_id: string
+          going_concern_std?: boolean | null
+          going_concern_text?: string | null
+          id?: string
+          kam_text?: string | null
+          kam_toggle?: boolean | null
+          litigation_rows?: Json | null
+          opinion_type?: string
+          qualification_para?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          audit_trail_text?: string | null
+          branch_text?: string | null
+          created_at?: string | null
+          emphasis_text?: string | null
+          emphasis_toggle?: boolean | null
+          engagement_id?: string
+          going_concern_std?: boolean | null
+          going_concern_text?: string | null
+          id?: string
+          kam_text?: string | null
+          kam_toggle?: boolean | null
+          litigation_rows?: Json | null
+          opinion_type?: string
+          qualification_para?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "iar_data_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
             referencedRelation: "audit_engagements"
             referencedColumns: ["id"]
           },
@@ -3572,6 +4711,71 @@ export type Database = {
           },
         ]
       }
+      ledger_aliases: {
+        Row: {
+          client_id: string
+          created_at: string
+          created_by: string | null
+          current_ledger_name: string
+          engagement_id: string | null
+          firm_id: string | null
+          id: string
+          note: string | null
+          prior_ledger_name: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          current_ledger_name: string
+          engagement_id?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          prior_ledger_name: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          current_ledger_name?: string
+          engagement_id?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          prior_ledger_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_aliases_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_aliases_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_aliases_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_aliases_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ledger_import_batches: {
         Row: {
           engagement_id: string
@@ -3713,6 +4917,41 @@ export type Database = {
           },
         ]
       }
+      mrl_data: {
+        Row: {
+          clauses_json: Json
+          engagement_id: string
+          header_data: Json | null
+          id: string
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          clauses_json?: Json
+          engagement_id: string
+          header_data?: Json | null
+          id?: string
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          clauses_json?: Json
+          engagement_id?: string
+          header_data?: Json | null
+          id?: string
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mrl_data_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       narration_rules: {
         Row: {
           action: string | null
@@ -3756,67 +4995,67 @@ export type Database = {
       }
       nce_capital_account: {
         Row: {
-          id: string
+          created_at: string | null
           engagement_id: string
           financial_year: string
-          partner_no: number
-          partner_name: string | null
-          profit_share_pct: number | null
-          opening_balance_cy: number | null
-          opening_balance_py: number | null
-          introduced_cy: number | null
-          introduced_py: number | null
-          remuneration_cy: number | null
-          remuneration_py: number | null
+          id: string
           interest_cy: number | null
           interest_py: number | null
+          introduced_cy: number | null
+          introduced_py: number | null
+          opening_balance_cy: number | null
+          opening_balance_py: number | null
+          partner_name: string | null
+          partner_no: number
+          profit_share_cy: number | null
+          profit_share_pct: number | null
+          profit_share_py: number | null
+          remuneration_cy: number | null
+          remuneration_py: number | null
           withdrawals_cy: number | null
           withdrawals_py: number | null
-          profit_share_cy: number | null
-          profit_share_py: number | null
-          created_at: string | null
         }
         Insert: {
-          id?: string
+          created_at?: string | null
           engagement_id: string
           financial_year: string
-          partner_no: number
-          partner_name?: string | null
-          profit_share_pct?: number | null
-          opening_balance_cy?: number | null
-          opening_balance_py?: number | null
-          introduced_cy?: number | null
-          introduced_py?: number | null
-          remuneration_cy?: number | null
-          remuneration_py?: number | null
+          id?: string
           interest_cy?: number | null
           interest_py?: number | null
+          introduced_cy?: number | null
+          introduced_py?: number | null
+          opening_balance_cy?: number | null
+          opening_balance_py?: number | null
+          partner_name?: string | null
+          partner_no: number
+          profit_share_cy?: number | null
+          profit_share_pct?: number | null
+          profit_share_py?: number | null
+          remuneration_cy?: number | null
+          remuneration_py?: number | null
           withdrawals_cy?: number | null
           withdrawals_py?: number | null
-          profit_share_cy?: number | null
-          profit_share_py?: number | null
-          created_at?: string | null
         }
         Update: {
-          id?: string
+          created_at?: string | null
           engagement_id?: string
           financial_year?: string
-          partner_no?: number
-          partner_name?: string | null
-          profit_share_pct?: number | null
-          opening_balance_cy?: number | null
-          opening_balance_py?: number | null
-          introduced_cy?: number | null
-          introduced_py?: number | null
-          remuneration_cy?: number | null
-          remuneration_py?: number | null
+          id?: string
           interest_cy?: number | null
           interest_py?: number | null
+          introduced_cy?: number | null
+          introduced_py?: number | null
+          opening_balance_cy?: number | null
+          opening_balance_py?: number | null
+          partner_name?: string | null
+          partner_no?: number
+          profit_share_cy?: number | null
+          profit_share_pct?: number | null
+          profit_share_py?: number | null
+          remuneration_cy?: number | null
+          remuneration_py?: number | null
           withdrawals_cy?: number | null
           withdrawals_py?: number | null
-          profit_share_cy?: number | null
-          profit_share_py?: number | null
-          created_at?: string | null
         }
         Relationships: [
           {
@@ -3830,33 +5069,33 @@ export type Database = {
       }
       nce_financial_notes: {
         Row: {
-          id: string
+          created_at: string | null
+          cy_data: Json
           engagement_id: string
           financial_year: string
+          id: string
           note_type: string
-          cy_data: Json
           py_data: Json
-          created_at: string | null
           updated_at: string | null
         }
         Insert: {
-          id?: string
+          created_at?: string | null
+          cy_data?: Json
           engagement_id: string
           financial_year: string
+          id?: string
           note_type: string
-          cy_data?: Json
           py_data?: Json
-          created_at?: string | null
           updated_at?: string | null
         }
         Update: {
-          id?: string
+          created_at?: string | null
+          cy_data?: Json
           engagement_id?: string
           financial_year?: string
+          id?: string
           note_type?: string
-          cy_data?: Json
           py_data?: Json
-          created_at?: string | null
           updated_at?: string | null
         }
         Relationships: [
@@ -3869,54 +5108,104 @@ export type Database = {
           },
         ]
       }
-      nce_ppe_schedule: {
+      nce_letters: {
         Row: {
-          id: string
+          cash_on_hand: number | null
+          closing_stock: number | null
+          closing_stock_date: string | null
+          created_at: string | null
+          custom_content: Json | null
           engagement_id: string
           financial_year: string
-          asset_category: string
-          asset_name: string
-          rate_pct: number | null
-          opening_balance: number | null
-          additions_pre: number | null
-          additions_post: number | null
-          total: number | null
-          depreciation: number | null
-          closing_balance: number | null
-          sort_order: number | null
-          created_at: string | null
+          id: string
+          letter_date: string | null
+          letter_type: string
+          updated_at: string | null
         }
         Insert: {
-          id?: string
+          cash_on_hand?: number | null
+          closing_stock?: number | null
+          closing_stock_date?: string | null
+          created_at?: string | null
+          custom_content?: Json | null
           engagement_id: string
           financial_year: string
-          asset_category: string
-          asset_name: string
-          rate_pct?: number | null
-          opening_balance?: number | null
-          additions_pre?: number | null
-          additions_post?: number | null
-          total?: number | null
-          depreciation?: number | null
-          closing_balance?: number | null
-          sort_order?: number | null
-          created_at?: string | null
+          id?: string
+          letter_date?: string | null
+          letter_type: string
+          updated_at?: string | null
         }
         Update: {
-          id?: string
+          cash_on_hand?: number | null
+          closing_stock?: number | null
+          closing_stock_date?: string | null
+          created_at?: string | null
+          custom_content?: Json | null
           engagement_id?: string
           financial_year?: string
+          id?: string
+          letter_date?: string | null
+          letter_type?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "nce_letters_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      nce_ppe_schedule: {
+        Row: {
+          additions_post: number | null
+          additions_pre: number | null
+          asset_category: string
+          asset_name: string
+          closing_balance: number | null
+          created_at: string | null
+          depreciation: number | null
+          engagement_id: string
+          financial_year: string
+          id: string
+          opening_balance: number | null
+          rate_pct: number | null
+          sort_order: number | null
+          total: number | null
+        }
+        Insert: {
+          additions_post?: number | null
+          additions_pre?: number | null
+          asset_category: string
+          asset_name: string
+          closing_balance?: number | null
+          created_at?: string | null
+          depreciation?: number | null
+          engagement_id: string
+          financial_year: string
+          id?: string
+          opening_balance?: number | null
+          rate_pct?: number | null
+          sort_order?: number | null
+          total?: number | null
+        }
+        Update: {
+          additions_post?: number | null
+          additions_pre?: number | null
           asset_category?: string
           asset_name?: string
-          rate_pct?: number | null
-          opening_balance?: number | null
-          additions_pre?: number | null
-          additions_post?: number | null
-          total?: number | null
-          depreciation?: number | null
           closing_balance?: number | null
-          sort_order?: number | null
           created_at?: string | null
+          depreciation?: number | null
+          engagement_id?: string
+          financial_year?: string
+          id?: string
+          opening_balance?: number | null
+          rate_pct?: number | null
+          sort_order?: number | null
+          total?: number | null
         }
         Relationships: [
           {
@@ -4070,6 +5359,7 @@ export type Database = {
           note_43: Json | null
           note_44: Json | null
           note_45: Json | null
+          note_nc_1: Json | null
           status: string | null
         }
         Insert: {
@@ -4099,6 +5389,7 @@ export type Database = {
           note_43?: Json | null
           note_44?: Json | null
           note_45?: Json | null
+          note_nc_1?: Json | null
           status?: string | null
         }
         Update: {
@@ -4128,6 +5419,7 @@ export type Database = {
           note_43?: Json | null
           note_44?: Json | null
           note_45?: Json | null
+          note_nc_1?: Json | null
           status?: string | null
         }
         Relationships: [
@@ -4135,6 +5427,53 @@ export type Database = {
             foreignKeyName: "notes_to_accounts_engagement_id_fkey"
             columns: ["engagement_id"]
             isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notes_to_accounts_data: {
+        Row: {
+          engagement_id: string
+          header_overrides: Json
+          id: string
+          note1_new_entity_enabled: boolean
+          note1_new_entity_text: string | null
+          note3_variant: string
+          notes_json: Json
+          signature_data: Json
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          engagement_id: string
+          header_overrides?: Json
+          id?: string
+          note1_new_entity_enabled?: boolean
+          note1_new_entity_text?: string | null
+          note3_variant?: string
+          notes_json?: Json
+          signature_data?: Json
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          engagement_id?: string
+          header_overrides?: Json
+          id?: string
+          note1_new_entity_enabled?: boolean
+          note1_new_entity_text?: string | null
+          note3_variant?: string
+          notes_json?: Json
+          signature_data?: Json
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_to_accounts_data_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
             referencedRelation: "audit_engagements"
             referencedColumns: ["id"]
           },
@@ -4180,6 +5519,86 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      otp_requests: {
+        Row: {
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          new_email: string | null
+          otp_code: string
+          purpose: string
+          used_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          expires_at: string
+          id?: string
+          new_email?: string | null
+          otp_code: string
+          purpose?: string
+          used_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          new_email?: string | null
+          otp_code?: string
+          purpose?: string
+          used_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "otp_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      planning_staff: {
+        Row: {
+          created_at: string | null
+          firm_id: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          firm_id: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          firm_id?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "planning_staff_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "planning_staff_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -4281,7 +5700,7 @@ export type Database = {
           can_export: boolean | null
           can_view: boolean | null
           custom_restrictions: Json | null
-          firm_id: string
+          firm_id: string | null
           id: string
           module: string
           role: string
@@ -4295,7 +5714,7 @@ export type Database = {
           can_export?: boolean | null
           can_view?: boolean | null
           custom_restrictions?: Json | null
-          firm_id: string
+          firm_id?: string | null
           id?: string
           module: string
           role: string
@@ -4309,7 +5728,7 @@ export type Database = {
           can_export?: boolean | null
           can_view?: boolean | null
           custom_restrictions?: Json | null
-          firm_id?: string
+          firm_id?: string | null
           id?: string
           module?: string
           role?: string
@@ -4697,6 +6116,286 @@ export type Database = {
           },
         ]
       }
+      stage7_cashflow_data: {
+        Row: {
+          closing_balance: number | null
+          disclosure_notes: string | null
+          engagement_id: string
+          last_updated_at: string | null
+          last_updated_by: string | null
+          net_financing: number | null
+          net_investing: number | null
+          net_operating: number | null
+          opening_balance: number | null
+        }
+        Insert: {
+          closing_balance?: number | null
+          disclosure_notes?: string | null
+          engagement_id: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          net_financing?: number | null
+          net_investing?: number | null
+          net_operating?: number | null
+          opening_balance?: number | null
+        }
+        Update: {
+          closing_balance?: number | null
+          disclosure_notes?: string | null
+          engagement_id?: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          net_financing?: number | null
+          net_investing?: number | null
+          net_operating?: number | null
+          opening_balance?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage7_cashflow_data_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stage7_ifc_data: {
+        Row: {
+          engagement_id: string
+          last_updated_at: string | null
+          last_updated_by: string | null
+          place: string | null
+          report_date: string | null
+          sections: Json
+        }
+        Insert: {
+          engagement_id: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          place?: string | null
+          report_date?: string | null
+          sections?: Json
+        }
+        Update: {
+          engagement_id?: string
+          last_updated_at?: string | null
+          last_updated_by?: string | null
+          place?: string | null
+          report_date?: string | null
+          sections?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage7_ifc_data_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: true
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sync_batches: {
+        Row: {
+          client_id: string | null
+          completed_at: string | null
+          current_phase: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          groups_fetched: number | null
+          id: string
+          ledgers_fetched: number | null
+          phase_errors: Json | null
+          phase_status: Json | null
+          phase_timings: Json | null
+          started_at: string | null
+          status: string | null
+          sync_type: string | null
+          tally_company: string | null
+          tb_rows_fetched: number | null
+          vouchers_fetched: number | null
+          warnings: Json | null
+        }
+        Insert: {
+          client_id?: string | null
+          completed_at?: string | null
+          current_phase?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          groups_fetched?: number | null
+          id?: string
+          ledgers_fetched?: number | null
+          phase_errors?: Json | null
+          phase_status?: Json | null
+          phase_timings?: Json | null
+          started_at?: string | null
+          status?: string | null
+          sync_type?: string | null
+          tally_company?: string | null
+          tb_rows_fetched?: number | null
+          vouchers_fetched?: number | null
+          warnings?: Json | null
+        }
+        Update: {
+          client_id?: string | null
+          completed_at?: string | null
+          current_phase?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          groups_fetched?: number | null
+          id?: string
+          ledgers_fetched?: number | null
+          phase_errors?: Json | null
+          phase_status?: Json | null
+          phase_timings?: Json | null
+          started_at?: string | null
+          status?: string | null
+          sync_type?: string | null
+          tally_company?: string | null
+          tb_rows_fetched?: number | null
+          vouchers_fetched?: number | null
+          warnings?: Json | null
+        }
+        Relationships: []
+      }
+      sync_requests: {
+        Row: {
+          client_id: string | null
+          engagement_id: string | null
+          error: string | null
+          firm_id: string | null
+          id: string
+          processed_at: string | null
+          requested_at: string | null
+          requested_by: string | null
+          status: string
+        }
+        Insert: {
+          client_id?: string | null
+          engagement_id?: string | null
+          error?: string | null
+          firm_id?: string | null
+          id?: string
+          processed_at?: string | null
+          requested_at?: string | null
+          requested_by?: string | null
+          status?: string
+        }
+        Update: {
+          client_id?: string | null
+          engagement_id?: string | null
+          error?: string | null
+          firm_id?: string | null
+          id?: string
+          processed_at?: string | null
+          requested_at?: string | null
+          requested_by?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
+      tally_groups: {
+        Row: {
+          client_id: string | null
+          created_at: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          group_name: string
+          id: string
+          is_primary: boolean | null
+          is_revenue: boolean | null
+          parent_group: string | null
+          primary_group: string | null
+          sync_batch_id: string | null
+          tally_company: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          group_name: string
+          id?: string
+          is_primary?: boolean | null
+          is_revenue?: boolean | null
+          parent_group?: string | null
+          primary_group?: string | null
+          sync_batch_id?: string | null
+          tally_company?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          group_name?: string
+          id?: string
+          is_primary?: boolean | null
+          is_revenue?: boolean | null
+          parent_group?: string | null
+          primary_group?: string | null
+          sync_batch_id?: string | null
+          tally_company?: string | null
+        }
+        Relationships: []
+      }
+      tally_ledgers: {
+        Row: {
+          client_id: string | null
+          closing_balance: number | null
+          closing_type: string | null
+          created_at: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          ledger_name: string
+          opening_balance: number | null
+          opening_type: string | null
+          parent_group: string | null
+          sync_batch_id: string | null
+          tally_company: string | null
+        }
+        Insert: {
+          client_id?: string | null
+          closing_balance?: number | null
+          closing_type?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_name: string
+          opening_balance?: number | null
+          opening_type?: string | null
+          parent_group?: string | null
+          sync_batch_id?: string | null
+          tally_company?: string | null
+        }
+        Update: {
+          client_id?: string | null
+          closing_balance?: number | null
+          closing_type?: string | null
+          created_at?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_name?: string
+          opening_balance?: number | null
+          opening_type?: string | null
+          parent_group?: string | null
+          sync_batch_id?: string | null
+          tally_company?: string | null
+        }
+        Relationships: []
+      }
       tally_processing_logs: {
         Row: {
           created_at: string
@@ -4788,6 +6487,123 @@ export type Database = {
           },
         ]
       }
+      tally_trial_balance: {
+        Row: {
+          balance_type: string | null
+          client_id: string | null
+          closing_balance: number | null
+          credit_amount: number | null
+          debit_amount: number | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          ledger_name: string
+          opening_balance: number | null
+          opening_type: string | null
+          parent_group: string | null
+          sync_batch_id: string | null
+          synced_at: string | null
+          tally_company: string | null
+        }
+        Insert: {
+          balance_type?: string | null
+          client_id?: string | null
+          closing_balance?: number | null
+          credit_amount?: number | null
+          debit_amount?: number | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_name: string
+          opening_balance?: number | null
+          opening_type?: string | null
+          parent_group?: string | null
+          sync_batch_id?: string | null
+          synced_at?: string | null
+          tally_company?: string | null
+        }
+        Update: {
+          balance_type?: string | null
+          client_id?: string | null
+          closing_balance?: number | null
+          credit_amount?: number | null
+          debit_amount?: number | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          ledger_name?: string
+          opening_balance?: number | null
+          opening_type?: string | null
+          parent_group?: string | null
+          sync_batch_id?: string | null
+          synced_at?: string | null
+          tally_company?: string | null
+        }
+        Relationships: []
+      }
+      tally_vouchers: {
+        Row: {
+          amount: number | null
+          client_id: string | null
+          dr_cr: string | null
+          engagement_id: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          line_items: Json | null
+          narration: string | null
+          party_ledger: string | null
+          sync_batch_id: string | null
+          synced_at: string | null
+          tally_company: string | null
+          tally_guid: string | null
+          voucher_date: string | null
+          voucher_number: string | null
+          voucher_type: string | null
+        }
+        Insert: {
+          amount?: number | null
+          client_id?: string | null
+          dr_cr?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          line_items?: Json | null
+          narration?: string | null
+          party_ledger?: string | null
+          sync_batch_id?: string | null
+          synced_at?: string | null
+          tally_company?: string | null
+          tally_guid?: string | null
+          voucher_date?: string | null
+          voucher_number?: string | null
+          voucher_type?: string | null
+        }
+        Update: {
+          amount?: number | null
+          client_id?: string | null
+          dr_cr?: string | null
+          engagement_id?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          line_items?: Json | null
+          narration?: string | null
+          party_ledger?: string | null
+          sync_batch_id?: string | null
+          synced_at?: string | null
+          tally_company?: string | null
+          tally_guid?: string | null
+          voucher_date?: string | null
+          voucher_number?: string | null
+          voucher_type?: string | null
+        }
+        Relationships: []
+      }
       tally_xml_uploads: {
         Row: {
           created_at: string
@@ -4812,6 +6628,213 @@ export type Database = {
           parse_status?: string
           raw_xml?: string | null
           total_rows?: number
+        }
+        Relationships: []
+      }
+      tax_audit_3cd_clauses: {
+        Row: {
+          annexure_ref: string | null
+          applicability: string
+          clause_no: string
+          engagement_id: string
+          id: string
+          response: string | null
+          sequence_order: number
+          sub_clause: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          annexure_ref?: string | null
+          applicability?: string
+          clause_no: string
+          engagement_id: string
+          id?: string
+          response?: string | null
+          sequence_order?: number
+          sub_clause?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          annexure_ref?: string | null
+          applicability?: string
+          clause_no?: string
+          engagement_id?: string
+          id?: string
+          response?: string | null
+          sequence_order?: number
+          sub_clause?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      tax_audit_annexures: {
+        Row: {
+          annexure_id: string
+          clause_link: string | null
+          display_sequence: number
+          engagement_id: string
+          id: string
+          is_deleted: boolean
+          rows_json: Json
+          title: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          annexure_id: string
+          clause_link?: string | null
+          display_sequence?: number
+          engagement_id: string
+          id?: string
+          is_deleted?: boolean
+          rows_json?: Json
+          title?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          annexure_id?: string
+          clause_link?: string | null
+          display_sequence?: number
+          engagement_id?: string
+          id?: string
+          is_deleted?: boolean
+          rows_json?: Json
+          title?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      tax_audit_cell_map: {
+        Row: {
+          cell_address: string
+          data_type: string
+          field_key: string
+          formula_cell: boolean
+          id: string
+          sheet: string
+          source: string | null
+          template_name: string
+        }
+        Insert: {
+          cell_address: string
+          data_type?: string
+          field_key: string
+          formula_cell?: boolean
+          id?: string
+          sheet: string
+          source?: string | null
+          template_name: string
+        }
+        Update: {
+          cell_address?: string
+          data_type?: string
+          field_key?: string
+          formula_cell?: boolean
+          id?: string
+          sheet?: string
+          source?: string | null
+          template_name?: string
+        }
+        Relationships: []
+      }
+      tax_audit_form: {
+        Row: {
+          created_at: string
+          engagement_id: string
+          form_type: string
+          id: string
+          status: string
+          template_version: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          engagement_id: string
+          form_type: string
+          id?: string
+          status?: string
+          template_version?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          engagement_id?: string
+          form_type?: string
+          id?: string
+          status?: string
+          template_version?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      tax_audit_values: {
+        Row: {
+          current_value: string | null
+          data_type: string
+          engagement_id: string
+          field_key: string
+          id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          current_value?: string | null
+          data_type?: string
+          engagement_id: string
+          field_key: string
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          current_value?: string | null
+          data_type?: string
+          engagement_id?: string
+          field_key?: string
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      tax_audit_versions: {
+        Row: {
+          change_reason: string | null
+          changed_at: string
+          element_id: string
+          element_type: string
+          engagement_id: string
+          id: string
+          new_value: Json | null
+          old_value: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          change_reason?: string | null
+          changed_at?: string
+          element_id: string
+          element_type: string
+          engagement_id: string
+          id?: string
+          new_value?: Json | null
+          old_value?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          change_reason?: string | null
+          changed_at?: string
+          element_id?: string
+          element_type?: string
+          engagement_id?: string
+          id?: string
+          new_value?: Json | null
+          old_value?: Json | null
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -4922,6 +6945,47 @@ export type Database = {
           total_chunks?: number | null
         }
         Relationships: []
+      }
+      tds_ack_files: {
+        Row: {
+          client_id: string
+          created_at: string | null
+          file_name: string
+          file_url: string
+          filing_id: string
+          firm_id: string | null
+          id: string
+          user_id: string | null
+        }
+        Insert: {
+          client_id: string
+          created_at?: string | null
+          file_name: string
+          file_url: string
+          filing_id: string
+          firm_id?: string | null
+          id?: string
+          user_id?: string | null
+        }
+        Update: {
+          client_id?: string
+          created_at?: string | null
+          file_name?: string
+          file_url?: string
+          filing_id?: string
+          firm_id?: string | null
+          id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_ack_files_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tds_challans: {
         Row: {
@@ -5646,6 +7710,129 @@ export type Database = {
           },
         ]
       }
+      telegram_authorized_users: {
+        Row: {
+          created_at: string | null
+          firm_id: string
+          id: string
+          is_active: boolean
+          last_used_at: string | null
+          linked_at: string | null
+          telegram_chat_id: number
+          telegram_first_name: string | null
+          telegram_user_id: number
+          telegram_username: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          firm_id: string
+          id?: string
+          is_active?: boolean
+          last_used_at?: string | null
+          linked_at?: string | null
+          telegram_chat_id: number
+          telegram_first_name?: string | null
+          telegram_user_id: number
+          telegram_username?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          firm_id?: string
+          id?: string
+          is_active?: boolean
+          last_used_at?: string | null
+          linked_at?: string | null
+          telegram_chat_id?: number
+          telegram_first_name?: string | null
+          telegram_user_id?: number
+          telegram_username?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telegram_authorized_users_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telegram_authorized_users_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telegram_context: {
+        Row: {
+          history: Json
+          last_update_id: number | null
+          updated_at: string
+          user_id: number
+        }
+        Insert: {
+          history?: Json
+          last_update_id?: number | null
+          updated_at?: string
+          user_id: number
+        }
+        Update: {
+          history?: Json
+          last_update_id?: number | null
+          updated_at?: string
+          user_id?: number
+        }
+        Relationships: []
+      }
+      telegram_link_tokens: {
+        Row: {
+          created_at: string | null
+          expires_at: string | null
+          firm_id: string
+          id: string
+          token: string
+          used: boolean
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          expires_at?: string | null
+          firm_id: string
+          id?: string
+          token: string
+          used?: boolean
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          expires_at?: string | null
+          firm_id?: string
+          id?: string
+          token?: string
+          used?: boolean
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "telegram_link_tokens_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "telegram_link_tokens_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       threecd_master_templates: {
         Row: {
           clause_number: string
@@ -5897,6 +8084,7 @@ export type Database = {
       }
       users: {
         Row: {
+          avatar_url: string | null
           created_at: string | null
           email: string | null
           firm_id: string | null
@@ -5911,6 +8099,7 @@ export type Database = {
           role: string | null
         }
         Insert: {
+          avatar_url?: string | null
           created_at?: string | null
           email?: string | null
           firm_id?: string | null
@@ -5925,6 +8114,7 @@ export type Database = {
           role?: string | null
         }
         Update: {
+          avatar_url?: string | null
           created_at?: string | null
           email?: string | null
           firm_id?: string | null
@@ -6099,6 +8289,7 @@ export type Database = {
       }
     }
     Functions: {
+      _tally_flip: { Args: { p: string }; Returns: string }
       approve_week_timesheets: {
         Args: {
           p_approved_by: string
@@ -6108,8 +8299,41 @@ export type Database = {
         }
         Returns: number
       }
+      caflow_exec: { Args: { sql: string }; Returns: undefined }
       current_user_firm_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
+      get_ledger_reconciliation: {
+        Args: { p_engagement_id: string; p_ledger_name: string }
+        Returns: {
+          credit_total: number
+          debit_total: number
+          derived_closing: number
+          derived_closing_type: string
+          opening_balance: number
+          opening_type: string
+          reconciled: boolean
+          tally_closing: number
+          tally_closing_type: string
+          variance: number
+          voucher_count: number
+        }[]
+      }
+      get_ledger_vouchers: {
+        Args: { p_engagement_id: string; p_ledger_name: string }
+        Returns: {
+          amount: number
+          dr_cr: string
+          id: string
+          line_items: Json
+          narration: string
+          party_ledger: string
+          this_amount: number
+          this_dr_cr: string
+          voucher_date: string
+          voucher_number: string
+          voucher_type: string
+        }[]
+      }
       get_next_invoice_seq: {
         Args: {
           p_financial_year: string
@@ -6127,13 +8351,79 @@ export type Database = {
         Args: { _conversation_id: string; _user_id: string }
         Returns: boolean
       }
+      is_party_ledger: {
+        Args: { p_account_group: string; p_normalized_name: string }
+        Returns: boolean
+      }
       is_same_firm_user: { Args: { _user_id: string }; Returns: boolean }
       is_superadmin: { Args: never; Returns: boolean }
+      list_ledger_variances: {
+        Args: { p_engagement_id: string }
+        Returns: {
+          derived_closing: number
+          derived_closing_type: string
+          ledger_name: string
+          tally_closing: number
+          tally_closing_type: string
+          variance: number
+          voucher_count: number
+        }[]
+      }
+      refresh_tb_period_totals: {
+        Args: { p_engagement_id: string }
+        Returns: number
+      }
       set_user_context: {
         Args: { p_user_id: string; p_user_name: string; p_user_role: string }
         Returns: undefined
       }
+      sync_engagement_intelligence:
+        | {
+            Args: {
+              p_engagement_id: string
+              p_entity_type: string
+              p_firm_id: string
+            }
+            Returns: number
+          }
+        | {
+            Args: {
+              p_client_id?: string
+              p_engagement_id: string
+              p_entity_type: string
+              p_firm_id: string
+            }
+            Returns: number
+          }
       update_overdue_invoices: { Args: { p_firm_id: string }; Returns: number }
+      upsert_coa_intelligence:
+        | {
+            Args: {
+              p_accepted: boolean
+              p_account_group: string
+              p_account_head: string
+              p_bs_pl: string
+              p_engagement_id: string
+              p_entity_type: string
+              p_firm_id: string
+              p_normalized_name: string
+            }
+            Returns: undefined
+          }
+        | {
+            Args: {
+              p_accepted: boolean
+              p_account_group: string
+              p_account_head: string
+              p_bs_pl: string
+              p_client_id?: string
+              p_engagement_id: string
+              p_entity_type: string
+              p_firm_id: string
+              p_normalized_name: string
+            }
+            Returns: undefined
+          }
     }
     Enums: {
       [_ in never]: never
@@ -6262,6 +8552,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {},
   },

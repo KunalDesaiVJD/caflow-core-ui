@@ -36,6 +36,8 @@ const TdsFilings = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // CP-02: sub-tab inside TDS Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+  // Increment to force TdsDashboard to re-fetch when returning from workspace
+  const [dashRefreshKey, setDashRefreshKey] = useState(0);
   /* DEPRECATED - migration moved to Filings section Options dropdown */
 
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -158,7 +160,10 @@ const TdsFilings = () => {
         </div>
         <nav className="flex-1 py-2 space-y-0.5 px-2">
           {NAV_ITEMS.map(item => (
-            <button key={item.key} onClick={() => setActiveSection(item.key)}
+            <button key={item.key} onClick={() => {
+              if (item.key === "dashboard") setDashRefreshKey(k => k + 1);
+              setActiveSection(item.key);
+            }}
               className={cn("w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors",
                 activeSection === item.key ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
               <item.icon size={16} className="shrink-0" />
@@ -173,7 +178,7 @@ const TdsFilings = () => {
           {activeSection === "dashboard" && (
             <TdsDashboard
               clients={clients} users={users} isSuperadmin={isSuperadmin}
-              resolveFirmId={resolveFirmId}
+              resolveFirmId={resolveFirmId} refreshKey={dashRefreshKey}
               onNavigate={(section) => {
                 // CP-02: "data-entry" and "validate" deep-links now open workspace
                 if (section === "data-entry") { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }
