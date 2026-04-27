@@ -1725,12 +1725,20 @@ export default function PipelineFinancialStatements({
       const fyParts = (engagement.financial_year as string).split("-");
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
-      const { data } = await (supabase.from as any)("audit_engagements")
+      // Prefer is_py_shell=true (auto-created by sync-py.js); fall back to any FY-1 engagement
+      const { data: shellEng } = await (supabase.from as any)("audit_engagements")
+        .select("id")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .eq("is_py_shell", true)
+        .maybeSingle();
+      if ((shellEng as any)?.id) return (shellEng as any).id;
+      const { data: anyEng } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
         .maybeSingle();
-      return (data as any)?.id ?? null;
+      return (anyEng as any)?.id ?? null;
     },
     enabled: (engagement as any)?.py_source === "py_shell" && !!engagement?.client_id && !!engagement?.financial_year,
   });
@@ -2676,15 +2684,27 @@ export default function PipelineFinancialStatements({
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
 
       // ── Find FY-1 engagement ─────────────────────────────────────────────
+      // Prefer is_py_shell=true (created by sync-py.js / auto-created during sync)
       let pyEngId: string | null = null;
-      const { data: prevEng } = await supabase
-        .from("audit_engagements")
+      const { data: shellEng } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
-        .is("deleted_at" as any, null)
+        .eq("is_py_shell", true)
         .maybeSingle();
-      pyEngId = (prevEng as any)?.id ?? null;
+      if ((shellEng as any)?.id) {
+        pyEngId = (shellEng as any).id;
+      } else {
+        // Fallback: any regular FY-1 engagement (for clients that ran setup before PY shell redesign)
+        const { data: prevEng } = await supabase
+          .from("audit_engagements")
+          .select("id")
+          .eq("client_id", engagement.client_id)
+          .eq("financial_year", prevFy)
+          .is("deleted_at" as any, null)
+          .maybeSingle();
+        pyEngId = (prevEng as any)?.id ?? null;
+      }
 
       // ── Paginated TB fetcher ─────────────────────────────────────────────
       async function fetchEngTB(engId: string): Promise<any[]> {

@@ -321,6 +321,41 @@ export async function getCOAMapping(engagementId: string): Promise<COAMapping> {
 }
 
 /**
+ * Fetch the prior-year (FY-1) trial balance for a given engagement.
+ * Used by buildBreakup to populate the PY amount column from actual
+ * prior-year closing balances instead of current-year opening balances
+ * (which are 0 for P&L accounts that reset each year).
+ */
+async function getPreviousYearTrialBalance(engagementId: string): Promise<TBLedger[]> {
+  const { data: eng } = await supabase
+    .from("audit_engagements")
+    .select("client_id, financial_year")
+    .eq("id", engagementId)
+    .maybeSingle();
+  const clientId = (eng as any)?.client_id;
+  const fy       = (eng as any)?.financial_year;
+  if (!clientId || !fy) return [];
+  const parts = String(fy).split("-");
+  if (parts.length !== 2) return [];
+  const prevFy = `${parseInt(parts[0], 10) - 1}-${String(parseInt(parts[0], 10)).slice(-2)}`;
+
+  // Prefer PY shell (is_py_shell=true — has Tally sync data from sync-py.bat)
+  // then fall back to any regular FY-1 engagement
+  const { data: engList } = await supabase
+    .from("audit_engagements")
+    .select("id, is_py_shell")
+    .eq("client_id", clientId)
+    .eq("financial_year", prevFy);
+
+  const sorted = ((engList || []) as any[]).sort(
+    (a, b) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0)
+  );
+  const prevEngId = sorted[0]?.id;
+  if (!prevEngId) return [];
+  return getTrialBalance(prevEngId);
+}
+
+/**
  * Find the prior-year audit_engagements row (same client, FY-1) and return
  * its stage5_notes if available. Falls back to NULL if no prior engagement.
  */
@@ -515,6 +550,10 @@ export function buildBreakup(
   ledgers: TBLedger[],
   template: string[] | undefined,
   existing: BreakupRow[] | undefined,
+  /** Prior-year trial balance — used for amount_py instead of opening_balance.
+   *  P&L accounts reset to 0 each year so their opening_balance is always 0;
+   *  passing the actual FY-1 TB gives correct PY ledger-level amounts. */
+  pyLedgers?: TBLedger[],
 ): BreakupRow[] {
   // 1) Preserve manual rows from existing breakup verbatim — these are user-
   //    typed entries that don't correspond to any COA-mapped ledger.
@@ -528,6 +567,22 @@ export function buildBreakup(
   const usedLedgers = new Set<string>();
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Build a fast-lookup map from prior-year TB for PY amount resolution.
+  // Key = lowercase ledger name → TBLedger from the FY-1 trial balance.
+  // For P&L accounts, opening_balance is 0 (accounts reset each year), so we
+  // must use the actual FY-1 closing balance from pyLedgers when available.
+  const pyMap = new Map<string, TBLedger>();
+  for (const pl of (pyLedgers || [])) {
+    pyMap.set(pl.account_name.toLowerCase().trim(), pl);
+  }
+
+  /** Resolve PY amount for a ledger: prefer FY-1 closing balance, fall back
+   *  to current-year opening_balance (works for BS accounts; 0 for P&L). */
+  const resolvePY = (accountName: string, openingBalance: number): number => {
+    const py = pyMap.get(accountName.toLowerCase().trim());
+    return py ? Math.abs(round2(py.balance)) : Math.abs(round2(openingBalance));
+  };
 
   if (template && template.length > 0) {
     for (const head of template) {
@@ -547,16 +602,17 @@ export function buildBreakup(
         result.push({
           description:   head,
           amount_cy:     Math.abs(round2(matched.balance)),
-          amount_py:     Math.abs(round2(matched.opening_balance)),
+          amount_py:     resolvePY(matched.account_name, matched.opening_balance),
           source:        "linked",
           linked_ledger: matched.account_name,
         });
       } else {
-        // Template head with no matching ledger — keep as suggestion with 0
+        // Template head with no matching ledger — check if it exists in PY TB
+        const pyMatch = pyMap.get(head.toLowerCase().trim());
         result.push({
           description: head,
           amount_cy:   0,
-          amount_py:   0,
+          amount_py:   pyMatch ? Math.abs(round2(pyMatch.balance)) : 0,
           source:      "linked",
         });
       }
@@ -569,7 +625,7 @@ export function buildBreakup(
     result.push({
       description:   l.account_name,
       amount_cy:     Math.abs(round2(l.balance)),
-      amount_py:     Math.abs(round2(l.opening_balance)),
+      amount_py:     resolvePY(l.account_name, l.opening_balance),
       source:        "linked",
       linked_ledger: l.account_name,
     });
@@ -757,11 +813,12 @@ export async function autoPopulateNotes(
   engagementId: string,
   options: { existing?: Stage5Notes | null } = {},
 ): Promise<Stage5Notes> {
-  const [mapping, tb, pyNotes, pyFs] = await Promise.all([
+  const [mapping, tb, pyNotes, pyFs, pyTB] = await Promise.all([
     getCOAMapping(engagementId),
     getTrialBalance(engagementId),
     getPreviousYearStage5Notes(engagementId),
     getPreviousYearFsAmounts(engagementId),
+    getPreviousYearTrialBalance(engagementId),  // ← FY-1 TB for accurate PY amounts
   ]);
 
   // Helper to resolve PY for a registered row.
@@ -825,9 +882,32 @@ export async function autoPopulateNotes(
         const migrated = migrateLegacyBreakup(section, rowKey, rowExist);
         if (migrated.length > 0) existingBreak = migrated;
       }
-      const breakup = buildBreakup(ledgers, spec.template, existingBreak);
+      // Pass prior-year TB so PY amounts use FY-1 closing balances, not
+      // current-year opening balances (which are 0 for P&L accounts).
+      const breakup = buildBreakup(ledgers, spec.template, existingBreak, pyTB);
 
       out[section][rowKey] = { cy, py, breakup };
+    }
+  }
+
+  // ── Note 30 EPS — auto-populate NPAT from P&L computation ─────────────────
+  // The EPS note needs Net Profit After Tax (NPAT). Compute it from the current
+  // TB + COA mapping (same logic as PipelineFinancialStatements computedAmounts).
+  // Only auto-fill if the user hasn't manually entered a value.
+  {
+    const existingNpat = (options.existing as any)?.pl?.eps?.npat;
+    if (typeof existingNpat !== "number") {
+      let revSum = 0, expSum = 0;
+      for (const ledger of tb) {
+        const code = mapping[ledger.account_name]?.code ?? "";
+        if (code.startsWith("PL_REV")) revSum += ledger.balance;  // negative (CR)
+        if (code.startsWith("PL_EXP")) expSum += ledger.balance;  // positive (DR)
+      }
+      const npat = Math.round((-revSum - expSum) * 100) / 100;
+      if (Math.abs(npat) > 0.005) {
+        if (!out.pl.eps) out.pl.eps = {};
+        out.pl.eps = { ...(out.pl.eps as any), npat };
+      }
     }
   }
 
