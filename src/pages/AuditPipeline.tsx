@@ -219,21 +219,20 @@ export default function AuditPipeline() {
   // always matches the Audit Dashboard:
   //   1. clients.statutory_audit_applicable / clients.tax_audit_type  (ClientDetail direct saves)
   //   2. client_fy_audit_setup boolean flags  (wizard-based setup)
-  //   3. client_fy_classifications ilike 'audit'  (FY classification snapshot)
-  //   4. client_classification_history.new_classification = 'Audit'  (history log)
-  //   5. active client_services rows whose service_category.linked_module = 'audit'
+  // SIMPLE RULE: show ALL active (non-draft, non-deleted) firm clients in the
+  // Create Engagement dropdown. Setup/service data is fetched only to pre-fill
+  // the Audit Type field — it no longer gates who appears in the list.
   const { data: eligibleClients } = useQuery({
     queryKey: ["audit-eligible-clients", user?.firm_id, user?.id],
     queryFn: async () => {
       const firmId = user?.firm_id ?? "";
 
-      // 1. All non-deleted clients — include is_draft so we can let audit-classified
-      //    draft clients through (wizard-created clients that haven't completed all
-      //    wizard steps but already have Audit classification + audit setup saved).
+      // Fetch all non-deleted clients for this firm
       let clientQuery = supabase
         .from("clients")
         .select("id, name, entity_type, statutory_audit_applicable, tax_audit_type, is_draft")
         .is("deleted_at", null)
+        .eq("is_draft", false)
         .order("name", { ascending: true });
       if (firmId) clientQuery = clientQuery.eq("firm_id", firmId);
       const { data: allFirmClients } = await clientQuery;
@@ -333,27 +332,13 @@ export default function AuditPipeline() {
             has_statutory_service:       !!svc.hasStat,
             has_tax_audit_service:       !!svc.hasTax,
             has_internal_audit_service:  !!svc.hasInternal,
-            // true for ANY client with at least one active service
             has_any_service:             !!serviceMap[c.id],
-            // true for ANY client that has ANY audit setup row (even if all flags false)
             has_any_audit_setup:         !!setupMap[c.id],
           };
         })
-        .filter(c => {
-          const hasAuditFlag =
-            auditClassifiedIds.has(c.id) ||
-            c.statutory_audit_applicable || c.tax_audit_applicable ||
-            c.internal_audit_applicable  || c.stock_audit_applicable ||
-            c.has_statutory_service      || c.has_tax_audit_service  ||
-            c.has_internal_audit_service ||
-            (c as any).has_any_service   ||
-            (c as any).has_any_audit_setup; // any audit setup row → show in dropdown
-          if (!hasAuditFlag) return false;
-          // Draft clients: only show if they have Audit classification and a name
-          // (wizard-created clients that saved audit setup but haven't fully activated yet)
-          if (c.is_draft) return auditClassifiedIds.has(c.id) && Boolean(c.name?.trim());
-          return true;
-        });
+        // No eligibility gate — all active firm clients appear in the dropdown.
+        // Setup/service flags are kept only for pre-filling the Audit Type field.
+        .filter(c => Boolean((c.name as string)?.trim()));
     },
     enabled: !!user?.id,
   });
@@ -1523,7 +1508,7 @@ export default function AuditPipeline() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Create New Audit Engagement</DialogTitle>
-            <DialogDescription>Select a client with Statutory or Tax Audit activated</DialogDescription>
+            <DialogDescription>Select a client to create an audit engagement</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div>
