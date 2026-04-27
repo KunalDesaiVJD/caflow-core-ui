@@ -4964,6 +4964,34 @@ export default function PipelineFinancialStatements({
                 removed for non-corporate entities — PY figures flow automatically
                 from the prior-year Tally sync via the COA mapping.
             */}
+
+            {/* ── Fetch PY from FY-1 Tally button ─────────────────────────── */}
+            {!pyLocked && (
+              <div className="mb-3 flex items-center justify-between rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-950/20 px-3 py-2">
+                <div className="flex items-center gap-2 text-xs text-blue-800 dark:text-blue-300">
+                  <Database className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {noPriorEngagement
+                      ? <><strong>PY not yet synced.</strong> Run sync-py.bat for FY {pyYear - 1}-{String(pyYear).slice(-2)}, then click Fetch.</>
+                      : <>Prior year Tally data is available. Click <strong>Fetch PY from FY-1 Tally</strong> to auto-populate PY comparative figures.</>
+                    }
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1.5 border-blue-400 text-blue-700 hover:bg-blue-100 dark:border-blue-600 dark:text-blue-300 shrink-0 ml-3"
+                  onClick={fetchPyPLFromTally}
+                  disabled={fetchingPyTally || noPriorEngagement}
+                >
+                  {fetchingPyTally
+                    ? <><span className="animate-spin inline-block">↻</span> Fetching…</>
+                    : <><Database className="h-3 w-3" /> Fetch PY from FY-1 Tally</>
+                  }
+                </Button>
+              </div>
+            )}
+
             {/* Phase UI-3: Pixel-perfect on-screen P&L for corporate entities.
                 Mirrors writeProfitAndLoss() in src/lib/fsExcelExport.ts row-by-row
                 using fsDisplayData.pl from UI-1. NCE entities continue to render
