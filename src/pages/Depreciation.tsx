@@ -98,8 +98,10 @@ const emptyBulkRow = () => ({
 export default function Depreciation() {
 const { user } = useAuth();
 const qc = useQueryClient();
-const [clientId,  setClientId]  = useState('');
-const [fy,        setFy]        = useState(FY_OPTIONS[0]);
+const [clientId,     setClientId]     = useState('');
+const [clientSearch, setClientSearch] = useState('');
+const [clientOpen,   setClientOpen]   = useState(false);
+const [fy,           setFy]           = useState(FY_OPTIONS[0]);
 const [activeTab, setActiveTab] = useState('register');
 const [showAdd,     setShowAdd]     = useState(false);
 const [showDispose, setShowDispose] = useState<string | null>(null);
@@ -928,13 +930,51 @@ return (
   <CardContent className='pt-4 flex flex-wrap items-end gap-4'>
     <div className='w-72'>
       <Label>Client *</Label>
-      <Select value={clientId} onValueChange={setClientId}>
-        <SelectTrigger><SelectValue placeholder='Select client' /></SelectTrigger>
-        <SelectContent>
-          {(clients||[]).map((c:any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          {!clients?.length && <div className='px-3 py-2 text-sm text-muted-foreground'>No clients found</div>}
-        </SelectContent>
-      </Select>
+      <div className='relative'>
+        <button
+          type='button'
+          onClick={() => setClientOpen(v => !v)}
+          className='flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring'
+        >
+          <span className={clientId ? 'text-foreground' : 'text-muted-foreground'}>
+            {clientId
+              ? ((clients||[]) as any[]).find((c:any) => c.id === clientId)?.name || 'Select client'
+              : 'Select client'}
+          </span>
+          <svg className='h-4 w-4 opacity-50' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M19 9l-7 7-7-7' /></svg>
+        </button>
+        {clientOpen && (
+          <div className='absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg'>
+            <div className='p-2'>
+              <input
+                autoFocus
+                className='w-full rounded border px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-ring'
+                placeholder='Search client...'
+                value={clientSearch}
+                onChange={e => setClientSearch(e.target.value)}
+                onClick={e => e.stopPropagation()}
+              />
+            </div>
+            <div className='max-h-60 overflow-y-auto'>
+              {((clients||[]) as any[])
+                .filter((c:any) => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+                .map((c:any) => (
+                  <div
+                    key={c.id}
+                    className='flex cursor-pointer items-center px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground'
+                    onClick={() => { setClientId(c.id); setClientOpen(false); setClientSearch(''); }}
+                  >
+                    {clientId === c.id && <svg className='mr-2 h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M5 13l4 4L19 7' /></svg>}
+                    <span className={clientId === c.id ? 'font-medium' : ''}>{c.name}</span>
+                  </div>
+                ))}
+              {!((clients||[]) as any[]).filter((c:any) => c.name.toLowerCase().includes(clientSearch.toLowerCase())).length && (
+                <div className='px-3 py-2 text-sm text-muted-foreground'>No clients found</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
       <p className='text-xs text-muted-foreground mt-1'>Companies only (Private Ltd, Public Ltd, OPC)</p>
     </div>
     <div className='w-36'>
