@@ -392,7 +392,7 @@ function PatternBTable({
                   onChangePyLt={() => {}} onChangePySt={() => {}}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions}
+                  headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
                 />
               ))}
@@ -583,7 +583,7 @@ function PatternATable({
                   onChangePySt={v => onChangePy(cr.id + "_st", v)}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions}
+                  headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
                   onPromote={(staticId) => onPromote(cr.id, staticId)}
                 />
               ))}

@@ -403,7 +403,7 @@ export default function AuditStatusRow({
 
       {/* 2 · Party Name (hover card shows audit employees / firm / partner) */}
       <TCell className="min-w-[140px] sticky left-10 z-10 bg-card">
-        {editing ? (
+        {isNew ? (
           <ClientCombobox
             value={draft.party_name}
             onChange={handleClientSelect}

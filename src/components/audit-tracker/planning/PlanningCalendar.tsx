@@ -12,10 +12,10 @@
  * Views: Month | Week
  * Navigation: < prev | Month Year | next >
  */
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { ChevronLeft, ChevronRight, Plus, Calendar, AlignJustify, UserPlus, X as XIcon, Search, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PlanEntry } from "../hooks/useAuditPlanning";
 import type { ClientOption } from "../hooks/useClients";
@@ -238,8 +238,11 @@ export default function PlanningCalendar({
   const [dialogEmpName,     setDialogEmpName]     = useState<string>("");
 
   // ── Add employee picker state ───────────────────────────────────────────────
-  const [addingEmployee, setAddingEmployee] = useState(false);
-  const [addEmpValue,    setAddEmpValue]    = useState("");
+  const [addingEmployee,  setAddingEmployee]  = useState(false);
+  const [addEmpValue,     setAddEmpValue]     = useState("");
+  const [addEmpSearch,    setAddEmpSearch]    = useState("");
+  const [addEmpOpen,      setAddEmpOpen]      = useState(false);
+  const addEmpInputRef = useRef<HTMLInputElement>(null);
 
   // Users not yet in planningStaff
   const availableToAdd = useMemo(() =>
@@ -247,19 +250,52 @@ export default function PlanningCalendar({
     [users, planningStaff]
   );
 
-  async function handleAddEmployee(userId: string) {
-    const u = users.find(u => u.id === userId);
-    if (!u) return;
-    await onAddStaff(userId, u.name);
-    setAddEmpValue("");
+  // Filtered by search
+  const filteredAvailable = useMemo(() =>
+    addEmpSearch
+      ? availableToAdd.filter(u => u.name.toLowerCase().includes(addEmpSearch.toLowerCase()))
+      : availableToAdd,
+    [availableToAdd, addEmpSearch]
+  );
+
+  // ── Per-column filters ────────────────────────────────────────────────────────
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+
+  function setColFilter(empId: string, val: string) {
+    setColumnFilters(p => ({ ...p, [empId]: val }));
+  }
+  function clearColFilters() {
+    setColumnFilters({});
+  }
+  const hasColFilters = Object.values(columnFilters).some(Boolean);
+
+  async function handleAddEmployee(userId: string, userName: string) {
+    await onAddStaff(userId, userName);
+    setAddEmpSearch("");
+    setAddEmpOpen(false);
     setAddingEmployee(false);
   }
 
   // ── Dates to render ────────────────────────────────────────────────────────
-  const dates = useMemo<Date[]>(() => {
+  const allDates = useMemo<Date[]>(() => {
     if (view === "month") return monthDates(year, month);
     return weekDates(weekStart);
   }, [view, year, month, weekStart]);
+
+  // Filter dates based on per-column client filters
+  const dates = useMemo<Date[]>(() => {
+    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v.trim());
+    if (activeFilters.length === 0) return allDates;
+    return allDates.filter(date => {
+      const iso = toISO(date);
+      return activeFilters.every(([empId, filterVal]) => {
+        const hits = cellEntries(entries, iso, empId);
+        return hits.some(e =>
+          (e.client_name || "").toLowerCase().includes(filterVal.toLowerCase())
+        );
+      });
+    });
+  }, [allDates, columnFilters, entries]);
 
   const todayISO = toISO(now);
 
@@ -348,23 +384,42 @@ export default function PlanningCalendar({
             <Plus size={12} /> New
           </Button>
 
-          {/* Add employee to calendar */}
+          {/* Add employee to calendar — searchable combobox */}
           {addingEmployee ? (
-            <div className="flex items-center gap-1">
-              <Select value={addEmpValue} onValueChange={handleAddEmployee}>
-                <SelectTrigger className="h-8 text-xs w-[160px]">
-                  <SelectValue placeholder="Select employee…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableToAdd.length === 0
-                    ? <SelectItem value="__none__" disabled className="text-xs">All employees added</SelectItem>
-                    : availableToAdd.map(u => (
-                        <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>
+            <div className="relative flex items-center gap-1">
+              <div className="relative">
+                <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <Input
+                  ref={addEmpInputRef}
+                  autoFocus
+                  value={addEmpSearch}
+                  onChange={e => { setAddEmpSearch(e.target.value); setAddEmpOpen(true); }}
+                  onFocus={() => setAddEmpOpen(true)}
+                  onBlur={() => setTimeout(() => setAddEmpOpen(false), 150)}
+                  placeholder="Search employee…"
+                  className="h-8 text-xs pl-6 w-[170px]"
+                />
+                {addEmpOpen && (
+                  <div className="absolute top-full left-0 z-50 mt-1 w-full min-w-[170px] bg-popover border rounded-md shadow-lg max-h-48 overflow-auto">
+                    {filteredAvailable.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground italic">
+                        {availableToAdd.length === 0 ? "All employees added" : "No match"}
+                      </div>
+                    ) : (
+                      filteredAvailable.map(u => (
+                        <div
+                          key={u.id}
+                          onMouseDown={e => { e.preventDefault(); handleAddEmployee(u.id, u.name); }}
+                          className="px-3 py-1.5 text-xs cursor-pointer hover:bg-accent"
+                        >
+                          {u.name}
+                        </div>
                       ))
-                  }
-                </SelectContent>
-              </Select>
-              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setAddingEmployee(false)}>
+                    )}
+                  </div>
+                )}
+              </div>
+              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => { setAddingEmployee(false); setAddEmpSearch(""); }}>
                 <XIcon size={13} />
               </Button>
             </div>
@@ -372,6 +427,14 @@ export default function PlanningCalendar({
             <Button size="sm" variant="outline" className="h-8 text-xs gap-1"
               onClick={() => setAddingEmployee(true)}>
               <UserPlus size={12} /> Add Employee
+            </Button>
+          )}
+
+          {/* Clear column filters */}
+          {hasColFilters && (
+            <Button size="sm" variant="outline" className="h-8 text-xs gap-1 text-amber-600 border-amber-300 hover:bg-amber-50"
+              onClick={clearColFilters}>
+              <XIcon size={12} /> Clear Filters
             </Button>
           )}
         </div>
@@ -394,9 +457,9 @@ export default function PlanningCalendar({
                 {/* Employee columns — only planning staff */}
                 {planningStaff.map(s => (
                   <th key={s.user_id}
-                    className="border border-indigo-600 px-1 py-2.5 text-center w-[90px] min-w-[90px]"
+                    className="border border-indigo-600 px-1 py-1 text-center w-[90px] min-w-[90px]"
                     title={s.name}>
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="flex items-center justify-center gap-1 mb-1">
                       <span className="truncate text-[11px]">{s.name.split(" ")[0].toUpperCase()}</span>
                       <button
                         onClick={() => onRemoveStaff(s.id)}
@@ -405,6 +468,20 @@ export default function PlanningCalendar({
                       >
                         <XIcon size={10} />
                       </button>
+                    </div>
+                    {/* Per-column client filter */}
+                    <div className="relative" onClick={e => e.stopPropagation()}>
+                      <Filter size={8} className="absolute left-1 top-1/2 -translate-y-1/2 text-indigo-300 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={columnFilters[s.user_id] || ""}
+                        onChange={e => setColFilter(s.user_id, e.target.value)}
+                        placeholder="filter…"
+                        className={cn(
+                          "w-full h-5 pl-3.5 pr-1 text-[9px] rounded bg-indigo-800 border border-indigo-500 text-white placeholder-indigo-400 focus:outline-none focus:border-yellow-300",
+                          columnFilters[s.user_id] && "border-yellow-300 bg-indigo-900"
+                        )}
+                      />
                     </div>
                   </th>
                 ))}

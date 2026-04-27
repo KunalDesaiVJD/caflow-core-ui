@@ -53,9 +53,9 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "UDIN Statutory",        id: "udin_statutory_audit",           filterType: "text"   },
   { label: "UDIN Date",             id: "udin_date",                      filterType: "date"   },
   { label: "Scanned",               id: "scanned",                        filterType: "yesno"  },
-  { label: "Prepared By",           id: "prepared_by",                    filterType: "text"   },
-  { label: "Checked By",            id: "checked_by",                     filterType: "text"   },
-  { label: "Uploaded By",           id: "uploaded_by",                    filterType: "text"   },
+  { label: "3CA/3CB+3CD Prepared By", id: "prepared_by",                   filterType: "text"   },
+  { label: "3CA/3CB+3CD Checked By",  id: "checked_by",                   filterType: "text"   },
+  { label: "3CA/3CB+3CD Uploaded By", id: "uploaded_by",                  filterType: "text"   },
   { label: "Remarks",               id: "remarks",                        filterType: "text"   },
   { label: "",                      id: "_actions",                       filterType: "none"   },
 ];
