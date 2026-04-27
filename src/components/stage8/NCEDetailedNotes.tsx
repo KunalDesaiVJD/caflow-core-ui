@@ -302,7 +302,7 @@ function CustomRowEditor({
                   </span>
                 )}
               </span>
-              {onEjectCustomSource && row.sources!.length > 1 && (
+              {onEjectCustomSource && (
                 <button
                   type="button"
                   title={`Move "${s.ledger}" to its own row`}
@@ -488,16 +488,14 @@ function PatternBTable({
                     <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate flex-1 italic">{s.ledger}</span>
-                        {cySources[row.id].length > 1 && (
-                          <button
-                            type="button"
-                            title={`Move "${s.ledger}" to its own row`}
-                            onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                            className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
-                          >
-                            <CornerUpRight className="h-3 w-3" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          title={`Move "${s.ledger}" to its own row`}
+                          onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                          className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                        >
+                          <CornerUpRight className="h-3 w-3" />
+                        </button>
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
@@ -761,16 +759,14 @@ function PatternATable({
                             <span className="text-[9px] uppercase ml-1 font-semibold not-italic">[{(s as any).column}]</span>
                           )}
                         </span>
-                        {cySources[row.id].length > 1 && (
-                          <button
-                            type="button"
-                            title={`Move "${s.ledger}" to its own row`}
-                            onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                            className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
-                          >
-                            <CornerUpRight className="h-3 w-3" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          title={`Move "${s.ledger}" to its own row`}
+                          onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                          className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                        >
+                          <CornerUpRight className="h-3 w-3" />
+                        </button>
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
