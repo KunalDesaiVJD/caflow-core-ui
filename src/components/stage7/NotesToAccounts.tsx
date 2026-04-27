@@ -451,7 +451,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     if (!engagement?.firm_id) return;
     supabase
       .from("firms")
-      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state")
+      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
       .eq("id", engagement.firm_id)
       .single()
       .then(({ data }) => { if (data) setFirmDetails(data); });
@@ -628,7 +628,14 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
   // partnerDetails is loaded async from users table; fall back to engagement.partner_name
   // which is always stored at engagement-creation time (no async required).
   const partnerAutoName   = partnerDetails?.name || engagement?.partner_name || "";
-  const partnerMembership = partnerDetails?.icai_reg_no || "[Membership No.]";
+  // Membership number: look up from firms.membership_numbers JSON (same source as
+  // the partner dropdown in Engagement Setup → Settings → Audit Registration).
+  const firmMembershipNos = (firmDetails?.membership_numbers as any[]) || [];
+  const partnerFromFirm   = firmMembershipNos.find(
+    (m: any) => m?.partner_name === (engagement?.partner_name || partnerDetails?.name)
+  );
+  const partnerMembership =
+    partnerFromFirm?.membership_no || partnerDetails?.icai_reg_no || "[Membership No.]";
   const assesseePlace    = sig.assesseePlace || clientDetails?.registered_state || "[Place]";
   const selectedCount    = notes.filter((n) => n.selected).length;
 
