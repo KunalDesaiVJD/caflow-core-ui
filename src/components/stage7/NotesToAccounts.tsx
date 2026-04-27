@@ -676,31 +676,43 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       { width: 3.3  },  // K  (11) narrow right spacer
     ];
 
-    const thin      = { style: "thin" as const };
-    const boxBorder = { top: thin, bottom: thin, left: thin, right: thin };
+    const thin = { style: "thin" as const };
 
-    // Apply border silently (slave cells of a merge group will throw — ignore)
-    const tb = (ref: string) => {
-      try { ws.getCell(ref).border = boxBorder; } catch (_e) { /* merged slave */ }
+    // ── Border helpers — matching NOTE 1.xlsx template EXACTLY ──────────────
+    // Template border rules:
+    //   Rows 2–5 (header): outer-box only on B–J
+    //     col B  = top + bottom + LEFT   (left edge of content area)
+    //     col C–I = top + bottom only    (no side borders on interior)
+    //     col J  = top + bottom + RIGHT  (right edge of content area)
+    //     col A, K = NO border
+    //   Row 6 (blank separator): only B.left + J.right (no top/bottom)
+    //   Rows 7+ (notes, signature): NO BORDERS AT ALL
+
+    // Apply outer-box border to one header row (rows 2–5)
+    const hdrBorder = (rn: number) => {
+      ws.getRow(rn).getCell(2).border  = { top: thin, bottom: thin, left: thin };   // B
+      for (let c = 3; c <= 9; c++) {
+        try { ws.getRow(rn).getCell(c).border = { top: thin, bottom: thin }; } catch(_e) {}
+      }
+      try { ws.getRow(rn).getCell(10).border = { top: thin, bottom: thin, right: thin }; } catch(_e) {} // J
     };
 
-    // Apply border to every cell A–K in a row
-    const borderRow = (rowNum: number) => {
-      ["A","B","C","D","E","F","G","H","I","J","K"].forEach(c => tb(`${c}${rowNum}`));
+    // Apply separator row borders (only vertical side lines, no horizontal)
+    const sepBorder = (rn: number) => {
+      ws.getRow(rn).getCell(2).border  = { left:  thin };  // B
+      ws.getRow(rn).getCell(10).border = { right: thin };  // J
     };
 
-    // ── Row 1: blank bordered row ─────────────────────────────────────────────
+    // ── Row 1: intentionally NO borders (matches template) ───────────────────
     let r = 1;
-    borderRow(r);
     r++;
 
     // ── Row 2: Entity name — B2:J2 merged, bold sz11, center, v:middle ───────
     ws.mergeCells(`B${r}:J${r}`);
     ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
-    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    ws.getCell(`B${r}`).border    = boxBorder;
-    tb(`A${r}`); tb(`K${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
+    hdrBorder(r);
     r++;
 
     // ── Row 3: Notes heading — B3:H3 merged; I3 = year ───────────────────────
@@ -708,44 +720,37 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements  for the year ended, 31st March, `;
     ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    ws.getCell(`B${r}`).border    = boxBorder;
     ws.getCell(`I${r}`).value     = auditYear;
     ws.getCell(`I${r}`).font      = { bold: true, size: 11 };
-    ws.getCell(`I${r}`).alignment = { vertical: "middle", wrapText: true };
-    ws.getCell(`I${r}`).border    = boxBorder;
-    tb(`A${r}`); tb(`J${r}`); tb(`K${r}`);
+    ws.getCell(`I${r}`).alignment = { vertical: "middle" };
+    hdrBorder(r);
     r++;
 
     // ── Row 4: blank row — B4:J4 merged ──────────────────────────────────────
     ws.mergeCells(`B${r}:J${r}`);
-    ws.getCell(`B${r}`).value     = "";
-    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top", wrapText: true };
-    ws.getCell(`B${r}`).border    = boxBorder;
-    tb(`A${r}`); tb(`K${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
+    hdrBorder(r);
     r++;
 
     // ── Row 5: "Note :" + summary title — B5 standalone, D5:J5 merged ────────
     ws.getCell(`B${r}`).value     = "Note :";
     ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { vertical: "middle" };
-    ws.getCell(`B${r}`).border    = boxBorder;
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { horizontal: "left", vertical: "middle" };
-    ws.getCell(`C${r}`).border    = boxBorder;
     ws.mergeCells(`D${r}:J${r}`);
     ws.getCell(`D${r}`).value     = "Summary of Significant accounting policies";
     ws.getCell(`D${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`D${r}`).alignment = { horizontal: "left", vertical: "middle" };
-    ws.getCell(`D${r}`).border    = boxBorder;
-    tb(`A${r}`); tb(`K${r}`);
+    hdrBorder(r);
     r++;
 
-    // ── Row 6: blank separator ────────────────────────────────────────────────
-    borderRow(r);
+    // ── Row 6: blank separator — only left (B) and right (J) side lines ──────
+    sepBorder(r);
     r++;
 
     // ── Notes rows (starting at r = 7) ────────────────────────────────────────
-    // Each note: 2 rows — content row (B:C merged=num, D:J merged=text) + blank continuation
+    // NO borders on note rows — matches template exactly
     const selectedNotes = notes.filter(n => n.selected);
     selectedNotes.forEach((note, idx) => {
       const num = idx + 1;
@@ -758,161 +763,107 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
         body += "\n\n" + resolveTokens(header.note3VariantText);
       }
 
-      // Content row: B:C merged = number, D:J merged = text
+      // Content row: B:C merged = number, D:J merged = text — NO borders
       ws.mergeCells(`B${r}:C${r}`);
       ws.getCell(`B${r}`).value     = num;
       ws.getCell(`B${r}`).font      = { size: 11 };
       ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top", wrapText: true };
-      ws.getCell(`B${r}`).border    = boxBorder;
       ws.mergeCells(`D${r}:J${r}`);
       ws.getCell(`D${r}`).value     = body;
       ws.getCell(`D${r}`).font      = { size: 11 };
       ws.getCell(`D${r}`).alignment = { horizontal: "justify", vertical: "top", wrapText: true };
-      ws.getCell(`D${r}`).border    = boxBorder;
       const lines = Math.max(1, Math.ceil(body.length / 90) + (body.match(/\n/g)?.length ?? 0));
       ws.getRow(r).height = Math.max(18, lines * 15);
-      tb(`A${r}`); tb(`K${r}`);
       r++;
 
-      // Blank continuation row (same column structure)
+      // Blank continuation row — NO borders
       ws.mergeCells(`B${r}:C${r}`);
-      ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top", wrapText: true };
-      ws.getCell(`B${r}`).border    = boxBorder;
+      ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "top" };
       ws.mergeCells(`D${r}:J${r}`);
-      ws.getCell(`D${r}`).alignment = { horizontal: "justify", vertical: "top", wrapText: true };
-      ws.getCell(`D${r}`).border    = boxBorder;
-      tb(`A${r}`); tb(`K${r}`);
+      ws.getCell(`D${r}`).alignment = { horizontal: "justify", vertical: "top" };
       r++;
     });
 
-    // ── One blank separator row before signature (matches template) ──────────
-    borderRow(r); r++;
+    // ── Blank separator row before signature — NO borders (matches template) ──
+    r++;
 
-    // ── Signature block — exactly matching NOTE 1.xlsx template ──────────────
+    // ── Signature block — NO borders (matches template) ──────────────────────
     // Left side : C:E merged (cols 3–5) = assessee name / sig / place / date
     // Right side: H:I merged (cols 8–9) = CA firm name / partner / membership
     const assesseeName   = sig.assesseeNameOverride || displayEntityName;
     const partnerDisplay = sig.partnerNameOverride  || partnerAutoName   || "[Partner Name]";
 
     // "For, [Assessee]"  |  "For [Firm]"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
     ws.getCell(`C${r}`).value     = `For, ${assesseeName}`;
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
-    ws.getCell(`C${r}`).border    = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = `For ${firmName}`;
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "Chartered Accountants"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
-    ws.getCell(`C${r}`).border = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = "Chartered Accountants";
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "FRN: ______"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
-    ws.getCell(`C${r}`).border = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = `FRN: ${firmFRN}`;
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "x__________________"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
     ws.getCell(`C${r}`).value     = "x__________________";
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
-    ws.getCell(`C${r}`).border    = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
-    ws.getCell(`H${r}`).border = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "Signature of assessee"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
     ws.getCell(`C${r}`).value     = "Signature of assessee";
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
-    ws.getCell(`C${r}`).border    = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
-    ws.getCell(`H${r}`).border = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "[Partner Name]"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
-    ws.getCell(`C${r}`).border = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = partnerDisplay;
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "Place:" + "Partner"
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
     ws.getCell(`C${r}`).value     = `Place: ${assesseePlace}`;
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
-    ws.getCell(`C${r}`).border    = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = "Partner";
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
     // "Date:" + "Membership No."
-    tb(`B${r}`);
     ws.mergeCells(`C${r}:E${r}`);
     ws.getCell(`C${r}`).value     = `Date : ${sig.assesseeDate || ""}`;
     ws.getCell(`C${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`C${r}`).alignment = { vertical: "top", wrapText: true };
-    ws.getCell(`C${r}`).border    = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
     ws.mergeCells(`H${r}:I${r}`);
     ws.getCell(`H${r}`).value     = `Membership No.: ${partnerMembership}`;
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
-    ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
-    r++;
-
-    // Final blank row
-    tb(`B${r}`);
-    ws.mergeCells(`C${r}:E${r}`);
-    ws.getCell(`C${r}`).border = boxBorder;
-    tb(`F${r}`); tb(`G${r}`); tb(`H${r}`); tb(`I${r}`); tb(`J${r}`);
-    tb(`A${r}`); tb(`K${r}`);
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], {
