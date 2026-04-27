@@ -673,26 +673,42 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       { width: 32 },  // H  CA firm signature block
     ];
 
+    const thin = { style: "thin" as const };
+    const boxBorder = { top: thin, bottom: thin, left: thin, right: thin };
+    // Apply box border to all cells B–H in a given row (handles merged cells)
+    const applyHeaderBorder = (row: number) => {
+      for (const col of ["B","C","D","E","F","G","H"]) {
+        try { ws.getCell(`${col}${row}`).border = boxBorder; } catch(_e) {/* skip merged inner cells */}
+      }
+    };
+
     let r = 2;
-    // Entity name — merged B:H, bold, centered
+    // Row 2 — Entity name: merged B:H, bold, centered, bordered
+    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value = header.entityNameOverride || displayEntityName;
     ws.getCell(`B${r}`).font = { bold: true, size: 13 };
-    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center" };
-    r++;
-    // Sub-heading
+    applyHeaderBorder(r);
+
+    r++;  // r = 3
+    // Row 3 — Notes heading: merged B:H, bold, centered, bordered
+    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).value =
       `Notes forming part of the Financial Statements  for the year ended, 31st March, ${auditYear}`;
     ws.getCell(`B${r}`).font = { bold: true, size: 11 };
-    ws.mergeCells(`B${r}:H${r}`);
     ws.getCell(`B${r}`).alignment = { horizontal: "center" };
-    r += 2;
-    // Section label — "Note :" in B, title in D (matches template layout)
+    applyHeaderBorder(r);
+
+    r++;  // r = 4  (NO blank row — goes directly to Note: label row)
+    // Row 4 — "Note :" label + "Summary of Significant Accounting Policies" (bordered)
     ws.getCell(`B${r}`).value = "Note :";
     ws.getCell(`B${r}`).font = { bold: true };
+    ws.mergeCells(`D${r}:H${r}`);
     ws.getCell(`D${r}`).value = "Summary of Significant Accounting Policies";
     ws.getCell(`D${r}`).font = { bold: true };
-    r += 2;
+    applyHeaderBorder(r);
+
+    r += 2;  // r = 6  (blank row 5, notes start at row 6)
 
     // Notes — no header row, no borders, blank row between each (matches template)
     const selectedNotes = notes.filter(n => n.selected);
