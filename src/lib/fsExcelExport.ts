@@ -1729,6 +1729,8 @@ function writeCashFlow(
  * @param bsData       Pre-computed Balance Sheet rows
  * @param plData       Pre-computed Statement of P&L rows
  * @param cfsData      Pre-computed Cash Flow Statement rows
+ * @param notesData    Optional Stage 5 Notes — adds 4 note sheets
+ * @param ratiosData   Optional Stage 7 Ratios — adds 3 ratio sheets (corporate only)
  * @returns            Blob containing the .xlsx file, ready for download
  */
 export async function generateFinancialStatementsXLSX(
@@ -1739,6 +1741,8 @@ export async function generateFinancialStatementsXLSX(
   cfsData:      CFSRowData,
   /** UI-6 Phase 5: optional Stage 5 Notes data — populates 4 extra sheets. */
   notesData:    import("./notesAutoPopulate").Stage5Notes | null = null,
+  /** UI-8 Phase 7: optional Stage 7 Ratios data — populates 3 extra sheets. */
+  ratiosData:   import("./ratioAutoPopulate").Stage7Ratios | null = null,
 ): Promise<Blob> {
   // ── Shared variables (per Phase 1 spec — define ONCE, use in all 3 sheets) ──
   const cyYear      = new Date(engagement.fy_end).getFullYear();
@@ -1797,6 +1801,13 @@ export async function generateFinancialStatementsXLSX(
   // and avoid a circular dep with notesAutoPopulate (which also imports types).
   const { writeNotesSheets } = await import("./fsNotesWriter");
   writeNotesSheets(wb, { cyYear, pyYear, companyName }, notesData);
+
+  // ── UI-8 Phase 7 — Ratio sheets (Current Year / Previous Year / RATIO) ───
+  // Corporate entities only; caller passes null for NCE engagements.
+  if (ratiosData != null) {
+    const { writeRatiosSheets } = await import("./fsRatiosWriter");
+    writeRatiosSheets(wb, { cyYear, pyYear, companyName }, ratiosData);
+  }
 
   // ── Serialise to a Blob ──────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();

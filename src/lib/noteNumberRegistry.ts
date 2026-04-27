@@ -63,6 +63,15 @@ export const NOTE_REGISTRY: NoteEntry[] = [
   { key: "finance_costs",        noteNo: 28, category: "PL",       label: "Finance Costs" },
   { key: "other_expenses",       noteNo: 29, category: "PL",       label: "Other expenses" },
   { key: "eps",                  noteNo: 30, category: "PL",       label: "Earnings per equity share" },
+
+  // ── Ratios (Stage 7 / UI-8) ─────────────────────────────────────────────
+  // Note 31 is the next available slot after EPS (Note 30).
+  // The Excel template for Ratio.xlsx labels its sheet "Note - 22" because
+  // that file has only one schedule; in CAFlow, where all 30 balance-sheet /
+  // P&L notes are already registered, Ratios logically follows as Note 31.
+  // The Ratios tab header reads from getNoteNo("ratios") so changing this
+  // single line is the only place that ever needs updating.
+  { key: "ratios",               noteNo: 31, category: "PL",       label: "Ratios" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

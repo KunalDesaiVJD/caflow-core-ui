@@ -29,10 +29,11 @@ import {
 } from "@/lib/fsExcelExport";
 import NotesTab from "@/components/stage5/NotesTab";
 import NCENotesTab from "@/components/stage7/NCENotesTab";
+import { RatiosTab } from "@/components/stage7/RatiosTab";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen,
+  BookOpen, TrendingUp,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -2674,8 +2675,24 @@ export default function PipelineFinancialStatements({
           console.warn("[FS Export] Could not load stage5_notes:", e);
         }
 
+        // UI-8 Phase 7 — Load stage7_ratios for the 3 extra ratio worksheets.
+        // Corporate entities only (NCE/non-corporate engagements pass null).
+        let ratiosData: any = null;
+        if (!isNonCorporate) {
+          try {
+            const { data: ratiosRow } = await supabase
+              .from("audit_engagements")
+              .select("stage7_ratios")
+              .eq("id", engagement.id)
+              .maybeSingle();
+            ratiosData = (ratiosRow as any)?.stage7_ratios ?? null;
+          } catch (e) {
+            console.warn("[FS Export] Could not load stage7_ratios:", e);
+          }
+        }
+
         const blob = await generateFinancialStatementsXLSX(
-          fsEng, fsFirm, memoBs, memoPl, memoCfs, notesData,
+          fsEng, fsFirm, memoBs, memoPl, memoCfs, notesData, ratiosData,
         );
         const safeClientPP = (engagement?.clients?.name || "Client").replace(/[^A-Za-z0-9]/g, "_");
         const urlPP = URL.createObjectURL(blob);
@@ -4469,6 +4486,12 @@ export default function PipelineFinancialStatements({
                 <BookOpen size={14} /> Notes
               </TabsTrigger>
             )}
+            {/* UI-8 — Ratios tab AFTER Notes, corporate only */}
+            {!isNonCorporate && (
+              <TabsTrigger value="ratios" className="gap-1.5">
+                <TrendingUp size={14} /> Ratios
+              </TabsTrigger>
+            )}
             {/* UI-7 — NCE Notes tab (Capital Account / Notes to Accounts / PPE).
                 Guard is REVERSED vs corporate UI-6 above; the two never co-exist
                 so re-using value="notes" is safe and gives both branches the same
@@ -4802,6 +4825,13 @@ export default function PipelineFinancialStatements({
                   Renders 4 sub-tabs (Note BS-Liab → Note BS-Asset → FA → Note PL),
                   uses notesAutoPopulate service for auto-fill, persists on every edit. */}
               <NotesTab engagementId={engagementId} cyYear={cyYear} pyYear={pyYear} />
+            </TabsContent>
+          )}
+
+          {/* ── Ratios (UI-8) — Note 22 — corporate only, after Notes ── */}
+          {!isNonCorporate && (
+            <TabsContent value="ratios" className="mt-3">
+              <RatiosTab engagementId={engagementId} engagement={engagement} />
             </TabsContent>
           )}
 
