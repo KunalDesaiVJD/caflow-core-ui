@@ -676,10 +676,17 @@ try {
   if (delErr) throw delErr;
 
   // Build rows from the category-wise summary
+  // Map asset_class (free-text from fa_categories, e.g. 'T', 'I', 'Tangible', '')
+  // to the two values accepted by nce_ppe_schedule_asset_category_check constraint.
+  const toAssetCategory = (cls: string | null | undefined): 'tangible' | 'intangible' => {
+    const c = (cls || '').trim().toLowerCase();
+    if (c === 'i' || c.startsWith('intang')) return 'intangible';
+    return 'tangible'; // default: most assets are tangible
+  };
   const rows = summary.map((s: any, idx: number) => ({
     engagement_id:    engagement.id,
     financial_year:   fy,
-    asset_category:   s.asset_class || 'A',
+    asset_category:   toAssetCategory(s.asset_class),
     asset_name:       s.category_name,
     rate_pct:         s.wdv_rate ?? s.slm_rate ?? null,
     opening_balance:  Math.round((s.gross_block_opening - s.acc_dep_opening) * 100) / 100,
