@@ -61,16 +61,17 @@ const fmtPctChange = (n: number) =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface Props {
-  notes:        Stage5Notes;
-  cyYear:       number;
-  pyYear:       number;
-  updatePath:   (path: string, value: any) => void;
-  resetPath:    (path: string) => void;
-  isOverridden: (path: string) => boolean;
+  notes:           Stage5Notes;
+  cyYear:          number;
+  pyYear:          number;
+  updatePath:      (path: string, value: any) => void;
+  resetPath:       (path: string) => void;
+  isOverridden:    (path: string) => boolean;
+  collapseControl?: boolean;
 }
 
 export default function NoteBSLiab({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden,
+  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy  = (key: string) => Number(notes.bs_liab[key]?.cy ?? 0);
   const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
@@ -170,7 +171,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 1 — SHARE CAPITAL
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard noteNo={sn("share_capital")} title="Share capital">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("share_capital")} title="Share capital">
 
         {/* ── Main amounts table ──────────────────────────────────────────── */}
         <div className="overflow-x-auto">
@@ -561,7 +562,7 @@ export default function NoteBSLiab({
       {/* ════════════════════════════════════════════════════════════════════
           NOTE 2 — RESERVES AND SURPLUS
       ════════════════════════════════════════════════════════════════════ */}
-      <NoteCard noteNo={sn("reserves_surplus")} title="Reserves and surplus">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("reserves_surplus")} title="Reserves and surplus">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
 
         {/* 1. General Reserve — auto from COA mapping */}
@@ -660,13 +661,14 @@ export default function NoteBSLiab({
           NOTES 3–10 (unchanged)
       ════════════════════════════════════════════════════════════════════ */}
 
-      <NoteCard noteNo={sn("lt_borrowings")} title="Long-term borrowings">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("lt_borrowings")} title="Long-term borrowings">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_borrowings.breakup") ?? []) as ListRow[]}
           onChange={(next) => updatePath("bs_liab.lt_borrowings.breakup", next)}
           descPlaceholder="Bank / party / loan particulars (Secured / Unsecured)"
           addLabel="Add row"
+          showSubtotal
         />
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
@@ -682,7 +684,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_liab")} title="Deferred tax liabilities (Net)">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Excess of depreciation claimed in IT Act over books"
@@ -713,7 +715,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("other_lt_liabilities", "other_lt_liab")} title="Other long-term liabilities">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("other_lt_liabilities", "other_lt_liab")} title="Other long-term liabilities">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_lt_liabilities.breakup") ?? []) as ListRow[]}
@@ -735,7 +737,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("lt_provisions")} title="Long-term provisions">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("lt_provisions")} title="Long-term provisions">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.lt_provisions.breakup") ?? []) as ListRow[]}
@@ -757,13 +759,14 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("st_borrowings")} title="Short-term borrowings">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("st_borrowings")} title="Short-term borrowings">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_borrowings.breakup") ?? []) as ListRow[]}
           onChange={(next) => updatePath("bs_liab.st_borrowings.breakup", next)}
           descPlaceholder="Bank OD / CC / Term loan / party (Secured / Unsecured)"
           addLabel="Add row"
+          showSubtotal
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"
@@ -779,7 +782,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("trade_payables")} title="Trade Payables">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_payables")} title="Trade Payables">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <EditableRow
           label="Total outstanding dues of Micro and Small Enterprises"
@@ -842,7 +845,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("other_curr_liab", "other_current_liab")} title="Other current liabilities">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.other_curr_liab.breakup") ?? []) as ListRow[]}
@@ -864,7 +867,7 @@ export default function NoteBSLiab({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("st_provisions")} title="Short-term provisions">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("st_provisions")} title="Short-term provisions">
         <NoteHeaderRow cyLabel={cyDateLbl} pyLabel={pyDateLbl} />
         <ListTable
           rows={(get("bs_liab.st_provisions.breakup") ?? []) as ListRow[]}

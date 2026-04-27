@@ -15,16 +15,17 @@ import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
-  notes:        Stage5Notes;
-  cyYear:       number;
-  pyYear:       number;
-  updatePath:   (path: string, value: any) => void;
-  resetPath:    (path: string) => void;
-  isOverridden: (path: string) => boolean;
+  notes:           Stage5Notes;
+  cyYear:          number;
+  pyYear:          number;
+  updatePath:      (path: string, value: any) => void;
+  resetPath:       (path: string) => void;
+  isOverridden:    (path: string) => boolean;
+  collapseControl?: boolean;
 }
 
 export default function NotePL({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden,
+  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy = (key: string) => Number(notes.pl[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
@@ -49,13 +50,14 @@ export default function NotePL({
     const path = `pl.${key}.breakup`;
     const rows: ListRow[] = (get(path) ?? []) as ListRow[];
     return (
-      <NoteCard noteNo={noteNo} title={title}>
+      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <ListTable
           rows={rows}
           onChange={(next) => updatePath(path, next)}
           descPlaceholder={breakupHint}
           addLabel="Add row"
+          showSubtotal
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}
@@ -87,7 +89,7 @@ export default function NotePL({
       {renderListNote(sn("other_income"), "Other Income", "other_income",
         "Interest / Forex gain / Misc income")}
 
-      <NoteCard noteNo={sn("cost_materials")} title="Cost of materials consumed">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("cost_materials")} title="Cost of materials consumed">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Opening Stock"
@@ -133,7 +135,7 @@ export default function NotePL({
       {renderListNote(sn("purchases_stock"), "Purchase of stock-in-trade", "purchases_stock",
         "Purchase break-up")}
 
-      <NoteCard noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("changes_inventory", "changes_inventories")} title="Changes in inventories of FG / WIP / SIT">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <div className="text-[10px] italic text-muted-foreground mt-1">Closing Stock</div>
         <EditableRow
@@ -216,7 +218,7 @@ export default function NotePL({
         "Other expense particulars")}
 
       {/* EPS — Note 30 per NOTE_REGISTRY; always visible for corporate entities */}
-      <NoteCard noteNo={getNoteNo("eps")} title="Earnings per share (EPS)">
+      <NoteCard collapseControl={collapseControl} noteNo={getNoteNo("eps")} title="Earnings per share (EPS)">
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
         <EditableRow
           label="Net Profit After Tax (NPAT)"

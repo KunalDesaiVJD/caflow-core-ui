@@ -12,16 +12,17 @@ import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { getNoteNo } from "@/lib/noteNumberRegistry";
 
 interface Props {
-  notes:        Stage5Notes;
-  cyYear:       number;
-  pyYear:       number;
-  updatePath:   (path: string, value: any) => void;
-  resetPath:    (path: string) => void;
-  isOverridden: (path: string) => boolean;
+  notes:           Stage5Notes;
+  cyYear:          number;
+  pyYear:          number;
+  updatePath:      (path: string, value: any) => void;
+  resetPath:       (path: string) => void;
+  isOverridden:    (path: string) => boolean;
+  collapseControl?: boolean;
 }
 
 export default function NoteBSAsset({
-  notes, cyYear, pyYear, updatePath, resetPath, isOverridden,
+  notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl,
 }: Props) {
   const cy = (key: string) => Number(notes.bs_asset[key]?.cy ?? 0);
   const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
@@ -53,7 +54,7 @@ export default function NoteBSAsset({
     breakupPath: string,
     breakupHint: string,
   ) => (
-    <NoteCard noteNo={noteNo} title={title}>
+    <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
       <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
       <ListTable
         rows={(get(breakupPath) ?? []) as ListRow[]}
@@ -78,7 +79,7 @@ export default function NoteBSAsset({
 
   return (
     <div className="space-y-4">
-      <NoteCard noteNo={sn("nc_investments")} title="Non-current investments">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("nc_investments")} title="Non-current investments">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <div className="text-[10px] italic text-muted-foreground">(a) Investment property / (b) Equity Instruments / (c) Other investments</div>
         <ListTable
@@ -101,7 +102,7 @@ export default function NoteBSAsset({
         />
       </NoteCard>
 
-      <NoteCard noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("deferred_tax_asset", "deferred_tax_assets")} title="Deferred tax assets (Net)">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Excess of depreciation in books over IT Act"
@@ -135,7 +136,7 @@ export default function NoteBSAsset({
       {renderSingleNote(sn("inventories"), "Inventories", "inventories",
         "bs_asset.inventories.breakup", "Raw materials / WIP / Finished goods / Stores & spares")}
 
-      <NoteCard noteNo={sn("trade_receivables")} title="Trade Receivables">
+      <NoteCard collapseControl={collapseControl} noteNo={sn("trade_receivables")} title="Trade Receivables">
         <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
         <EditableRow
           label="Outstanding for a period exceeding 6 months"

@@ -49,7 +49,26 @@ Deno.serve(async (req) => {
         const cat = asset.fa_categories;
         if (!cat) { errors.push(`${asset.asset_name}: no category`); continue; }
 
-        const method  = (cat.depreciation_method || 'WDV').toUpperCase() as 'WDV' | 'SLM';
+        const method  = (cat.depreciation_method || 'WDV').toUpperCase() as 'WDV' | 'SLM' | 'N/A';
+
+        // N/A method = not depreciable (e.g. Land) — carry values forward unchanged
+        if (method === 'N/A') {
+          const gbOpen_ = parseFloat(asset.gross_block_opening) || 0;
+          const disps_  = parseFloat(asset.disposals_during_year) || 0;
+          const addns_  = parseFloat(asset.additions_during_year) || 0;
+          await sb.from('fa_assets').update({
+            depreciation_for_year: 0, dep_on_opening_block: 0, dep_on_additions: 0,
+            gross_block_closing: gbOpen_ + addns_ - disps_,
+            accumulated_dep_closing: parseFloat(asset.accumulated_dep_opening) || 0,
+            wdv_closing: gbOpen_ + addns_ - disps_,
+            is_fully_depreciated: false,
+            depreciation_method_used: 'N/A',
+            dep_formula_json: { method: 'N/A', status: 'non_depreciable', formula_text: 'Not Applicable — infinite useful life (e.g. Land). No depreciation charged.' },
+          }).eq('id', asset.id);
+          results.push({ asset_id: asset.id, asset_name: asset.asset_name, status: 'ok', method: 'N/A', depreciation: 0, wdv_closing: gbOpen_ + addns_ - disps_ });
+          continue;
+        }
+
         const gbOpen  = parseFloat(asset.gross_block_opening)     || 0;
         const acOpen  = parseFloat(asset.accumulated_dep_opening) || 0;
         const addns   = parseFloat(asset.additions_during_year)   || 0;

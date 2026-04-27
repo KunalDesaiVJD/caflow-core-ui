@@ -83,6 +83,8 @@ const MethodBadge = ({ method }: { method: string }) => (
 <Badge variant='outline' className={cn('text-[9px] px-1.5 py-0 font-semibold',
 method === 'SLM'
 ? 'border-blue-400 text-blue-700 bg-blue-50 dark:bg-blue-950/30 dark:text-blue-300'
+: method === 'N/A'
+? 'border-slate-400 text-slate-600 bg-slate-50 dark:bg-slate-950/30 dark:text-slate-300'
 : 'border-amber-400 text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-300'
 )}>{method || 'WDV'}</Badge>
 );
@@ -562,13 +564,14 @@ onError: (e:any) => toast.error(e.message),
 
 const addCatMut = useMutation({
 mutationFn: async () => {
+const isNA = nc.depreciation_method === 'N/A';
 const {error} = await supabase.from('fa_categories').insert({
   firm_id:user?.firm_id||null, name:nc.name,
   asset_class:nc.asset_class,
-  useful_life_years:parseInt(nc.useful_life_years)||10,
-  wdv_rate:parseFloat(nc.wdv_rate)||null,
-  slm_rate:parseFloat(nc.slm_rate)||null,
-  residual_value_pct:parseFloat(nc.residual_value_pct)||5,
+  useful_life_years:isNA ? 0 : (parseInt(nc.useful_life_years)||10),
+  wdv_rate:isNA ? 0 : (parseFloat(nc.wdv_rate)||null),
+  slm_rate:isNA ? 0 : (parseFloat(nc.slm_rate)||null),
+  residual_value_pct:isNA ? 0 : (parseFloat(nc.residual_value_pct)||5),
   schedule_ii_part:nc.schedule_ii_part,
   depreciation_method:nc.depreciation_method,
 } as any);
@@ -1729,22 +1732,39 @@ return (
       </div>
       <div className='grid grid-cols-2 gap-3'>
         <div><Label>Method *</Label>
-          <Select value={nc.depreciation_method} onValueChange={v=>setNc(p=>({...p,depreciation_method:v}))}>
+          <Select value={nc.depreciation_method} onValueChange={v=>setNc(p=>({...p,depreciation_method:v,useful_life_years:v==='N/A'?'':p.useful_life_years,wdv_rate:v==='N/A'?'0':p.wdv_rate,slm_rate:v==='N/A'?'0':p.slm_rate}))}>
             <SelectTrigger><SelectValue/></SelectTrigger>
-            <SelectContent><SelectItem value='WDV'>WDV</SelectItem><SelectItem value='SLM'>SLM</SelectItem></SelectContent>
+            <SelectContent>
+              <SelectItem value='WDV'>WDV</SelectItem>
+              <SelectItem value='SLM'>SLM</SelectItem>
+              <SelectItem value='N/A'>Not Applicable (No Depreciation)</SelectItem>
+            </SelectContent>
           </Select>
         </div>
-        <div><Label>Useful Life (yrs) *</Label><Input type='number' value={nc.useful_life_years} onChange={e=>setNc(p=>({...p,useful_life_years:e.target.value}))}/></div>
+        <div>
+          <Label>Useful Life (yrs){nc.depreciation_method!=='N/A'&&' *'}</Label>
+          {nc.depreciation_method==='N/A'
+            ? <Input value='Infinite' disabled className='text-muted-foreground'/>
+            : <Input type='number' value={nc.useful_life_years} onChange={e=>setNc(p=>({...p,useful_life_years:e.target.value}))}/>
+          }
+        </div>
       </div>
-      <div className='grid grid-cols-3 gap-3'>
-        <div><Label>WDV Rate %</Label><Input type='number' step='0.01' value={nc.wdv_rate} onChange={e=>setNc(p=>({...p,wdv_rate:e.target.value}))}/></div>
-        <div><Label>SLM Rate %</Label><Input type='number' step='0.01' value={nc.slm_rate} onChange={e=>setNc(p=>({...p,slm_rate:e.target.value}))}/></div>
-        <div><Label>Residual %</Label><Input type='number' value={nc.residual_value_pct} onChange={e=>setNc(p=>({...p,residual_value_pct:e.target.value}))}/></div>
-      </div>
+      {nc.depreciation_method!=='N/A' && (
+        <div className='grid grid-cols-3 gap-3'>
+          <div><Label>WDV Rate %</Label><Input type='number' step='0.01' value={nc.wdv_rate} onChange={e=>setNc(p=>({...p,wdv_rate:e.target.value}))}/></div>
+          <div><Label>SLM Rate %</Label><Input type='number' step='0.01' value={nc.slm_rate} onChange={e=>setNc(p=>({...p,slm_rate:e.target.value}))}/></div>
+          <div><Label>Residual %</Label><Input type='number' value={nc.residual_value_pct} onChange={e=>setNc(p=>({...p,residual_value_pct:e.target.value}))}/></div>
+        </div>
+      )}
+      {nc.depreciation_method==='N/A' && (
+        <p className='text-[11px] text-muted-foreground bg-amber-50 border border-amber-200 rounded px-2 py-1'>
+          ℹ️ Assets in this category (e.g. Land) have infinite useful life — no depreciation will be calculated.
+        </p>
+      )}
     </div>
     <DialogFooter>
       <Button variant='outline' onClick={()=>setShowAddCat(false)}>Cancel</Button>
-      <Button onClick={()=>addCatMut.mutate()} disabled={!nc.name||!nc.useful_life_years||addCatMut.isPending}>Add Category</Button>
+      <Button onClick={()=>addCatMut.mutate()} disabled={!nc.name||(nc.depreciation_method!=='N/A'&&!nc.useful_life_years)||addCatMut.isPending}>Add Category</Button>
     </DialogFooter>
   </DialogContent>
 </Dialog>
@@ -1765,20 +1785,31 @@ return (
           <SelectTrigger><SelectValue placeholder='Select category'/></SelectTrigger>
           <SelectContent>
             {(cats||[]).map((c:any)=>(
-              <SelectItem key={c.id} value={c.id}>{c.name} — {c.depreciation_method||'WDV'} {fmtPct(c.depreciation_method==='SLM'?c.slm_rate:c.wdv_rate)} ({c.useful_life_years}yr)</SelectItem>
+              <SelectItem key={c.id} value={c.id}>
+                {c.name} — {c.depreciation_method==='N/A'
+                  ? 'Not Applicable (Infinite Life)'
+                  : `${c.depreciation_method||'WDV'} ${fmtPct(c.depreciation_method==='SLM'?c.slm_rate:c.wdv_rate)} (${c.useful_life_years}yr)`}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {selCat&&(
           <div className={cn('mt-2 px-3 py-2 rounded text-xs flex items-center gap-3',
-            selCat.depreciation_method==='SLM'
+            selCat.depreciation_method==='N/A'
+              ?'bg-slate-50 dark:bg-slate-950/30 border border-slate-200'
+              :selCat.depreciation_method==='SLM'
               ?'bg-blue-50 dark:bg-blue-950/30 border border-blue-200'
               :'bg-amber-50 dark:bg-amber-950/30 border border-amber-200'
           )}>
             <MethodBadge method={selCat.depreciation_method||'WDV'}/>
-            <span className='text-muted-foreground'>Rate:</span>
-            <span className='font-semibold font-mono'>{fmtPct(selCat.depreciation_method==='SLM'?selCat.slm_rate:selCat.wdv_rate)}</span>
-            <span className='ml-auto text-muted-foreground'>Applied on: {selCat.depreciation_method==='SLM'?'Original Gross Block':'Written Down Value'}</span>
+            {selCat.depreciation_method==='N/A'
+              ? <span className='text-muted-foreground'>Infinite useful life — no depreciation will be charged</span>
+              : <>
+                  <span className='text-muted-foreground'>Rate:</span>
+                  <span className='font-semibold font-mono'>{fmtPct(selCat.depreciation_method==='SLM'?selCat.slm_rate:selCat.wdv_rate)}</span>
+                  <span className='ml-auto text-muted-foreground'>Applied on: {selCat.depreciation_method==='SLM'?'Original Gross Block':'Written Down Value'}</span>
+                </>
+            }
           </div>
         )}
       </div>

@@ -7,9 +7,9 @@
  * AgeingTable) so every note file imports from one place.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Pencil, X, Plus, Trash2 } from "lucide-react";
+import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // Indian numbering: 1,23,45,678.00 with parens for negatives, "-" for zero.
@@ -127,15 +127,46 @@ export function EditableCell({
 // Layout primitives
 // ─────────────────────────────────────────────────────────────────────────
 
-export function NoteCard({ noteNo, title, children }: { noteNo: number | string | null; title: string; children: React.ReactNode }) {
+/**
+ * collapseControl (optional):
+ *   true  → force all NoteCards collapsed (Collapse All)
+ *   false → force all NoteCards expanded  (Expand All)
+ *   undefined → uncontrolled; user's own toggle governs
+ */
+export function NoteCard({
+  noteNo, title, children, defaultCollapsed = false, collapseControl,
+}: {
+  noteNo: number | string | null;
+  title: string;
+  children: React.ReactNode;
+  defaultCollapsed?: boolean;
+  collapseControl?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  // Respond to Expand All / Collapse All from parent
+  useEffect(() => {
+    if (collapseControl !== undefined) setCollapsed(collapseControl);
+  }, [collapseControl]);
+
   return (
     <section className="rounded-lg border bg-card mb-4">
-      <header className="border-b bg-muted/30 px-3 py-1.5">
-        <h3 className="text-xs font-semibold">
+      <header
+        className="border-b bg-muted/30 px-3 py-1.5 flex items-center gap-1.5 cursor-pointer select-none hover:bg-muted/50 transition-colors"
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        {collapsed
+          ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          : <ChevronDown  className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        }
+        <h3 className="text-xs font-semibold flex-1">
           {noteNo != null ? `Note ${noteNo} — ` : ""}{title}
         </h3>
+        <span className="text-[9px] text-muted-foreground">{collapsed ? "expand" : "collapse"}</span>
       </header>
-      <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
+      {!collapsed && (
+        <div className="px-3 py-2 text-[11px] space-y-2">{children}</div>
+      )}
     </section>
   );
 }
@@ -244,11 +275,19 @@ export function ListTable({
   onChange,
   addLabel = "Add row",
   descPlaceholder = "Particulars",
+  showSubtotal = false,
 }: {
   rows:             ListRow[];
   onChange:         (next: ListRow[]) => void;
   addLabel?:        string;
   descPlaceholder?: string;
+  /**
+   * When true, a read-only "Sub-total" row is rendered below the items
+   * whenever there are ≥ 2 rows. Useful when multiple auto-linked ledgers
+   * (e.g. "Sand Purchase 5%", "Steel Purchase 18%") appear under the same
+   * note — the user can see their combined value at a glance.
+   */
+  showSubtotal?:    boolean;
 }) {
   // Patch a row. If the row is currently "linked" and the user touched any
   // user-visible field (description / amount), flip it to "manual" and
@@ -354,6 +393,21 @@ export function ListTable({
           </div>
         );
       })}
+
+      {/* Sub-total row — shown when showSubtotal=true and ≥ 2 rows exist */}
+      {showSubtotal && displayRows.length >= 2 && (() => {
+        const totalCY = displayRows.reduce((s, r) => s + (r.amount_cy ?? 0), 0);
+        const totalPY = displayRows.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+        return (
+          <div className="grid grid-cols-12 gap-2 items-center border-t border-muted pt-1 mt-0.5">
+            <div className="col-span-6 text-[10px] font-semibold text-muted-foreground">Sub-total</div>
+            <div className="col-span-3 text-right text-[10px] font-semibold tabular-nums pr-1">{formatINR(totalCY)}</div>
+            <div className="col-span-2 text-right text-[10px] font-semibold tabular-nums pr-1">{formatINR(totalPY)}</div>
+            <div className="col-span-1" />
+          </div>
+        );
+      })()}
+
       <Button
         type="button" variant="outline" size="sm"
         onClick={add}

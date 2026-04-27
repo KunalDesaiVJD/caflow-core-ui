@@ -529,12 +529,12 @@ function CorporateBalanceSheetView({
                     ? <EditableNoteCell value={row.noteNo ?? null} onCommit={(v) => onEditNote!(row.code!, v)} />
                     : (row.noteNo ?? "")}
                 </td>
-                <td className={`text-right tabular-nums py-0.5 px-1 ${fontSize}`}>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy} onCommit={(v) => onCommitCY!(row.code!, v)} />
                     : formatINR(row.cy)}
                 </td>
-                <td className={`text-right tabular-nums py-0.5 px-1 ${fontSize}`}>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${fontSize}`}>
                   {editablePY
                     ? <EditableMoneyCell value={row.py} onCommit={(v) => onCommitPY!(row.code!, v)} />
                     : formatINR(row.py)}
@@ -740,12 +740,12 @@ function CorporatePLView({
                 <td className={`text-center py-0.5 px-1 ${boldCls} text-[11px]`}>{row.roman || ""}</td>
                 <td className={`py-0.5 px-3 ${boldCls} text-[11px]`} style={{ paddingLeft: 12 + indentPx }}>{row.label}</td>
                 <td className="text-center py-0.5 px-2 text-muted-foreground">{row.noteNo ?? ""}</td>
-                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
                   {editableCY
                     ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommitCY!(row.code!, v)} />
                     : (row.cy === undefined ? "" : <span className="inline-flex items-center gap-1">{formatINR(row.cy)}{isLockedCY && <span title="Auto-computed from INV_* ledgers — locked" className="text-blue-400">🔒</span>}</span>)}
                 </td>
-                <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} text-[11px]`}>
+                <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} text-[11px]`}>
                   {editablePY
                     ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommitPY!(row.code!, v)} />
                     : (row.py === undefined ? "" : formatINR(row.py))}
@@ -1260,12 +1260,12 @@ function CorporateCFView({ bs, pl, cfs, cyYear, pyYear, companyName, overrides, 
                 <tr key={idx} className="hover:bg-muted/10">
                   <td />
                   <td className={`py-0.5 px-3 ${boldCls} ${fontSize}`} style={{ paddingLeft: 24 }}>{row.label}</td>
-                  <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} ${fontSize}`}>
+                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
                     {editable
                       ? <EditableMoneyCell value={row.cy ?? 0} onCommit={(v) => onCommit!(row.rowKey!, "cy", v)} />
                       : (row.cy === undefined ? "" : formatINR(row.cy))}
                   </td>
-                  <td className={`text-right tabular-nums py-0.5 px-1 ${boldCls} ${fontSize}`}>
+                  <td className={`text-right tabular-nums py-0.5 px-3 ${boldCls} ${fontSize}`}>
                     {editable
                       ? <EditableMoneyCell value={row.py ?? 0} onCommit={(v) => onCommit!(row.rowKey!, "py", v)} />
                       : (row.py === undefined ? "" : formatINR(row.py))}

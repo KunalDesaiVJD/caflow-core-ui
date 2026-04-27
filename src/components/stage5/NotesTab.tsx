@@ -15,7 +15,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Printer, FileText, Wallet, Building2, Coins } from "lucide-react";
+import { Loader2, RefreshCw, Printer, FileText, Wallet, Building2, Coins, ChevronsUpDown, ChevronsDownUp } from "lucide-react";
 import { toast } from "sonner";
 import {
   loadStage5Notes, saveStage5Notes, autoPopulateNotes,
@@ -35,10 +35,12 @@ interface Props {
 }
 
 export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
-  const [notes,    setNotes]    = useState<Stage5Notes | null>(null);
-  const [loading,  setLoading]  = useState(true);
-  const [syncing,  setSyncing]  = useState(false);
-  const [activeTab,setActiveTab]= useState<"bs_liab" | "bs_asset" | "pl" | "fa">("bs_liab");
+  const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
+  const [loading,       setLoading]       = useState(true);
+  const [syncing,       setSyncing]       = useState(false);
+  const [activeTab,     setActiveTab]     = useState<"bs_liab" | "bs_asset" | "pl" | "fa">("bs_liab");
+  // undefined = uncontrolled, true = all collapsed, false = all expanded
+  const [collapseAll,   setCollapseAll]   = useState<boolean | undefined>(undefined);
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
 
   // ── Initial load + auto-populate-if-needed ────────────────────────────
@@ -226,13 +228,31 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
             </span>
           )}
         </span>
-        <Button
-          type="button" size="sm" variant="outline"
-          onClick={handlePrint}
-          className="h-7 text-xs gap-1 ml-auto"
-        >
-          <Printer className="w-3 h-3" /> Print Notes
-        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            type="button" size="sm" variant="ghost"
+            onClick={() => setCollapseAll(false)}
+            className="h-7 text-xs gap-1"
+            title="Expand all notes"
+          >
+            <ChevronsUpDown className="w-3 h-3" /> Expand All
+          </Button>
+          <Button
+            type="button" size="sm" variant="ghost"
+            onClick={() => setCollapseAll(true)}
+            className="h-7 text-xs gap-1"
+            title="Collapse all notes"
+          >
+            <ChevronsDownUp className="w-3 h-3" /> Collapse All
+          </Button>
+          <Button
+            type="button" size="sm" variant="outline"
+            onClick={handlePrint}
+            className="h-7 text-xs gap-1"
+          >
+            <Printer className="w-3 h-3" /> Print Notes
+          </Button>
+        </div>
       </div>
 
       {/* Sub-tabs */}
@@ -256,18 +276,21 @@ export default function NotesTab({ engagementId, cyYear, pyYear }: Props) {
           <NoteBSLiab
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+            collapseControl={collapseAll}
           />
         </TabsContent>
         <TabsContent value="bs_asset" className="mt-3">
           <NoteBSAsset
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+            collapseControl={collapseAll}
           />
         </TabsContent>
         <TabsContent value="pl" className="mt-3">
           <NotePL
             notes={notes} cyYear={cyYear} pyYear={pyYear}
             updatePath={updatePath} resetPath={resetPath} isOverridden={isOverridden}
+            collapseControl={collapseAll}
           />
         </TabsContent>
         <TabsContent value="fa" className="mt-3">
