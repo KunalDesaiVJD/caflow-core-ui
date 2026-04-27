@@ -4151,8 +4151,10 @@ export default function PipelineFinancialStatements({
 
   // ─── FS row renderer ───
   const renderFSRows = (items: (FSLineItem & { depth: number })[]) =>
-    items.map(item => {
-      // ── Section-divider row (e.g. "EQUITY AND LIABILITIES", "ASSETS") ─────
+    items
+      .filter(item => !item.hideFromDisplay)   // skip computation-only rows
+      .map(item => {
+      // ── Section-divider row (e.g. "EQUITY AND LIABILITIES", "INCOME") ─────
       if (item.isDivider) {
         return (
           <TableRow key={item.code} className="bg-muted/60">
@@ -4210,10 +4212,12 @@ export default function PipelineFinancialStatements({
             {item.noteRef && !isHeader && !isTotalRow ? item.noteRef : ""}
           </TableCell>
 
-          {/* CY amount + pencil */}
+          {/* CY amount + pencil
+               Intermediate section headers (has children, NOT a total row) never
+               show amounts — they are pure structural labels (per Excel template). */}
           <TableCell className="text-right text-xs font-mono tabular-nums">
             <div className="flex items-center justify-end gap-1">
-              {amount !== 0 ? (
+              {(isHeader && !isTotalRow) ? null : amount !== 0 ? (
                 <span className={amount < 0 ? "text-destructive" : ""}>
                   {amount < 0 ? "(" : ""}₹{Math.abs(amount).toLocaleString("en-IN")}{amount < 0 ? ")" : ""}
                 </span>
@@ -4234,16 +4238,16 @@ export default function PipelineFinancialStatements({
             </div>
           </TableCell>
 
-          {/* PY amount + amber badge + pencil */}
+          {/* PY amount — hidden for intermediate section headers, same as CY */}
           <TableCell className="text-right text-xs font-mono tabular-nums text-muted-foreground">
             <div className="flex items-center justify-end gap-1">
-              {hasPyOverride && (
+              {!(isHeader && !isTotalRow) && hasPyOverride && (
                 <span
                   title={pyMeta ? `Manually overridden by ${pyMeta.by} on ${new Date(pyMeta.at).toLocaleDateString("en-IN")}` : "Manually overridden"}
                   className="text-amber-600 cursor-help"
                 >⚠</span>
               )}
-              {py !== 0 ? (
+              {(isHeader && !isTotalRow) ? null : py !== 0 ? (
                 <span className={hasPyOverride ? "text-amber-700 dark:text-amber-400" : ""}>
                   {py < 0 ? "(" : ""}₹{Math.abs(py).toLocaleString("en-IN")}{py < 0 ? ")" : ""}
                 </span>

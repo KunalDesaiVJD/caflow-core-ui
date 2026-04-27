@@ -23,6 +23,8 @@ export interface FSLineItem {
   /** When true, flattenTree outputs children BEFORE this node so it appears
    *  as a "TOTAL" row at the bottom of its group instead of a header at top. */
   showTotalLast?: boolean;
+  /** Suppress this row in on-screen renderFSRows (still participates in computation). */
+  hideFromDisplay?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -76,20 +78,26 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
   { code: "NCE_ACCTPOL", name: "Summary of Significant Accounting Policies", noteRef: 1, section: "NCE_BS_footnote" },
 
   // ── PROFIT & LOSS — INCOME ──
-  // showTotalLast: children (I, II) render first; parent total (III) renders after.
+  // "INCOME" is the section label; NCE_PL_INC is the total that renders after I & II.
+  { code: "NCE_PL_INC_HDR", name: "INCOME", noteRef: null, section: "NCE_PL_income", isDivider: true },
   { code: "NCE_PL_INC", name: "III. Total Income (I + II)", noteRef: null, section: "NCE_PL_income", showTotalLast: true, children: [
     { code: "NCE_REV_OPS", name: "I.  Revenue from operations", noteRef: 22, section: "NCE_PL_income" },
     { code: "NCE_REV_OTH", name: "II. Other income",            noteRef: 23, section: "NCE_PL_income" },
   ]},
 
   // ── PROFIT & LOSS — EXPENSES ──
+  // NCE_CII (changes in inventories) is hidden from display — its value is already
+  // captured within Cost of goods sold in the Excel template.  It is kept in the
+  // tree so inventory dual-posting still functions correctly, but hideFromDisplay
+  // suppresses it in renderFSRows.
+  { code: "NCE_PL_EXP_HDR", name: "EXPENSES", noteRef: null, section: "NCE_PL_expenses", isDivider: true },
   { code: "NCE_PL_EXP", name: "IV. Total Expenses", noteRef: null, section: "NCE_PL_expenses", showTotalLast: true, children: [
-    { code: "NCE_COGS",     name: "(a) Cost of goods sold / purchases",  noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_CII",      name: "(b) Changes in inventories of stock", noteRef: 24, section: "NCE_PL_expenses" },
-    { code: "NCE_EMP_EXP",  name: "(c) Employee benefits expense",      noteRef: 25, section: "NCE_PL_expenses" },
-    { code: "NCE_FIN_COST", name: "(d) Finance costs",                  noteRef: 26, section: "NCE_PL_expenses" },
-    { code: "NCE_DEPR",     name: "(e) Depreciation and amortisation",  noteRef: 27, section: "NCE_PL_expenses" },
-    { code: "NCE_OTH_EXP",  name: "(f) Other expenses",                noteRef: 28, section: "NCE_PL_expenses" },
+    { code: "NCE_COGS",     name: "(a) Cost of goods sold",          noteRef: 24, section: "NCE_PL_expenses" },
+    { code: "NCE_CII",      name: "(a) Changes in inventories",      noteRef: 24, section: "NCE_PL_expenses", hideFromDisplay: true },
+    { code: "NCE_EMP_EXP",  name: "(b) Employee benefits expense",   noteRef: 25, section: "NCE_PL_expenses" },
+    { code: "NCE_FIN_COST", name: "(c) Finance costs",               noteRef: 26, section: "NCE_PL_expenses" },
+    { code: "NCE_DEPR",     name: "(d) Depreciation and amortisation", noteRef: 27, section: "NCE_PL_expenses" },
+    { code: "NCE_OTH_EXP",  name: "(e) Other expenses",              noteRef: 28, section: "NCE_PL_expenses" },
   ]},
 
   // ── PROFIT CHAIN ──

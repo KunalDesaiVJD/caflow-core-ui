@@ -295,26 +295,31 @@ export default function AuditPipeline() {
 
       // Build per-client flags from active services (source 5).
       // Accept the row if:
-      //   a) linked_module === "audit", OR
-      //   b) category name contains "audit"-related keywords, OR
-      //   c) no category at all (left-join returned null) — treat as audit service
-      //      since it was explicitly added to an audit-enabled client.
+      //   a) linked_module is any audit/tax/statutory/compliance variant, OR
+      //   b) category name contains "audit" OR "tax" keywords, OR
+      //   c) no category at all (left-join returned null) — treat as audit service.
+      // This is intentionally broad: if a client has a service that looks audit/tax-adjacent
+      // in ANY way they should surface in the dropdown. Firms use many naming conventions
+      // ("Tax Audit Services", "Statutory Compliance", "Taxation", "Income Tax Audit", etc.).
+      const AUDIT_MODULES = new Set(["audit", "statutory", "tax", "tax_audit", "compliance", "income_tax"]);
       const serviceMap: Record<string, { hasStat: boolean; hasTax: boolean; hasInternal: boolean }> = {};
       for (const row of (auditSvcRes.data ?? []) as any[]) {
         if (!row.client_id) continue;
         const cat = row.service_categories;
         const n   = ((cat?.name as string) ?? "").toLowerCase();
-        const isAuditModule  = cat?.linked_module === "audit";
-        const isAuditByName  = n.includes("statutory") || n.includes("tax audit") ||
-                               n.includes("internal audit") || n.includes("stock audit") ||
-                               n.includes("audit");
-        const noCategoryInfo = !cat; // left-join produced no category row
+        const lm  = ((cat?.linked_module as string) ?? "").toLowerCase();
+        const isAuditModule  = AUDIT_MODULES.has(lm);
+        const isAuditByName  = n.includes("audit") || n.includes("tax");
+        const noCategoryInfo = !cat; // left-join returned no category row
         if (!isAuditModule && !isAuditByName && !noCategoryInfo) continue;
         if (!serviceMap[row.client_id]) serviceMap[row.client_id] = { hasStat: false, hasTax: false, hasInternal: false };
-        if (n.includes("statutory"))     serviceMap[row.client_id].hasStat = true;
-        else if (n.includes("internal")) serviceMap[row.client_id].hasInternal = true;
-        else if (n.includes("tax"))      serviceMap[row.client_id].hasTax = true;
-        else                             serviceMap[row.client_id].hasStat = true; // default to statutory
+        // Classify which audit type this service represents
+        if (n.includes("internal"))                                serviceMap[row.client_id].hasInternal = true;
+        else if (n.includes("tax") || lm === "tax" || lm === "tax_audit" || lm === "income_tax")
+                                                                   serviceMap[row.client_id].hasTax = true;
+        else if (n.includes("statutory") || lm === "statutory")    serviceMap[row.client_id].hasStat = true;
+        else if (n.includes("stock"))                              { /* stock audit — no separate flag yet */ }
+        else                                                        serviceMap[row.client_id].hasStat = true; // default
       }
 
       return (allFirmClients as any[])
