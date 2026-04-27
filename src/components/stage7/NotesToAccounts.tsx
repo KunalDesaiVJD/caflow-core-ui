@@ -785,8 +785,7 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       r++;
     });
 
-    // ── Two blank separator rows before signature ─────────────────────────────
-    borderRow(r); r++;
+    // ── One blank separator row before signature (matches template) ──────────
     borderRow(r); r++;
 
     // ── Signature block — exactly matching NOTE 1.xlsx template ──────────────
@@ -834,16 +833,6 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     ws.getCell(`H${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`H${r}`).alignment = { horizontal: "right", vertical: "top", wrapText: true };
     ws.getCell(`H${r}`).border    = boxBorder;
-    tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
-    r++;
-
-    // blank signature-space row
-    tb(`B${r}`);
-    ws.mergeCells(`C${r}:E${r}`);
-    ws.getCell(`C${r}`).border = boxBorder;
-    tb(`F${r}`); tb(`G${r}`);
-    ws.mergeCells(`H${r}:I${r}`);
-    ws.getCell(`H${r}`).border = boxBorder;
     tb(`J${r}`); tb(`A${r}`); tb(`K${r}`);
     r++;
 
