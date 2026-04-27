@@ -14,7 +14,7 @@
  *  • Auto-saves 1.2 s after any cell change; explicit "Save All Notes" also present.
  */
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { supabase }    from "@/integrations/supabase/client";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
@@ -307,7 +307,7 @@ function CustomRowEditor({
                   type="button"
                   title={`Move "${s.ledger}" to its own row`}
                   onClick={() => onEjectCustomSource(s.ledger, s.amountCy)}
-                  className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                  className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
                 >
                   <CornerUpRight className="h-3 w-3" />
                 </button>
@@ -379,11 +379,19 @@ function PatternBTable({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const headingOptions = useMemo(
+  const staticHeadingOptions = useMemo(
     () => config.rows
       .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
       .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
     [config, hiddenRows, labelOverrides],
+  );
+  // Include OTHER custom rows so "Site Expense - 18%" can move under "Site Expense"
+  const allHeadingOptions = useMemo(
+    () => [
+      ...staticHeadingOptions,
+      ...customRows.map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
+    ],
+    [staticHeadingOptions, customRows],
   );
 
   return (
@@ -404,29 +412,55 @@ function PatternBTable({
           const attachedHere = !row.isSectionHeader && !row.isTotal
             ? customRows.filter(cr => cr.attachedTo === row.id)
             : [];
+          // Only truly top-level (no parent). Custom rows attached to OTHER custom rows
+          // are rendered beneath their custom parent row below.
           const unattachedAtGrand = customRows.filter(cr => !cr.attachedTo);
           return (
             <>
-              {/* Custom rows inserted just before grand total (only those NOT attached anywhere) */}
-              {insertCustomBefore && unattachedAtGrand.map(cr => (
-                <CustomRowEditor
-                  key={cr.id}
-                  row={cr}
-                  cyVal={rawCy[cr.id] ?? 0}
-                  pyVal={rawPy[cr.id] ?? 0}
-                  isPatternA={false}
-                  cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
-                  onChangeCy={v => onChangeCy(cr.id, v)}
-                  onChangePy={v => onChangePy(cr.id, v)}
-                  onChangeCyLt={() => {}} onChangeCySt={() => {}}
-                  onChangePyLt={() => {}} onChangePySt={() => {}}
-                  onChangeLabel={label => onChangeLabel(cr.id, label)}
-                  onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions}
-                  onPromote={(staticId) => onPromote(cr.id, staticId)}
-                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
-                />
-              ))}
+              {/* Custom rows just before grand total */}
+              {insertCustomBefore && unattachedAtGrand.map(cr => {
+                // Custom rows "promoted" to sit under THIS custom row
+                const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                return (
+                  <Fragment key={cr.id}>
+                    <CustomRowEditor
+                      row={cr}
+                      cyVal={rawCy[cr.id] ?? 0}
+                      pyVal={rawPy[cr.id] ?? 0}
+                      isPatternA={false}
+                      cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
+                      onChangeCy={v => onChangeCy(cr.id, v)}
+                      onChangePy={v => onChangePy(cr.id, v)}
+                      onChangeCyLt={() => {}} onChangeCySt={() => {}}
+                      onChangePyLt={() => {}} onChangePySt={() => {}}
+                      onChangeLabel={label => onChangeLabel(cr.id, label)}
+                      onDelete={() => onDeleteRow(cr.id)}
+                      headingOptions={allHeadingOptions.filter(o => o.id !== cr.id)}
+                      onPromote={(targetId) => onPromote(cr.id, targetId)}
+                      onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                    />
+                    {customSubRows.map(sub => (
+                      <CustomRowEditor
+                        key={sub.id}
+                        row={sub}
+                        cyVal={rawCy[sub.id] ?? 0}
+                        pyVal={rawPy[sub.id] ?? 0}
+                        isPatternA={false}
+                        cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
+                        onChangeCy={v => onChangeCy(sub.id, v)}
+                        onChangePy={v => onChangePy(sub.id, v)}
+                        onChangeCyLt={() => {}} onChangeCySt={() => {}}
+                        onChangePyLt={() => {}} onChangePySt={() => {}}
+                        onChangeLabel={label => onChangeLabel(sub.id, label)}
+                        onDelete={() => onDeleteRow(sub.id)}
+                        headingOptions={allHeadingOptions.filter(o => o.id !== sub.id)}
+                        onPromote={(targetId) => onPromote(sub.id, targetId)}
+                        onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                      />
+                    ))}
+                  </Fragment>
+                );
+              })}
 
               {row.isSectionHeader ? (
                 <TableRow key={row.id} className="bg-muted/20">
@@ -492,7 +526,7 @@ function PatternBTable({
                           type="button"
                           title={`Move "${s.ledger}" to its own row`}
                           onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                          className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                          className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
                         >
                           <CornerUpRight className="h-3 w-3" />
                         </button>
@@ -522,8 +556,8 @@ function PatternBTable({
                   onChangePyLt={() => {}} onChangePySt={() => {}}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
-                  onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
+                  onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
@@ -598,12 +632,22 @@ function PatternATable({
     return groups;
   }, [customRows]);
 
-  const headingOptions = useMemo(
+  const staticHeadingOptions = useMemo(
     () => config.rows
       .filter(r => !r.isSectionHeader && !r.isTotal && !hiddenRows.includes(r.id))
       .map(r => ({ id: r.id, label: labelOverrides[r.id] ?? r.label })),
     [config, hiddenRows, labelOverrides],
   );
+  // Include custom rows in dropdown so items can move under other custom rows
+  const allHeadingOptions = useMemo(
+    () => [
+      ...staticHeadingOptions,
+      ...customRows.map(cr => ({ id: cr.id, label: cr.label || "(unnamed row)" })),
+    ],
+    [staticHeadingOptions, customRows],
+  );
+  // Keep backward-compatible alias for filter expressions below
+  const headingOptions = staticHeadingOptions;
 
   // For each sectionTag total, build the set of static-row IDs that belong
   // to that section (all non-header, non-total rows between the previous total
@@ -654,37 +698,64 @@ function PatternATable({
               ? (customBySection["_global"] ?? [])
               : [];
           // headingOptions for sectionRows: exclude static rows in the same section
+          // but include all custom rows so rows can be grouped under other custom rows
           const sectionHeadingOptions = row.sectionTag
-            ? headingOptions.filter(opt => !sectionStaticIds[row.sectionTag!]?.has(opt.id))
-            : headingOptions;
+            ? allHeadingOptions.filter(opt => !sectionStaticIds[row.sectionTag!]?.has(opt.id))
+            : allHeadingOptions;
           const attachedHere = !row.isSectionHeader && !row.isTotal
             ? customRows.filter(cr => cr.attachedTo === row.id)
             : [];
           const displayLabel = labelOverrides[row.id] ?? row.label;
           return (
             <>
-              {sectionRows.map(cr => (
-                <CustomRowEditor
-                  key={cr.id}
-                  row={cr}
-                  cyVal={0} pyVal={0}
-                  isPatternA={true}
-                  cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
-                  cyStVal={rawCy[cr.id + "_st"] ?? 0}
-                  pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
-                  pyStVal={rawPy[cr.id + "_st"] ?? 0}
-                  onChangeCy={() => {}} onChangePy={() => {}}
-                  onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
-                  onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
-                  onChangePyLt={v => onChangePy(cr.id + "_lt", v)}
-                  onChangePySt={v => onChangePy(cr.id + "_st", v)}
-                  onChangeLabel={label => onChangeLabel(cr.id, label)}
-                  onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={sectionHeadingOptions}
-                  onPromote={(staticId) => onPromote(cr.id, staticId)}
-                  onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
-                />
-              ))}
+              {sectionRows.map(cr => {
+                const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                return (
+                  <Fragment key={cr.id}>
+                    <CustomRowEditor
+                      row={cr}
+                      cyVal={0} pyVal={0}
+                      isPatternA={true}
+                      cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
+                      cyStVal={rawCy[cr.id + "_st"] ?? 0}
+                      pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
+                      pyStVal={rawPy[cr.id + "_st"] ?? 0}
+                      onChangeCy={() => {}} onChangePy={() => {}}
+                      onChangeCyLt={v => onChangeCy(cr.id + "_lt", v)}
+                      onChangeCySt={v => onChangeCy(cr.id + "_st", v)}
+                      onChangePyLt={v => onChangePy(cr.id + "_lt", v)}
+                      onChangePySt={v => onChangePy(cr.id + "_st", v)}
+                      onChangeLabel={label => onChangeLabel(cr.id, label)}
+                      onDelete={() => onDeleteRow(cr.id)}
+                      headingOptions={sectionHeadingOptions.filter(o => o.id !== cr.id)}
+                      onPromote={(targetId) => onPromote(cr.id, targetId)}
+                      onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
+                    />
+                    {customSubRows.map(sub => (
+                      <CustomRowEditor
+                        key={sub.id}
+                        row={sub}
+                        cyVal={0} pyVal={0}
+                        isPatternA={true}
+                        cyLtVal={rawCy[sub.id + "_lt"] ?? 0}
+                        cyStVal={rawCy[sub.id + "_st"] ?? 0}
+                        pyLtVal={rawPy[sub.id + "_lt"] ?? 0}
+                        pyStVal={rawPy[sub.id + "_st"] ?? 0}
+                        onChangeCy={() => {}} onChangePy={() => {}}
+                        onChangeCyLt={v => onChangeCy(sub.id + "_lt", v)}
+                        onChangeCySt={v => onChangeCy(sub.id + "_st", v)}
+                        onChangePyLt={v => onChangePy(sub.id + "_lt", v)}
+                        onChangePySt={v => onChangePy(sub.id + "_st", v)}
+                        onChangeLabel={label => onChangeLabel(sub.id, label)}
+                        onDelete={() => onDeleteRow(sub.id)}
+                        headingOptions={sectionHeadingOptions.filter(o => o.id !== sub.id)}
+                        onPromote={(targetId) => onPromote(sub.id, targetId)}
+                        onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
+                      />
+                    ))}
+                  </Fragment>
+                );
+              })}
 
               {row.isSectionHeader ? (
                 <TableRow key={row.id} className="bg-muted/20">
@@ -763,7 +834,7 @@ function PatternATable({
                           type="button"
                           title={`Move "${s.ledger}" to its own row`}
                           onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                          className="shrink-0 text-muted-foreground hover:text-indigo-600 transition-colors"
+                          className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
                         >
                           <CornerUpRight className="h-3 w-3" />
                         </button>
@@ -800,8 +871,8 @@ function PatternATable({
                   onChangePySt={v => onChangePy(cr.id + "_st", v)}
                   onChangeLabel={label => onChangeLabel(cr.id, label)}
                   onDelete={() => onDeleteRow(cr.id)}
-                  headingOptions={headingOptions.filter(opt => opt.id !== row.id)}
-                  onPromote={(staticId) => onPromote(cr.id, staticId)}
+                  headingOptions={allHeadingOptions.filter(o => o.id !== cr.id && o.id !== row.id)}
+                  onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                 />
               ))}
