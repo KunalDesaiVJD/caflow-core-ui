@@ -441,11 +441,24 @@ export default function AuditPipeline() {
   useEffect(() => {
     if (routeEngId) {
       setSelectedEngId(routeEngId);
-      if (auditCtx?.setSelectedEngagementId) {
-        auditCtx.setSelectedEngagementId(routeEngId);
-      }
+      // Global context update is deferred to after engagement data loads (see
+      // the engagement-loaded effect below) so we can check is_py_shell first.
+      // Writing a PY shell ID to localStorage caused the wrong client to appear
+      // on Chrome refresh because PY shells are filtered out of the engagement
+      // list and the fallback picked the first available engagement.
     }
   }, [routeEngId]);
+
+  // After the engagement loads, update the global context — but ONLY for
+  // regular engagements. PY shells must never overwrite the active client
+  // selection because they are hidden from all audit lists and dashboards.
+  useEffect(() => {
+    if (!engagement) return;
+    if ((engagement as any)?.is_py_shell) return; // skip PY shells
+    if (!auditCtx?.setSelectedEngagementId) return;
+    auditCtx.setSelectedEngagementId(engagement.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engagement?.id, (engagement as any)?.is_py_shell]);
 
   const stageStatuses: Record<string, StageStatus> = useMemo(() => {
     if (!engagement?.stage_statuses) {
@@ -1408,13 +1421,27 @@ export default function AuditPipeline() {
             </div>
           </div>
         ) : activeStage === 2 ? (
-          /* STAGE 2 — Trial Balance Import */
+          /* STAGE 2 — Trial Balance Import (also used as Tally Sync for PY shells) */
+          <>
+          {(engagement as any)?.is_py_shell && (
+            <div className="mb-3 flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 px-4 py-2.5 text-sm">
+              <span className="text-amber-600 dark:text-amber-400 font-semibold shrink-0">⚠ PY Shell</span>
+              <span className="text-amber-800 dark:text-amber-300 text-xs">
+                You are viewing a <strong>Prior Year Shell</strong> engagement ({(engagement as any)?.financial_year}) created to sync Tally TB data. This engagement is hidden from all dashboards. Sync Tally data here, then return to the current-year engagement's Financial Statements and click <strong>Fetch PY from FY-1 Tally</strong>.
+              </span>
+              <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-300"
+                onClick={() => navigate('/audit')}>
+                ← Audit Dashboard
+              </Button>
+            </div>
+          )}
           <PipelineStage2
             engagementId={selectedEngId}
             engagement={engagement}
             onStageComplete={() => { refetchEng(); queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] }); }}
             onSaveDraft={() => { refetchEng(); }}
           />
+          </>
         ) : activeStage === 3 ? (
           /* STAGE 3 — COA & Financial Statements */
           <PipelineStage3

@@ -181,11 +181,29 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
 
     if (mapped.length > 0) {
       const stored = localStorage.getItem(ENGAGEMENT_STORAGE_KEY);
-      const storedExists = stored && mapped.find((e: any) => e.id === stored);
-      if (!selectedEngagementId || !mapped.find((e: any) => e.id === selectedEngagementId)) {
-        const pick = storedExists ? stored! : mapped[0].id;
-        setSelectedEngagementId(pick);
-        localStorage.setItem(ENGAGEMENT_STORAGE_KEY, pick);
+      // Is the stored/current ID still a valid REGULAR engagement?
+      const storedValid  = stored            ? mapped.find((e: any) => e.id === stored)            : null;
+      const currentValid = selectedEngagementId ? mapped.find((e: any) => e.id === selectedEngagementId) : null;
+
+      if (currentValid) {
+        // In-memory selection is fine — nothing to do.
+      } else if (storedValid) {
+        // Restore from localStorage (was preserved while browsing a PY shell).
+        setSelectedEngagementId(stored!);
+      } else if (!stored && !selectedEngagementId) {
+        // First ever load — auto-select the first available engagement.
+        setSelectedEngagementId(mapped[0].id);
+        localStorage.setItem(ENGAGEMENT_STORAGE_KEY, mapped[0].id);
+      } else {
+        // Stored/current ID is stale — it was a PY shell or a deleted engagement
+        // that is no longer in the regular engagement list. Clear it so the user
+        // sees the dashboard without a wrong client being pre-selected.
+        localStorage.removeItem(ENGAGEMENT_STORAGE_KEY);
+        setSelectedEngagementId("");
+        console.warn(
+          `[AuditContext] Cleared stale engagement ID "${stored || selectedEngagementId}" ` +
+          `(not in regular engagement list — likely a PY shell or deleted engagement).`
+        );
       }
     }
     } catch (err) {
