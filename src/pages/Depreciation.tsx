@@ -279,18 +279,21 @@ enabled: !!assets?.length,
 });
 
 // ── Phase 2-4: Engagement lookup for this client+FY ──────────────────────
+// Use .neq('is_py_shell', true) instead of .or(…) — the OR syntax was
+// silently returning null in production when the column had a NOT NULL default.
 const { data: engagement } = useQuery({
 queryKey: ['dep-engagement', clientId, fy],
 queryFn: async () => {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('audit_engagements')
     .select('id, financial_year, status')
     .eq('client_id', clientId)
     .eq('financial_year', fy)
-    .or('is_py_shell.is.null,is_py_shell.eq.false')
+    .neq('is_py_shell', true)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (error) console.error('[dep-engagement] query error:', error.message, error);
   return data || null;
 },
 enabled: !!clientId && !!fy,
