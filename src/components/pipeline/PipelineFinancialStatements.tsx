@@ -209,6 +209,22 @@ const BS_LIABILITY_CODES = new Set([
 // Corporate P&L revenue-side codes — same sign convention.
 const PL_REVENUE_CODES = new Set(["PL_REV_OPS", "PL_REV_OI"]);
 
+// ── Tally's accumulated P&L account (retained-earnings carrier) ──────────────
+// Tally's "Profit & Loss A/c" ledger carries closing balance =
+//   prior retained earnings + current-year net profit.
+// When mapped to BS_EQ_RS, the closing balance double-counts current-year profit
+// because revenue/expense ledgers already capture it via PL_REV / PL_EXP codes.
+// Solution: use opening_balance (prior retained earnings only) for BS mapping.
+// Current-year net profit is then auto-credited to BS_EQ_RS after P&L totals are known.
+const isTallyPLAccount = (name: string): boolean => {
+  const n = name.toLowerCase().trim();
+  if (n === "profit & loss a/c" || n === "profit and loss a/c" ||
+      n === "p & l a/c"         || n === "p&l a/c"             ||
+      n === "profit & loss account" || n === "profit and loss account" ||
+      n === "p & l account") return true;
+  return /^profit\s*[&and]+\s*loss(\s*(a\/c|account))?$/i.test(name.trim());
+};
+
 // ═══════════════════════════════════════
 // Props
 // ═══════════════════════════════════════
@@ -2060,6 +2076,10 @@ export default function PipelineFinancialStatements({
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
         amounts[plCode] = (amounts[plCode] || 0) + ((acct.opening_balance ?? 0) - acct.balance);
         hasInvMapping = true;
+      } else if (isTallyPLAccount(acct.account_name) && mapping.code.startsWith("BS_")) {
+        // ── P&L A/c on Balance Sheet: use OPENING balance (prior retained earnings) ──
+        // Current-year profit is auto-credited to BS_EQ_RS after computeTotal (below).
+        amounts[mapping.code] = (amounts[mapping.code] || 0) + (acct.opening_balance ?? 0);
       } else {
         amounts[mapping.code] = (amounts[mapping.code] || 0) + acct.balance;
       }
@@ -2101,6 +2121,26 @@ export default function PipelineFinancialStatements({
       amounts["NCE_PROF_XI"]  = Math.round((amounts["NCE_PROF_IX"]  - (amounts["NCE_PART_REM"] || 0)) * 100) / 100;
       // NCE_TAX was already summed by computeTotal (NCE_CUR_TAX + NCE_PRIOR_TAX)
       amounts["NCE_NET_PROF"] = Math.round((amounts["NCE_PROF_XI"]  - (amounts["NCE_TAX"]      || 0)) * 100) / 100;
+    }
+
+    // ── Auto-flow net P&L to BS_EQ_RS for corporate entities ─────────────────
+    // Revenue (PL_REV, credit = negative) and Expenses (PL_EXP, debit = positive)
+    // are in P&L codes, not in the BS.  The current-year net profit must be
+    // credited to Reserves & Surplus so the Balance Sheet balances.
+    // This mirrors the standard closing entry: Dr P&L A/c → Cr Reserves & Surplus.
+    // Note: if the user has set a manual override on BS_EQ_RS, this still applies
+    // on top — net profit is a required accounting transfer, not an optional entry.
+    if (!isNonCorporate) {
+      const rev   = amounts["PL_REV"] || 0; // negative (credit)
+      const exp   = amounts["PL_EXP"] || 0; // positive (debit)
+      const netPL = Math.round((-rev - exp) * 100) / 100;
+      if (Math.abs(netPL) > 0.005) {
+        // Credit net profit to Reserves (negative = credit in Tally sign convention)
+        amounts["BS_EQ_RS"] = (amounts["BS_EQ_RS"] || 0) - netPL;
+        // Re-run computeTotal on BS_EQ so the parent total picks up the change
+        const bsEqNode = (activeTree as FSLineItem[]).find(i => i.code === "BS_EQ");
+        if (bsEqNode) computeTotal(bsEqNode);
+      }
     }
 
     return amounts;

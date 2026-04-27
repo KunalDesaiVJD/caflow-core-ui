@@ -1622,6 +1622,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
   const generateFS = async () => {
     setSaving(true);
+    if (unmappedCount > 0) {
+      toast.warning(`${unmappedCount} unmapped ledger(s) will be excluded from the Financial Statements.`);
+    }
     try {
       // Delete existing FS rows
       await supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId);
@@ -1678,6 +1681,20 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
       toast.success("Financial Statements generated — view in Stage 5 Financial Statements");
       queryClient.invalidateQueries({ queryKey: ["fs-rows"] });
+
+      // ── Auto-populate Notes (Stage 5) so notes are ready for this engagement ──
+      // This runs silently in the background; a failure does not block the user.
+      (async () => {
+        try {
+          const { loadStage5Notes, saveStage5Notes, autoPopulateNotes } =
+            await import("@/lib/notesAutoPopulate");
+          const existing = await loadStage5Notes(engagementId);
+          const fresh    = await autoPopulateNotes(engagementId, { existing });
+          await saveStage5Notes(engagementId, fresh);
+        } catch (notesErr: any) {
+          console.warn("Notes auto-population failed (non-critical):", notesErr?.message);
+        }
+      })();
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -2537,9 +2554,9 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
             </div>
           </div>
 
-          {/* Generate FS Button */}
+          {/* Generate FS Button — always enabled; unmapped ledgers are warned via toast */}
           <div className="flex justify-end pt-3">
-            <Button onClick={generateFS} disabled={!allMapped || saving} className="gap-1">
+            <Button onClick={generateFS} disabled={saving} className="gap-1">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
               Generate Financial Statements
             </Button>
