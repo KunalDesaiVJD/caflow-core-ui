@@ -95,9 +95,9 @@ export function useTdsReconFlags(
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) return;
       (supabase as any)
-        .from("firm_users")
+        .from("users")
         .select("firm_id")
-        .eq("user_id", data.user.id)
+        .eq("id", data.user.id)
         .maybeSingle()
         .then(({ data: fu }: any) => { if (fu?.firm_id) setFirmId(fu.firm_id); });
     });
