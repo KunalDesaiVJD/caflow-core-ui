@@ -14,7 +14,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Shield, ShieldAlert, ShieldQuestion, FileSpreadsheet, Play, Download, FileText, BarChart3, ChevronLeft, ChevronRight, X, Loader2, Calculator } from "lucide-react";
+import { TdsReconModule } from "@/components/tds-recon/TdsReconModule";
 
 const CATEGORIES = ["All", "TDS", "GST", "Cash Payments", "Loans", "Prior Period", "Depreciation", "Deferred Tax", "Bank Recon", "Narration AI"];
 const SEVERITIES = ["All", "HIGH", "MEDIUM", "LOW"];
@@ -78,6 +79,10 @@ export default function AuditScrutiny() {
   const [linkClauseId, setLinkClauseId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [auditFirmName, setAuditFirmName] = useState<string | null>(null);
+
+  // View mode: scrutiny findings vs TDS analytics
+  type ScrutinyView = "scrutiny" | "tds";
+  const [viewMode, setViewMode] = useState<ScrutinyView>("scrutiny");
 
   // Check trial balance existence via Tally sync batches (snapshot path removed)
   useEffect(() => {
@@ -263,6 +268,24 @@ export default function AuditScrutiny() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* View mode toggle */}
+          <div className="inline-flex rounded-md border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setViewMode("scrutiny")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-r transition-colors ${viewMode === "scrutiny" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              <ShieldAlert size={12} /> Scrutiny Findings
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("tds")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === "tds" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              <Calculator size={12} /> TDS Analytics
+            </button>
+          </div>
+          {viewMode === "scrutiny" && (<>
           <Button onClick={handleRunScrutiny} disabled={running} className="bg-amber-600 hover:bg-amber-700 text-white">
             {running ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
             {running ? "Running..." : "Run Scrutiny"}
@@ -270,9 +293,17 @@ export default function AuditScrutiny() {
           <Button variant="outline" onClick={handleExport}><Download className="h-4 w-4 mr-2" />Export XLSX</Button>
           <Button variant="outline" onClick={() => navigate(`/clients/${clientId}/audit/3cd`)}><FileText className="h-4 w-4 mr-2" />3CD Form</Button>
           <Button variant="outline" onClick={() => navigate(`/clients/${clientId}/audit/comparative`)}><BarChart3 className="h-4 w-4 mr-2" />Comparative</Button>
+          </>)}
         </div>
       </div>
 
+      {/* ── TDS Analytics view ── */}
+      {viewMode === "tds" && (
+        <TdsReconModule clientId={clientId} financialYear={fy} />
+      )}
+
+      {/* ── Scrutiny Findings view ── */}
+      {viewMode === "scrutiny" && (<>
       {/* Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Card><CardContent className="p-4 text-center"><p className="text-xs text-muted-foreground">Total</p><p className="text-2xl font-bold text-foreground">{stats.total}</p></CardContent></Card>
@@ -378,6 +409,9 @@ export default function AuditScrutiny() {
           </div>
         </>
       )}
+
+      {/* ── End Scrutiny Findings view ── */}
+      </>)}
 
       {/* Detail Slide-over */}
       <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
