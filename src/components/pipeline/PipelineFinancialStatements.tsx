@@ -2251,12 +2251,29 @@ export default function PipelineFinancialStatements({
   // priority over both pyAmounts and pyManualAmounts since it is the authoritative source.
   const mergedPY: Record<string, number> = useMemo(() => {
     const merged: Record<string, number> = { ...pyAmounts };
-    // Fold in manual PY P&L for items that have no prior-engagement value.
-    // Leaf-only: parents are recomputed below.
-    if (noPriorEngagement) {
-      for (const [code, val] of Object.entries(pyManualAmounts)) {
-        if (!Number.isFinite(val)) continue;
-        if (merged[code] === undefined || merged[code] === null) merged[code] = val;
+
+    // ── Fold in pyManualAmounts (from "Fetch PY from FY-1 Tally" button) ───
+    // ALWAYS apply for P&L items, regardless of noPriorEngagement.
+    //
+    // Root cause fix: previously pyManualAmounts was gated on noPriorEngagement.
+    // When the PY shell has ANY rows in fa_financial_statements (even if partial),
+    // noPriorEngagement = false and the Fetch button's data was completely ignored —
+    // causing PY = "—" for expenses even after clicking Fetch.
+    //
+    // The Fetch button is an explicit user action that sources data directly from
+    // Tally via the PY shell's coa_mapping. It should always win for P&L codes.
+    // BS codes continue to come from computedAmountsPY (opening balances) below.
+    for (const [code, val] of Object.entries(pyManualAmounts)) {
+      if (!Number.isFinite(val)) continue;
+      const item = activeFlatItems.find(i => i.code === code);
+      const sec  = String(item?.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (isPL) {
+        // Tally-fetched P&L amounts always take precedence
+        merged[code] = val;
+      } else if (noPriorEngagement && (merged[code] === undefined || merged[code] === null)) {
+        // Non-P&L (edge case): only fill if no prior engagement and code not set
+        merged[code] = val;
       }
     }
     for (const [code, val] of Object.entries(computedAmountsPY)) {
@@ -2336,11 +2353,16 @@ export default function PipelineFinancialStatements({
     for (const [code, val] of Object.entries(pyAmounts || {})) {
       if (Number.isFinite(val as number)) exportPy[code] = val as number;
     }
-    if (noPriorEngagement) {
-      for (const [code, val] of Object.entries(pyManualAmounts || {})) {
-        if (Number.isFinite(val)) {
-          if (exportPy[code] === undefined || exportPy[code] === 0) exportPy[code] = val;
-        }
+    // Always apply pyManualAmounts for P&L codes (same fix as mergedPY above).
+    for (const [code, val] of Object.entries(pyManualAmounts || {})) {
+      if (!Number.isFinite(val)) continue;
+      const item = activeFlatItems.find(i => i.code === code);
+      const sec  = String(item?.section || "").toLowerCase();
+      const isPL = sec.includes("pl") || sec.includes("revenue") || sec.includes("expense");
+      if (isPL) {
+        exportPy[code] = val;
+      } else if (noPriorEngagement && (exportPy[code] === undefined || exportPy[code] === 0)) {
+        exportPy[code] = val;
       }
     }
     // PY Changes in Inventories: override with PY Shell TB when INV_* are mapped
