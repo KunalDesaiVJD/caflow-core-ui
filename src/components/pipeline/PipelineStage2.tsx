@@ -145,22 +145,29 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               )}
 
               <div className="flex gap-2 pt-1">
-                <Button onClick={() => navigate("/audit/tally-sync")} variant="outline" size="sm">
-                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-                  Open Tally Sync
-                </Button>
+                {/* Only show standalone Tally Sync link for regular (non-PY-shell) engagements.
+                    PY shells use this same Stage 2 page as their sync UI — navigating to the
+                    standalone /audit/tally-sync page would show the CY client's data instead. */}
+                {!(engagement as any)?.is_py_shell && (
+                  <Button onClick={() => navigate("/audit/tally-sync")} variant="outline" size="sm">
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                    Open Tally Sync
+                  </Button>
+                )}
                 <Button onClick={requestSync} variant="ghost" size="sm">
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
                   Re-sync Now
                 </Button>
-                <Button
-                  onClick={onStageComplete}
-                  size="sm"
-                  className="ml-auto"
-                >
-                  Proceed to COA Mapping
-                  <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-                </Button>
+                {!(engagement as any)?.is_py_shell && (
+                  <Button
+                    onClick={onStageComplete}
+                    size="sm"
+                    className="ml-auto"
+                  >
+                    Proceed to COA Mapping
+                    <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                  </Button>
+                )}
               </div>
             </div>
           ) : (
@@ -187,10 +194,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
               </div>
 
               <div className="flex gap-2">
-                <Button onClick={() => navigate("/audit/tally-sync")} variant="outline" size="sm">
-                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-                  Open Tally Sync Page
-                </Button>
+                {/* For regular engagements only — PY shells use THIS page as their sync UI */}
+                {!(engagement as any)?.is_py_shell && (
+                  <Button onClick={() => navigate("/audit/tally-sync")} variant="outline" size="sm">
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                    Open Tally Sync Page
+                  </Button>
+                )}
                 <Button onClick={requestSync} size="sm">
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
                   Request Sync

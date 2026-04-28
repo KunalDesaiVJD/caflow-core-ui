@@ -4747,7 +4747,10 @@ export default function PipelineFinancialStatements({
         </Alert>
       )}
 
-      {noPriorEngagement && !(engagement as any)?.is_py_shell && (
+      {/* PY Data Source card — only shown when PY setup has NOT been configured yet.
+          Once py_setup_completed is true (user picked py_shell/manual/none), this card
+          is hidden so it doesn't duplicate the PY Shell navigation banner below. */}
+      {noPriorEngagement && !(engagement as any)?.is_py_shell && !(engagement as any)?.py_setup_completed && (
         <Alert className="border-primary/30">
           <FileSpreadsheet className="h-4 w-4" />
           <AlertTitle className="text-xs flex items-center justify-between">

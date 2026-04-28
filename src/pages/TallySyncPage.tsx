@@ -1185,6 +1185,33 @@ export default function TallySyncPage() {
     };
   });
 
+  // ── No engagement selected ───────────────────────────────────────────────
+  // This standalone Tally Sync page always shows data for the GLOBALLY selected
+  // engagement (via Audit Dashboard / sidebar). PY shell data is visible only
+  // inside Audit Pipeline → Stage 2 (navigate there via "Open PY Shell Tally Sync"
+  // on the Financial Statements page). If nothing is selected, prompt the user.
+  if (!selectedEngagementId || !selectedEngagement) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <h1 className="text-2xl font-bold text-foreground flex items-center gap-2 mb-4">
+          <RefreshCw className="h-6 w-6 text-sidebar-gold" />
+          Stage 5 — Tally Sync
+        </h1>
+        <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-5 text-sm text-amber-800 dark:text-amber-300 space-y-2">
+          <p className="font-semibold">No engagement selected.</p>
+          <p>
+            Go to <strong>Audit Dashboard → Engagement Pipeline</strong> and select an engagement, then return here.
+            This page always shows Tally sync data for the globally active engagement.
+          </p>
+          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+            Note: PY Shell sync runs inside <strong>Audit Pipeline → Stage 2</strong> for the PY shell engagement,
+            not on this standalone page.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
       <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />

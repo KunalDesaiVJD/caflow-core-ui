@@ -196,14 +196,16 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(ENGAGEMENT_STORAGE_KEY, mapped[0].id);
       } else {
         // Stored/current ID is stale — it was a PY shell or a deleted engagement
-        // that is no longer in the regular engagement list. Clear it so the user
-        // sees the dashboard without a wrong client being pre-selected.
-        localStorage.removeItem(ENGAGEMENT_STORAGE_KEY);
-        setSelectedEngagementId("");
+        // that is no longer in the regular engagement list. Rather than leaving the
+        // state empty (which caused the UI to briefly show a blank/wrong client),
+        // fall back to the first available regular engagement so the dashboard
+        // always has a sensible default.
         console.warn(
-          `[AuditContext] Cleared stale engagement ID "${stored || selectedEngagementId}" ` +
-          `(not in regular engagement list — likely a PY shell or deleted engagement).`
+          `[AuditContext] Stale engagement ID "${stored || selectedEngagementId}" ` +
+          `not in regular list — auto-selecting first available engagement.`
         );
+        localStorage.setItem(ENGAGEMENT_STORAGE_KEY, mapped[0].id);
+        setSelectedEngagementId(mapped[0].id);
       }
     }
     } catch (err) {
@@ -221,7 +223,13 @@ export function AuditContextProvider({ children }: { children: ReactNode }) {
     <AuditContext.Provider value={{
       selectedClientId,
       selectedEngagementId,
-      setSelectedClientId: (id: string) => { setSelectedClientId(id); setSelectedEngagementId(""); },
+      setSelectedClientId: (id: string) => {
+        setSelectedClientId(id);
+        // Clear both in-memory state AND localStorage when switching clients so
+        // a hard-refresh doesn't restore an engagement from the previous client.
+        setSelectedEngagementId("");
+        localStorage.removeItem(ENGAGEMENT_STORAGE_KEY);
+      },
       setSelectedEngagementId: (id: string) => {
         setSelectedEngagementId(id);
         localStorage.setItem(ENGAGEMENT_STORAGE_KEY, id);
