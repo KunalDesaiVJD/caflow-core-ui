@@ -479,6 +479,8 @@ export async function autoPopulateRatios(
     // Carry forward existing commentary; blank if no prior data
     commentary:       options.existing?.commentary ?? JSON.parse(JSON.stringify(DEFAULT_COMMENTARY)),
     manual_overrides: options.existing?.manual_overrides ?? [],
+    // Preserve user-defined custom ratios — never overwrite on re-sync
+    custom_ratios:    options.existing?.custom_ratios ?? [],
   };
 
   // Merge with existing, honouring every manually-overridden path

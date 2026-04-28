@@ -225,6 +225,21 @@ export function RatiosTab({ engagementId, engagement }: Props) {
   const handleExportExcel = useCallback(async () => {
     setExporting(true);
     try {
+      // Auto-populate from BS/P&L before export so values are always fresh.
+      // This mirrors the "Re-sync" button but is silent on failure (falls back
+      // to whatever is currently in state).
+      let exportRatios = ratios;
+      try {
+        const { autoPopulateRatios: _autoPop, saveStage7Ratios: _save } =
+          await import("@/lib/ratioAutoPopulate");
+        exportRatios = await _autoPop(engagementId, { existing: ratios });
+        setRatios(exportRatios);
+        await _save(engagementId, exportRatios);
+        setLastSynced(new Date().toLocaleTimeString("en-IN"));
+      } catch {
+        // TB data unavailable — export with current state values
+      }
+
       const ExcelJS   = (await import("exceljs")).default;
       const wb        = new ExcelJS.Workbook();
       wb.creator      = "CAFlow";
@@ -235,7 +250,7 @@ export function RatiosTab({ engagementId, engagement }: Props) {
       const pyYear    = cyYear - 1;
       const companyName = engagement?.clients?.name || engagement?.client_name || "";
       const { writeRatiosSheets } = await import("@/lib/fsRatiosWriter");
-      writeRatiosSheets(wb, { cyYear, pyYear, companyName }, ratios);
+      writeRatiosSheets(wb, { cyYear, pyYear, companyName }, exportRatios);
       const buffer = await wb.xlsx.writeBuffer();
       const blob   = new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -254,7 +269,7 @@ export function RatiosTab({ engagementId, engagement }: Props) {
     } finally {
       setExporting(false);
     }
-  }, [ratios, engagement, fy]);
+  }, [ratios, engagement, fy, engagementId]);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) {
