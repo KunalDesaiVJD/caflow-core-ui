@@ -1778,13 +1778,17 @@ export default function PipelineFinancialStatements({
         .eq("is_py_shell", true);
 
       if (shells && shells.length > 0) {
-        // Prefer the PY shell that has tally_trial_balance rows (TB synced)
+        // Prefer the PY shell that has tally_trial_balance rows (TB synced).
+        // Use a regular select(limit:1) instead of head:true count — some RLS
+        // configurations return null/0 for the head count even when select
+        // works, causing the wrong shell to be picked when multiple exist.
         for (const shell of shells as any[]) {
-          const { count } = await supabase
+          const { data: probe } = await supabase
             .from("tally_trial_balance")
-            .select("ledger_name", { count: "exact", head: true })
-            .eq("engagement_id", shell.id);
-          if ((count ?? 0) > 0) return shell.id;
+            .select("ledger_name")
+            .eq("engagement_id", shell.id)
+            .limit(1);
+          if (probe && probe.length > 0) return shell.id;
         }
         // No shell has TB data yet — return first shell so navigation works
         return (shells[0] as any).id;
