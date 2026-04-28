@@ -243,6 +243,7 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
         {/* ── Sheet 4b: Ledger Explorer ── */}
         <TabsContent value="ledger_explorer" className="mt-3">
           <LedgerExplorerTab
+            engagementId={engagementId}
             clientId={data.engagement?.client_id}
             financialYear={data.financialYear}
             onRaiseQuery={handleRaiseQuery}

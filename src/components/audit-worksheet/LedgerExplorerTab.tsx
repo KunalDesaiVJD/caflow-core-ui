@@ -1,16 +1,13 @@
 /**
- * LedgerExplorerTab
+ * LedgerExplorerTab  (Phase 2A update)
  *
- * Surfaces all Tally groups → ledgers → balances for an engagement.
+ * Two view modes toggled from the toolbar:
+ *   [Group Tree]  — original Tally group → ledger accordion
+ *   [BS / P&L]   — FS-mapped financial statement with CY | PY | Variance
  *
- * Layout:
- *   Search bar
- *   ── GROUP NAME ─── (collapsible, shows ledger count + net balance)
- *     Ledger row: name | opening | closing | [View Entries] [Raise Query]
- *
- * "View Entries" → opens LedgerSidePanel (slide-over with all vouchers)
- * "Raise Query"  → calls onRaiseQuery(group, ledger) which pre-fills the
- *                  Query Sheet row and switches the parent to the queries tab.
+ * Phase 2A additions:
+ *   • View toggle (Group Tree / BS P&L)
+ *   • engagementId prop (required for COA mapping + PY lookup in BS/PL view)
  */
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,11 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
 import {
   ChevronRight, ChevronDown, BookOpen, MessageSquareWarning,
-  Search, X, Loader2, DatabaseZap,
+  Search, X, Loader2, DatabaseZap, List, BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTallyEngagementId } from "./hooks/useTallyEngagementId";
 import { LedgerSidePanel } from "./LedgerSidePanel";
+import { BsPlView } from "./BsPlView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +39,10 @@ interface GroupData {
   totalClose: number; // net signed closing (Dr positive, Cr negative)
 }
 
+type ViewMode = "tree" | "bspl";
+
 interface Props {
+  engagementId:  string;
   clientId:      string | null | undefined;
   financialYear: string | null | undefined;
   /** Called when user clicks "Raise Query" for a ledger / voucher entry */
@@ -59,9 +60,10 @@ function fmtAmt(n: number): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function LedgerExplorerTab({ clientId, financialYear, onRaiseQuery }: Props) {
+export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRaiseQuery }: Props) {
   const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear);
 
+  const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [ledgers,  setLedgers]  = useState<TBLedger[]>([]);
   const [loading,  setLoading]  = useState(false);
   const [search,   setSearch]   = useState("");
@@ -163,40 +165,89 @@ export function LedgerExplorerTab({ clientId, financialYear, onRaiseQuery }: Pro
       {/* ── Toolbar ── */}
       <div className="flex flex-wrap items-center gap-2 justify-between">
         <div className="flex items-center gap-2">
-          {/* Search */}
-          <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search group or ledger…"
-              className="h-8 pl-8 pr-7 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring w-52"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X size={12} />
-              </button>
-            )}
+
+          {/* View mode toggle */}
+          <div className="inline-flex rounded-md border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setViewMode("tree")}
+              className={cn(
+                "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors border-r",
+                viewMode === "tree"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <List size={11} /> Group Tree
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("bspl")}
+              className={cn(
+                "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                viewMode === "bspl"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <BarChart3 size={11} /> BS / P&amp;L
+            </button>
           </div>
-          <Badge variant="secondary" className="text-[10px] h-5 px-1.5">
-            {ledgers.length} ledgers · {groups.length} groups
-          </Badge>
+
+          {viewMode === "tree" && (
+            <>
+              {/* Search (tree only) */}
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search group or ledger…"
+                  className="h-8 pl-8 pr-7 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring w-52"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              <Badge variant="secondary" className="text-[10px] h-5 px-1.5">
+                {ledgers.length} ledgers · {groups.length} groups
+              </Badge>
+            </>
+          )}
         </div>
-        <div className="flex gap-1">
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={expandAll}>
-            Expand All
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={collapseAll}>
-            Collapse All
-          </Button>
-        </div>
+
+        {viewMode === "tree" && (
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={expandAll}>
+              Expand All
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={collapseAll}>
+              Collapse All
+            </Button>
+          </div>
+        )}
       </div>
 
+      {/* ── BS / P&L view ── */}
+      {viewMode === "bspl" && (
+        <BsPlView
+          engagementId={engagementId}
+          clientId={clientId}
+          financialYear={financialYear}
+          onRaiseQuery={onRaiseQuery}
+        />
+      )}
+
+      {/* ── Group Tree view ── */}
+      {viewMode === "tree" && (
+      <>
       {/* ── Group accordion ── */}
       <div className="rounded-lg border overflow-hidden divide-y">
         {groups.length === 0 ? (
@@ -308,6 +359,8 @@ export function LedgerExplorerTab({ clientId, financialYear, onRaiseQuery }: Pro
           onRaiseQuery(group, ledger, note);
         }}
       />
+      </>
+      )}
     </div>
   );
 }
