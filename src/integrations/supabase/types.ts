@@ -7633,6 +7633,197 @@ export type Database = {
           },
         ]
       }
+      tds_recon_flags: {
+        Row: {
+          id: string
+          client_id: string
+          firm_id: string
+          financial_year: string
+          flag_type: string
+          goal_number: number | null
+          tb_ledger_name: string | null
+          tds_deductee_name: string | null
+          section_code: string | null
+          nature_of_payment: string | null
+          book_amount: number | null
+          tds_amount: number | null
+          expected_tds: number | null
+          actual_tds: number | null
+          variance_amount: number | null
+          expected_rate: number | null
+          actual_rate: number | null
+          threshold_amount: number | null
+          voucher_ids: string[] | null
+          deductee_ids: string[] | null
+          mapping_id: string | null
+          ai_reasoning: string | null
+          ai_confidence: number | null
+          sample_narrations: string[] | null
+          flag_status: string
+          query_id: string | null
+          actioned_by: string | null
+          actioned_at: string | null
+          action_note: string | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          client_id: string
+          firm_id: string
+          financial_year: string
+          flag_type: string
+          goal_number?: number | null
+          tb_ledger_name?: string | null
+          tds_deductee_name?: string | null
+          section_code?: string | null
+          nature_of_payment?: string | null
+          book_amount?: number | null
+          tds_amount?: number | null
+          expected_tds?: number | null
+          actual_tds?: number | null
+          variance_amount?: number | null
+          expected_rate?: number | null
+          actual_rate?: number | null
+          threshold_amount?: number | null
+          voucher_ids?: string[] | null
+          deductee_ids?: string[] | null
+          mapping_id?: string | null
+          ai_reasoning?: string | null
+          ai_confidence?: number | null
+          sample_narrations?: string[] | null
+          flag_status?: string
+          query_id?: string | null
+          actioned_by?: string | null
+          actioned_at?: string | null
+          action_note?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          client_id?: string
+          firm_id?: string
+          financial_year?: string
+          flag_type?: string
+          goal_number?: number | null
+          tb_ledger_name?: string | null
+          tds_deductee_name?: string | null
+          section_code?: string | null
+          nature_of_payment?: string | null
+          book_amount?: number | null
+          tds_amount?: number | null
+          expected_tds?: number | null
+          actual_tds?: number | null
+          variance_amount?: number | null
+          expected_rate?: number | null
+          actual_rate?: number | null
+          threshold_amount?: number | null
+          voucher_ids?: string[] | null
+          deductee_ids?: string[] | null
+          mapping_id?: string | null
+          ai_reasoning?: string | null
+          ai_confidence?: number | null
+          sample_narrations?: string[] | null
+          flag_status?: string
+          query_id?: string | null
+          actioned_by?: string | null
+          actioned_at?: string | null
+          action_note?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_recon_flags_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_recon_flags_mapping_id_fkey"
+            columns: ["mapping_id"]
+            isOneToOne: false
+            referencedRelation: "tds_tb_party_mappings"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      tds_tb_party_mappings: {
+        Row: {
+          id: string
+          client_id: string
+          firm_id: string
+          financial_year: string
+          tb_ledger_name: string
+          tb_parent_group: string | null
+          tb_total_debit: number | null
+          tds_deductee_name: string
+          tds_section_code: string | null
+          tds_total_amount: number | null
+          tds_filing_ids: string[] | null
+          match_confidence: number | null
+          match_method: string | null
+          ai_reasoning: string | null
+          mapping_status: string
+          mapped_by: string | null
+          notes: string | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          client_id: string
+          firm_id: string
+          financial_year: string
+          tb_ledger_name: string
+          tb_parent_group?: string | null
+          tb_total_debit?: number | null
+          tds_deductee_name: string
+          tds_section_code?: string | null
+          tds_total_amount?: number | null
+          tds_filing_ids?: string[] | null
+          match_confidence?: number | null
+          match_method?: string | null
+          ai_reasoning?: string | null
+          mapping_status?: string
+          mapped_by?: string | null
+          notes?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          client_id?: string
+          firm_id?: string
+          financial_year?: string
+          tb_ledger_name?: string
+          tb_parent_group?: string | null
+          tb_total_debit?: number | null
+          tds_deductee_name?: string
+          tds_section_code?: string | null
+          tds_total_amount?: number | null
+          tds_filing_ids?: string[] | null
+          match_confidence?: number | null
+          match_method?: string | null
+          ai_reasoning?: string | null
+          mapping_status?: string
+          mapped_by?: string | null
+          notes?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tb_party_mappings_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       tds_rate_master: {
         Row: {
           assessment_year: string
