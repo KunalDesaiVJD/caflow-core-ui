@@ -10,6 +10,14 @@
  *   • priority      — High | Medium | Low
  *   • allCorrected  — also satisfied when query_status === "resolved"
  *   • Backward migration: existing rows with content → "raised"; empty → "draft"
+ *
+ * Phase 3C additions:
+ *   • due_date      — ISO date string (YYYY-MM-DD); optional per row
+ *   • bulkSetStatus — advance a set of rows to the same status in one mutation
+ *
+ * Phase 3D additions:
+ *   • syncStatusFromClient — called by useQueryStatusSync when client portal
+ *                            changes a linked audit_client_queries record
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
@@ -82,6 +90,8 @@ export interface QueryRow {
   // Phase 3B
   query_status:         QueryStatus;
   priority:             QueryPriority;
+  // Phase 3C
+  due_date?:            string;  // YYYY-MM-DD — response deadline
 }
 
 export interface QuerySheetData {
@@ -97,6 +107,7 @@ export const BLANK_QUERY: Omit<QueryRow, "id"> = {
   correction_status:  "",
   query_status:       "draft",
   priority:           "Medium",
+  due_date:           "",
 };
 
 const BLANK_DATA: QuerySheetData = { queries: [] };
@@ -293,6 +304,71 @@ export function useQuerySheetStorage(
     [debounce],
   );
 
+  /** Phase 3C: Set the same status on multiple rows at once */
+  const bulkSetStatus = useCallback(
+    (ids: string[], status: QueryStatus) => {
+      setData(prev => {
+        const idSet = new Set(ids);
+        const next: QuerySheetData = {
+          queries: prev.queries.map(q => {
+            if (!idSet.has(q.id)) return q;
+            const extra = status === "resolved"
+              ? { correction_status: "Yes" as CorrectionStatus }
+              : status === "escalated"
+              ? { correction_status: "No" as CorrectionStatus }
+              : {};
+            return { ...q, query_status: status, ...extra };
+          }),
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  /**
+   * Phase 3D: Called by useQueryStatusSync when a linked audit_client_queries
+   * record changes status in the portal.
+   * Maps:  "Reply Received"  → response_received
+   *        "Clarified"|"Closed" → resolved
+   * Silently ignored if the row isn't in a state that should advance.
+   */
+  const syncStatusFromClient = useCallback(
+    (clientQueryId: string, clientStatus: string) => {
+      setData(prev => {
+        const rowIdx = prev.queries.findIndex(q => q.dispatched_query_id === clientQueryId);
+        if (rowIdx === -1) return prev;
+
+        const row = prev.queries[rowIdx];
+        let newStatus: QueryStatus | null = null;
+
+        if (clientStatus === "Reply Received" && row.query_status === "dispatched") {
+          newStatus = "response_received";
+        } else if (
+          (clientStatus === "Clarified" || clientStatus === "Closed") &&
+          row.query_status !== "resolved" &&
+          row.query_status !== "escalated"
+        ) {
+          newStatus = "resolved";
+        }
+
+        if (!newStatus) return prev;
+
+        const extra = newStatus === "resolved"
+          ? { correction_status: "Yes" as CorrectionStatus }
+          : {};
+        const updated = { ...row, query_status: newStatus, ...extra };
+        const queries = [...prev.queries];
+        queries[rowIdx] = updated;
+        const next: QuerySheetData = { queries };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
   /** Cycle priority: High → Medium → Low → High */
   const cyclePriority = useCallback(
     (id: string) => {
@@ -353,6 +429,8 @@ export function useQuerySheetStorage(
     bulkAddQueries,
     advanceStatus,
     setQueryStatus,
+    bulkSetStatus,
+    syncStatusFromClient,
     cyclePriority,
     manualSave,
     saving,
