@@ -15,6 +15,7 @@
  *   engagementId — passed straight through to each sub-component.
  */
 
+import { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wallet, FileText, Building2 } from "lucide-react";
 import { NCECapitalAccount } from "@/components/stage8/NCECapitalAccount";
@@ -25,11 +26,26 @@ import { NCEPPESchedule }    from "@/components/stage8/NCEPPESchedule";
 
 interface Props {
   engagementId: string;
+  navigateToNote?: number | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote }: Props) {
+  const [activeSubTab, setActiveSubTab] = useState("capital_account");
+
+  useEffect(() => {
+    if (navigateToNote != null) {
+      setActiveSubTab("notes_to_accounts");
+      // Wait for tab content to render then scroll
+      const timer = setTimeout(() => {
+        document.getElementById(`nce-note-${navigateToNote}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [navigateToNote]);
+
   return (
     <div className="space-y-3">
 
@@ -39,7 +55,7 @@ export default function NCENotesTab({ engagementId }: Props) {
       </h2>
 
       {/* Sub-tabs */}
-      <Tabs defaultValue="capital_account">
+      <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
         <TabsList>
           <TabsTrigger value="capital_account" className="gap-1.5">
             <Wallet size={14} /> Capital Account

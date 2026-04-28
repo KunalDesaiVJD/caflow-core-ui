@@ -1618,6 +1618,9 @@ export default function PipelineFinancialStatements({
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
 
+  // ─── NCE note navigation state ────────────────────────────────────────────
+  const [nceNavNote, setNceNavNote] = useState<number | null>(null);
+
   // ─── NCE Signature block editable state ──────────────────────────────────
   const [sigSignatoryName, setSigSignatoryName] = useState("");
   const [sigPlace,         setSigPlace]         = useState("");
@@ -5006,9 +5009,9 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
-                    setTimeout(() => {
-                      document.getElementById(`nce-note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }, 150);
+                    setNceNavNote(noteNo);
+                    // Reset after a delay so re-clicking the same note works
+                    setTimeout(() => setNceNavNote(null), 1000);
                   }}
                 />
                 {nceSignatureBlock}
@@ -5170,9 +5173,9 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
-                    setTimeout(() => {
-                      document.getElementById(`nce-note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }, 150);
+                    setNceNavNote(noteNo);
+                    // Reset after a delay so re-clicking the same note works
+                    setTimeout(() => setNceNavNote(null), 1000);
                   }}
                 />
                 {nceSignatureBlock}
@@ -5279,7 +5282,7 @@ export default function PipelineFinancialStatements({
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
             <TabsContent value="notes" className="mt-3">
-              <NCENotesTab engagementId={engagementId} />
+              <NCENotesTab engagementId={engagementId} navigateToNote={nceNavNote} />
             </TabsContent>
           )}
         </Tabs>

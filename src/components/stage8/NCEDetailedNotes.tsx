@@ -67,6 +67,33 @@ function newCustomId(): string {
   return "custom_" + Math.random().toString(36).slice(2, 10);
 }
 
+// ─── Sub-ledger actions menu (single eject action) ─────────────────────────
+function SubLedgerActionsMenu({ ledger, onEject }: { ledger: string; onEject: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title="Ledger actions"
+          className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        >
+          <MoreVertical className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" className="w-44 p-1">
+        <button
+          type="button"
+          className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+          onClick={() => { onEject(); setOpen(false); }}
+        >
+          <CornerUpRight className="h-3 w-3 shrink-0" /> Move to its own row
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Note card (collapsible) ──────────────────────────────────────────────────
 
 function NoteCard({
@@ -348,14 +375,7 @@ function CustomRowEditor({
                 )}
               </span>
               {onEjectCustomSource && (
-                <button
-                  type="button"
-                  title={`Move "${s.ledger}" to its own row`}
-                  onClick={() => onEjectCustomSource(s.ledger, s.amountCy)}
-                  className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
-                >
-                  <CornerUpRight className="h-3 w-3" />
-                </button>
+                <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectCustomSource(s.ledger, s.amountCy)} />
               )}
             </div>
           </TableCell>
@@ -569,14 +589,7 @@ function PatternBTable({
                     <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate flex-1 italic">{s.ledger}</span>
-                        <button
-                          type="button"
-                          title={`Move "${s.ledger}" to its own row`}
-                          onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                          className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
-                        >
-                          <CornerUpRight className="h-3 w-3" />
-                        </button>
+                        <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)} />
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
@@ -880,14 +893,7 @@ function PatternATable({
                             <span className="text-[9px] uppercase ml-1 font-semibold not-italic">[{(s as any).column}]</span>
                           )}
                         </span>
-                        <button
-                          type="button"
-                          title={`Move "${s.ledger}" to its own row`}
-                          onClick={() => onEjectSource(row.id, s.ledger, s.amountCy)}
-                          className="shrink-0 text-indigo-500 hover:text-indigo-700 transition-colors"
-                        >
-                          <CornerUpRight className="h-3 w-3" />
-                        </button>
+                        <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)} />
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
@@ -1154,19 +1160,47 @@ export function NCEDetailedNotes({ engagementId }: Props) {
     });
   }, [scheduleSave]);
 
-  const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, staticId: string) => {
+  const handlePromoteCustomToStatic = useCallback((noteType: string, customId: string, targetId: string) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
-      // Attach the custom row beneath the chosen static row. Amounts stay on
+      const config = NOTES_CONFIG.find(c => c.noteType === noteType);
+
+      // Determine section of the target row
+      let targetSection: string | undefined;
+      // Check if target is a custom row → inherit its section
+      const targetCustomRow = cur.customRows.find(r => r.id === targetId);
+      if (targetCustomRow) {
+        targetSection = targetCustomRow.section;
+      } else if (config) {
+        // Target is a static row → find which section it belongs to
+        let sectionStart = 0;
+        outer: for (let i = 0; i < config.rows.length; i++) {
+          const row = config.rows[i];
+          if (row.isTotal && row.sectionTag) {
+            for (let j = sectionStart; j < i; j++) {
+              const sr = config.rows[j];
+              if (!sr.isSectionHeader && !sr.isTotal && sr.id === targetId) {
+                targetSection = row.sectionTag;
+                break outer;
+              }
+            }
+            sectionStart = i + 1;
+          }
+        }
+      }
+
+      // Attach the custom row beneath the chosen row. Amounts stay on
       // the custom row's own keys — they continue to roll up into the same
-      // section/grand total via computeDisplayData. The static row itself is
+      // section/grand total via computeDisplayData. The target row itself is
       // untouched so the move is fully reversible.
       const next = { ...prev, [noteType]: {
         ...cur,
         customRows: cur.customRows.map(r =>
-          r.id === customId ? { ...r, attachedTo: staticId } : r,
+          r.id === customId
+            ? { ...r, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) }
+            : r,
         ),
-      } };
+      }};
       scheduleSave(next);
       return next;
     });

@@ -9,8 +9,11 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { Pencil, X, Plus, Trash2, ChevronDown, ChevronRight, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Popover, PopoverTrigger, PopoverContent,
+} from "@/components/ui/popover";
 
 // Indian numbering: 1,23,45,678.00 with parens for negatives, "-" for zero.
 export function formatINR(n: number | null | undefined): string {
@@ -244,6 +247,33 @@ export function NoteHeaderRow({ cyLabel, pyLabel }: { cyLabel: string; pyLabel: 
   );
 }
 
+// ─── Row actions menu for ListTable rows (⋮) ─────────────────────────────────
+function ListRowActionsMenu({ onDelete }: { onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title="Row actions"
+          className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <MoreVertical size={12} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" className="w-36 p-1">
+        <button
+          type="button"
+          className="w-full text-left px-2 py-1 rounded text-xs hover:bg-red-50 text-destructive flex items-center gap-1.5 transition-colors"
+          onClick={() => { onDelete(); setOpen(false); }}
+        >
+          <Trash2 size={11} className="shrink-0" /> Delete row
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
  * ListTable — managed list of {description, amount_cy, amount_py} rows.
  * Used for note line-items where the user adds rows freely (e.g. ledger
@@ -381,14 +411,7 @@ export function ListTable({
               />
             </div>
             <div className="col-span-1 flex justify-end">
-              <button
-                type="button"
-                onClick={() => remove(origIdx)}
-                className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
-                title="Remove row"
-              >
-                <Trash2 size={12} />
-              </button>
+              <ListRowActionsMenu onDelete={() => remove(origIdx)} />
             </div>
           </div>
         );
