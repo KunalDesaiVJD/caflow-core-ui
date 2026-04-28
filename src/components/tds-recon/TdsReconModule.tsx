@@ -10,16 +10,17 @@
  * Header: live exposure KPI bar + Export TDS Report button.
  */
 import { useState, useEffect, useCallback } from "react";
-import { Link2, GitCompareArrows, AlertOctagon, FileDown, Loader2 } from "lucide-react";
+import { Link2, GitCompareArrows, AlertOctagon, Landmark, FileDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { TdsPartyMappingPanel } from "./TdsPartyMappingPanel";
 import { TdsReconFlagsPanel }  from "./TdsReconFlagsPanel";
 import { TdsMissingPanel }     from "./TdsMissingPanel";
+import { TdsDemandPanel }      from "./TdsDemandPanel";
 import { generateTdsReport }   from "./TdsReportGenerator";
 
-type TdsTab = "mappings" | "recon" | "missing";
+type TdsTab = "mappings" | "recon" | "missing" | "demand";
 
 interface Props {
   clientId:      string | null | undefined;
@@ -27,25 +28,28 @@ interface Props {
 }
 
 interface ExposureSummary {
-  totalFlags:       number;
-  pendingFlags:     number;
-  goal1Flags:       number;
-  goal2Flags:       number;
-  goal3Flags:       number;
+  totalFlags:        number;
+  pendingFlags:      number;
+  goal1Flags:        number;
+  goal2Flags:        number;
+  goal3Flags:        number;
   estimatedExposure: number;
-  shortVariance:    number;
+  shortVariance:     number;
   confirmedMappings: number;
+  grandTotalDemand:  number;
 }
 
 const EMPTY_SUMMARY: ExposureSummary = {
   totalFlags: 0, pendingFlags: 0, goal1Flags: 0, goal2Flags: 0,
   goal3Flags: 0, estimatedExposure: 0, shortVariance: 0, confirmedMappings: 0,
+  grandTotalDemand: 0,
 };
 
 const TABS: Array<{ id: TdsTab; label: string; icon: React.ReactNode; phase: string }> = [
   { id: "mappings", label: "Party Mappings",  icon: <Link2 size={13} />,           phase: "TDS-2" },
   { id: "recon",    label: "Reconciliation",  icon: <GitCompareArrows size={13} />, phase: "TDS-3" },
   { id: "missing",  label: "Missing TDS",     icon: <AlertOctagon size={13} />,     phase: "TDS-4" },
+  { id: "demand",   label: "Demand Analysis", icon: <Landmark size={13} />,         phase: "TDS-6" },
 ];
 
 function fmtINR(n: number): string {
@@ -66,7 +70,7 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
   const loadSummary = useCallback(async () => {
     if (!clientId || !financialYear) return;
     setSummaryLoading(true);
-    const [flagsRes, mapsRes] = await Promise.all([
+    const [flagsRes, mapsRes, demandRes] = await Promise.all([
       (supabase as any)
         .from("tds_recon_flags")
         .select("goal_number,flag_type,flag_status,expected_tds,variance_amount")
@@ -77,10 +81,16 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
         .select("mapping_status")
         .eq("client_id", clientId)
         .eq("financial_year", financialYear),
+      (supabase as any)
+        .from("tds_demand_items")
+        .select("total_demand,item_status")
+        .eq("client_id", clientId)
+        .eq("financial_year", financialYear),
     ]);
 
     const flags:    any[] = flagsRes.data    ?? [];
     const mappings: any[] = mapsRes.data     ?? [];
+    const demandItems: any[] = demandRes.data ?? [];
 
     const goal3 = flags.filter(f => f.goal_number === 3 || f.flag_type === "missing_tds_obligation");
 
@@ -97,6 +107,9 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
         .filter(f => f.flag_type === "short_deduction" && f.flag_status !== "disregarded")
         .reduce((s: number, f: any) => s + Math.abs(f.variance_amount ?? 0), 0),
       confirmedMappings: mappings.filter(m => m.mapping_status === "confirmed").length,
+      grandTotalDemand:  demandItems
+        .filter(d => d.item_status !== "settled")
+        .reduce((s: number, d: any) => s + (d.total_demand ?? 0), 0),
     });
     setSummaryLoading(false);
   }, [clientId, financialYear]);
@@ -122,7 +135,7 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
     }
   };
 
-  const hasData = summary.totalFlags > 0 || summary.confirmedMappings > 0;
+  const hasData = summary.totalFlags > 0 || summary.confirmedMappings > 0 || summary.grandTotalDemand > 0;
 
   return (
     <div className="space-y-3">
@@ -160,7 +173,7 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
       {/* ── Exposure KPI bar ── */}
       {hasData && (
         <div className={cn(
-          "grid grid-cols-4 gap-2 p-3 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-100 rounded-lg",
+          "grid grid-cols-5 gap-2 p-3 bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-100 rounded-lg",
           summaryLoading && "opacity-60",
         )}>
           {/* Total Flags */}
@@ -216,6 +229,20 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
               <span className="text-[9px] bg-red-50 text-red-600 rounded px-1">Goal 3</span>
             </div>
           </div>
+
+          {/* Grand total demand (TDS-6) */}
+          <div className="text-center border-l border-teal-100">
+            <div className={cn(
+              "text-lg font-bold leading-tight",
+              summary.grandTotalDemand > 0 ? "text-slate-800" : "text-slate-400",
+            )}>
+              {summary.grandTotalDemand > 0 ? fmtINR(summary.grandTotalDemand) : "—"}
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">Total Demand (incl. Interest)</div>
+            <div className="flex justify-center mt-1">
+              <span className="text-[9px] bg-slate-100 text-slate-600 rounded px-1">TDS-6</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -254,6 +281,9 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
       )}
       {activeTab === "missing"  && (
         <TdsMissingPanel      clientId={clientId} financialYear={financialYear} />
+      )}
+      {activeTab === "demand"   && (
+        <TdsDemandPanel       clientId={clientId} financialYear={financialYear} />
       )}
     </div>
   );

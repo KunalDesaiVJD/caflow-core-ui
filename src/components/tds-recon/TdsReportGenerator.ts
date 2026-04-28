@@ -131,7 +131,7 @@ export async function generateTdsReport(input: ReportInput): Promise<void> {
     import("jspdf-autotable"),
   ]);
 
-  const [clientRes, flagsRes, mappingsRes] = await Promise.all([
+  const [clientRes, flagsRes, mappingsRes, demandRes] = await Promise.all([
     (supabase as any).from("clients").select("name,entity_type,business_activity").eq("id", clientId).maybeSingle(),
     (supabase as any)
       .from("tds_recon_flags")
@@ -145,11 +145,18 @@ export async function generateTdsReport(input: ReportInput): Promise<void> {
       .select("*")
       .eq("client_id", clientId)
       .eq("financial_year", financialYear),
+    (supabase as any)
+      .from("tds_demand_items")
+      .select("*")
+      .eq("client_id", clientId)
+      .eq("financial_year", financialYear)
+      .order("total_demand", { ascending: false }),
   ]);
 
-  const client: ClientRow   = clientRes.data   ?? { name: null, entity_type: null, business_activity: null };
-  const flags:  any[]       = flagsRes.data     ?? [];
-  const mappings: any[]     = mappingsRes.data  ?? [];
+  const client: ClientRow   = clientRes.data    ?? { name: null, entity_type: null, business_activity: null };
+  const flags:  any[]       = flagsRes.data      ?? [];
+  const mappings: any[]     = mappingsRes.data   ?? [];
+  const demandItems: any[]  = demandRes.data     ?? [];
 
   const clientName = client.name || "Client";
   const fyLabel    = financialYear;
@@ -176,6 +183,13 @@ export async function generateTdsReport(input: ReportInput): Promise<void> {
   const shortDeductionVariance = goal2Flags
     .filter(f => f.flag_type === "short_deduction" && f.flag_status !== "disregarded")
     .reduce((s, f) => s + Math.abs(f.variance_amount ?? 0), 0);
+
+  const grandTotalDemand   = demandItems
+    .filter(d => d.item_status !== "settled")
+    .reduce((s, d) => s + (d.total_demand ?? 0), 0);
+  const interest201Total   = demandItems.reduce((s, d) => s + (d.interest_201_1a ?? 0), 0);
+  const fee234eTotal       = demandItems.reduce((s, d) => s + (d.fee_234e ?? 0), 0);
+  const shortfallTotal     = demandItems.reduce((s, d) => s + (d.tds_shortfall ?? 0), 0);
 
   // ── 3. Build PDF ──
   const doc  = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -659,6 +673,116 @@ export async function generateTdsReport(input: ReportInput): Promise<void> {
         }
       },
     });
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // DEMAND ANALYSIS PAGE — Section 201(1A) + 234E
+  // ────────────────────────────────────────────────────────────────────────────
+
+  doc.addPage();
+  _pageHeader(doc, "Demand Analysis — Section 201(1A) & 234E", clientName, fyLabel, PW, ML, MR);
+  y = 22;
+
+  y = _sectionTitle(doc, "TDS Demand Summary (Shortfall + Interest + Late Fees)", ML, y, CW);
+
+  if (demandItems.length === 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9);
+    doc.setTextColor(...C_MUTED);
+    doc.text("Demand computation not yet run. Use the Demand Analysis tab in CAFlow to compute.", ML, y + 6);
+    y += 20;
+  } else {
+    // Summary stat boxes
+    const dStats: [string, string, RGB][] = [
+      ["TDS Shortfall",      fmtINR(shortfallTotal),   C_RED],
+      ["201(1A) Interest",   fmtINR(interest201Total), C_AMBER],
+      ["234E Late Fees",     fmtINR(fee234eTotal),     [217, 119, 6] as RGB],
+      ["Grand Total Demand", fmtINR(grandTotalDemand), C_DARK],
+    ];
+    const dsw = (CW - 9) / 4;
+    dStats.forEach(([label, val, col], i) => {
+      const bx = ML + i * (dsw + 3);
+      doc.setFillColor(...C_LIGHT);
+      doc.roundedRect(bx, y, dsw, 24, 2, 2, "F");
+      doc.setFillColor(...col);
+      doc.roundedRect(bx, y, 4, 24, 0, 0, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.setTextColor(...col);
+      doc.text(trunc(val, 12), bx + dsw / 2 + 2, y + 14, { align: "center" });
+      doc.setFontSize(6.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...C_MUTED);
+      doc.text(label, bx + dsw / 2 + 2, y + 21, { align: "center" });
+    });
+    y += 32;
+
+    // Detail table
+    y = _sectionTitle(doc, "Per-Item Demand Breakdown", ML, y, CW);
+
+    autoTable(doc, {
+      startY: y,
+      head: [["TB Ledger", "Deductee", "Sec.", "Type", "Shortfall", "201(1A)", "234E", "Total", "Status"]],
+      body: demandItems.map(d => [
+        trunc(d.tb_ledger_name, 20),
+        trunc(d.tds_deductee_name, 18),
+        d.section_code || "—",
+        d.flag_type === "short_deduction" ? "Short Dedn" : "Missing TDS",
+        fmtINR(d.tds_shortfall),
+        fmtINR(d.interest_201_1a),
+        fmtINR(d.fee_234e),
+        fmtINR(d.total_demand),
+        d.item_status?.replace(/_/g, " ") || "—",
+      ]),
+      foot: [[
+        "TOTAL", "", "", "",
+        fmtINR(shortfallTotal),
+        fmtINR(interest201Total),
+        fmtINR(fee234eTotal),
+        fmtINR(grandTotalDemand),
+        "",
+      ]],
+      styles:     { fontSize: 7, cellPadding: 2, textColor: C_BODY },
+      headStyles: { fillColor: C_DARK, textColor: C_WHITE, fontStyle: "bold", fontSize: 7 },
+      footStyles: { fillColor: C_DARK, textColor: C_WHITE, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: C_LIGHT },
+      columnStyles: {
+        0: { cellWidth: 28 },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 13, halign: "center" },
+        3: { cellWidth: 20 },
+        4: { cellWidth: 20, halign: "right" },
+        5: { cellWidth: 20, halign: "right" },
+        6: { cellWidth: 18, halign: "right" },
+        7: { cellWidth: 22, halign: "right", fontStyle: "bold" },
+        8: { cellWidth: 15 },
+      },
+      margin: { left: ML, right: MR },
+      didDrawPage: (h: any) => _pageFooter(doc, h.pageNumber, PW, PH, todayStr),
+    });
+
+    y = (doc as any).lastAutoTable.finalY + 8;
+
+    // Statutory note
+    if (y > PH - 30) { doc.addPage(); _pageHeader(doc, "Demand Analysis (cont.)", clientName, fyLabel, PW, ML, MR); y = 22; }
+    doc.setFillColor(...[255, 251, 235] as RGB);
+    doc.roundedRect(ML, y, CW, 18, 2, 2, "F");
+    doc.setDrawColor(...C_AMBER);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(ML, y, CW, 18, 2, 2, "S");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(...C_AMBER);
+    doc.text("Statutory Note:", ML + 3, y + 6);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(...C_BODY);
+    const noteText =
+      "Interest u/s 201(1A): 1%/month (non-deduction) or 1.5%/month (late payment), calculated on ceiling months. " +
+      "Section 234E fee: ₹200/day, capped at TDS shortfall. Dates assumed mid-year (Oct) where specific transaction dates unavailable. " +
+      "Actual liability may differ. Verify with CPC intimations before acting.";
+    const noteLines = doc.splitTextToSize(noteText, CW - 6);
+    doc.text(noteLines, ML + 3, y + 11);
   }
 
   // ────────────────────────────────────────────────────────────────────────────
