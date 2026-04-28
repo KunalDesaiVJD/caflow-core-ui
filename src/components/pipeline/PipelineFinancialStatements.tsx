@@ -2103,6 +2103,18 @@ export default function PipelineFinancialStatements({
       ? (pyShellTb?.length ?? 0) > 0
       : !noPriorEngagement;
 
+  // ─── COA Mapping gate for "Fetch PY from FY-1 Tally" ────────────────────
+  // PY comparative figures depend on COA mapping being complete. If unmapped
+  // ledgers exist the fetch silently skips them and produces incomplete PY
+  // P&L figures. Require stage_statuses["3"] === "complete" (or pipeline
+  // already past stage 3) before enabling the Fetch button.
+  const coaMappingComplete: boolean =
+    (engagement?.stage_statuses as any)?.["3"] === "complete" ||
+    (engagement?.pipeline_stage ?? 0) > 3;
+
+  // The Fetch button requires BOTH: PY data synced AND COA mapping done.
+  const fetchPyEnabled: boolean = pyShellSyncDone && coaMappingComplete;
+
   // ─── Load manual overrides from existing FS ───
   useEffect(() => {
     if (existingFs && existingFs.length > 0) {
@@ -4836,7 +4848,9 @@ export default function PipelineFinancialStatements({
             <div className="flex items-center gap-2">
               {!pyShellSyncDone
                 ? <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400">⚠ Tally sync pending</Badge>
-                : <Badge variant="outline" className="text-[10px] border-green-500 text-green-700 dark:text-green-400">✓ Tally synced</Badge>
+                : !coaMappingComplete
+                ? <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400">⚠ COA mapping pending</Badge>
+                : <Badge variant="outline" className="text-[10px] border-green-500 text-green-700 dark:text-green-400">✓ Ready to fetch</Badge>
               }
               {pyShellId && (
                 <Button
@@ -4851,8 +4865,10 @@ export default function PipelineFinancialStatements({
           </AlertTitle>
           <AlertDescription className="text-xs text-blue-700/80 dark:text-blue-400/80 mt-0.5">
             {!pyShellSyncDone
-              ? "PY Shell created but Tally not yet synced. Click \"Open PY Shell Tally Sync\", run the sync for FY 2024-25, then return here and click \"Fetch from FY-1 Tally\" in the P&L tab."
-              : "PY Shell Tally sync is complete. Use \"Fetch from FY-1 Tally\" in the P&L tab to pull PY P&L figures into this engagement."}
+              ? "PY Shell created but Tally not yet synced. Click \"Open PY Shell Tally Sync\", run the sync for FY 2024-25, then return here."
+              : !coaMappingComplete
+              ? "Tally sync done ✓ — Now go to Stage 6 (COA Mapping) and map all prior-year ledgers. Once COA Mapping is marked complete, return here and click \"Fetch from FY-1 Tally\" in the P&L tab."
+              : "PY Shell Tally sync is complete and COA mapping is done. Use \"Fetch from FY-1 Tally\" in the P&L tab to pull PY P&L figures into this engagement."}
           </AlertDescription>
         </Alert>
       )}
@@ -5083,6 +5099,8 @@ export default function PipelineFinancialStatements({
                   <span>
                     {!pyShellSyncDone
                       ? <><strong>PY not yet synced.</strong> Run sync-py.bat for FY {pyYear - 1}-{String(pyYear).slice(-2)}, then click Fetch.</>
+                      : !coaMappingComplete
+                      ? <><strong>Complete COA Mapping first.</strong> Go to <strong>Stage 6 — COA Mapping</strong>, map all prior-year ledgers, then return here to fetch PY figures.</>
                       : <>Prior year Tally data available. Click <strong>Fetch PY from FY-1 Tally</strong> to auto-populate PY comparative figures.</>
                     }
                   </span>
@@ -5092,7 +5110,8 @@ export default function PipelineFinancialStatements({
                   variant="outline"
                   className="h-7 text-xs gap-1.5 border-blue-400 text-blue-700 hover:bg-blue-100 dark:border-blue-600 dark:text-blue-300 shrink-0 ml-3"
                   onClick={fetchPyPLFromTally}
-                  disabled={fetchingPyTally || !pyShellSyncDone}
+                  disabled={fetchingPyTally || !fetchPyEnabled}
+                  title={!pyShellSyncDone ? "Run PY sync first" : !coaMappingComplete ? "Complete COA Mapping (Stage 6) first" : undefined}
                 >
                   {fetchingPyTally
                     ? <><span className="animate-spin inline-block">↻</span> Fetching…</>
