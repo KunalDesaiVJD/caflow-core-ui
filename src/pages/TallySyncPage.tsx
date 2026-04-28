@@ -537,6 +537,86 @@ export default function TallySyncPage() {
   const latest  = batches[0];
   const hasData = rowCounts.ledgers > 0 || rowCounts.groups > 0;
 
+  // ── Categorized sync errors / warnings ─────────────────────────────────────
+  // Tally itself is internally consistent — every sync error or warning has
+  // a concrete extraction-side cause. Build a flat list of [phase | message |
+  // reason | fix] rows from the latest batch's `warnings[]` and `phase_errors`
+  // map so the user sees ALL issues with explanations on this page.
+  const syncIssues = useMemo(() => {
+    if (!latest) return [] as Array<{ phase: string; severity: "error" | "warning"; message: string; reason: string; fix: string }>;
+    const fy = (selectedEngagement as any)?.financial_year ?? tallyFy ?? "current FY";
+    const out: Array<{ phase: string; severity: "error" | "warning"; message: string; reason: string; fix: string }> = [];
+
+    const categorize = (raw: string): { reason: string; fix: string } => {
+      const s = (raw || "").toLowerCase();
+      if (/no progress|agent.*crash|auto-failed.*no progress/.test(s)) {
+        return {
+          reason: "The sync agent process stopped sending heartbeats — it crashed mid-run or the PC went to sleep. Tally itself was not the cause.",
+          fix: `Re-open Tally on FY ${fy}, then re-run the sync .bat file. If the .bat closes immediately, check the agent log in C:\\team-package\\logs.`,
+        };
+      }
+      if (/stuck.*running|over 30 min/.test(s)) {
+        return {
+          reason: "Sync ran past 30 min without reaching the 'completed' state — Tally became unresponsive (typical when a different ALT-key dialog is open in Tally, or another XML client is hammering port 9000).",
+          fix: "Close any Tally dialogs (Esc to Gateway), close any other XML client, then re-run the sync.",
+        };
+      }
+      if (/period|f2|wrong year|fy\s*\d|active period/.test(s)) {
+        return {
+          reason: `Tally's active period (F2) is set to a year other than FY ${fy}. $ClosingBalance and voucher COLLECTION both read from the active period, so figures came back for the wrong year.`,
+          fix: `Press F2 in Tally and set period to 01-Apr to 31-Mar of FY ${fy}, then re-run the sync.`,
+        };
+      }
+      if (/econnreset|eai_again|etimedout|socket|timeout|9000/.test(s)) {
+        return {
+          reason: "The Tally XML server on port 9000 dropped or refused a request. Usually because Tally is on a modal dialog, or Tally was switched to a different company mid-sync.",
+          fix: "In Tally: Esc back to Gateway, F11 → Set 'EnableXML=Yes', confirm port is 9000, then re-run the sync.",
+        };
+      }
+      if (/voucher.*(skip|missing|partial|truncat)|collection.*partial/.test(s)) {
+        return {
+          reason: "Voucher COLLECTION returned fewer rows than Tally's books contain — the TDL request hit a row cap or one date-range chunk failed.",
+          fix: "Re-run the sync. If the same warning reappears, narrow Tally's company period to a single year (F2) and try again.",
+        };
+      }
+      if (/company|no company|alter.*company|odbc/.test(s)) {
+        return {
+          reason: "Tally has no company loaded, or the loaded company name doesn't match what's recorded on this engagement.",
+          fix: `Open the correct company in Tally (Gateway → Select Company → ${(selectedEngagement as any)?.client_name ?? "the engagement's client"}), then re-run the sync.`,
+        };
+      }
+      if (/dr.?cr|debit.*credit.*mismatch|unbalanced/.test(s)) {
+        return {
+          reason: "The synced voucher set's total Dr ≠ total Cr beyond the ₹500 reconciliation guard. This means one or more vouchers were partially fetched (a line item missed) — Tally's own books always balance.",
+          fix: "Re-run the sync. If the imbalance persists, the company has a voucher with a cost-centre or class allocation the TDL skips — open the highest-amount unmatched voucher in Tally and check for cost-centre splits.",
+        };
+      }
+      if (/auth|permission|denied/.test(s)) {
+        return {
+          reason: "Tally rejected the XML request — usually because 'Allow remote access' is off or a Tally.NET subscription is required for this company.",
+          fix: "In Tally: F11 → Set 'AllowRemoteAccess = Yes' for this company, then re-run the sync.",
+        };
+      }
+      return {
+        reason: "Extraction-side issue with no specific signature recognized. Tally itself never produces inconsistent numbers, so the cause is in the sync agent or the Tally request shape.",
+        fix: `Re-run the sync with Tally on FY ${fy}. If the warning persists, copy the raw message above and share it for further diagnosis.`,
+      };
+    };
+
+    // sync_batches.warnings[] — array of strings or {message} objects
+    for (const w of (latest.warnings ?? []) as any[]) {
+      const msg = typeof w === "string" ? w : (w?.message ?? JSON.stringify(w));
+      const cat = categorize(msg);
+      out.push({ phase: (w?.phase as string) || "—", severity: "warning", message: msg, ...cat });
+    }
+    // sync_batches.phase_errors{} — { phaseName: errorMessage }
+    for (const [phase, msg] of Object.entries((latest.phase_errors ?? {}) as Record<string, string>)) {
+      const cat = categorize(msg);
+      out.push({ phase, severity: "error", message: msg, ...cat });
+    }
+    return out;
+  }, [latest, selectedEngagement, tallyFy]);
+
   // ── Filtered views ────────────────────────────────────────────────────────────
   const filteredGroups  = groups.filter(g =>
     !groupSearch || decodeHtml(g.group_name).toLowerCase().includes(groupSearch.toLowerCase()) ||
@@ -1279,6 +1359,61 @@ export default function TallySyncPage() {
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
       <EngagementHeader engagement={selectedEngagement} stageNumber={5} stageLabel="Tally Sync" />
+
+      {/* ── Sync Errors & Warnings ──────────────────────────────────────────
+          Tally itself is internally consistent — every sync error or warning
+          has a concrete extraction-side cause. Show the latest batch's
+          warnings[] and phase_errors{} as a flat table with a categorized
+          reason and fix for each one. */}
+      {syncIssues.length > 0 && (
+        <Card className="border-red-300 bg-red-50/40 dark:bg-red-950/10">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 text-red-900 dark:text-red-300">
+              <AlertTriangle className="h-4 w-4" />
+              Sync Errors &amp; Warnings — {syncIssues.length} issue{syncIssues.length > 1 ? "s" : ""} from the last sync
+            </CardTitle>
+            <CardDescription className="text-xs text-red-800/80 dark:text-red-400/80">
+              Tally itself never produces inconsistent opening / closing / movement values. Every issue below is on the extraction side — each row shows the original message, a categorized reason, and the exact fix.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="overflow-x-auto rounded border border-red-200 dark:border-red-900 bg-white dark:bg-background">
+              <table className="w-full text-xs">
+                <thead className="bg-red-100/60 dark:bg-red-900/30 text-red-900 dark:text-red-200">
+                  <tr>
+                    <th className="text-left px-2 py-1.5 font-semibold w-20">Severity</th>
+                    <th className="text-left px-2 py-1.5 font-semibold w-24">Phase</th>
+                    <th className="text-left px-2 py-1.5 font-semibold">Raw Message</th>
+                    <th className="text-left px-2 py-1.5 font-semibold">Reason &amp; Fix</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {syncIssues.map((it, i) => (
+                    <tr key={i} className="border-t border-red-100 dark:border-red-900/40 align-top">
+                      <td className="px-2 py-1.5">
+                        <Badge variant="outline" className={cn(
+                          "text-[10px]",
+                          it.severity === "error"
+                            ? "border-red-400 text-red-700 bg-red-50"
+                            : "border-amber-400 text-amber-700 bg-amber-50",
+                        )}>
+                          {it.severity}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-[11px]">{it.phase}</td>
+                      <td className="px-2 py-1.5 text-red-900 dark:text-red-200 max-w-md break-words">{it.message}</td>
+                      <td className="px-2 py-1.5 max-w-md">
+                        <div className="text-red-900 dark:text-red-200">{it.reason}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5"><span className="font-semibold">Fix:</span> {it.fix}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
