@@ -11,8 +11,8 @@
  *   • Per-row actions: Raise Query (dialog) | Accept | Disregard
  */
 import { useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
+import { runReconEngine } from "./tdsEngine";
 import { Badge }    from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -495,17 +495,7 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
     }
     setRunning(true);
     try {
-      const res = await supabase.functions.invoke("tds-recon-engine", {
-        body: { client_id: clientId, financial_year: financialYear, firm_id: firmId, goals, rerun: true },
-      });
-      if (res.error) throw new Error(res.error.message);
-
-      const r = res.data as {
-        flags_created: number; flags_preserved: number;
-        goal1_flags: number; goal2_flags: number;
-        message?: string; mappings_analysed?: number;
-      };
-
+      const r = await runReconEngine({ client_id: clientId, financial_year: financialYear, firm_id: firmId, goals, rerun: true });
       if (r.message && r.flags_created === 0) {
         toast.info(r.message);
       } else {

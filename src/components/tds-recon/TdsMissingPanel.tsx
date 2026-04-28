@@ -11,8 +11,8 @@
  *   • Create Mapping dialog: pre-fill section, let auditor enter deductee name
  */
 import { useState, useCallback } from "react";
-import { supabase }   from "@/integrations/supabase/client";
 import { Button }     from "@/components/ui/button";
+import { runMissingScanner } from "./tdsEngine";
 import { Badge }      from "@/components/ui/badge";
 import { Input }      from "@/components/ui/input";
 import { Textarea }   from "@/components/ui/textarea";
@@ -422,19 +422,7 @@ export function TdsMissingPanel({ clientId, financialYear }: Props) {
     }
     setRunning(true);
     try {
-      const res = await supabase.functions.invoke("tds-missing-scanner", {
-        body: {
-          client_id: clientId, financial_year: financialYear,
-          firm_id: firmId, confidence_threshold: threshold,
-        },
-      });
-      if (res.error) throw new Error(res.error.message);
-
-      const r = res.data as {
-        scanned: number; excluded_mapped: number; flagged: number;
-        estimated_total_tds: number; message?: string;
-      };
-
+      const r = await runMissingScanner({ client_id: clientId, financial_year: financialYear, firm_id: firmId, confidence_threshold: threshold });
       if (r.message && r.flagged === 0) {
         toast.info(r.message);
       } else {

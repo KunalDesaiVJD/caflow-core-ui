@@ -50,3 +50,15 @@ verify_jwt = false
 
 [functions.export_tax_audit]
 verify_jwt = false
+
+[functions.tds-ai-mapper]
+verify_jwt = true
+
+[functions.tds-recon-engine]
+verify_jwt = true
+
+[functions.tds-missing-scanner]
+verify_jwt = true
+
+[functions.tds-demand-calculator]
+verify_jwt = true
