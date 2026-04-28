@@ -263,6 +263,7 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
         <AnomalyFeedView
           tallyEngId={tallyEngId}
           financialYear={financialYear}
+          clientId={clientId}
           onRaiseQuery={onRaiseQuery}
         />
       )}

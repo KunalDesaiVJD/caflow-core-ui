@@ -13,7 +13,7 @@ import { Badge  } from "@/components/ui/badge";
 import {
   Loader2, Zap, AlertTriangle, RefreshCw,
   MessageSquareWarning, ChevronDown, ChevronRight,
-  Info,
+  Info, BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -26,12 +26,15 @@ import {
   VoucherRow,
   TBRow,
 } from "@/lib/anomalyEngine";
+import { LedgerSidePanel } from "./LedgerSidePanel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Props {
   tallyEngId:    string | null | undefined;
   financialYear: string | null | undefined;
+  /** Phase 2C: needed to open LedgerSidePanel from anomaly card */
+  clientId?:     string | null | undefined;
   onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
 }
 
@@ -119,9 +122,11 @@ function SummaryBar({
 function AnomalyCard({
   flag,
   onRaiseQuery,
+  onViewLedger,
 }: {
   flag: AnomalyFlag;
   onRaiseQuery: (group: string, ledger: string, note?: string) => void;
+  onViewLedger: (ledger: string, group: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -171,6 +176,21 @@ function AnomalyCard({
               ? <ChevronDown size={12} />
               : <ChevronRight size={12} />}
           </button>
+          {(flag.ledger_name || flag.voucher_type) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[10px] gap-0.5 text-blue-600 hover:bg-blue-50 hover:text-blue-700 flex-shrink-0"
+              title="View ledger entries"
+              onClick={() => onViewLedger(
+                flag.ledger_name || flag.voucher_type || "",
+                flag.parent_group,
+              )}
+            >
+              <BookOpen size={10} />
+              <span>View</span>
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
@@ -218,11 +238,14 @@ function AnomalyCard({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function AnomalyFeedView({ tallyEngId, financialYear, onRaiseQuery }: Props) {
+export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQuery }: Props) {
   const [vouchers,  setVouchers]  = useState<VoucherRow[]>([]);
   const [tb,        setTb]        = useState<TBRow[]>([]);
   const [loading,   setLoading]   = useState(false);
   const [scanDone,  setScanDone]  = useState(false);
+
+  // Phase 2C: LedgerSidePanel state
+  const [panelLedger, setPanelLedger] = useState<{ name: string; group: string } | null>(null);
 
   // Filter state
   const [sevFilter,  setSevFilter]  = useState<AnomalySeverity | "all">("all");
@@ -283,6 +306,12 @@ export function AnomalyFeedView({ tallyEngId, financialYear, onRaiseQuery }: Pro
     const s = new Set<AnomalyType>(report.flags.map(f => f.flag_type));
     return Array.from(s);
   }, [report]);
+
+  // Phase 2C: all flagged voucher IDs (for highlighting in LedgerSidePanel)
+  const flaggedVoucherIds = useMemo(
+    () => new Set<string>((report?.flags ?? []).map(f => f.voucher_id)),
+    [report],
+  );
 
   // Filtered flags
   const visible = useMemo(() => {
@@ -446,10 +475,26 @@ export function AnomalyFeedView({ tallyEngId, financialYear, onRaiseQuery }: Pro
               key={flag.id}
               flag={flag}
               onRaiseQuery={onRaiseQuery}
+              onViewLedger={(ledger, group) => setPanelLedger({ name: ledger, group })}
             />
           ))}
         </div>
       )}
+
+      {/* ── Ledger side panel (Phase 2C) ── */}
+      <LedgerSidePanel
+        open={!!panelLedger}
+        ledgerName={panelLedger?.name ?? ""}
+        parentGroup={panelLedger?.group ?? ""}
+        clientId={clientId}
+        financialYear={financialYear}
+        flaggedVoucherIds={flaggedVoucherIds}
+        onClose={() => setPanelLedger(null)}
+        onRaiseQuery={(group, ledger, note) => {
+          setPanelLedger(null);
+          onRaiseQuery(group, ledger, note);
+        }}
+      />
 
       {/* ── Rule legend (collapsed info) ── */}
       <details className="group">
