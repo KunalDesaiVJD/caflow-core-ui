@@ -2748,16 +2748,21 @@ export default function PipelineFinancialStatements({
       // Prefer is_py_shell=true (PY shell from sync-py.js), fall back to any
       // FY-1 engagement. Use order(created_at desc) so a PY shell (created
       // more recently) wins over an older regular engagement when both exist.
+      // Also fetch coa_mapping so we can map PY shell ledger names correctly —
+      // the PY shell may have ledger names that differ from CY and aren't in the
+      // CY's coaMapping at all (renamed ledgers, GST-rate suffixes, etc.).
       let pyEngId: string | null = null;
+      let pyEngCoaMapping: Record<string, any> = {};
       const { data: pyEngRow } = await supabase
         .from("audit_engagements")
-        .select("id")
+        .select("id, coa_mapping")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
         .order("created_at" as any, { ascending: false })
         .limit(1)
         .maybeSingle();
       pyEngId = (pyEngRow as any)?.id ?? null;
+      pyEngCoaMapping = (pyEngRow as any)?.coa_mapping ?? {};
 
       // ── Paginated TB fetcher ─────────────────────────────────────────────
       async function fetchEngTB(engId: string): Promise<any[]> {
@@ -2814,9 +2819,18 @@ export default function PipelineFinancialStatements({
 
       // ── Aggregate signed closing balances per FS code ────────────────────
       // closing_balance is unsigned; balance_type DR → positive, CR → negative
+      //
+      // Lookup priority:
+      //   1. PY shell's own coa_mapping  — most accurate; ledger names in the
+      //      PY shell TB match names in the PY shell's Stage 3 mapping exactly.
+      //   2. CY engagement's coaMapping  — fallback when the PY shell hasn't
+      //      been mapped yet or the ledger name is identical across years.
       const preview: Record<string, number> = {};
       for (const row of pyTbRows) {
-        const mapping = (coaMapping as any)[String(row.ledger_name || "").trim()];
+        const name = String(row.ledger_name || "").trim();
+        const mapping =
+          (pyEngCoaMapping[name]) ||       // 1. PY shell's own mapping
+          (coaMapping as any)[name];        // 2. CY fallback
         if (!mapping || !plLeafCodes.has(mapping.code)) continue;
         const cb    = Math.abs(Number(row.closing_balance ?? 0));
         const isDr  = String(row.balance_type ?? "").toUpperCase() === "DR";
@@ -2825,7 +2839,7 @@ export default function PipelineFinancialStatements({
       }
 
       if (!Object.keys(preview).length) {
-        toast("No P&L ledgers matched current COA mapping. Check Stage 3 mapping first.");
+        toast("No P&L ledgers matched. Ensure Stage 6 (COA Mapping) is complete for the PY Shell engagement first.");
         return;
       }
 
