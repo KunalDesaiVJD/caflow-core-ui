@@ -1714,17 +1714,22 @@ export default function PipelineFinancialStatements({
       const fyParts = (engagement.financial_year || "").split("-");
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
-      const { data: prevEng } = await supabase
-        .from("audit_engagements")
+      // Exclude PY shells — they have no fa_financial_statements rows.
+      // Also use .limit(1) to prevent maybeSingle() error when both a regular
+      // engagement and a PY shell exist for the same client + FY.
+      const { data: prevEng } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (!prevEng) return null;
       const { data: prevFs } = await supabase
         .from("fa_financial_statements")
         .select("line_item_code, amount_cy")
-        .eq("engagement_id", prevEng.id);
+        .eq("engagement_id", (prevEng as any).id);
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
@@ -1739,11 +1744,13 @@ export default function PipelineFinancialStatements({
       const fyParts = (engagement.financial_year as string).split("-");
       if (fyParts.length !== 2) return false;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
-      const { data } = await supabase
-        .from("audit_engagements")
+      const { data } = await (supabase.from as any)("audit_engagements")
         .select("is_finalized")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       return !!(data as any)?.is_finalized;
     },

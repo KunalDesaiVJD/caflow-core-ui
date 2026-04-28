@@ -511,21 +511,25 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const { data: priorEngagement } = useQuery({
     queryKey: ["prior-engagement-fs", engagement?.client_id, engagement?.financial_year],
     queryFn: async () => {
-      // Find previous FY engagement
+      // Find previous FY engagement (exclude PY shells — they have no FS rows).
+      // Use .limit(1) to prevent maybeSingle() error when both a regular
+      // engagement and a PY shell exist for the same client + FY.
       const fyParts = (engagement.financial_year || "").split("-");
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
-      const { data: prevEng } = await supabase
-        .from("audit_engagements")
+      const { data: prevEng } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
+        .or("is_py_shell.is.null,is_py_shell.eq.false")
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (!prevEng) return null;
       const { data: prevFs } = await supabase
         .from("fa_financial_statements")
         .select("line_item_code, amount_cy")
-        .eq("engagement_id", prevEng.id);
+        .eq("engagement_id", (prevEng as any).id);
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
@@ -543,15 +547,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
 
-      // Find the PY shell (or prior CY) engagement
-      const { data: pyEng } = await supabase
-        .from("audit_engagements")
+      // Prefer the PY shell (is_py_shell=true) — it has the synced TB data.
+      // Fall back to any FY-1 engagement if no PY shell exists.
+      let pyEng: any = null;
+      const { data: shellFirst } = await (supabase.from as any)("audit_engagements")
         .select("id, coa_mapping")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
+        .eq("is_py_shell", true)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (shellFirst) {
+        pyEng = shellFirst;
+      } else {
+        const { data: fallback } = await (supabase.from as any)("audit_engagements")
+          .select("id, coa_mapping")
+          .eq("client_id", engagement.client_id)
+          .eq("financial_year", prevFy)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        pyEng = fallback;
+      }
       if (!pyEng) return null;
 
       // Paginated fetch of PY shell TB (closing_balance only needed)
