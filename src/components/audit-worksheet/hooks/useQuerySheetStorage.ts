@@ -25,6 +25,7 @@ export interface QueryRow {
   required_documents:   string;
   remark:               string;
   correction_status:    CorrectionStatus;
+  dispatched_query_id?: string;   // set when dispatched to audit_client_queries
 }
 
 export interface QuerySheetData {

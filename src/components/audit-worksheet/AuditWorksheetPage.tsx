@@ -12,7 +12,7 @@ import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, DatabaseZap } from "lucide-react";
+import { AlertTriangle, DatabaseZap, MessageSquareWarning } from "lucide-react";
 import { toast } from "sonner";
 
 import AuditWorksheetHeader  from "./AuditWorksheetHeader";
@@ -27,6 +27,7 @@ import QuerySheet            from "./QuerySheet";
 import type { QueryPrefill } from "./QuerySheet";
 import Checklist             from "./Checklist";
 import { LedgerExplorerTab } from "./LedgerExplorerTab";
+import { AuditClientInboxTab } from "./AuditClientInboxTab";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -164,6 +165,9 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
           <TabsTrigger value="checklist" className="text-xs">
             Checklist
           </TabsTrigger>
+          <TabsTrigger value="client_inbox" className="text-xs gap-1">
+            <MessageSquareWarning size={11} /> Client Inbox
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Sheet 1: Merged Tax + Statutory Master (both) ── */}
@@ -258,6 +262,11 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
             engagementId={engagementId}
             onSaved={() => onSaved?.("Checklist")}
           />
+        </TabsContent>
+
+        {/* ── Sheet 7: Client Inbox ── */}
+        <TabsContent value="client_inbox" className="mt-3">
+          <AuditClientInboxTab data={data} engagementId={engagementId} />
         </TabsContent>
       </Tabs>
     </div>

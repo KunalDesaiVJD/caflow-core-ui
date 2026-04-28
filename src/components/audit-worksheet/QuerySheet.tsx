@@ -26,11 +26,12 @@ import {
 } from "@/components/ui/table";
 import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X, BookOpen,
+  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X, BookOpen, Send, CheckCircle2,
 } from "lucide-react";
 import { LedgerSidePanel } from "./LedgerSidePanel";
 import { toast } from "sonner";
 
+import { supabase } from "@/integrations/supabase/client";
 import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
 import type { QueryRow } from "./hooks/useQuerySheetStorage";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
@@ -182,6 +183,46 @@ export default function QuerySheet({
 
   // View Ledger side panel state
   const [viewLedger, setViewLedger] = useState<{ name: string; group: string } | null>(null);
+
+  // Dispatch to Client state
+  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+
+  const dispatchToClient = async (row: QueryRow) => {
+    if (!data.engagement?.client_id) {
+      toast.error("No client linked to this engagement");
+      return;
+    }
+    setDispatchingId(row.id);
+    try {
+      const { data: created, error } = await supabase
+        .from("audit_client_queries" as any)
+        .insert({
+          query_text:         row.query_description || row.head,
+          required_documents: row.required_documents || null,
+          ledger_name:        row.particulars || null,
+          group_name:         row.head || null,
+          priority:           "Medium",
+          engagement_id:      engagementId,
+          client_id:          data.engagement.client_id,
+          firm_id:            data.engagement.firm_id || null,
+          financial_year:     data.financialYear || null,
+          status:             "Open",
+          source:             "worksheet",
+          source_ref_id:      row.id,
+        } as any)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (created) {
+        updateQuery(row.id, "dispatched_query_id" as any, (created as any).id);
+      }
+      toast.success("Query dispatched to client portal");
+    } catch (err: any) {
+      toast.error(err.message || "Dispatch failed");
+    } finally {
+      setDispatchingId(null);
+    }
+  };
 
   // ── Search + Filter state ────────────────────────────────────────────────────
   // statusFilter: null = show all; "corrected" = Yes only; "pending" = not Yes
@@ -426,13 +467,14 @@ export default function QuerySheet({
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[130px]">Remark</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center min-w-[120px]">Correction Status</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center w-16">Del</th>
+              <th className="border border-orange-500 px-2 py-2.5 text-center w-20">Dispatch</th>
             </tr>
           </thead>
           <tbody>
             {queries.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="border border-border py-12 text-center text-muted-foreground"
                 >
                   <div className="flex flex-col items-center gap-2">
@@ -451,7 +493,7 @@ export default function QuerySheet({
               </tr>
             ) : displayedQueries.length === 0 ? (
               <tr>
-                <td colSpan={8} className="border border-border py-8 text-center text-muted-foreground text-sm">
+                <td colSpan={9} className="border border-border py-8 text-center text-muted-foreground text-sm">
                   No queries match the current filter
                   {(statusFilter || searchText) && (
                     <button
@@ -599,6 +641,29 @@ export default function QuerySheet({
                           onClick={() => setConfirmDeleteId(row.id)}
                         >
                           <Trash2 size={13} />
+                        </Button>
+                      )}
+                    </td>
+
+                    {/* Dispatch to Client */}
+                    <td className="border border-border px-2 py-2 align-middle text-center">
+                      {row.dispatched_query_id ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <CheckCircle2 size={13} className="text-green-600" />
+                          <span className="text-[9px] text-green-700">Sent</span>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                          title="Dispatch to client portal"
+                          disabled={dispatchingId === row.id}
+                          onClick={() => dispatchToClient(row)}
+                        >
+                          {dispatchingId === row.id
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Send size={12} />}
                         </Button>
                       )}
                     </td>

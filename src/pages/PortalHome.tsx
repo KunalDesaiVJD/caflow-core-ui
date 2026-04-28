@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,8 +12,99 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
   FileText, Download, Upload, AlertTriangle, Receipt, CreditCard,
-  Bell, Loader2, FolderOpen,
+  Bell, Loader2, FolderOpen, ClipboardList, ArrowRight,
 } from "lucide-react";
+
+// ─── Audit Progress Card ──────────────────────────────────────────────────────
+
+const STAGE_LABELS: Record<number, string> = {
+  1: "Engagement Setup", 2: "Workpapers", 3: "Scrutiny",
+  4: "Tax Audit", 5: "Financial Stmts", 6: "Notes",
+  7: "Reports", 8: "Sign-off", 9: "Filing", 10: "Closure",
+};
+const TOTAL_STAGES = 10;
+
+function AuditProgressCard({ clientId }: { clientId: string }) {
+  const [engagements, setEngagements] = useState<any[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    async function load() {
+      const [{ data: engs }, { count }] = await Promise.all([
+        supabase
+          .from("audit_engagements")
+          .select("id, financial_year, audit_type, pipeline_stage, stage_statuses")
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false })
+          .limit(3),
+        supabase
+          .from("audit_client_queries")
+          .select("id", { count: "exact", head: true })
+          .eq("client_id", clientId)
+          .in("status", ["Open", "Client Acknowledged"]),
+      ]);
+      setEngagements(engs || []);
+      setPendingCount(count || 0);
+    }
+    load();
+  }, [clientId]);
+
+  if (engagements.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <ClipboardList size={16} className="text-primary" /> Audit Status
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {pendingCount > 0 && (
+          <div className="flex items-center justify-between rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={14} className="text-amber-600" />
+              <span className="text-sm font-medium text-amber-800">
+                {pendingCount} {pendingCount === 1 ? "query" : "queries"} pending your response
+              </span>
+            </div>
+            <Link to="/portal/queries">
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-amber-700 hover:bg-amber-100">
+                View <ArrowRight size={12} />
+              </Button>
+            </Link>
+          </div>
+        )}
+
+        {engagements.map(eng => {
+          const stage   = eng.pipeline_stage || 1;
+          const pct     = Math.round((stage / TOTAL_STAGES) * 100);
+          const label   = (eng.audit_type || "Audit").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+          const fy      = eng.financial_year || "";
+          const stageLabel = STAGE_LABELS[stage] || `Stage ${stage}`;
+          return (
+            <div key={eng.id} className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium">{label}</span>
+                  {fy && <span className="text-xs text-muted-foreground ml-2">FY {fy}</span>}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Stage {stage}/{TOTAL_STAGES} · {stageLabel}
+                </span>
+              </div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
 
 function formatINR(n: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
@@ -201,15 +293,18 @@ export default function PortalHome() {
   const docGroups = groupDocs(documents);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Welcome */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Welcome back, {clientData.name}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <h1 className="text-xl font-bold text-foreground">Welcome back, {clientData.name}</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           {firmName && <>Managed by <strong>{firmName}</strong></>}
           {partnerName && <> · Partner: <strong>{partnerName}</strong></>}
         </p>
       </div>
+
+      {/* Audit Progress */}
+      <AuditProgressCard clientId={clientData.id} />
 
       {/* Demand Alert */}
       {demands.length > 0 && (
