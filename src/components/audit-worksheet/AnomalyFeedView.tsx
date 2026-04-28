@@ -13,7 +13,7 @@ import { Badge  } from "@/components/ui/badge";
 import {
   Loader2, Zap, AlertTriangle, RefreshCw,
   MessageSquareWarning, ChevronDown, ChevronRight,
-  Info, BookOpen,
+  Info, BookOpen, ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -32,11 +32,13 @@ import { getDraftSuggestion } from "./QueryDraftEngine";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  tallyEngId:    string | null | undefined;
-  financialYear: string | null | undefined;
+  tallyEngId:      string | null | undefined;
+  financialYear:   string | null | undefined;
   /** Phase 2C: needed to open LedgerSidePanel from anomaly card */
-  clientId?:     string | null | undefined;
-  onRaiseQuery:  (group: string, ledger: string, note?: string) => void;
+  clientId?:       string | null | undefined;
+  onRaiseQuery:    (group: string, ledger: string, note?: string) => void;
+  /** Phase 5: raise a formal finding from an anomaly */
+  onRaiseFinding?: (group: string, ledger: string, note?: string) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -124,10 +126,12 @@ function AnomalyCard({
   flag,
   onRaiseQuery,
   onViewLedger,
+  onRaiseFinding,
 }: {
   flag: AnomalyFlag;
-  onRaiseQuery: (group: string, ledger: string, note?: string) => void;
-  onViewLedger: (ledger: string, group: string) => void;
+  onRaiseQuery:    (group: string, ledger: string, note?: string) => void;
+  onViewLedger:    (ledger: string, group: string) => void;
+  onRaiseFinding?: (group: string, ledger: string, note?: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -214,6 +218,31 @@ function AnomalyCard({
             <MessageSquareWarning size={10} />
             <span>Query</span>
           </Button>
+          {/* Phase 5: Raise formal finding */}
+          {onRaiseFinding && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[10px] gap-0.5 text-purple-600 hover:bg-purple-50 hover:text-purple-700 flex-shrink-0"
+              title="Raise a formal audit finding"
+              onClick={() => onRaiseFinding(
+                flag.parent_group,
+                flag.ledger_name || flag.voucher_type || "",
+                getDraftSuggestion(
+                  flag.parent_group,
+                  flag.ledger_name || flag.voucher_type || "",
+                  flag.flag_type,
+                  {
+                    amount: Math.abs(flag.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                    date:   flag.voucher_date,
+                  },
+                ),
+              )}
+            >
+              <ShieldAlert size={10} />
+              <span>Finding</span>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -248,7 +277,7 @@ function AnomalyCard({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQuery }: Props) {
+export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQuery, onRaiseFinding }: Props) {
   const [vouchers,  setVouchers]  = useState<VoucherRow[]>([]);
   const [tb,        setTb]        = useState<TBRow[]>([]);
   const [loading,   setLoading]   = useState(false);
@@ -486,6 +515,7 @@ export function AnomalyFeedView({ tallyEngId, financialYear, clientId, onRaiseQu
               flag={flag}
               onRaiseQuery={onRaiseQuery}
               onViewLedger={(ledger, group) => setPanelLedger({ name: ledger, group })}
+              onRaiseFinding={onRaiseFinding}
             />
           ))}
         </div>

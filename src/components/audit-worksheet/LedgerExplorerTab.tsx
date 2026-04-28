@@ -43,11 +43,13 @@ interface GroupData {
 type ViewMode = "tree" | "bspl" | "anomaly";
 
 interface Props {
-  engagementId:  string;
-  clientId:      string | null | undefined;
-  financialYear: string | null | undefined;
+  engagementId:    string;
+  clientId:        string | null | undefined;
+  financialYear:   string | null | undefined;
   /** Called when user clicks "Raise Query" for a ledger / voucher entry */
-  onRaiseQuery:  (group: string, ledger: string, entryNote?: string) => void;
+  onRaiseQuery:    (group: string, ledger: string, entryNote?: string) => void;
+  /** Phase 5: Called when user clicks "Raise Finding" from the anomaly feed */
+  onRaiseFinding?: (group: string, ledger: string, note?: string) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -61,7 +63,7 @@ function fmtAmt(n: number): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRaiseQuery }: Props) {
+export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRaiseQuery, onRaiseFinding }: Props) {
   const { tallyEngId, loading: resolving } = useTallyEngagementId(clientId, financialYear);
 
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
@@ -265,6 +267,7 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
           financialYear={financialYear}
           clientId={clientId}
           onRaiseQuery={onRaiseQuery}
+          onRaiseFinding={onRaiseFinding}
         />
       )}
 

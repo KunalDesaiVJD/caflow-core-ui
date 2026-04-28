@@ -12,7 +12,7 @@ import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle, DatabaseZap, MessageSquareWarning, MailCheck } from "lucide-react";
+import { AlertTriangle, DatabaseZap, MessageSquareWarning, MailCheck, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import AuditWorksheetHeader  from "./AuditWorksheetHeader";
@@ -29,6 +29,7 @@ import Checklist             from "./Checklist";
 import { LedgerExplorerTab } from "./LedgerExplorerTab";
 import { AuditClientInboxTab } from "./AuditClientInboxTab";
 import { CommunicationLogTab } from "./CommunicationLogTab";
+import { FindingsTab }         from "./FindingsTab";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -70,16 +71,23 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   // ── Ledger Explorer → Query Sheet pre-fill ──────────────────────────────────
-  // When user clicks "Raise Query" in LedgerExplorerTab, we:
-  //   1. Store the pre-fill payload
-  //   2. Switch to "queries" tab
-  //   3. QuerySheet consumes it via externalPrefill prop + calls onPrefillConsumed
   const [pendingPrefill, setPendingPrefill] = useState<QueryPrefill | null>(null);
 
   const handleRaiseQuery = (group: string, ledger: string, entryNote?: string) => {
     setPendingPrefill({ head: group, particulars: ledger, note: entryNote });
     setActiveTab("queries");
     toast.success(`Query added for ${ledger} — edit details in Query Sheet`);
+  };
+
+  // ── Anomaly Feed → Findings tab pre-fill (Phase 5) ───────────────────────────
+  const [pendingFindingPrefill, setPendingFindingPrefill] = useState<{
+    category: string; ledger: string; observation: string;
+  } | null>(null);
+
+  const handleRaiseFinding = (group: string, ledger: string, note?: string) => {
+    setPendingFindingPrefill({ category: group, ledger, observation: note || "" });
+    setActiveTab("findings");
+    toast.success(`Finding raised for ${ledger || group} — complete in Findings tab`);
   };
 
   // Correct the active tab once engagement data finishes loading.
@@ -172,6 +180,9 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
           <TabsTrigger value="comm_log" className="text-xs gap-1">
             <MailCheck size={11} /> Comm. Log
           </TabsTrigger>
+          <TabsTrigger value="findings" className="text-xs gap-1">
+            <ShieldAlert size={11} /> Findings
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Sheet 1: Merged Tax + Statutory Master (both) ── */}
@@ -247,6 +258,7 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
             clientId={data.engagement?.client_id}
             financialYear={data.financialYear}
             onRaiseQuery={handleRaiseQuery}
+            onRaiseFinding={handleRaiseFinding}
           />
         </TabsContent>
 
@@ -278,6 +290,16 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
         {/* ── Sheet 8: Communication Log ── */}
         <TabsContent value="comm_log" className="mt-3">
           <CommunicationLogTab data={data} engagementId={engagementId} />
+        </TabsContent>
+
+        {/* ── Sheet 9: Findings Register (Phase 5) ── */}
+        <TabsContent value="findings" className="mt-3">
+          <FindingsTab
+            data={data}
+            engagementId={engagementId}
+            externalPrefill={pendingFindingPrefill}
+            onPrefillConsumed={() => setPendingFindingPrefill(null)}
+          />
         </TabsContent>
       </Tabs>
     </div>
