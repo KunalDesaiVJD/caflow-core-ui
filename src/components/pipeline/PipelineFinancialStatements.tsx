@@ -1760,26 +1760,43 @@ export default function PipelineFinancialStatements({
   // ─── PY Shell engagement ID (for navigation back to it) ─────────────────
   // Runs only when py_source === "py_shell" so the user can always navigate
   // back to the shell's Tally Sync even after leaving the shell page.
+  // When multiple PY shells exist for the same FY (e.g. one auto-created by
+  // sync-py.js and one by "Setup PY Data"), prefer the one that has actual
+  // tally_trial_balance rows — it is the authoritative PY shell.
   const { data: pyShellId } = useQuery({
     queryKey: ["py-shell-id", engagement?.client_id, engagement?.financial_year],
     queryFn: async () => {
       const fyParts = (engagement.financial_year as string).split("-");
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
-      // Prefer is_py_shell=true (auto-created by sync-py.js); fall back to any FY-1 engagement
-      const { data: shellEng } = await (supabase.from as any)("audit_engagements")
+
+      // Step 1: fetch all is_py_shell=true engagements for FY-1
+      const { data: shells } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
-        .eq("is_py_shell", true)
-        .maybeSingle();
-      if ((shellEng as any)?.id) return (shellEng as any).id;
-      const { data: anyEng } = await (supabase.from as any)("audit_engagements")
+        .eq("is_py_shell", true);
+
+      if (shells && shells.length > 0) {
+        // Prefer the PY shell that has tally_trial_balance rows (TB synced)
+        for (const shell of shells as any[]) {
+          const { count } = await supabase
+            .from("tally_trial_balance")
+            .select("ledger_name", { count: "exact", head: true })
+            .eq("engagement_id", shell.id);
+          if ((count ?? 0) > 0) return shell.id;
+        }
+        // No shell has TB data yet — return first shell so navigation works
+        return (shells[0] as any).id;
+      }
+
+      // Step 2: Fallback — any FY-1 engagement (no PY shell exists)
+      const { data: anyEngs } = await (supabase.from as any)("audit_engagements")
         .select("id")
         .eq("client_id", engagement.client_id)
         .eq("financial_year", prevFy)
-        .maybeSingle();
-      return (anyEng as any)?.id ?? null;
+        .limit(1);
+      return (anyEngs as any)?.[0]?.id ?? null;
     },
     enabled: (engagement as any)?.py_source === "py_shell" && !!engagement?.client_id && !!engagement?.financial_year,
   });
@@ -2782,16 +2799,33 @@ export default function PipelineFinancialStatements({
       // CY's coaMapping at all (renamed ledgers, GST-rate suffixes, etc.).
       let pyEngId: string | null = null;
       let pyEngCoaMapping: Record<string, any> = {};
-      const { data: pyEngRow } = await supabase
-        .from("audit_engagements")
-        .select("id, coa_mapping")
+
+      // Prefer PY shell with actual TB rows; fall back to any FY-1 engagement.
+      // Multiple PY shells can exist for the same FY (one from sync-py.bat,
+      // one from "Setup PY Data") — we need the one that was actually synced.
+      const { data: allFY1 } = await (supabase.from as any)("audit_engagements")
+        .select("id, coa_mapping, is_py_shell")
         .eq("client_id", engagement.client_id)
-        .eq("financial_year", prevFy)
-        .order("created_at" as any, { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      pyEngId = (pyEngRow as any)?.id ?? null;
-      pyEngCoaMapping = (pyEngRow as any)?.coa_mapping ?? {};
+        .eq("financial_year", prevFy);
+      const fy1List = (allFY1 || []) as any[];
+      // Sort: PY shells first
+      fy1List.sort((a: any, b: any) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0));
+      for (const row of fy1List) {
+        const { count } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name", { count: "exact", head: true })
+          .eq("engagement_id", row.id);
+        if ((count ?? 0) > 0) {
+          pyEngId = row.id;
+          pyEngCoaMapping = row.coa_mapping ?? {};
+          break;
+        }
+      }
+      // If no TB data found in any, use first available engagement
+      if (!pyEngId && fy1List.length > 0) {
+        pyEngId = fy1List[0].id;
+        pyEngCoaMapping = fy1List[0].coa_mapping ?? {};
+      }
 
       // ── Paginated TB fetcher ─────────────────────────────────────────────
       async function fetchEngTB(engId: string): Promise<any[]> {
