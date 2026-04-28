@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn }  from "@/lib/utils";
 import { AUDIT_EMAIL_LABELS, AuditEmailType } from "@/components/email/EmailTemplateEngine";
+import { CommunicationDashboard } from "./CommunicationDashboard";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -155,6 +156,12 @@ export function CommunicationLogTab({ data, engagementId }: Props) {
 
   return (
     <div className="space-y-4">
+
+      {/* Phase 4C: KPI Dashboard */}
+      <CommunicationDashboard engagementId={engagementId} />
+
+      <div className="border-t pt-4" />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

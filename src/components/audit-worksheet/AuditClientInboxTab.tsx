@@ -522,11 +522,12 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
   const [filter,       setFilter]       = useState<"all"|"open"|"replied"|"closed">("all");
   const [emailPayload, setEmailPayload] = useState<EmailComposePayload | null>(null);
 
-  // Phase 4A: reminder engine
-  const { rules, setRules, pendingReminders, markSent } = useReminderEngine(
-    engagementId,
-    queries,
-  );
+  // Phase 4A/4C: reminder + escalation engine
+  const {
+    rules, setRules,
+    pendingReminders, escalationCandidates,
+    markSent, markEscalated,
+  } = useReminderEngine(engagementId, queries);
 
   const fetchQueries = useCallback(async () => {
     if (!engagementId) return;
@@ -577,7 +578,13 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
   const sendPendingReminders = () => {
     if (!pendingReminders.length) return;
     openEmail("audit_query_reminder", pendingReminders as ClientQuery[]);
-    // markSent is called in onSent callback below after successful send
+  };
+
+  // Phase 4C: send escalation email + mark escalated
+  const sendEscalation = () => {
+    if (!escalationCandidates.length) return;
+    openEmail("audit_query_reminder", escalationCandidates as ClientQuery[]);
+    // markEscalated called in onSent below
   };
 
   // Phase 3F: urgency-sorted displayed list
@@ -648,12 +655,14 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         </div>
       </div>
 
-      {/* Phase 4A: Reminder rules panel */}
+      {/* Phase 4A/4C: Reminder + escalation rules panel */}
       <ReminderRulesPanel
         rules={rules}
         onSetRules={setRules}
         pendingCount={pendingReminders.length}
         onSendReminders={sendPendingReminders}
+        escalationCount={escalationCandidates.length}
+        onEscalate={sendEscalation}
       />
 
       {/* Filter tabs */}
@@ -721,9 +730,15 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           onClose={() => setEmailPayload(null)}
           defaultPayload={emailPayload}
           onSent={() => {
-            // Phase 4A: mark reminder queries as sent so they don't re-trigger
-            if (emailPayload.templateType === "audit_query_reminder" && pendingReminders.length) {
-              markSent(pendingReminders.map(q => q.id));
+            if (emailPayload.templateType === "audit_query_reminder") {
+              // Phase 4A: mark pending reminders as sent
+              if (pendingReminders.length) {
+                markSent(pendingReminders.map(q => q.id));
+              }
+              // Phase 4C: mark escalated queries so they don't re-trigger immediately
+              if (escalationCandidates.length) {
+                markEscalated(escalationCandidates.map(q => q.id));
+              }
             }
             setEmailPayload(null);
           }}
