@@ -1549,14 +1549,17 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const hasOpen  = Math.abs(opening) >= 0.005;
       const hasClose = Math.abs(closing) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
-      // hideZero: hide only accounts with no balance AND no turnover
-      if (hideZero && !hasOpen && !hasClose && !hasTurnover) return false;
+      // hideZero: hide only accounts with no balance AND no turnover.
+      // Exception: in "All Unmapped" mode, always show unmapped ledgers even with ₹0
+      // so the auditor can find and map them (prevents the "1 unmapped but panel empty" bug).
+      const isUnmapped = !coaMapping[a.account_name];
+      if (hideZero && !hasOpen && !hasClose && !hasTurnover && !(workMode === "all" && isUnmapped)) return false;
 
       // Workflow-mode narrowing
       if (workMode === "py"     && !hasOpen) return false;                        // PY-mapping: only opening ≠ 0
       if (workMode === "cy"     && (hasOpen || !hasClose)) return false;          // CY-mapping: new ledgers (open=0, close≠0)
       if (workMode === "closed" && (!hasOpen || hasClose)) return false;          // Closed accounts only (open≠0, close=0)
-      // "all" mode: include everything not excluded above (incl. turnover-only accounts)
+      // "all" mode: include everything not excluded above (incl. turnover-only and ₹0 unmapped)
 
       if (!s) return true;
       return (
@@ -1564,7 +1567,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         a.account_group.toLowerCase().includes(s)
       );
     });
-  }, [tbAccounts, search, hideZero, workMode]);
+  }, [tbAccounts, search, hideZero, workMode, coaMapping]);
 
   // Left panel = exclusively UNMAPPED ledgers. Mapped ledgers live in the right
   // panel (grouped under their FS code) with ✕ unmap affordances.
@@ -1584,8 +1587,10 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const hasOpen     = Math.abs(a.opening_balance ?? 0) >= 0.005;
       const hasClose    = Math.abs(a.balance) >= 0.005;
       const hasTurnover = Math.abs(a.tally_debit ?? 0) >= 0.005 || Math.abs(a.tally_credit ?? 0) >= 0.005;
-      if (!hasOpen && !hasClose && !hasTurnover) continue;  // truly dormant — skip
+      // "all" counts every unmapped ledger — including ₹0 dormant ones — so it
+      // matches unmappedCount in the stats bar and the auditor can find them.
       if (!coaMapping[a.account_name]) all++;
+      if (!hasOpen && !hasClose && !hasTurnover) continue;  // skip dormant for sub-mode counts
       if (hasOpen  && !coaMapping[a.account_name]) py++;
       if (!hasOpen && hasClose && !coaMapping[a.account_name]) cy++;
       if (hasOpen  && !hasClose) closed++;                  // review regardless of mapped state
