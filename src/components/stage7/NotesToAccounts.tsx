@@ -676,7 +676,42 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       { width: 3.3  },  // K  (11) narrow right spacer
     ];
 
-    const thin = { style: "thin" as const };
+    // Helper: apply thin border to every cell in a row's B:D range BEFORE
+    // calling mergeCells() — ExcelJS nullifies non-master cells on merge, so
+    // borders must be set while those cells still exist.
+    const hdrBorder = (row: number) => {
+      const borderAll = { top: { style: "thin" as const }, bottom: { style: "thin" as const }, left: { style: "thin" as const }, right: { style: "thin" as const } };
+      for (const col of ["B", "C", "D"]) {
+        ws.getCell(`${col}${row}`).border = borderAll;
+      }
+    };
+
+    let r = 2;
+    // ── Row 2 — Entity name ──────────────────────────────────────────────────
+    hdrBorder(r);
+    ws.getCell(`B${r}`).value = header.entityNameOverride || displayEntityName;
+    ws.getCell(`B${r}`).font = { bold: true, size: 13 };
+    ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
+    ws.getRow(r).height = 21;
+    r++;
+    // ── Row 3 — "Notes forming part of..." ──────────────────────────────────
+    hdrBorder(r);
+    ws.getCell(`B${r}`).value =
+      `Notes forming part of the Financial Statements for the year ended 31st March, ${auditYear}`;
+    ws.getCell(`B${r}`).font = { bold: true, size: 11 };
+    ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
+    ws.getRow(r).height = 18;
+    r++;
+    // ── Row 4 — "Note: Summary of Significant Accounting Policies" ──────────
+    hdrBorder(r);
+    ws.getCell(`B${r}`).value = "Note:   Summary of Significant Accounting Policies";
+    ws.getCell(`B${r}`).font = { bold: true, size: 11 };
+    ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle" };
+    ws.getRow(r).height = 18;
+    r += 2;
 
     // ── Border helpers — matching NOTE 1.xlsx template EXACTLY ──────────────
     // Template border rules:
