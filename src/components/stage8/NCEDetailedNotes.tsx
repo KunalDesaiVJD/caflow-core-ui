@@ -1105,7 +1105,22 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       const newCy = { ...cur.cy };
       const newPy = { ...cur.py };
       for (const s of ["", "_lt", "_st"]) { delete newCy[id + s]; delete newPy[id + s]; }
-      const next = { ...prev, [noteType]: { cy: newCy, py: newPy, customRows: cur.customRows.filter(r => r.id !== id) } };
+      // If the deleted row was an ejected standalone row, remove its ledger from
+      // ejectedLedgers so re-sync can auto-merge it again next time
+      const deletedRow = cur.customRows.find(r => r.id === id);
+      const newEjectedLedgers = deletedRow?.ejectedSource
+        ? (cur.ejectedLedgers ?? []).filter(l => l !== deletedRow!.ejectedSource)
+        : (cur.ejectedLedgers ?? []);
+      const next = {
+        ...prev,
+        [noteType]: {
+          ...cur,
+          cy: newCy,
+          py: newPy,
+          customRows: cur.customRows.filter(r => r.id !== id),
+          ejectedLedgers: newEjectedLedgers,
+        },
+      };
       scheduleSave(next);
       return next;
     });
@@ -1177,18 +1192,23 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       newCy[rowId] = Math.max(0, (cur.cy[rowId] ?? 0) - amount);
       if (column === "lt") newCy[rowId + "_lt"] = Math.max(0, (cur.cy[rowId + "_lt"] ?? 0) - amount);
       if (column === "st") newCy[rowId + "_st"] = Math.max(0, (cur.cy[rowId + "_st"] ?? 0) - amount);
-      // 3. Create new custom row with that ledger name + amount
+      // 3. Create new custom row with that ledger name + amount.
+      //    Mark as "manual" so it survives Re-sync from COA.
+      //    Store ejectedSource so deleting this row can clean up ejectedLedgers.
       const newId = newCustomId();
-      const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
+      const newRow: NCECustomRow = { id: newId, label: ledger, source: "manual", ejectedSource: ledger };
       newCy[newId] = amount;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
       if (column === "lt") newCy[newId + "_lt"] = amount;
       if (column === "st") newCy[newId + "_st"] = amount;
+      // 4. Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
+      const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
       const next = { ...prev, [noteType]: {
         ...cur,
         cy: newCy,
         cy_sources: newCySources,
         customRows: [...cur.customRows, newRow],
+        ejectedLedgers: newEjectedLedgers,
       }};
       scheduleSave(next);
       return next;
@@ -1214,14 +1234,18 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       newCy[customRowId] = Math.max(0, (cur.cy[customRowId] ?? 0) - amountCy);
       if (column === "lt") newCy[customRowId + "_lt"] = Math.max(0, (cur.cy[customRowId + "_lt"] ?? 0) - amountCy);
       if (column === "st") newCy[customRowId + "_st"] = Math.max(0, (cur.cy[customRowId + "_st"] ?? 0) - amountCy);
-      // Create new standalone custom row for this ledger
+      // Create new standalone custom row for this ledger.
+      // Mark as "manual" so it survives Re-sync from COA.
+      // Store ejectedSource so deleting this row can clean up ejectedLedgers.
       const newId = newCustomId();
       newCy[newId] = amountCy;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
       if (column === "lt") newCy[newId + "_lt"] = amountCy;
       if (column === "st") newCy[newId + "_st"] = amountCy;
-      const newRow: NCECustomRow = { id: newId, label: ledger, source: "auto" };
-      const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow] } };
+      const newRow: NCECustomRow = { id: newId, label: ledger, source: "manual", ejectedSource: ledger };
+      // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
+      const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
+      const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers } };
       scheduleSave(next);
       return next;
     });

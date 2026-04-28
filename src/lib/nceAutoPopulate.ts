@@ -199,6 +199,11 @@ export interface NCECustomRow {
    *  in the generic pre-total block. Amounts stay on the custom row — the
    *  static row is unchanged. */
   attachedTo?: string;
+  /** The original TB ledger name when this row was created by ejecting a
+   *  ledger from a merged auto row. Stored so that deleting this row can
+   *  clean up the note's `ejectedLedgers` list, allowing the ledger to be
+   *  re-merged on the next Re-sync from COA. */
+  ejectedSource?: string;
 }
 
 export interface NCENoteData {
@@ -214,6 +219,12 @@ export interface NCENoteData {
   /** For Pattern B notes: which TB ledgers were mapped into each static row (CY only).
    *  Keyed by NoteRowDef.id. Used to render the ℹ️ info popover in NCEDetailedNotes. */
   cy_sources?: Record<string, { ledger: string; amountCy: number }[]>;
+  /** TB ledger names that the user has explicitly ejected to standalone rows.
+   *  During Re-sync from COA, ledgers in this list are skipped in the auto-grouping
+   *  step — they will NOT be re-merged back into an auto row.
+   *  A ledger is removed from this list when the user deletes its standalone row,
+   *  at which point re-sync will include it again in auto-grouping. */
+  ejectedLedgers?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -278,7 +289,7 @@ function ledgerAmt(closingBalance: number): number {
 
 // Reserved keys used as JSONB metadata inside cy_data — must be filtered out
 // when reading numeric values back into the cy/py maps.
-const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources"]);
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers"]);
 
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
@@ -299,6 +310,10 @@ export function deserialiseNoteData(
       ? (rawCy._cy_sources as Record<string, { ledger: string; amountCy: number }[]>)
       : undefined;
 
+  const ejectedLedgers: string[] = Array.isArray(rawCy._ejected_ledgers)
+    ? (rawCy._ejected_ledgers as string[])
+    : [];
+
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
     if (!META_KEYS.has(k) && typeof v === "number") cy[k] = v;
@@ -307,7 +322,7 @@ export function deserialiseNoteData(
   for (const [k, v] of Object.entries(rawPy)) {
     if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources };
+  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers };
 }
 
 export function serialiseNoteData(
@@ -316,9 +331,10 @@ export function serialiseNoteData(
   return {
     cy_data: {
       ...d.cy,
-      _custom_rows:     d.customRows,
-      _hidden_rows:     d.hiddenRows ?? [],
-      _label_overrides: d.labelOverrides ?? {},
+      _custom_rows:      d.customRows,
+      _hidden_rows:      d.hiddenRows ?? [],
+      _label_overrides:  d.labelOverrides ?? {},
+      _ejected_ledgers:  d.ejectedLedgers ?? [],
       ...(d.cy_sources && Object.keys(d.cy_sources).length > 0
         ? { _cy_sources: d.cy_sources }
         : {}),
@@ -408,6 +424,11 @@ export async function nceAutoPopulate(
     const prev = existing[noteType] ?? { cy: {}, py: {}, customRows: [] };
     const manualRows = prev.customRows.filter(r => r.source === "manual");
 
+    // Build a set of TB ledger names the user has explicitly ejected to
+    // standalone rows. These are skipped during auto-grouping so they won't
+    // be re-merged into an auto row on re-sync.
+    const ejectedSet = new Set(prev.ejectedLedgers ?? []);
+
     const newCy:         Record<string, number> = {};
     const newPy:         Record<string, number> = {};
     const autoRows:      NCECustomRow[]         = [];
@@ -425,6 +446,8 @@ export async function nceAutoPopulate(
         if (!mapped || !codeSet.has(mapped.code)) continue;
         const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
+        // Skip ledgers the user has explicitly ejected to standalone rows
+        if (ejectedSet.has(row.ledger_name)) continue;
 
         const matchedRowId = smartMatch(row.ledger_name, smartRules);
         if (matchedRowId) {
@@ -509,6 +532,8 @@ export async function nceAutoPopulate(
         if (!isLT && !isST) continue;
         const amt = ledgerAmt(row.closing_balance);
         if (amt === 0) continue;
+        // Skip ledgers the user has explicitly ejected to standalone rows
+        if (ejectedSet.has(row.ledger_name)) continue;
 
         const matchedRowId = smartMatch(row.ledger_name, smartRules);
         if (matchedRowId) {
@@ -625,6 +650,10 @@ export async function nceAutoPopulate(
       cy:         mergedCy,
       py:         mergedPy,
       customRows: [...autoRows, ...manualRows],
+      // Preserve user settings that survive re-sync
+      hiddenRows:     prev.hiddenRows ?? [],
+      labelOverrides: prev.labelOverrides ?? {},
+      ejectedLedgers: prev.ejectedLedgers ?? [],
       ...(Object.keys(staticSources).length > 0 ? { cy_sources: staticSources } : {}),
     };
   }
