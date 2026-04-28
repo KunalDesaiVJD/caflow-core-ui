@@ -10,7 +10,6 @@
  *   • Inline edit: change deductee name, section, add note → saved to DB
  */
 import { useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
 import { Input }  from "@/components/ui/input";
@@ -30,6 +29,7 @@ import { toast } from "sonner";
 import {
   useTdsPartyMappings, MappingStatus, TbPartyMapping,
 } from "./hooks/useTdsPartyMappings";
+import { runAiMapper } from "./tdsEngine";
 
 // ─── Common TDS sections for the edit dropdown ────────────────────────────────
 const TDS_SECTIONS = [
@@ -217,19 +217,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     }
     setRunning(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const res = await supabase.functions.invoke("tds-ai-mapper", {
-        body: { client_id: clientId, financial_year: financialYear, firm_id: firmId, force_rematch: force },
-      });
-      if (res.error) throw new Error(res.error.message);
-
-      const r = res.data as {
-        mapped: number; skipped: number; confirmed: number; pending: number; needs_review: number;
-        message?: string;
-      };
-
+      const r = await runAiMapper({ client_id: clientId, financial_year: financialYear, firm_id: firmId, force_rematch: force });
       if (r.message && r.mapped === 0) {
         toast.info(r.message);
       } else {

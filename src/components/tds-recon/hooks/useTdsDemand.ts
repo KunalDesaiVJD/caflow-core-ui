@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { runDemandCalculator } from "../tdsEngine";
 
 export type ItemStatus = "computed" | "acknowledged" | "disputed" | "settled";
 
@@ -137,30 +138,28 @@ export function useTdsDemand(
     settled:           items.filter(i => i.item_status === "settled").length,
   };
 
-  // Run calculator
+  // Run calculator (client-side — no edge function required)
   const runCalculator = useCallback(async (opts: { computationDate?: string; assumeNotPaid?: boolean } = {}) => {
     if (!clientId || !financialYear || !firmId) return null;
     setRunning(true);
     setError(null);
     try {
-      const { data, error: fnErr } = await (supabase as any).functions.invoke(
-        "tds-demand-calculator",
-        {
-          body: {
-            client_id:       clientId,
-            financial_year:  financialYear,
-            firm_id:         firmId,
-            computation_date: opts.computationDate,
-            assumptions: {
-              assume_not_paid: opts.assumeNotPaid !== false,
-            },
-          },
-        },
-      );
-      if (fnErr) throw new Error(fnErr.message || "Function error");
-      if (data?.error) throw new Error(data.error);
+      const result = await runDemandCalculator({
+        client_id:        clientId,
+        financial_year:   financialYear,
+        firm_id:          firmId,
+        computation_date: opts.computationDate,
+        assume_not_paid:  opts.assumeNotPaid !== false,
+      });
       await load();
-      return data as RunResult;
+      return {
+        items_created:         result.items_created,
+        shortfall_total:       result.shortfall_total,
+        interest_201_1a_total: result.interest_201_1a_total,
+        fee_234e_total:        result.fee_234e_total,
+        grand_total_demand:    result.grand_total_demand,
+        computation_date:      result.computation_date,
+      } as RunResult;
     } catch (e: any) {
       setError(e.message);
       return null;
