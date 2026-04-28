@@ -40,6 +40,8 @@ interface Client {
   is_draft?: boolean | null;
   /** Populated only when All Firms selected — joined from firms table */
   firm_name?: string | null;
+  /** Soft-delete timestamp — non-null means client is archived */
+  deleted_at?: string | null;
 }
 
 interface GroupInfo {
@@ -195,8 +197,10 @@ const Clients = () => {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
-  // GAP-7: API vs Manual bifurcation
-  const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api">("all");
+  // GAP-7: API vs Manual bifurcation (+ "archived" view-only tab)
+  const [sourceTab, setSourceTab] = useState<"all" | "manual" | "api" | "archived">("all");
+  const [archivedClients, setArchivedClients] = useState<Client[]>([]);
+  const [archivedSearch, setArchivedSearch] = useState("");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
@@ -310,7 +314,7 @@ const Clients = () => {
 
   // GAP-2: re-fetch whenever effectiveFirmId or showAllFirms changes (superadmin firm selector, auth load)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); } }, [effectiveFirmId, showAllFirms]);
+  useEffect(() => { if (effectiveFirmId || showAllFirms) { fetchData(); fetchDrafts(); fetchArchivedClients(); } }, [effectiveFirmId, showAllFirms]);
 
   useEffect(() => { localStorage.setItem(VIEW_KEY, viewMode); }, [viewMode]);
 
@@ -345,6 +349,20 @@ const Clients = () => {
       setDrafts((data as Client[]) || []);
     } catch {}
     setDraftLoading(false);
+  };
+
+  // Fetch archived clients (deleted_at IS NOT NULL) — view-only, no mutations
+  const fetchArchivedClients = async () => {
+    if (!effectiveFirmId && !showAllFirms) { setArchivedClients([]); return; }
+    try {
+      const clientCols = "id, name, pan, entity_type, cin, created_at, deleted_at, firm_id, source";
+      let q = supabase.from("clients").select(clientCols)
+        .not("deleted_at", "is", null)
+        .order("deleted_at", { ascending: false });
+      if (!showAllFirms && effectiveFirmId) q = q.eq("firm_id", effectiveFirmId);
+      const { data } = await q;
+      setArchivedClients((data as Client[]) || []);
+    } catch {}
   };
 
   // GAP-6: hard-delete a draft client + companion records (called after confirmation)
@@ -663,9 +681,10 @@ const Clients = () => {
         const apiCount    = clients.filter(c => c.source === "api_import").length;
         const manualCount = clients.filter(c => c.source === "manual" || !c.source).length;
         const tabs = [
-          { key: "all" as const,    label: "All Clients",            count: allCount },
-          { key: "api" as const,    label: "Clients via API",        count: apiCount },
-          { key: "manual" as const, label: "Clients added Manually", count: manualCount },
+          { key: "all"      as const, label: "All Clients",            count: allCount },
+          { key: "api"      as const, label: "Clients via API",        count: apiCount },
+          { key: "manual"   as const, label: "Clients added Manually", count: manualCount },
+          { key: "archived" as const, label: "Archived",               count: archivedClients.length },
         ];
 
         // Sub-tab counts (within api_import clients only)
@@ -732,8 +751,8 @@ const Clients = () => {
         );
       })()}
 
-      {/* Search & Filter — BELOW tabs per spec */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Search & Filter — hidden when Archived tab is active (it has its own search) */}
+      {sourceTab !== "archived" && <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search by name or PAN..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
@@ -765,12 +784,63 @@ const Clients = () => {
             ))}
           </PopoverContent>
         </Popover>
-      </div>
+      </div>}
 
-      {/* Content */}
-      {loading ? (
+      {/* Archived Clients — view-only list, shown only when "Archived" tab is active */}
+      {sourceTab === "archived" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Search archived clients..." value={archivedSearch} onChange={e => setArchivedSearch(e.target.value)} className="pl-9" />
+            </div>
+          </div>
+          <div className="rounded-md border border-rose-200 bg-rose-50/30 dark:border-rose-900 dark:bg-rose-950/10 overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Client Name</TableHead>
+                  <TableHead className="text-xs">PAN</TableHead>
+                  <TableHead className="text-xs">Constitution</TableHead>
+                  <TableHead className="text-xs">Archived On</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {archivedClients
+                  .filter(c => !archivedSearch || (c.name || "").toLowerCase().includes(archivedSearch.toLowerCase()) || (c.pan || "").toLowerCase().includes(archivedSearch.toLowerCase()))
+                  .map(c => (
+                    <TableRow key={c.id} className="opacity-70">
+                      <TableCell className="font-medium text-sm">
+                        <span className="flex items-center gap-2">
+                          {c.name || "Unnamed"}
+                          <Badge variant="destructive" className="text-[9px] px-1 py-0">Archived</Badge>
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-muted-foreground">{c.pan || "—"}</TableCell>
+                      <TableCell>{c.entity_type && <Badge variant="outline" className="text-[10px]">{c.entity_type}</Badge>}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {c.deleted_at ? new Date(c.deleted_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                {archivedClients.filter(c => !archivedSearch || (c.name || "").toLowerCase().includes(archivedSearch.toLowerCase())).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-10 text-muted-foreground text-sm">No archived clients found</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Archived clients are view-only. All audit, billing, and sync operations are blocked for archived clients.
+          </p>
+        </div>
+      )}
+
+      {/* Content — shown only for non-archived tabs */}
+      {sourceTab !== "archived" && loading ? (
         <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
-      ) : filtered.length === 0 ? (
+      ) : sourceTab !== "archived" && filtered.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Users className="h-10 w-10 mb-3 opacity-40" />
@@ -787,7 +857,7 @@ const Clients = () => {
             </p>
           </CardContent>
         </Card>
-      ) : viewMode === "it" ? (
+      ) : sourceTab === "archived" ? null : viewMode === "it" ? (
         /* IT VIEW */
         <>
           <div className="rounded-md border border-border overflow-auto">
