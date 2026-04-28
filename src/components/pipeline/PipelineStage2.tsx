@@ -31,8 +31,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
   const navigate = useNavigate();
 
   // ── Fetch the most recent completed sync batch for this engagement ──
-  const { data: syncBatch, isLoading } = useQuery({
-    queryKey: ["sync-batch-stage2", engagementId, engagement?.client_id],
+  // PY shells share a client_id with the CY engagement. The legacy client_id
+  // fallback below would mis-classify a PY shell as "synced" simply because
+  // a sibling CY engagement had a sync batch — even though the PY shell's
+  // own tally_trial_balance / tally_ledgers / tally_vouchers tables are
+  // empty. Detect that case and surface it explicitly instead.
+  const { data: syncInfo, isLoading } = useQuery({
+    queryKey: ["sync-batch-stage2", engagementId, engagement?.client_id, engagement?.is_py_shell],
     queryFn: async () => {
       // Primary: sync_batch keyed to this engagement
       const { data: byEng } = await (supabase.from as any)("sync_batches")
@@ -42,10 +47,27 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         .order("completed_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (byEng) return byEng;
+      if (byEng) return { batch: byEng, source: "engagement" as const };
+
+      // For PY shells we never fall back — a sibling engagement's sync batch
+      // has nothing to do with the PY shell's own (empty) tables.
+      if ((engagement as any)?.is_py_shell) {
+        // Probe whether a sibling engagement is synced so we can show a
+        // helpful "synced on the wrong engagement" message.
+        if (!engagement?.client_id) return { batch: null, source: "none" as const };
+        const { data: sibling } = await (supabase.from as any)("sync_batches")
+          .select("id, completed_at, tally_company, engagement_id")
+          .eq("client_id", engagement.client_id)
+          .neq("engagement_id", engagementId)
+          .in("status", ["completed", "complete", "success", "complete_with_warnings"])
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        return { batch: null, source: sibling ? "sibling" as const : "none" as const, sibling };
+      }
 
       // Fallback: sync batch keyed to client_id (older syncs pre-engagement wiring)
-      if (!engagement?.client_id) return null;
+      if (!engagement?.client_id) return { batch: null, source: "none" as const };
       const { data: byClient } = await (supabase.from as any)("sync_batches")
         .select("id, status, completed_at, tally_company, tb_rows_fetched, warnings")
         .eq("client_id", engagement.client_id)
@@ -53,13 +75,39 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
         .order("completed_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      return byClient ?? null;
+      return byClient ? { batch: byClient, source: "client" as const } : { batch: null, source: "none" as const };
     },
     enabled: !!engagementId,
     refetchInterval: 30_000, // re-check every 30s so the page updates after user syncs
   });
 
-  const isSynced = !!syncBatch;
+  // Per-table row counts for THIS engagement — the only authoritative signal
+  // that data really landed against this engagement_id.
+  const { data: rowCounts } = useQuery({
+    queryKey: ["stage2-rowcounts", engagementId],
+    queryFn: async () => {
+      const tables = ["tally_trial_balance","tally_ledgers","tally_vouchers","tally_groups"] as const;
+      const out: Record<string, number> = {};
+      for (const t of tables) {
+        const { count } = await (supabase.from as any)(t)
+          .select("id", { count: "exact", head: true })
+          .eq("engagement_id", engagementId);
+        out[t] = count ?? 0;
+      }
+      return out;
+    },
+    enabled: !!engagementId,
+    refetchInterval: 30_000,
+  });
+
+  const syncBatch: any = syncInfo?.batch ?? null;
+  const totalRows = (rowCounts?.tally_trial_balance ?? 0)
+                  + (rowCounts?.tally_ledgers ?? 0)
+                  + (rowCounts?.tally_vouchers ?? 0)
+                  + (rowCounts?.tally_groups ?? 0);
+  // "Synced" requires both a batch keyed to THIS engagement AND actual rows
+  // in this engagement's tables. Either condition alone is a false positive.
+  const isSynced = !!syncBatch && totalRows > 0;
 
   // ── Auto-complete Stage 2 once a sync batch is found ──
   useEffect(() => {
@@ -132,6 +180,13 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
                     {" · "}Last synced: {syncedAt}
                     {syncBatch.tb_rows_fetched ? ` · ${syncBatch.tb_rows_fetched} TB rows` : ""}
                   </p>
+                  {/* Per-table breakdown so the user can see exactly what landed */}
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-green-700/90 dark:text-green-400/90 pt-0.5">
+                    <span><b>{rowCounts?.tally_trial_balance ?? 0}</b> TB rows</span>
+                    <span><b>{rowCounts?.tally_ledgers ?? 0}</b> ledgers</span>
+                    <span><b>{rowCounts?.tally_vouchers ?? 0}</b> vouchers</span>
+                    <span><b>{rowCounts?.tally_groups ?? 0}</b> groups</span>
+                  </div>
                 </div>
               </div>
 
@@ -173,16 +228,53 @@ export default function PipelineStage2({ engagementId, engagement, onStageComple
           ) : (
             // ── No sync yet ──
             <div className="space-y-3">
-              <Alert className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
-                <AlertDescription className="text-sm text-amber-700 dark:text-amber-400">
-                  No Tally sync found for this engagement. Trial Balance data is not yet available.
-                  <br />
-                  <span className="font-medium">
-                    Open Tally on your PC with the correct company, then run the sync agent.
-                  </span>
-                </AlertDescription>
-              </Alert>
+              {syncInfo?.source === "sibling" && (engagement as any)?.is_py_shell ? (
+                <Alert className="border-red-300 bg-red-50 dark:bg-red-950/20">
+                  <AlertTriangle className="w-4 h-4 text-red-600" />
+                  <AlertDescription className="text-sm text-red-800 dark:text-red-400 space-y-1">
+                    <div className="font-semibold">This PY shell has not been synced yet.</div>
+                    <div>
+                      A sync batch exists for the <b>current-year</b> engagement (same client) — but the PY shell's own tables
+                      (<code className="text-[11px]">tally_trial_balance</code>, <code className="text-[11px]">tally_ledgers</code>, <code className="text-[11px]">tally_vouchers</code>, <code className="text-[11px]">tally_groups</code>)
+                      are all empty. The sync was run while Tally was on the current-year period.
+                    </div>
+                    <div className="pt-1">
+                      <b>To fix:</b> in Tally press <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">F2</code> →
+                      set period to <b>FY {engagement?.financial_year}</b> (01-Apr to 31-Mar), press <kbd>Esc</kbd> back to
+                      Gateway, then run <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">sync-py.bat</code>
+                      from <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">C:\team-package</code>.
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <AlertDescription className="text-sm text-amber-700 dark:text-amber-400">
+                    No Tally sync found for this engagement. Trial Balance data is not yet available.
+                    <br />
+                    <span className="font-medium">
+                      Open Tally on your PC with the correct company, then run the sync agent.
+                    </span>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Per-engagement row counts — proves whether data actually landed */}
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: "TB Rows",  key: "tally_trial_balance" },
+                  { label: "Ledgers",  key: "tally_ledgers" },
+                  { label: "Vouchers", key: "tally_vouchers" },
+                  { label: "Groups",   key: "tally_groups" },
+                ].map(t => (
+                  <div key={t.key} className="border rounded px-2 py-1.5 bg-muted/30">
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t.label}</div>
+                    <div className={`text-sm font-semibold ${(rowCounts?.[t.key] ?? 0) > 0 ? "text-foreground" : "text-red-600"}`}>
+                      {(rowCounts?.[t.key] ?? 0).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
 
               <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">How to sync Tally data:</p>

@@ -561,12 +561,15 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
       let pyEng: any = null;
       for (const row of fy1List) {
-        // Check if this engagement has actual TB rows
-        const { count } = await supabase
+        // Check if this engagement has actual TB rows.
+        // Use a regular select(limit:1) probe — head:true counts return 0
+        // under some RLS configurations even when rows are readable.
+        const { data: probe } = await supabase
           .from("tally_trial_balance")
-          .select("ledger_name", { count: "exact", head: true })
-          .eq("engagement_id", row.id);
-        if ((count ?? 0) > 0) { pyEng = row; break; }
+          .select("ledger_name")
+          .eq("engagement_id", row.id)
+          .limit(1);
+        if (probe && probe.length > 0) { pyEng = row; break; }
       }
       // If no TB data in any, use first available (UI still needs coa_mapping)
       if (!pyEng && fy1List.length > 0) pyEng = fy1List[0];
@@ -2092,6 +2095,34 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
         {/* ═══════ COA MAPPING TAB ═══════ */}
         <TabsContent value="mapping" className="mt-4">
+          {/* Empty PY-shell warning — when py_source='py_shell' is set on the
+              CY engagement but the PY shell has no synced TB rows, every
+              P&L PY value will render blank. Tell the user exactly why and
+              what to do, instead of letting them debug it ledger-by-ledger. */}
+          {(engagement as any)?.py_source === "py_shell" && !pyShellTbData?.tbRows?.length && (
+            <Alert className="mb-3 border-red-300 bg-red-50/60 dark:bg-red-950/20">
+              <AlertTriangle className="h-4 w-4 text-red-600" />
+              <AlertTitle className="text-xs text-red-800 dark:text-red-300">
+                PY shell is empty — no PY P&L values available
+              </AlertTitle>
+              <AlertDescription className="text-[11px] text-red-700 dark:text-red-400 space-y-1">
+                <div>
+                  This engagement is configured to source PY figures from a PY shell
+                  (FY {(() => { const p = (engagement?.financial_year || "").split("-"); return p.length === 2 ? `${parseInt(p[0])-1}-${String(parseInt(p[0])).slice(-2)}` : "FY-1"; })()}),
+                  but that PY shell has zero <code>tally_trial_balance</code> / <code>tally_ledgers</code> / <code>tally_vouchers</code> rows.
+                  Balance Sheet PY values you may see come from the previously-saved <code>fa_financial_statements</code>; P&L PY values cannot be reconstructed without synced movements.
+                </div>
+                <div>
+                  <b>To populate PY P&L:</b> open Tally on your PC, press <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">F2</code>,
+                  set period to <b>01-Apr to 31-Mar of FY-1</b>, press <kbd>Esc</kbd> back to Gateway,
+                  then run <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded">sync-py.bat</code> from
+                  <code className="bg-red-100 dark:bg-red-900/30 px-1 rounded"> C:\team-package</code>. After it completes,
+                  refresh this page — the PY columns will populate automatically.
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* PY-first workflow segmented control */}
           <div className="flex items-stretch gap-0 mb-3 border rounded-md overflow-hidden">
             {([
