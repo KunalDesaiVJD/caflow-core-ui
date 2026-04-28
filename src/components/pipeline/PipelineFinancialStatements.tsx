@@ -2087,6 +2087,19 @@ export default function PipelineFinancialStatements({
     priorEngagement === null ||
     (Array.isArray(priorEngagement) && priorEngagement.length === 0);
 
+  // ─── PY sync-done flag: correct data source per py_source mode ───────────
+  // When py_source === "py_shell", PY data comes from tally_trial_balance
+  // (pyShellTb) — NOT from fa_financial_statements (priorEngagement).
+  // Using noPriorEngagement here was wrong: it always showed "sync pending"
+  // even after a successful PY shell sync, because fa_financial_statements
+  // has no rows until the user explicitly saves the FS.
+  // For all other py_source modes ("manual", "none", or prior-year FS), keep
+  // using priorEngagement (fa_financial_statements) as the source of truth.
+  const pyShellSyncDone: boolean =
+    (engagement as any)?.py_source === "py_shell"
+      ? (pyShellTb?.length ?? 0) > 0
+      : !noPriorEngagement;
+
   // ─── Load manual overrides from existing FS ───
   useEffect(() => {
     if (existingFs && existingFs.length > 0) {
@@ -4818,7 +4831,7 @@ export default function PipelineFinancialStatements({
               PY Shell — FY {pyYear - 1}-{String(pyYear).slice(-2)}
             </span>
             <div className="flex items-center gap-2">
-              {noPriorEngagement
+              {!pyShellSyncDone
                 ? <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400">⚠ Tally sync pending</Badge>
                 : <Badge variant="outline" className="text-[10px] border-green-500 text-green-700 dark:text-green-400">✓ Tally synced</Badge>
               }
@@ -4834,7 +4847,7 @@ export default function PipelineFinancialStatements({
             </div>
           </AlertTitle>
           <AlertDescription className="text-xs text-blue-700/80 dark:text-blue-400/80 mt-0.5">
-            {noPriorEngagement
+            {!pyShellSyncDone
               ? "PY Shell created but Tally not yet synced. Click \"Open PY Shell Tally Sync\", run the sync for FY 2024-25, then return here and click \"Fetch from FY-1 Tally\" in the P&L tab."
               : "PY Shell Tally sync is complete. Use \"Fetch from FY-1 Tally\" in the P&L tab to pull PY P&L figures into this engagement."}
           </AlertDescription>
@@ -5065,7 +5078,7 @@ export default function PipelineFinancialStatements({
                 <div className="flex items-center gap-2 text-xs text-blue-800 dark:text-blue-300">
                   <Database className="h-3.5 w-3.5 shrink-0" />
                   <span>
-                    {priorEngagement === null
+                    {!pyShellSyncDone
                       ? <><strong>PY not yet synced.</strong> Run sync-py.bat for FY {pyYear - 1}-{String(pyYear).slice(-2)}, then click Fetch.</>
                       : <>Prior year Tally data available. Click <strong>Fetch PY from FY-1 Tally</strong> to auto-populate PY comparative figures.</>
                     }
@@ -5076,7 +5089,7 @@ export default function PipelineFinancialStatements({
                   variant="outline"
                   className="h-7 text-xs gap-1.5 border-blue-400 text-blue-700 hover:bg-blue-100 dark:border-blue-600 dark:text-blue-300 shrink-0 ml-3"
                   onClick={fetchPyPLFromTally}
-                  disabled={fetchingPyTally || priorEngagement === null}
+                  disabled={fetchingPyTally || !pyShellSyncDone}
                 >
                   {fetchingPyTally
                     ? <><span className="animate-spin inline-block">↻</span> Fetching…</>
