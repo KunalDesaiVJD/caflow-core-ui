@@ -26,6 +26,8 @@ import {
   AlertTriangle, Bell,
 } from "lucide-react";
 import { EmailComposeDialog, EmailComposePayload } from "@/components/email/EmailComposeDialog";
+import { ReminderRulesPanel } from "./ReminderRulesPanel";
+import { useReminderEngine }  from "./hooks/useReminderEngine";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
@@ -520,6 +522,12 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
   const [filter,       setFilter]       = useState<"all"|"open"|"replied"|"closed">("all");
   const [emailPayload, setEmailPayload] = useState<EmailComposePayload | null>(null);
 
+  // Phase 4A: reminder engine
+  const { rules, setRules, pendingReminders, markSent } = useReminderEngine(
+    engagementId,
+    queries,
+  );
+
   const fetchQueries = useCallback(async () => {
     if (!engagementId) return;
     const { data: rows } = await (supabase as any)
@@ -554,6 +562,7 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
       engagementId,
       financialYear: data.financialYear,
       portalUrl:     `${window.location.origin}/portal`,
+      clientMobile:  (data.client as any)?.mobile || undefined,  // Phase 4B
       queries:       qs.map(q => ({
         ref_number:         q.ref_number,
         query_text:         q.query_text,
@@ -562,6 +571,13 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         ledger_name:        q.ledger_name,
       })),
     });
+  };
+
+  // Phase 4A: send all pending reminders + mark them sent
+  const sendPendingReminders = () => {
+    if (!pendingReminders.length) return;
+    openEmail("audit_query_reminder", pendingReminders as ClientQuery[]);
+    // markSent is called in onSent callback below after successful send
   };
 
   // Phase 3F: urgency-sorted displayed list
@@ -632,6 +648,14 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         </div>
       </div>
 
+      {/* Phase 4A: Reminder rules panel */}
+      <ReminderRulesPanel
+        rules={rules}
+        onSetRules={setRules}
+        pendingCount={pendingReminders.length}
+        onSendReminders={sendPendingReminders}
+      />
+
       {/* Filter tabs */}
       {queries.length > 0 && (
         <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit text-xs">
@@ -696,7 +720,13 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
           open={!!emailPayload}
           onClose={() => setEmailPayload(null)}
           defaultPayload={emailPayload}
-          onSent={() => setEmailPayload(null)}
+          onSent={() => {
+            // Phase 4A: mark reminder queries as sent so they don't re-trigger
+            if (emailPayload.templateType === "audit_query_reminder" && pendingReminders.length) {
+              markSent(pendingReminders.map(q => q.id));
+            }
+            setEmailPayload(null);
+          }}
         />
       )}
     </div>

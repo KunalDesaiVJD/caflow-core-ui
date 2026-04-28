@@ -301,11 +301,12 @@ function BulkDispatchDialog({
 }) {
   const [dueDate,   setDueDate]   = useState("");
   const [priority,  setPriority]  = useState<"keep" | QueryPriority>("keep");
+  const [groupByCategory, setGroupByCategory] = useState(false);
   const [saving,    setSaving]    = useState(false);
 
   // Reset when opening
   useEffect(() => {
-    if (open) { setDueDate(""); setPriority("keep"); }
+    if (open) { setDueDate(""); setPriority("keep"); setGroupByCategory(false); }
   }, [open]);
 
   const undispatched = rows.filter(r => !r.dispatched_query_id);
@@ -315,30 +316,96 @@ function BulkDispatchDialog({
     setSaving(true);
     const results: { id: string; clientQueryId: string }[] = [];
     try {
-      for (const row of undispatched) {
-        const { data: created, error } = await supabase
-          .from("audit_client_queries" as any)
-          .insert({
-            query_text:         row.query_description || row.head,
-            required_documents: row.required_documents || null,
-            ledger_name:        row.particulars || null,
-            group_name:         row.head || null,
-            priority:           priority === "keep" ? (row.priority || "Medium") : priority,
-            due_date:           dueDate || row.due_date || null,
-            engagement_id:      engagementId,
-            client_id:          clientId,
-            firm_id:            firmId,
-            financial_year:     financialYear,
-            status:             "Open",
-            source:             "worksheet",
-            source_ref_id:      row.id,
-          } as any)
-          .select("id")
-          .maybeSingle();
-        if (error) throw error;
-        if (created) results.push({ id: row.id, clientQueryId: (created as any).id });
+      if (groupByCategory) {
+        // ── Phase 4B: group rows by head (category) ──────────────────
+        const groups = new Map<string, QueryRow[]>();
+        for (const row of undispatched) {
+          const key = row.head?.trim() || "(no category)";
+          const g = groups.get(key) ?? [];
+          g.push(row);
+          groups.set(key, g);
+        }
+
+        for (const [head, groupRows] of groups) {
+          // Combine query descriptions as numbered list
+          const combinedText = groupRows.length === 1
+            ? (groupRows[0].query_description || head)
+            : groupRows.map((r, i) =>
+                `${i + 1}. ${r.query_description || r.particulars || "(see ledger)"}`
+              ).join("\n");
+
+          // Combine required docs (unique, comma-separated)
+          const allDocs = Array.from(
+            new Set(groupRows.map(r => r.required_documents).filter(Boolean)),
+          ).join(", ");
+
+          // Ledger names list
+          const ledgers = groupRows.map(r => r.particulars).filter(Boolean).join(", ");
+
+          // Highest priority wins
+          const topPriority = (["High","Medium","Low"] as QueryPriority[]).find(p =>
+            groupRows.some(r => (priority === "keep" ? r.priority : priority) === p)
+          ) ?? "Medium";
+
+          const { data: created, error } = await supabase
+            .from("audit_client_queries" as any)
+            .insert({
+              query_text:         combinedText,
+              required_documents: allDocs || null,
+              ledger_name:        ledgers || null,
+              group_name:         head,
+              priority:           priority === "keep" ? topPriority : priority,
+              due_date:           dueDate || groupRows[0].due_date || null,
+              engagement_id:      engagementId,
+              client_id:          clientId,
+              firm_id:            firmId,
+              financial_year:     financialYear,
+              status:             "Open",
+              source:             "worksheet_grouped",
+              source_ref_id:      groupRows[0].id,
+            } as any)
+            .select("id")
+            .maybeSingle();
+          if (error) throw error;
+          if (created) {
+            // All rows in group share the same clientQueryId
+            for (const row of groupRows) {
+              results.push({ id: row.id, clientQueryId: (created as any).id });
+            }
+          }
+        }
+        const groupCount = new Set(results.map(r => r.clientQueryId)).size;
+        toast.success(
+          `${undispatched.length} queries dispatched as ${groupCount} grouped ${groupCount === 1 ? "entry" : "entries"} in client portal`,
+        );
+      } else {
+        // ── Original: one portal entry per row ───────────────────────
+        for (const row of undispatched) {
+          const { data: created, error } = await supabase
+            .from("audit_client_queries" as any)
+            .insert({
+              query_text:         row.query_description || row.head,
+              required_documents: row.required_documents || null,
+              ledger_name:        row.particulars || null,
+              group_name:         row.head || null,
+              priority:           priority === "keep" ? (row.priority || "Medium") : priority,
+              due_date:           dueDate || row.due_date || null,
+              engagement_id:      engagementId,
+              client_id:          clientId,
+              firm_id:            firmId,
+              financial_year:     financialYear,
+              status:             "Open",
+              source:             "worksheet",
+              source_ref_id:      row.id,
+            } as any)
+            .select("id")
+            .maybeSingle();
+          if (error) throw error;
+          if (created) results.push({ id: row.id, clientQueryId: (created as any).id });
+        }
+        toast.success(`${results.length} ${results.length === 1 ? "query" : "queries"} dispatched to client portal`);
       }
-      toast.success(`${results.length} ${results.length === 1 ? "query" : "queries"} dispatched to client portal`);
+
       onDispatched(results);
       onClose();
     } catch (err: any) {
@@ -410,6 +477,43 @@ function BulkDispatchDialog({
               ))}
             </div>
           </div>
+
+          {/* Phase 4B: Group by category toggle */}
+          {undispatched.some(r => r.head?.trim()) && (
+            <div className="space-y-1 pt-1 border-t">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={groupByCategory}
+                  onChange={e => setGroupByCategory(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded accent-orange-600"
+                />
+                <span className="text-xs font-medium">Group by category (Group/Subgroup)</span>
+              </label>
+              {groupByCategory && (
+                <p className="text-[10px] text-muted-foreground pl-5 leading-relaxed">
+                  Queries with the same Group/Subgroup are merged into one portal entry.
+                  All linked rows advance together when the client responds.
+                </p>
+              )}
+              {groupByCategory && (() => {
+                const groups = new Map<string, number>();
+                for (const r of undispatched) {
+                  const key = r.head?.trim() || "(no category)";
+                  groups.set(key, (groups.get(key) ?? 0) + 1);
+                }
+                return (
+                  <div className="pl-5 flex flex-wrap gap-1 mt-1">
+                    {Array.from(groups.entries()).map(([k, n]) => (
+                      <span key={k} className="text-[10px] bg-orange-50 border border-orange-200 text-orange-700 rounded-full px-2 py-px">
+                        {k} ({n})
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">

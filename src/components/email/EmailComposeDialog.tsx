@@ -22,7 +22,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Mail, Eye, Send, Users, Info } from "lucide-react";
+import { Loader2, Mail, Eye, Send, Users, Info, MessageCircle } from "lucide-react";
 import { toast }    from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth }  from "@/hooks/useAuth";
@@ -47,6 +47,8 @@ export interface EmailComposePayload {
   financialYear?: string;
   portalUrl?:     string;
   queries?:       AuditQueryRow[];
+  /** Phase 4B: client mobile number — enables WhatsApp send option */
+  clientMobile?:  string;
 }
 
 interface Props {
@@ -79,6 +81,10 @@ export function EmailComposeDialog({ open, onClose, defaultPayload, onSent }: Pr
   const [deadlineDate,  setDeadlineDate]  = useState("");
   const [sending,       setSending]       = useState(false);
   const [tab,           setTab]           = useState<"compose"|"preview">("compose");
+  // Phase 4B: WhatsApp option
+  const [alsoWhatsApp,  setAlsoWhatsApp]  = useState(false);
+
+  const hasMobile = !!(defaultPayload.clientMobile?.trim());
 
   // ── Reset when dialog opens ──────────────────────────────────────────
   useEffect(() => {
@@ -89,6 +95,7 @@ export function EmailComposeDialog({ open, onClose, defaultPayload, onSent }: Pr
     setCustomMessage("");
     setDeadlineDate("");
     setTab("compose");
+    setAlsoWhatsApp(false);
   }, [open, defaultPayload.templateType, defaultPayload.clientEmail, defaultPayload.financialYear]);
 
   const handleTypeChange = (t: AuditEmailType) => {
@@ -155,6 +162,32 @@ export function EmailComposeDialog({ open, onClose, defaultPayload, onSent }: Pr
       }
 
       toast.success(`Email sent to ${toEmail.trim()}`);
+
+      // Phase 4B: WhatsApp follow-up
+      if (alsoWhatsApp && hasMobile && defaultPayload.clientMobile) {
+        try {
+          await supabase.functions.invoke("send-notification", {
+            body: {
+              type:        "audit_query_reminder",
+              firm_id:     defaultPayload.firmId,
+              client_id:   defaultPayload.clientId,
+              send_to_client: false,
+              direct_whatsapp: defaultPayload.clientMobile.replace(/[^0-9+]/g, ""),
+              payload: {
+                client_name:  defaultPayload.clientName,
+                firm_name:    defaultPayload.firmName,
+                portal_url:   defaultPayload.portalUrl || "",
+                query_count:  String(defaultPayload.queries?.length ?? 0),
+                custom_subject: subject,
+              },
+            },
+          });
+          toast.success("WhatsApp reminder queued");
+        } catch {
+          toast.warning("Email sent, but WhatsApp failed — check WATI configuration");
+        }
+      }
+
       onSent?.();
       onClose();
     } catch (err: any) {
@@ -260,6 +293,25 @@ export function EmailComposeDialog({ open, onClose, defaultPayload, onSent }: Pr
                 <p className="text-xs text-green-700 mt-1.5 flex items-center gap-1">
                   ✓ Client portal link included
                 </p>
+              )}
+
+              {/* Phase 4B: WhatsApp option */}
+              {hasMobile && ["audit_query_dispatch","audit_query_reminder"].includes(type) && (
+                <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={alsoWhatsApp}
+                    onChange={e => setAlsoWhatsApp(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded accent-green-600"
+                  />
+                  <MessageCircle size={12} className="text-green-600" />
+                  <span className="text-xs text-foreground">
+                    Also send WhatsApp reminder to{" "}
+                    <span className="font-mono text-green-700">
+                      {defaultPayload.clientMobile}
+                    </span>
+                  </span>
+                </label>
               )}
             </TabsContent>
 

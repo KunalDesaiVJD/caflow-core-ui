@@ -42,11 +42,14 @@ const subjects: Record<string, string> = {
 };
 
 const templateMap: Record<string, string> = {
-  tds_due_7_days:     "tds_due_7_days_reminder",
-  tds_due_1_day:      "tds_due_1_day_urgent",
-  invoice_generated:  "invoice_generated_notification",
-  credit_note_issued: "credit_note_issued_notification",
-  payment_reminder:   "payment_reminder_notification",
+  tds_due_7_days:        "tds_due_7_days_reminder",
+  tds_due_1_day:         "tds_due_1_day_urgent",
+  invoice_generated:     "invoice_generated_notification",
+  credit_note_issued:    "credit_note_issued_notification",
+  payment_reminder:      "payment_reminder_notification",
+  // Phase 4B: audit query reminders via WATI
+  audit_query_reminder:  "audit_query_reminder",
+  audit_query_dispatch:  "audit_query_dispatch",
 };
 
 const channelRules: Record<string, ("whatsapp" | "email")[]> = {
@@ -62,11 +65,11 @@ const channelRules: Record<string, ("whatsapp" | "email")[]> = {
   ledger_statement:          ["email"],
   payment_reminder:          ["email"],
   internal_filing_reminder:  ["whatsapp"],
-  // Audit communication templates (all email only)
+  // Audit communication templates
   audit_commencement:        ["email"],
   audit_document_request:    ["email"],
   audit_query_dispatch:      ["email"],
-  audit_query_reminder:      ["email"],
+  audit_query_reminder:      ["email"],     // Phase 4B: also handles whatsapp via direct_whatsapp param
   audit_draft_report:        ["email"],
   audit_final_report:        ["email"],
 };
@@ -505,7 +508,8 @@ Deno.serve(async (req) => {
       send_to_responsible = false,
       payload,
       recipient_id,
-      direct_email,       // bypass client lookup — send to this address directly
+      direct_email,        // bypass client lookup — send to this address directly
+      direct_whatsapp,     // Phase 4B — send WhatsApp to this number directly
     } = await req.json();
 
     if (!type || !firm_id)
@@ -585,6 +589,19 @@ Deno.serve(async (req) => {
       allResults.direct = await sendToRecipient(
         adminClient, directContact, type, firm_id, enrichedPayload, ["email"],
         enrichedPayload.custom_subject,
+      );
+    }
+
+    // Phase 4B: Direct WhatsApp — send to explicit phone number (no client lookup)
+    if (direct_whatsapp) {
+      const waContact = {
+        id:    "direct_wa",
+        name:  enrichedPayload.client_name || "Recipient",
+        email: null,
+        phone: (direct_whatsapp as string).replace(/[^0-9+]/g, ""),
+      };
+      allResults.direct_whatsapp = await sendToRecipient(
+        adminClient, waContact, type, firm_id, enrichedPayload, ["whatsapp"],
       );
     }
 
