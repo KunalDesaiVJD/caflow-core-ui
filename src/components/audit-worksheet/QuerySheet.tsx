@@ -10,7 +10,7 @@
  * the engagement can progress to the next pipeline stage.
  * Zero queries = gate is open (no pending corrections).
  */
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
 import { Button }   from "@/components/ui/button";
@@ -26,8 +26,9 @@ import {
 } from "@/components/ui/table";
 import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X,
+  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X, BookOpen,
 } from "lucide-react";
+import { LedgerSidePanel } from "./LedgerSidePanel";
 import { toast } from "sonner";
 
 import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
@@ -111,10 +112,21 @@ function parseWorkbook(file: File): Promise<Array<Omit<QueryRow, "id">>> {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/** Pre-fill payload sent from Ledger Explorer when user clicks "Raise Query" */
+export interface QueryPrefill {
+  head:       string;
+  particulars: string;
+  note?:       string;
+}
+
 interface Props {
-  data:         AuditWorksheetData;
-  engagementId: string;
-  onSaved?:     () => void;
+  data:            AuditWorksheetData;
+  engagementId:    string;
+  onSaved?:        () => void;
+  /** When set, auto-adds a pre-filled query row (from Ledger Explorer) */
+  externalPrefill?: QueryPrefill | null;
+  /** Called after externalPrefill is consumed so parent can clear it */
+  onPrefillConsumed?: () => void;
 }
 
 // ─── Correction Status Select ─────────────────────────────────────────────────
@@ -149,14 +161,27 @@ function CorrectionSelect({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function QuerySheet({ data, engagementId, onSaved }: Props) {
+export default function QuerySheet({
+  data, engagementId, onSaved,
+  externalPrefill, onPrefillConsumed,
+}: Props) {
   const {
-    queries, addQuery, updateQuery, deleteQuery, bulkAddQueries,
+    queries, addQuery, addQueryPrefilled, updateQuery, deleteQuery, bulkAddQueries,
     manualSave, saving, allCorrected, pendingCount,
   } = useQuerySheetStorage(engagementId, data.engagement?.firm_id);
 
+  // Consume externalPrefill (from Ledger Explorer) — fire once per change
+  useEffect(() => {
+    if (!externalPrefill) return;
+    addQueryPrefilled(externalPrefill.head, externalPrefill.particulars, externalPrefill.note);
+    onPrefillConsumed?.();
+  }, [externalPrefill]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Delete confirmation state: tracks which row is awaiting confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // View Ledger side panel state
+  const [viewLedger, setViewLedger] = useState<{ name: string; group: string } | null>(null);
 
   // ── Search + Filter state ────────────────────────────────────────────────────
   // statusFilter: null = show all; "corrected" = Yes only; "pending" = not Yes
@@ -472,12 +497,25 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
 
                     {/* Ledger */}
                     <td className="border border-border px-2 py-2 align-top">
-                      <Input
-                        className="h-7 text-xs w-full"
-                        placeholder="Ledger…"
-                        value={row.particulars}
-                        onChange={e => updateQuery(row.id, "particulars", e.target.value)}
-                      />
+                      <div className="flex items-center gap-1">
+                        <Input
+                          className="h-7 text-xs flex-1 min-w-0"
+                          placeholder="Ledger…"
+                          value={row.particulars}
+                          onChange={e => updateQuery(row.id, "particulars", e.target.value)}
+                        />
+                        {row.particulars && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 p-0 flex-shrink-0 text-blue-600 hover:bg-blue-50"
+                            title={`View ledger: ${row.particulars}`}
+                            onClick={() => setViewLedger({ name: row.particulars, group: row.head })}
+                          >
+                            <BookOpen size={12} />
+                          </Button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Query Description — textarea for longer text */}
@@ -588,6 +626,20 @@ export default function QuerySheet({ data, engagementId, onSaved }: Props) {
           </p>
         )}
       </div>
+
+      {/* ══════════ LEDGER SIDE PANEL ══════════ */}
+      <LedgerSidePanel
+        open={!!viewLedger}
+        ledgerName={viewLedger?.name ?? ""}
+        parentGroup={viewLedger?.group ?? ""}
+        clientId={data.engagement?.client_id}
+        financialYear={data.financialYear}
+        onClose={() => setViewLedger(null)}
+        onRaiseQuery={(group, ledger, note) => {
+          setViewLedger(null);
+          addQueryPrefilled(group, ledger, note);
+        }}
+      />
 
       {/* ══════════ IMPORT PREVIEW MODAL ══════════ */}
       <Dialog open={!!importPreview} onOpenChange={() => setImportPreview(null)}>

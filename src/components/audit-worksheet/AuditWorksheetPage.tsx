@@ -12,7 +12,8 @@ import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, DatabaseZap } from "lucide-react";
+import { toast } from "sonner";
 
 import AuditWorksheetHeader  from "./AuditWorksheetHeader";
 import ExportButtons         from "./ExportButtons";
@@ -23,7 +24,9 @@ import InternalAuditMaster   from "./InternalAuditMaster";
 import SpecialAttention      from "./SpecialAttention";
 import Worksheet             from "./Worksheet";
 import QuerySheet            from "./QuerySheet";
+import type { QueryPrefill } from "./QuerySheet";
 import Checklist             from "./Checklist";
+import { LedgerExplorerTab } from "./LedgerExplorerTab";
 
 import { useAuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
@@ -63,6 +66,19 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
     : "worksheet";
 
   const [activeTab, setActiveTab] = useState(defaultTab);
+
+  // ── Ledger Explorer → Query Sheet pre-fill ──────────────────────────────────
+  // When user clicks "Raise Query" in LedgerExplorerTab, we:
+  //   1. Store the pre-fill payload
+  //   2. Switch to "queries" tab
+  //   3. QuerySheet consumes it via externalPrefill prop + calls onPrefillConsumed
+  const [pendingPrefill, setPendingPrefill] = useState<QueryPrefill | null>(null);
+
+  const handleRaiseQuery = (group: string, ledger: string, entryNote?: string) => {
+    setPendingPrefill({ head: group, particulars: ledger, note: entryNote });
+    setActiveTab("queries");
+    toast.success(`Query added for ${ledger} — edit details in Query Sheet`);
+  };
 
   // Correct the active tab once engagement data finishes loading.
   // On first render data.auditType is "" (queries still in flight), so
@@ -139,6 +155,9 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
           <TabsTrigger value="worksheet" className="text-xs">
             Vouching
           </TabsTrigger>
+          <TabsTrigger value="ledger_explorer" className="text-xs gap-1">
+            <DatabaseZap size={11} /> Ledger Explorer
+          </TabsTrigger>
           <TabsTrigger value="queries" className="text-xs">
             Query Sheet
           </TabsTrigger>
@@ -203,12 +222,21 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
           </TabsContent>
         )}
 
-        {/* ── Sheet 4: Worksheet ── */}
+        {/* ── Sheet 4: Worksheet (Vouching) ── */}
         <TabsContent value="worksheet" className="mt-3">
           <Worksheet
             data={data}
             engagementId={engagementId}
             onSaved={() => onSaved?.("Audit Worksheet")}
+          />
+        </TabsContent>
+
+        {/* ── Sheet 4b: Ledger Explorer ── */}
+        <TabsContent value="ledger_explorer" className="mt-3">
+          <LedgerExplorerTab
+            clientId={data.engagement?.client_id}
+            financialYear={data.financialYear}
+            onRaiseQuery={handleRaiseQuery}
           />
         </TabsContent>
 
@@ -218,6 +246,8 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
             data={data}
             engagementId={engagementId}
             onSaved={() => onSaved?.("Query Sheet")}
+            externalPrefill={pendingPrefill}
+            onPrefillConsumed={() => setPendingPrefill(null)}
           />
         </TabsContent>
 

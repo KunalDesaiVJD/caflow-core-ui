@@ -139,6 +139,25 @@ export function useQuerySheetStorage(
     [debounce]
   );
 
+  // Add a pre-filled row (called from Ledger Explorer "Raise Query")
+  const addQueryPrefilled = useCallback(
+    (head: string, particulars: string, queryNote?: string) => {
+      setData(prev => {
+        const newRow: QueryRow = {
+          id: newId(),
+          ...BLANK_QUERY,
+          head,
+          particulars,
+          query_description: queryNote || "",
+        };
+        const next: QuerySheetData = { queries: [...prev.queries, newRow] };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   // CP-17: bulk-add multiple rows (used by Excel import)
   const bulkAddQueries = useCallback(
     (rows: Array<Omit<QueryRow, "id">>) => {
@@ -167,6 +186,7 @@ export function useQuerySheetStorage(
   return {
     queries,
     addQuery,
+    addQueryPrefilled,
     updateQuery,
     deleteQuery,
     bulkAddQueries,
