@@ -2906,6 +2906,30 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   </div>
                 </div>
 
+                {/* PY data missing banner — shown when P&L PY amounts are all zero */}
+                {(() => {
+                  const isPlDrill = varianceDrill?.code?.toLowerCase().includes("pl");
+                  const allPyZero = varianceDrillRows.length > 0 && totals.py === 0;
+                  if (!isPlDrill || !allPyZero) return null;
+                  const fyParts = (engagement?.financial_year || "").split("-");
+                  const prevFy = fyParts.length === 2
+                    ? `${parseInt(fyParts[0]) - 1}-${parseInt(fyParts[0]).toString().slice(-2)}`
+                    : "prior year";
+                  return (
+                    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-300">
+                      <span className="text-base leading-tight shrink-0">⚠</span>
+                      <div>
+                        <p className="font-semibold">Prior-year P&L amounts not yet synced.</p>
+                        <p className="mt-0.5 text-amber-700 dark:text-amber-400">
+                          To populate PY amounts: in Tally press <strong>F2</strong>, set period to{" "}
+                          <strong>FY {prevFy}</strong> (01-Apr-{prevFy.split("-")[0]} to 31-Mar-20{prevFy.split("-")[1]}),
+                          press Escape to return to Gateway, then re-run <strong>sync-py.bat</strong>.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Ledger-level rows */}
                 <div className="border rounded-md overflow-hidden">
                   <div className="grid grid-cols-[1fr_110px_110px_110px_50px] gap-1 bg-muted/60 px-3 py-1.5 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
