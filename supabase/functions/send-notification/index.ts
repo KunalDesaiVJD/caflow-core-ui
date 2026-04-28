@@ -20,18 +20,25 @@ const corsHeaders = {
 // ── Subject map ──────────────────────────────────────────────────────
 
 const subjects: Record<string, string> = {
-  tds_due_7_days:           "TDS Due in 7 Days",
-  tds_due_1_day:            "URGENT: TDS Due Tomorrow",
-  audit_report_ready:       "Audit Report Ready for Review",
-  invoice_generated:        "Invoice from V J Desai & Co. LLP",
-  scrutiny_complete:        "Scrutiny Complete — Findings Summary",
-  new_user_welcome:         "Welcome to CAFlow",
-  credit_note_issued:       "Credit Note Issued",
-  quotation_sent:           "Quotation for Your Review",
-  proforma_sent:            "Proforma Invoice",
-  ledger_statement:         "Ledger Statement",
-  payment_reminder:         "Payment Reminder",
-  internal_filing_reminder: "Filing Reminder",
+  tds_due_7_days:            "TDS Due in 7 Days",
+  tds_due_1_day:             "URGENT: TDS Due Tomorrow",
+  audit_report_ready:        "Audit Report Ready for Review",
+  invoice_generated:         "Invoice from V J Desai & Co. LLP",
+  scrutiny_complete:         "Scrutiny Complete — Findings Summary",
+  new_user_welcome:          "Welcome to CAFlow",
+  credit_note_issued:        "Credit Note Issued",
+  quotation_sent:            "Quotation for Your Review",
+  proforma_sent:             "Proforma Invoice",
+  ledger_statement:          "Ledger Statement",
+  payment_reminder:          "Payment Reminder",
+  internal_filing_reminder:  "Filing Reminder",
+  // Audit communication templates
+  audit_commencement:        "Commencement of Statutory Audit",
+  audit_document_request:    "Document Request — Audit",
+  audit_query_dispatch:      "Audit Queries — Action Required",
+  audit_query_reminder:      "Reminder: Pending Audit Queries",
+  audit_draft_report:        "Draft Audit Report for Review",
+  audit_final_report:        "Audit Report Finalized",
 };
 
 const templateMap: Record<string, string> = {
@@ -43,18 +50,25 @@ const templateMap: Record<string, string> = {
 };
 
 const channelRules: Record<string, ("whatsapp" | "email")[]> = {
-  tds_due_7_days:           ["whatsapp", "email"],
-  tds_due_1_day:            ["whatsapp", "email"],
-  audit_report_ready:       ["email"],
-  invoice_generated:        ["email"],
-  scrutiny_complete:        ["email"],
-  new_user_welcome:         ["email"],
-  credit_note_issued:       ["email"],
-  quotation_sent:           ["email"],
-  proforma_sent:            ["email"],
-  ledger_statement:         ["email"],
-  payment_reminder:         ["email"],
-  internal_filing_reminder: ["whatsapp"],
+  tds_due_7_days:            ["whatsapp", "email"],
+  tds_due_1_day:             ["whatsapp", "email"],
+  audit_report_ready:        ["email"],
+  invoice_generated:         ["email"],
+  scrutiny_complete:         ["email"],
+  new_user_welcome:          ["email"],
+  credit_note_issued:        ["email"],
+  quotation_sent:            ["email"],
+  proforma_sent:             ["email"],
+  ledger_statement:          ["email"],
+  payment_reminder:          ["email"],
+  internal_filing_reminder:  ["whatsapp"],
+  // Audit communication templates (all email only)
+  audit_commencement:        ["email"],
+  audit_document_request:    ["email"],
+  audit_query_dispatch:      ["email"],
+  audit_query_reminder:      ["email"],
+  audit_draft_report:        ["email"],
+  audit_final_report:        ["email"],
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -101,7 +115,27 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
   </div>
 </body></html>`;
 
+  // ── Audit email templates: full HTML pre-built by frontend ────────────
+  // When custom_html is supplied the caller has already assembled the complete
+  // branded email; return it verbatim so the edge function acts as a relay only.
+  if (payload.custom_html) {
+    return payload.custom_html as string;
+  }
+
   switch (type) {
+    // ── Audit communication pass-through types ───────────────────────────
+    case "audit_commencement":
+    case "audit_document_request":
+    case "audit_query_dispatch":
+    case "audit_query_reminder":
+    case "audit_draft_report":
+    case "audit_final_report":
+      return wrapper(`
+        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>${payload.custom_message || "Please find the audit communication details below."}</p>
+        <p>Regards,<br><strong>${firmName}</strong><br><em>Chartered Accountants</em></p>
+      `);
+
     case "invoice_generated":
       return wrapper(`
         <p>Dear ${payload.client_name || "Client"},</p>

@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/dialog";
 import {
   MessageSquareWarning, Send, Loader2, Paperclip, Download, X,
-  Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, Users,
+  Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, Users, Mail,
 } from "lucide-react";
+import { EmailComposeDialog, EmailComposePayload } from "@/components/email/EmailComposeDialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
@@ -431,10 +432,11 @@ interface Props {
 }
 
 export function AuditClientInboxTab({ data, engagementId }: Props) {
-  const [queries,     setQueries]     = useState<ClientQuery[]>([]);
-  const [loading,     setLoading]     = useState(true);
+  const [queries,      setQueries]      = useState<ClientQuery[]>([]);
+  const [loading,      setLoading]      = useState(true);
   const [newQueryOpen, setNewQueryOpen] = useState(false);
-  const [filter,      setFilter]      = useState<"all"|"open"|"replied"|"closed">("all");
+  const [filter,       setFilter]       = useState<"all"|"open"|"replied"|"closed">("all");
+  const [emailPayload, setEmailPayload] = useState<EmailComposePayload | null>(null);
 
   const fetchQueries = useCallback(async () => {
     if (!engagementId) return;
@@ -456,6 +458,29 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [fetchQueries, engagementId]);
+
+  // ── Email compose helper ─────────────────────────────────────────────
+  const openEmail = (templateType: EmailComposePayload["templateType"], selectedQueries?: ClientQuery[]) => {
+    const qs = (selectedQueries ?? queries.filter(q => !["Clarified","Closed"].includes(q.status)));
+    setEmailPayload({
+      templateType,
+      clientName:    data.clientName || "Client",
+      clientEmail:   data.client?.email || "",
+      firmName:      data.firmName || "",
+      firmId:        data.engagement?.firm_id || "",
+      clientId:      data.engagement?.client_id || "",
+      engagementId,
+      financialYear: data.financialYear,
+      portalUrl:     `${window.location.origin}/portal`,
+      queries:       qs.map(q => ({
+        ref_number:         q.ref_number,
+        query_text:         q.query_text,
+        required_documents: q.required_documents,
+        group_name:         q.group_name,
+        ledger_name:        q.ledger_name,
+      })),
+    });
+  };
 
   const displayed = queries.filter(q => {
     if (filter === "open")    return q.status === "Open" || q.status === "Client Acknowledged";
@@ -492,10 +517,24 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
             {queries.length} total · {queries.filter(q => !["Clarified","Closed"].includes(q.status)).length} open
           </p>
         </div>
-        <Button size="sm" className="gap-1 h-8 text-xs bg-orange-600 hover:bg-orange-700"
-          onClick={() => setNewQueryOpen(true)}>
-          <Plus size={13}/> New Query to Client
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant="outline" className="gap-1 h-8 text-xs"
+            onClick={() => openEmail("audit_commencement", [])}>
+            <Mail size={13}/> Commencement
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1 h-8 text-xs"
+            onClick={() => openEmail("audit_query_dispatch")}>
+            <Mail size={13}/> Dispatch Queries
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1 h-8 text-xs"
+            onClick={() => openEmail("audit_query_reminder")}>
+            <Mail size={13}/> Send Reminder
+          </Button>
+          <Button size="sm" className="gap-1 h-8 text-xs bg-orange-600 hover:bg-orange-700"
+            onClick={() => setNewQueryOpen(true)}>
+            <Plus size={13}/> New Query
+          </Button>
+        </div>
       </div>
 
       {/* Filter tabs */}
@@ -550,6 +589,16 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
         financialYear={data.financialYear}
         onCreated={fetchQueries}
       />
+
+      {/* Email Compose dialog */}
+      {emailPayload && (
+        <EmailComposeDialog
+          open={!!emailPayload}
+          onClose={() => setEmailPayload(null)}
+          defaultPayload={emailPayload}
+          onSent={() => setEmailPayload(null)}
+        />
+      )}
     </div>
   );
 }
