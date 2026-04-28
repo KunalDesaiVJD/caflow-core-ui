@@ -236,6 +236,7 @@ export default function AuditWorksheetPage({ engagementId, onSaved }: Props) {
             data={data}
             engagementId={engagementId}
             onSaved={() => onSaved?.("Audit Worksheet")}
+            onRaiseQuery={handleRaiseQuery}
           />
         </TabsContent>
 

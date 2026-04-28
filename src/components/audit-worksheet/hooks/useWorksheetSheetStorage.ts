@@ -5,12 +5,28 @@
  * in audit_worksheet_master.worksheet_json (jsonb column).
  *
  * Per-row state: extent (text or date), work date, checked-by, notes.
+ * Phase 1 addition: multi-period support via VouchingPeriod[].
  * 1-second debounced auto-save on every field change.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { awLoad, awSave, awLoadFromDB } from "@/lib/awStorage";
 import { useAuth } from "@/hooks/useAuth";
+
+// ─── VouchingPeriod — Phase 1 ────────────────────────────────────────────────
+// Each book row can have 0-N periods, each checked by different staff members.
+// When periods.length === 0, the legacy single-row fields are used for display.
+
+export interface VouchingPeriod {
+  id:             string;
+  period_label:   string;         // user-editable: "Q1", "Apr-Jun 25", "Period 1"
+  extent_text:    string;         // for "range" extentType: "MM/YY TO MM/YY"
+  extent_date:    string;         // for "as_on" extentType: ISO date
+  date:           string;         // ISO date — when checking was done
+  assigned_ids:   string[];       // staff assigned to this period
+  assigned_names: string[];
+  status:         "pending" | "done" | "na";
+}
 
 // ─── Per-row state ───────────────────────────────────────────────────────────
 
@@ -24,7 +40,9 @@ export interface WsRowState {
   // Multi-checker fields (CP-06)
   checked_by_ids:   string[];
   checked_by_names: string[];
-  notes: string;             // 2-3 sub-row area for additional notes
+  notes: string;             // book-level remarks
+  // Phase 1: multi-period array (empty = use legacy single-row display)
+  periods: VouchingPeriod[];
 }
 
 export const BLANK_ROW: WsRowState = {
@@ -36,6 +54,7 @@ export const BLANK_ROW: WsRowState = {
   checked_by_ids:   [],
   checked_by_names: [],
   notes: "",
+  periods: [],
 };
 
 // ─── Full worksheet data ─────────────────────────────────────────────────────
@@ -144,10 +163,92 @@ export function useWorksheetSheetStorage(
         base.checked_by_ids   = [base.checked_by_id];
         base.checked_by_names = base.checked_by_name ? [base.checked_by_name] : [];
       }
+      // Ensure periods array always exists
+      if (!Array.isArray(base.periods)) base.periods = [];
       return base;
     },
     [data.rows]
   );
 
-  return { data, setRowField, patchRow, getRow, manualSave, saving, loaded };
+  // ── Phase 1: Multi-period helpers ─────────────────────────────────────────
+
+  /** Add a new period to a book row.
+   *  If this is the first period AND the row has legacy data,
+   *  the legacy extent/date/assigned fields are migrated into it. */
+  const addPeriod = useCallback(
+    (rowId: string) => {
+      setData(prev => {
+        const prevRow: WsRowState = prev.rows[rowId]
+          ? { ...BLANK_ROW, ...prev.rows[rowId], periods: prev.rows[rowId].periods ?? [] }
+          : { ...BLANK_ROW };
+        const existing = prevRow.periods;
+        const isFirst  = existing.length === 0;
+
+        const newPeriod: VouchingPeriod = {
+          id:           crypto.randomUUID(),
+          period_label: `Period ${existing.length + 1}`,
+          // Migrate legacy single-row data on first period only
+          extent_text:    isFirst ? prevRow.extent_text : "",
+          extent_date:    isFirst ? prevRow.extent_date : "",
+          date:           isFirst ? prevRow.date        : "",
+          assigned_ids:   isFirst ? (prevRow.checked_by_ids   ?? []) : [],
+          assigned_names: isFirst ? (prevRow.checked_by_names ?? []) : [],
+          status: "pending",
+        };
+
+        const next: WorksheetSheetData = {
+          rows: {
+            ...prev.rows,
+            [rowId]: { ...prevRow, periods: [...existing, newPeriod] },
+          },
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  /** Patch one or more fields on a specific period. */
+  const updatePeriod = useCallback(
+    (rowId: string, periodId: string, patch: Partial<VouchingPeriod>) => {
+      setData(prev => {
+        const prevRow: WsRowState = prev.rows[rowId]
+          ? { ...BLANK_ROW, ...prev.rows[rowId], periods: prev.rows[rowId].periods ?? [] }
+          : { ...BLANK_ROW };
+        const periods = prevRow.periods.map(p =>
+          p.id === periodId ? { ...p, ...patch } : p,
+        );
+        const next: WorksheetSheetData = {
+          rows: { ...prev.rows, [rowId]: { ...prevRow, periods } },
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  /** Remove a period by id. */
+  const removePeriod = useCallback(
+    (rowId: string, periodId: string) => {
+      setData(prev => {
+        const prevRow: WsRowState = prev.rows[rowId]
+          ? { ...BLANK_ROW, ...prev.rows[rowId], periods: prev.rows[rowId].periods ?? [] }
+          : { ...BLANK_ROW };
+        const periods = prevRow.periods.filter(p => p.id !== periodId);
+        const next: WorksheetSheetData = {
+          rows: { ...prev.rows, [rowId]: { ...prevRow, periods } },
+        };
+        debounce(next);
+        return next;
+      });
+    },
+    [debounce],
+  );
+
+  return {
+    data, setRowField, patchRow, getRow, manualSave, saving, loaded,
+    addPeriod, updatePeriod, removePeriod,
+  };
 }
