@@ -28,6 +28,16 @@ export default function NoteBSAsset({
   const py = (key: string) => Number(notes.bs_asset[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
+  // to the sum of breakup rows' amount_py so "Total per BS" never shows "—".
+  const effectivePY = (key: string, breakupPath?: string): number => {
+    const autoPy = py(key);
+    if (autoPy !== 0) return autoPy;
+    const bPath = breakupPath ?? `bs_asset.${key}.breakup`;
+    const breakup = (get(bPath) ?? []) as ListRow[];
+    return breakup.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+  };
+
   // Smart note: only show a note number when at least one year has data.
   const sn = (dataKey: string, regKey: string = dataKey): number | null =>
     cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
@@ -53,29 +63,32 @@ export default function NoteBSAsset({
     key: string,
     breakupPath: string,
     breakupHint: string,
-  ) => (
-    <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
-      <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
-      <ListTable
-        rows={(get(breakupPath) ?? []) as ListRow[]}
-        onChange={(next) => updatePath(breakupPath, next)}
-        descPlaceholder={breakupHint}
-        addLabel="Add row"
-      />
-      <EditableRow
-        label={`Total — ${title} (per BS)`}
-        cy={cy(key)} py={py(key)}
-        autoCY={cy(key)} autoPY={py(key)}
-        isOverriddenCy={isOverridden(`bs_asset.${key}.cy`)}
-        isOverriddenPy={isOverridden(`bs_asset.${key}.py`)}
-        onCommitCy={(v) => updatePath(`bs_asset.${key}.cy`, v)}
-        onCommitPy={(v) => updatePath(`bs_asset.${key}.py`, v)}
-        onResetCy={() => resetPath(`bs_asset.${key}.cy`)}
-        onResetPy={() => resetPath(`bs_asset.${key}.py`)}
-        bold
-      />
-    </NoteCard>
-  );
+  ) => {
+    const effPY = effectivePY(key, breakupPath);
+    return (
+      <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
+        <NoteHeaderRow cyLabel={`As at 31-Mar-${cyYear}`} pyLabel={`As at 31-Mar-${pyYear}`} />
+        <ListTable
+          rows={(get(breakupPath) ?? []) as ListRow[]}
+          onChange={(next) => updatePath(breakupPath, next)}
+          descPlaceholder={breakupHint}
+          addLabel="Add row"
+        />
+        <EditableRow
+          label={`Total — ${title} (per BS)`}
+          cy={cy(key)} py={effPY}
+          autoCY={cy(key)} autoPY={effPY}
+          isOverriddenCy={isOverridden(`bs_asset.${key}.cy`)}
+          isOverriddenPy={isOverridden(`bs_asset.${key}.py`)}
+          onCommitCy={(v) => updatePath(`bs_asset.${key}.cy`, v)}
+          onCommitPy={(v) => updatePath(`bs_asset.${key}.py`, v)}
+          onResetCy={() => resetPath(`bs_asset.${key}.cy`)}
+          onResetPy={() => resetPath(`bs_asset.${key}.py`)}
+          bold
+        />
+      </NoteCard>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -90,8 +103,8 @@ export default function NoteBSAsset({
         />
         <EditableRow
           label="Total — Non-current investments (per BS)"
-          cy={cy("nc_investments")} py={py("nc_investments")}
-          autoCY={cy("nc_investments")} autoPY={py("nc_investments")}
+          cy={cy("nc_investments")} py={effectivePY("nc_investments")}
+          autoCY={cy("nc_investments")} autoPY={effectivePY("nc_investments")}
           isOverriddenCy={isOverridden("bs_asset.nc_investments.cy")}
           isOverriddenPy={isOverridden("bs_asset.nc_investments.py")}
           onCommitCy={(v) => updatePath("bs_asset.nc_investments.cy", v)}

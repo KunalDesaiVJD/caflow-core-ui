@@ -31,6 +31,15 @@ export default function NotePL({
   const py = (key: string) => Number(notes.pl[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
+  // to the sum of breakup rows' amount_py so "Total per P&L" never shows "—".
+  const effectivePY = (key: string): number => {
+    const autoPy = py(key);
+    if (autoPy !== 0) return autoPy;
+    const breakup = (get(`pl.${key}.breakup`) ?? []) as ListRow[];
+    return breakup.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+  };
+
   // Smart note: only show a note number when at least one year has data.
   const sn = (dataKey: string, regKey: string = dataKey): number | null =>
     cy(dataKey) !== 0 || py(dataKey) !== 0 ? (getNoteNo(regKey) ?? null) : null;
@@ -49,6 +58,7 @@ export default function NotePL({
   ) => {
     const path = `pl.${key}.breakup`;
     const rows: ListRow[] = (get(path) ?? []) as ListRow[];
+    const effPY = effectivePY(key);
     return (
       <NoteCard collapseControl={collapseControl} noteNo={noteNo} title={title}>
         <NoteHeaderRow cyLabel={`FY ${cyYear - 1}-${String(cyYear).slice(-2)}`} pyLabel={`FY ${pyYear - 1}-${String(pyYear).slice(-2)}`} />
@@ -61,8 +71,8 @@ export default function NotePL({
         />
         <EditableRow
           label={`Total — ${title} (per P&L)`}
-          cy={cy(key)} py={py(key)}
-          autoCY={cy(key)} autoPY={py(key)}
+          cy={cy(key)} py={effPY}
+          autoCY={cy(key)} autoPY={effPY}
           isOverriddenCy={isOverridden(`pl.${key}.cy`)}
           isOverriddenPy={isOverridden(`pl.${key}.py`)}
           onCommitCy={(v) => updatePath(`pl.${key}.cy`, v)}

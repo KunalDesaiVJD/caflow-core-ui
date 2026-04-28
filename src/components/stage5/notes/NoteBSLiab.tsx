@@ -77,6 +77,16 @@ export default function NoteBSLiab({
   const py  = (key: string) => Number(notes.bs_liab[key]?.py ?? 0);
   const get = (path: string) => path.split(".").reduce<any>((c, k) => c?.[k], notes);
 
+  // effectivePY: returns auto-populated PY if non-zero, otherwise falls back
+  // to the sum of breakup rows' amount_py (so "Total per BS" never shows "—"
+  // when sub-total rows already have PY values filled in).
+  const effectivePY = (key: string): number => {
+    const autoPy = py(key);
+    if (autoPy !== 0) return autoPy;
+    const breakup = (get(`bs_liab.${key}.breakup`) ?? []) as ListRow[];
+    return breakup.reduce((s, r) => s + (r.amount_py ?? 0), 0);
+  };
+
   // Smart note: only show a note number when at least one year has data.
   // dataKey = key into notes.bs_liab; regKey = key into noteNumberRegistry
   // (defaults to dataKey when they match, e.g. lt_borrowings → lt_borrowings).
@@ -672,8 +682,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total — Long-term borrowings (per BS)"
-          cy={cy("lt_borrowings")} py={py("lt_borrowings")}
-          autoCY={cy("lt_borrowings")} autoPY={py("lt_borrowings")}
+          cy={cy("lt_borrowings")} py={effectivePY("lt_borrowings")}
+          autoCY={cy("lt_borrowings")} autoPY={effectivePY("lt_borrowings")}
           isOverriddenCy={isOverridden("bs_liab.lt_borrowings.cy")}
           isOverriddenPy={isOverridden("bs_liab.lt_borrowings.py")}
           onCommitCy={(v) => updatePath("bs_liab.lt_borrowings.cy", v)}
@@ -703,8 +713,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total — Deferred tax liabilities (per BS)"
-          cy={cy("deferred_tax_liab")} py={py("deferred_tax_liab")}
-          autoCY={cy("deferred_tax_liab")} autoPY={py("deferred_tax_liab")}
+          cy={cy("deferred_tax_liab")} py={effectivePY("deferred_tax_liab")}
+          autoCY={cy("deferred_tax_liab")} autoPY={effectivePY("deferred_tax_liab")}
           isOverriddenCy={isOverridden("bs_liab.deferred_tax_liab.cy")}
           isOverriddenPy={isOverridden("bs_liab.deferred_tax_liab.py")}
           onCommitCy={(v) => updatePath("bs_liab.deferred_tax_liab.cy", v)}
@@ -725,8 +735,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total (per BS)"
-          cy={cy("other_lt_liabilities")} py={py("other_lt_liabilities")}
-          autoCY={cy("other_lt_liabilities")} autoPY={py("other_lt_liabilities")}
+          cy={cy("other_lt_liabilities")} py={effectivePY("other_lt_liabilities")}
+          autoCY={cy("other_lt_liabilities")} autoPY={effectivePY("other_lt_liabilities")}
           isOverriddenCy={isOverridden("bs_liab.other_lt_liabilities.cy")}
           isOverriddenPy={isOverridden("bs_liab.other_lt_liabilities.py")}
           onCommitCy={(v) => updatePath("bs_liab.other_lt_liabilities.cy", v)}
@@ -747,8 +757,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total (per BS)"
-          cy={cy("lt_provisions")} py={py("lt_provisions")}
-          autoCY={cy("lt_provisions")} autoPY={py("lt_provisions")}
+          cy={cy("lt_provisions")} py={effectivePY("lt_provisions")}
+          autoCY={cy("lt_provisions")} autoPY={effectivePY("lt_provisions")}
           isOverriddenCy={isOverridden("bs_liab.lt_provisions.cy")}
           isOverriddenPy={isOverridden("bs_liab.lt_provisions.py")}
           onCommitCy={(v) => updatePath("bs_liab.lt_provisions.cy", v)}
@@ -770,8 +780,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total — Short-term borrowings (per BS)"
-          cy={cy("st_borrowings")} py={py("st_borrowings")}
-          autoCY={cy("st_borrowings")} autoPY={py("st_borrowings")}
+          cy={cy("st_borrowings")} py={effectivePY("st_borrowings")}
+          autoCY={cy("st_borrowings")} autoPY={effectivePY("st_borrowings")}
           isOverriddenCy={isOverridden("bs_liab.st_borrowings.cy")}
           isOverriddenPy={isOverridden("bs_liab.st_borrowings.py")}
           onCommitCy={(v) => updatePath("bs_liab.st_borrowings.cy", v)}
@@ -855,8 +865,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total (per BS)"
-          cy={cy("other_curr_liab")} py={py("other_curr_liab")}
-          autoCY={cy("other_curr_liab")} autoPY={py("other_curr_liab")}
+          cy={cy("other_curr_liab")} py={effectivePY("other_curr_liab")}
+          autoCY={cy("other_curr_liab")} autoPY={effectivePY("other_curr_liab")}
           isOverriddenCy={isOverridden("bs_liab.other_curr_liab.cy")}
           isOverriddenPy={isOverridden("bs_liab.other_curr_liab.py")}
           onCommitCy={(v) => updatePath("bs_liab.other_curr_liab.cy", v)}
@@ -877,8 +887,8 @@ export default function NoteBSLiab({
         />
         <EditableRow
           label="Total (per BS)"
-          cy={cy("st_provisions")} py={py("st_provisions")}
-          autoCY={cy("st_provisions")} autoPY={py("st_provisions")}
+          cy={cy("st_provisions")} py={effectivePY("st_provisions")}
+          autoCY={cy("st_provisions")} autoPY={effectivePY("st_provisions")}
           isOverriddenCy={isOverridden("bs_liab.st_provisions.cy")}
           isOverriddenPy={isOverridden("bs_liab.st_provisions.py")}
           onCommitCy={(v) => updatePath("bs_liab.st_provisions.cy", v)}
