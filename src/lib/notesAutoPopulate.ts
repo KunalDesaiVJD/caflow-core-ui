@@ -869,11 +869,21 @@ export async function autoPopulateNotes(
       // so we must NOT apply sectionSign again (double-negation bug).
       // Only the fa_financial_statements fallback path needs the sectionSign flip
       // because fa_financial_statements stores TB-signed values.
+      //
+      // MIGRATION NOTE: engagements auto-populated BEFORE the sectionSign fix
+      // may have stored bs_liab values in old Cr-negative convention (e.g.
+      // lt_borrowings.cy = -197000 instead of +197000). When that prior-year
+      // note is read as PY for the current year, it would show as negative.
+      // Guard: for bs_liab rows, take Math.abs so old-convention negatives are
+      // corrected. The only false-positive edge case is reserves_surplus with
+      // accumulated losses (Dr balance), which the new convention stores as
+      // negative — Math.abs would flip it positive. This is a one-year
+      // transitional artefact; the user can override it manually if needed.
       let py: number;
       const priorStage5Py = pyNotes?.[section]?.[rowKey]?.cy;
       if (typeof priorStage5Py === "number" && Number.isFinite(priorStage5Py)) {
-        // Already sign-corrected — use directly.
-        py = priorStage5Py;
+        // For bs_liab: guard against stale Cr-negative values from pre-fix era
+        py = section === "bs_liab" ? Math.abs(priorStage5Py) : priorStage5Py;
       } else {
         // FS fallback: sum raw fa_financial_statements amounts and apply sign.
         py = sectionSign * pyOf(section, rowKey, spec);
