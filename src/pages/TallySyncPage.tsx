@@ -699,20 +699,84 @@ export default function TallySyncPage() {
   const tbCreditTotal = filteredTB.reduce((s, r) => s + getTurnover(r).credit, 0);
   const hasDebitCredit = tbDebitTotal > 0 || tbCreditTotal > 0;
 
-  // Per-ledger reconciliation against Tally's authoritative closing
+  // Per-ledger reconciliation against Tally's authoritative closing.
+  // Tally itself never produces internal opening / closing / movement
+  // inconsistencies — every variance has a concrete reason on OUR extraction
+  // side. Categorize each mismatch so the user sees the actual cause on this
+  // page instead of a generic "off by ₹X".
   const tbReconStats = useMemo(() => {
+    const fy = (selectedEngagement as any)?.financial_year ?? tallyFy ?? "current FY";
     let matched = 0;
-    const mismatches: { name: string; expected: number; actual: number }[] = [];
+    const mismatches: {
+      name: string;
+      group: string | null;
+      opening: number;
+      debit: number;
+      credit: number;
+      derived: number;
+      expected: number;
+      diff: number;
+      reason: string;
+      fix: string;
+    }[] = [];
+
     for (const r of filteredTB) {
       const { debit, credit } = getTurnover(r);
       const openingSigned = r.opening_balance * (r.opening_type === "Dr" ? 1 : -1);
       const closingSigned = r.closing_balance * (r.balance_type  === "Dr" ? 1 : -1);
       const derivedSigned = openingSigned + debit - credit;
-      if (Math.abs(derivedSigned - closingSigned) < 1) matched++;
-      else mismatches.push({ name: r.ledger_name, expected: closingSigned, actual: derivedSigned });
+      const diff = derivedSigned - closingSigned;
+
+      if (Math.abs(diff) < 1) { matched++; continue; }
+
+      // ── Categorize the variance — Tally is internally consistent, so the
+      //    difference always traces back to one of the following extraction
+      //    causes. Order matters: most specific cause first.
+      let reason: string;
+      let fix: string;
+
+      const noMovement = Math.abs(debit) < 0.5 && Math.abs(credit) < 0.5;
+      const closingZero = Math.abs(closingSigned) < 0.5;
+      const derivedZero = Math.abs(derivedSigned) < 0.5;
+      const signFlipped = Math.abs(derivedSigned + closingSigned) < 1
+                       && Math.abs(derivedSigned) > 1;
+
+      if (noMovement && !closingZero && Math.abs(closingSigned - openingSigned) > 0.5) {
+        // Tally reports a closing different from opening but we synced no vouchers.
+        reason = `Vouchers for this ledger were not fetched — Tally voucher COLLECTION returned no entries even though Tally's own closing changed by ₹${Math.abs(closingSigned - openingSigned).toLocaleString("en-IN", { maximumFractionDigits: 2 })}.`;
+        fix = `In Tally press F2 → set period to FY ${fy} (full year), press Escape, then re-run the sync. Tally's voucher COLLECTION only returns rows for the active company period.`;
+      } else if (derivedZero && !closingZero) {
+        reason = `No movement was extracted but Tally has a closing of ₹${Math.abs(closingSigned).toLocaleString("en-IN")} — the ledger's vouchers fell outside the synced period.`;
+        fix = `In Tally press F2, set period to 01-Apr to 31-Mar of FY ${fy}, then re-run the sync.`;
+      } else if (closingZero && !derivedZero) {
+        reason = `Tally returned $ClosingBalance = 0 for this ledger even though our synced movement gives ₹${Math.abs(derivedSigned).toLocaleString("en-IN")}. This happens when Tally's active period is set to a year other than ${fy} — $ClosingBalance always reads from the active period.`;
+        fix = `In Tally press F2 and set period to FY ${fy}. Then re-run the sync. The derived figure (opening + Dr − Cr from vouchers) is the correct one.`;
+      } else if (signFlipped) {
+        reason = `Sign flipped between extraction and Tally — the ledger's balance_type (${r.balance_type}) is recorded opposite to the derived sign.`;
+        fix = `Check whether this ledger was recently re-classified (e.g. asset → liability) in Tally. Re-run the sync after Tally re-saves the ledger header.`;
+      } else if (Math.abs(diff) < 100) {
+        reason = `Rounding gap of ₹${Math.abs(diff).toLocaleString("en-IN", { maximumFractionDigits: 2 })} — Tally's $ClosingBalance is rounded to the company's display precision while our derived figure uses raw voucher amounts.`;
+        fix = `In Tally → F12 (Configure) → set "Use Decimals" to 2 for this company, save, then re-run the sync. Or treat the derived figure as authoritative.`;
+      } else {
+        reason = `Voucher COLLECTION returned partial data — ${Math.abs(diff).toLocaleString("en-IN", { maximumFractionDigits: 2 })} of movement is missing between what Tally reports as closing (₹${Math.abs(closingSigned).toLocaleString("en-IN")}) and what our synced vouchers add up to (₹${Math.abs(derivedSigned).toLocaleString("en-IN")}).`;
+        fix = `Confirm Tally's company period is set to FY ${fy} (F2). If yes, the voucher set is being truncated — re-run sync; if mismatch persists, the ledger likely has cost-centre or inventory voucher classes that the TDL skips.`;
+      }
+
+      mismatches.push({
+        name: r.ledger_name,
+        group: r.parent_group ?? null,
+        opening: openingSigned,
+        debit, credit,
+        derived: derivedSigned,
+        expected: closingSigned,
+        diff,
+        reason,
+        fix,
+      });
     }
+
     return { matched, total: filteredTB.length, allMatched: filteredTB.length > 0 && matched === filteredTB.length, mismatches };
-  }, [filteredTB, getTurnover]);
+  }, [filteredTB, getTurnover, selectedEngagement, tallyFy]);
 
   // ── Group map for BS/PL classification ───────────────────────────────────────
   const groupInfoMap = useMemo(() => {
@@ -1345,6 +1409,70 @@ export default function TallySyncPage() {
               )}
             </CardContent>
           )}
+        </Card>
+      )}
+
+      {/* ── Variance Diagnostics ────────────────────────────────────────────
+          Tally is internally consistent, so any difference between Tally's
+          $ClosingBalance and our derived (opening + Dr − Cr) is caused by
+          something on the extraction side. Show every offending ledger with
+          its concrete reason and fix so the user does not have to guess. */}
+      {hasData && tbReconStats.mismatches.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/30 dark:bg-amber-950/10">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 text-amber-900 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4" />
+              Variance Diagnostics — {tbReconStats.mismatches.length} ledger{tbReconStats.mismatches.length > 1 ? "s" : ""} differ from Tally
+            </CardTitle>
+            <CardDescription className="text-xs text-amber-800/80 dark:text-amber-400/80">
+              Tally itself never produces inconsistent opening / closing / movement values. Every variance below is caused by the sync extraction layer — the most common cause is Tally's active period (F2) being set to a year other than the engagement's FY, which makes <code className="bg-amber-100 dark:bg-amber-900/30 px-1 rounded">$ClosingBalance</code> read the wrong year while voucher COLLECTION returns rows from yet another period.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="overflow-x-auto rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-background">
+              <table className="w-full text-xs">
+                <thead className="bg-amber-100/60 dark:bg-amber-900/30 text-amber-900 dark:text-amber-200">
+                  <tr>
+                    <th className="text-left px-2 py-1.5 font-semibold">Ledger</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Opening</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Dr</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Cr</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Derived Closing</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Tally Closing</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">Diff</th>
+                    <th className="text-left px-2 py-1.5 font-semibold">Reason &amp; Fix</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tbReconStats.mismatches.slice(0, 50).map((m, i) => (
+                    <tr key={`${m.name}-${i}`} className="border-t border-amber-100 dark:border-amber-900/40 align-top">
+                      <td className="px-2 py-1.5">
+                        <div className="font-medium">{m.name}</div>
+                        {m.group && <div className="text-[10px] text-muted-foreground">{m.group}</div>}
+                      </td>
+                      <td className="text-right px-2 py-1.5 font-mono">{m.opening.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                      <td className="text-right px-2 py-1.5 font-mono">{m.debit.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                      <td className="text-right px-2 py-1.5 font-mono">{m.credit.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                      <td className="text-right px-2 py-1.5 font-mono">{m.derived.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                      <td className="text-right px-2 py-1.5 font-mono">{m.expected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                      <td className={`text-right px-2 py-1.5 font-mono font-semibold ${Math.abs(m.diff) > 100 ? "text-red-600" : "text-amber-700"}`}>
+                        {m.diff.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2 py-1.5 max-w-md">
+                        <div className="text-amber-900 dark:text-amber-200">{m.reason}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5"><span className="font-semibold">Fix:</span> {m.fix}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {tbReconStats.mismatches.length > 50 && (
+                <div className="px-2 py-1.5 text-[10px] text-muted-foreground border-t border-amber-100">
+                  Showing first 50 of {tbReconStats.mismatches.length} variances. Re-run sync after applying the fix above to clear them in bulk.
+                </div>
+              )}
+            </div>
+          </CardContent>
         </Card>
       )}
 
