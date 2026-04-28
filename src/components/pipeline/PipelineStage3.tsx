@@ -2908,7 +2908,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
 
                 {/* PY data missing banner — shown when P&L PY amounts are all zero */}
                 {(() => {
-                  const isPlDrill = varianceDrill?.code?.toLowerCase().includes("pl");
+                  // Look up this drill item in the active FS tree to get its section.
+                  // Individual P&L items have codes like NCE_COGS, NCE_EMP_EXP — their
+                  // section field is "NCE_PL_expenses" / "NCE_PL_income" / "NCE_PL_profit".
+                  const drillItem = activeFlatItems.find(i => i.code === varianceDrill?.code);
+                  const isPlDrill = drillItem?.section?.toLowerCase().includes("pl")
+                    || varianceDrill?.code?.toLowerCase().includes("pl");
                   const allPyZero = varianceDrillRows.length > 0 && totals.py === 0;
                   if (!isPlDrill || !allPyZero) return null;
                   const fyParts = (engagement?.financial_year || "").split("-");
