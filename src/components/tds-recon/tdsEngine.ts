@@ -741,7 +741,7 @@ export async function runDemandCalculator(params: {
       payment_date: paymentDate?.toISOString().slice(0,10) ?? null,
       computation_date: compDate.toISOString().slice(0,10),
       interest_rate_pct: interestResult.rate, interest_months: interestResult.months,
-      interest_201_1a: interestResult.interestAmt, late_filing_days: lateDays, fee_234e,
+      interest_201_1a: interestResult.interestAmt, late_filing_days: lateDays, fee_234e: fee234e,
       total_demand: shortfall + interestResult.interestAmt + fee234e,
       computation_note: interestResult.note, item_status: "computed",
     });
