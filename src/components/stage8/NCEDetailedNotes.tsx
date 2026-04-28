@@ -25,9 +25,6 @@ import {
 import {
   Popover, PopoverTrigger, PopoverContent,
 } from "@/components/ui/popover";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { toast }       from "sonner";
 import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical } from "lucide-react";
 import { cn }          from "@/lib/utils";
