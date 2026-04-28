@@ -388,7 +388,14 @@ export async function nceAutoPopulate(
   }
 
   // ── 4. Load PY amounts from prior year's nce_financial_notes ───────────
-  const pyNotes: Record<string, Record<string, number>> = {};
+  //
+  // We also load the prior year's _custom_rows so we can match custom rows
+  // by LABEL (not just by generated ID). Generated IDs (custom_XXX_0) are
+  // order-dependent: if a new ledger group appears or disappears the indices
+  // shift and pyNotes[id] returns 0 for every row — causing all PY
+  // individual rows to show "—" even though PY data exists.
+  const pyNotes:      Record<string, Record<string, number>>  = {};
+  const pyCustomRows: Record<string, NCECustomRow[]>          = {};
   if (financialYear && clientId) {
     const parts = String(financialYear).split("-");
     if (parts.length === 2) {
@@ -409,12 +416,26 @@ export async function nceAutoPopulate(
           const raw = (r.cy_data as Record<string, any>) ?? {};
           const nums: Record<string, number> = {};
           for (const [k, v] of Object.entries(raw)) {
-            if (k !== "_custom_rows" && typeof v === "number") nums[k] = v as number;
+            if (!META_KEYS.has(k) && typeof v === "number") nums[k] = v as number;
           }
-          pyNotes[r.note_type] = nums;
+          pyNotes[r.note_type]      = nums;
+          pyCustomRows[r.note_type] = Array.isArray(raw._custom_rows)
+            ? (raw._custom_rows as NCECustomRow[])
+            : [];
         }
       }
     }
+  }
+
+  /** Look up prior-year amount for a custom row by matching its label to the
+   *  prior year's _custom_rows array, then reading the matched row's ID from
+   *  pyNotes. Falls back to a direct ID lookup for backwards compatibility. */
+  function pyForCustomRow(noteType: string, currentId: string, label: string, suffix = ""): number {
+    const priorRows = pyCustomRows[noteType] ?? [];
+    const match = priorRows.find(r => r.label === label);
+    if (match) return Math.abs(pyNotes[noteType]?.[match.id + suffix] ?? 0);
+    // Fall back to direct key lookup (works when groups are in the same order)
+    return Math.abs(pyNotes[noteType]?.[currentId + suffix] ?? 0);
   }
 
   // ── 5. Build per-note results ───────────────────────────────────────────
@@ -456,9 +477,10 @@ export async function nceAutoPopulate(
           // Track which ledgers feed this static row (for info popover)
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
           staticSources[matchedRowId].push({ ledger: row.ledger_name, amountCy: amt });
-          // PY: carry from prior-year cy_data for the same static key, if any
+          // PY: carry from prior-year cy_data for the same static key, if any.
+          // Use Math.abs to guard against stale negative values stored in old data.
           if (!(matchedRowId in newPy)) {
-            newPy[matchedRowId] = pyNotes[noteType]?.[matchedRowId] ?? 0;
+            newPy[matchedRowId] = Math.abs(pyNotes[noteType]?.[matchedRowId] ?? 0);
           }
         } else {
           unmatchedB.push({ ledger: row.ledger_name, amt, parentGroup: row.parent_group ?? undefined });
@@ -490,7 +512,9 @@ export async function nceAutoPopulate(
           : (ledgers.length === 1 ? ledgers[0].ledger : pickMergedLabel(baseHeads));
         const id = makeCustomId(label, idx++);
         newCy[id] = totalAmt;
-        newPy[id] = pyNotes[noteType]?.[id] ?? 0;
+        // Match PY by label (stable across re-syncs) rather than by generated ID
+        // (which shifts when group order changes → old behaviour gave PY = 0)
+        newPy[id] = pyForCustomRow(noteType, id, label);
         autoRows.push({
           id,
           label,
@@ -540,11 +564,11 @@ export async function nceAutoPopulate(
           // Fill static row directly with LT/ST suffix
           if (isLT) newCy[matchedRowId + "_lt"] = (newCy[matchedRowId + "_lt"] ?? 0) + amt;
           if (isST) newCy[matchedRowId + "_st"] = (newCy[matchedRowId + "_st"] ?? 0) + amt;
-          // PY from prior year if available
+          // PY from prior year if available (Math.abs guards against stale negatives)
           if (isLT && !(matchedRowId + "_lt" in newPy))
-            newPy[matchedRowId + "_lt"] = pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0;
+            newPy[matchedRowId + "_lt"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_lt"] ?? 0);
           if (isST && !(matchedRowId + "_st" in newPy))
-            newPy[matchedRowId + "_st"] = pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0;
+            newPy[matchedRowId + "_st"] = Math.abs(pyNotes[noteType]?.[matchedRowId + "_st"] ?? 0);
         } else {
           unmatchedA.push({ ledger: row.ledger_name, amt, isLT, isST, parentGroup: row.parent_group ?? undefined });
         }
@@ -573,8 +597,9 @@ export async function nceAutoPopulate(
           if (l.isLT) totalLt += l.amt;
           if (l.isST) totalSt += l.amt;
         }
-        if (totalLt > 0) { newCy[id + "_lt"] = totalLt; newPy[id + "_lt"] = 0; }
-        if (totalSt > 0) { newCy[id + "_st"] = totalSt; newPy[id + "_st"] = 0; }
+        // PY: match prior-year row by label (robust against group-order changes)
+        if (totalLt > 0) { newCy[id + "_lt"] = totalLt; newPy[id + "_lt"] = pyForCustomRow(noteType, id, label, "_lt"); }
+        if (totalSt > 0) { newCy[id + "_st"] = totalSt; newPy[id + "_st"] = pyForCustomRow(noteType, id, label, "_st"); }
 
         // For borrowings, all unmatched are unsecured by nature
         const section = noteType === "borrowings" ? "unsecured" : undefined;
@@ -639,10 +664,11 @@ export async function nceAutoPopulate(
       }
     }
 
-    // Apply prior-year CY as PY for static rows if not already set
+    // Apply prior-year CY as PY for static rows if not already set.
+    // Math.abs guards against stale negative values that may exist in old data.
     if (pyNotes[noteType]) {
       for (const [k, v] of Object.entries(pyNotes[noteType])) {
-        if (!(k in mergedPy)) mergedPy[k] = v;
+        if (!(k in mergedPy)) mergedPy[k] = Math.abs(v);
       }
     }
 
