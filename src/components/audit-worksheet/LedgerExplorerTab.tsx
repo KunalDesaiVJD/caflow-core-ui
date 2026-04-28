@@ -15,12 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
 import {
   ChevronRight, ChevronDown, BookOpen, MessageSquareWarning,
-  Search, X, Loader2, DatabaseZap, List, BarChart3,
+  Search, X, Loader2, DatabaseZap, List, BarChart3, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTallyEngagementId } from "./hooks/useTallyEngagementId";
 import { LedgerSidePanel } from "./LedgerSidePanel";
 import { BsPlView } from "./BsPlView";
+import { AnomalyFeedView } from "./AnomalyFeedView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ interface GroupData {
   totalClose: number; // net signed closing (Dr positive, Cr negative)
 }
 
-type ViewMode = "tree" | "bspl";
+type ViewMode = "tree" | "bspl" | "anomaly";
 
 interface Props {
   engagementId:  string;
@@ -184,13 +185,25 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
               type="button"
               onClick={() => setViewMode("bspl")}
               className={cn(
-                "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors border-r",
                 viewMode === "bspl"
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-muted/60",
               )}
             >
               <BarChart3 size={11} /> BS / P&amp;L
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("anomaly")}
+              className={cn(
+                "flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                viewMode === "anomaly"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <Zap size={11} /> Anomalies
             </button>
           </div>
 
@@ -240,6 +253,15 @@ export function LedgerExplorerTab({ engagementId, clientId, financialYear, onRai
         <BsPlView
           engagementId={engagementId}
           clientId={clientId}
+          financialYear={financialYear}
+          onRaiseQuery={onRaiseQuery}
+        />
+      )}
+
+      {/* ── Anomaly Feed view ── */}
+      {viewMode === "anomaly" && (
+        <AnomalyFeedView
+          tallyEngId={tallyEngId}
           financialYear={financialYear}
           onRaiseQuery={onRaiseQuery}
         />
