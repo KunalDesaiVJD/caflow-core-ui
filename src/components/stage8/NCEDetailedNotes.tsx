@@ -357,7 +357,7 @@ function RowActionsMenu({
 // ─── Custom-row inline editor ─────────────────────────────────────────────────
 
 function CustomRowEditor({
-  row, cyVal, pyVal, isPatternA,
+  row, cyVal, pyVal, isPatternA, isChild,
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
@@ -365,6 +365,7 @@ function CustomRowEditor({
   row: NCECustomRow;
   cyVal: number; pyVal: number;
   isPatternA: boolean;
+  isChild?: boolean;
   cyLtVal: number; cyStVal: number; pyLtVal: number; pyStVal: number;
   onChangeCy: (v: number) => void; onChangePy: (v: number) => void;
   onChangeCyLt: (v: number) => void; onChangeCySt: (v: number) => void;
@@ -380,8 +381,8 @@ function CustomRowEditor({
   const colCount = isPatternA ? 6 : 4;
   return (
     <>
-      <TableRow className="bg-blue-50/30 hover:bg-blue-50/50">
-        <TableCell className={cn("p-1", isPatternA && "border-r")}>
+      <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30")}>
+        <TableCell className={cn("p-1", isPatternA && "border-r", isChild && "pl-8")}>
           <div className="flex items-center gap-1 min-w-0">
             {/* +/- toggle for merged/source ledgers */}
             {hasSources ? (
@@ -584,6 +585,7 @@ function PatternBTable({
                         cyVal={rawCy[sub.id] ?? 0}
                         pyVal={rawPy[sub.id] ?? 0}
                         isPatternA={false}
+                        isChild={true}
                         cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
                         onChangeCy={v => onChangeCy(sub.id, v)}
                         onChangePy={v => onChangePy(sub.id, v)}
@@ -614,19 +616,26 @@ function PatternBTable({
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(py[row.id] ?? 0)}</TableCell>
                   <TableCell />
                 </TableRow>
-              ) : (
+              ) : (() => {
+                const hasAttachedB = attachedHere.length > 0;
+                const hasSrcsB = (cySources[row.id]?.length ?? 0) > 0;
+                const showToggleB = hasAttachedB || hasSrcsB;
+                const isOpenB = openSources.has(row.id);
+                const aggCyB = (rawCy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id] ?? 0), 0) : 0);
+                const aggPyB = (rawPy[row.id] ?? 0) + (hasAttachedB ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id] ?? 0), 0) : 0);
+                return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1", indentCls(row.indent))}>
                     <div className="flex items-center gap-1">
-                      {/* +/- expand for mapped Tally ledgers */}
-                      {(cySources[row.id]?.length ?? 0) > 0 ? (
+                      {/* +/- expand for mapped Tally ledgers and/or attached custom rows */}
+                      {showToggleB ? (
                         <button
                           type="button"
                           className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
                           onClick={() => toggleSources(row.id)}
-                          title={openSources.has(row.id) ? "Collapse mapped ledgers" : "Expand mapped ledgers"}
+                          title={isOpenB ? "Collapse" : "Expand"}
                         >
-                          {openSources.has(row.id) ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+                          {isOpenB ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
                         </button>
                       ) : (
                         <div className="w-5 shrink-0" />
@@ -639,10 +648,14 @@ function PatternBTable({
                     </div>
                   </TableCell>
                   <TableCell className="p-1">
-                    <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />
+                    {hasAttachedB && !isOpenB
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
+                      : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />
+                    {hasAttachedB && !isOpenB
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
+                      : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <button type="button" onClick={() => onHideStatic(row.id)}
@@ -652,7 +665,8 @@ function PatternBTable({
                     </button>
                   </TableCell>
                 </TableRow>
-              )}
+                );
+              })()}
 
               {/* Inline source-ledger sub-rows for static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
@@ -678,14 +692,15 @@ function PatternBTable({
                 ))
               }
 
-              {/* Custom rows attached under this static row */}
-              {attachedHere.map(cr => (
+              {/* Custom rows attached under this static row — only visible when expanded */}
+              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => (
                 <CustomRowEditor
                   key={cr.id}
                   row={cr}
                   cyVal={rawCy[cr.id] ?? 0}
                   pyVal={rawPy[cr.id] ?? 0}
                   isPatternA={false}
+                  isChild={true}
                   cyLtVal={0} cyStVal={0} pyLtVal={0} pyStVal={0}
                   onChangeCy={v => onChangeCy(cr.id, v)}
                   onChangePy={v => onChangePy(cr.id, v)}
@@ -876,6 +891,7 @@ function PatternATable({
                         row={sub}
                         cyVal={0} pyVal={0}
                         isPatternA={true}
+                        isChild={true}
                         cyLtVal={rawCy[sub.id + "_lt"] ?? 0}
                         cyStVal={rawCy[sub.id + "_st"] ?? 0}
                         pyLtVal={rawPy[sub.id + "_lt"] ?? 0}
@@ -912,19 +928,31 @@ function PatternATable({
                   <TableCell className="text-xs text-right py-1.5 font-bold">{fmtNum(py[row.id + "_st"] ?? 0)}</TableCell>
                   <TableCell />
                 </TableRow>
-              ) : (
+              ) : (() => {
+                /* Aggregate values: own static value + any attached custom rows */
+                const hasAttachedA = attachedHere.length > 0;
+                const hasSrcsA     = (cySources[row.id]?.length ?? 0) > 0;
+                const showToggleA  = hasSrcsA || hasAttachedA;
+                const isOpenA      = openSources.has(row.id);
+
+                const aggLtCy = (rawCy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id + "_lt"] ?? 0), 0) : 0);
+                const aggStCy = (rawCy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawCy[cr.id + "_st"] ?? 0), 0) : 0);
+                const aggLtPy = (rawPy[row.id + "_lt"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id + "_lt"] ?? 0), 0) : 0);
+                const aggStPy = (rawPy[row.id + "_st"] ?? 0) + (hasAttachedA ? attachedHere.reduce((s, cr) => s + (rawPy[cr.id + "_st"] ?? 0), 0) : 0);
+
+                return (
                 <TableRow key={row.id} className="hover:bg-muted/10">
                   <TableCell className={cn("p-1 border-r", indentCls(row.indent))}>
                     <div className="flex items-center gap-1">
-                      {/* +/- expand for mapped Tally ledgers */}
-                      {(cySources[row.id]?.length ?? 0) > 0 ? (
+                      {/* +/- expand for mapped Tally ledgers or attached custom rows */}
+                      {showToggleA ? (
                         <button
                           type="button"
                           className="w-5 h-5 flex items-center justify-center rounded border border-muted-foreground/30 bg-background text-muted-foreground hover:bg-muted shrink-0"
                           onClick={() => toggleSources(row.id)}
-                          title={openSources.has(row.id) ? "Collapse mapped ledgers" : "Expand mapped ledgers"}
+                          title={isOpenA ? "Collapse" : "Expand"}
                         >
-                          {openSources.has(row.id) ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+                          {isOpenA ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
                         </button>
                       ) : (
                         <div className="w-5 shrink-0" />
@@ -936,17 +964,26 @@ function PatternATable({
                       />
                     </div>
                   </TableCell>
+                  {/* When collapsed with children: show aggregate as read-only. When expanded or no children: show NumInput */}
                   <TableCell className="p-1">
-                    <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />
+                    {hasAttachedA && !isOpenA
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtCy ? fmtNum(aggLtCy) : "—"}</span>
+                      : <NumInput value={rawCy[row.id + "_lt"] ?? 0} onChange={v => onChangeCy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1 border-r">
-                    <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />
+                    {hasAttachedA && !isOpenA
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggLtPy ? fmtNum(aggLtPy) : "—"}</span>
+                      : <NumInput value={rawPy[row.id + "_lt"] ?? 0} onChange={v => onChangePy(row.id + "_lt", v)} disabled={row.naLT} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />
+                    {hasAttachedA && !isOpenA
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggStCy ? fmtNum(aggStCy) : "—"}</span>
+                      : <NumInput value={rawCy[row.id + "_st"] ?? 0} onChange={v => onChangeCy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1">
-                    <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />
+                    {hasAttachedA && !isOpenA
+                      ? <span className="text-xs tabular-nums text-right block pr-1">{aggStPy ? fmtNum(aggStPy) : "—"}</span>
+                      : <NumInput value={rawPy[row.id + "_st"] ?? 0} onChange={v => onChangePy(row.id + "_st", v)} disabled={row.naST} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <button type="button" onClick={() => onHideStatic(row.id)}
@@ -956,7 +993,8 @@ function PatternATable({
                     </button>
                   </TableCell>
                 </TableRow>
-              )}
+                );
+              })()}
 
               {/* Inline source-ledger sub-rows for Pattern A static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
@@ -991,13 +1029,14 @@ function PatternATable({
                 ))
               }
 
-              {/* Custom rows attached under this static row */}
-              {attachedHere.map(cr => (
+              {/* Custom rows attached under this static row — only visible when expanded */}
+              {attachedHere.length > 0 && openSources.has(row.id) && attachedHere.map(cr => (
                 <CustomRowEditor
                   key={cr.id}
                   row={cr}
                   cyVal={0} pyVal={0}
                   isPatternA={true}
+                  isChild={true}
                   cyLtVal={rawCy[cr.id + "_lt"] ?? 0}
                   cyStVal={rawCy[cr.id + "_st"] ?? 0}
                   pyLtVal={rawPy[cr.id + "_lt"] ?? 0}
