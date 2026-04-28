@@ -23,6 +23,7 @@ import {
 import {
   MessageSquareWarning, Send, Loader2, Paperclip, Download, X,
   Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, Users, Mail,
+  AlertTriangle, Bell,
 } from "lucide-react";
 import { EmailComposeDialog, EmailComposePayload } from "@/components/email/EmailComposeDialog";
 import { cn } from "@/lib/utils";
@@ -76,9 +77,47 @@ function fmtTime(iso: string): string {
   });
 }
 
+// ─── Due-date urgency helpers (Phase 3F) ─────────────────────────────────────
+
+type DueStatus = "overdue" | "today" | "soon" | "ok" | "none";
+
+function getDueStatus(due: string | null): { status: DueStatus; days: number } {
+  if (!due) return { status: "none", days: 0 };
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d     = new Date(due); d.setHours(0, 0, 0, 0);
+  const days  = Math.ceil((d.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0)  return { status: "overdue", days };
+  if (days === 0) return { status: "today",   days: 0 };
+  if (days <= 3)  return { status: "soon",    days };
+  return { status: "ok", days };
+}
+
+/** Urgency rank — lower = show first */
+function urgencyRank(q: ClientQuery): number {
+  const terminal = ["Clarified", "Closed"].includes(q.status);
+  if (terminal) return 999;
+  const { status, days } = getDueStatus(q.due_date);
+  if (status === "overdue") return days;          // negative — most overdue = lowest = first
+  if (status === "today")   return 0;
+  if (status === "soon")    return days;           // 1–3
+  // No due date — sort by priority then created_at
+  const priorityOrder: Record<string, number> = { High: 10, Medium: 20, Low: 30 };
+  return 100 + (priorityOrder[q.priority] ?? 20);
+}
+
+function urgencySort(list: ClientQuery[]): ClientQuery[] {
+  return [...list].sort((a, b) => urgencyRank(a) - urgencyRank(b));
+}
+
 // ─── QueryThread ─────────────────────────────────────────────────────────────
 
-function QueryThread({ query, onStatusChange }: { query: ClientQuery; onStatusChange: () => void }) {
+function QueryThread({
+  query, onStatusChange, onRemind,
+}: {
+  query:          ClientQuery;
+  onStatusChange: () => void;
+  onRemind?:      () => void;
+}) {
   const { user } = useAuth();
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [expanded,   setExpanded]   = useState(false);
@@ -160,11 +199,22 @@ function QueryThread({ query, onStatusChange }: { query: ClientQuery; onStatusCh
   };
 
   const hasNewReply = query.status === "Reply Received";
+  const dueInfo     = getDueStatus(query.due_date);
+  const isTerminal  = ["Clarified", "Closed"].includes(query.status);
 
   return (
-    <Card className={cn("overflow-hidden", hasNewReply && "ring-2 ring-primary/40")}>
+    <Card className={cn(
+      "overflow-hidden",
+      hasNewReply && "ring-2 ring-primary/40",
+      !isTerminal && dueInfo.status === "overdue" && "ring-2 ring-red-300",
+      !isTerminal && dueInfo.status === "today"   && "ring-2 ring-orange-300",
+    )}>
       <CardHeader
-        className={cn("pb-0 cursor-pointer", hasNewReply && "bg-primary/5")}
+        className={cn(
+          "pb-0 cursor-pointer",
+          hasNewReply && "bg-primary/5",
+          !isTerminal && dueInfo.status === "overdue" && "bg-red-50/60",
+        )}
         onClick={() => setExpanded(v => !v)}
       >
         <div className="flex items-start gap-3 py-1">
@@ -191,7 +241,26 @@ function QueryThread({ query, onStatusChange }: { query: ClientQuery; onStatusCh
               {hasNewReply && (
                 <span className="text-[10px] font-semibold text-primary animate-pulse">● New Reply</span>
               )}
-              {query.due_date && (
+
+              {/* Phase 3F: due-date urgency badges */}
+              {!isTerminal && dueInfo.status === "overdue" && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded-full px-1.5 py-px">
+                  <AlertTriangle size={9} /> {Math.abs(dueInfo.days)}d overdue
+                </span>
+              )}
+              {!isTerminal && dueInfo.status === "today" && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-orange-700 bg-orange-100 border border-orange-200 rounded-full px-1.5 py-px">
+                  <Clock size={9} /> Due today
+                </span>
+              )}
+              {!isTerminal && dueInfo.status === "soon" && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-px">
+                  <Clock size={9} /> Due in {dueInfo.days}d
+                </span>
+              )}
+
+              {/* Due date — shown when ok/no urgency */}
+              {query.due_date && !["overdue","today","soon"].includes(dueInfo.status) && (
                 <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
                   <Clock size={10} /> {query.due_date}
                 </span>
@@ -199,6 +268,19 @@ function QueryThread({ query, onStatusChange }: { query: ClientQuery; onStatusCh
             </div>
             <p className="text-sm leading-relaxed line-clamp-2">{query.query_text}</p>
           </div>
+
+          {/* Phase 3F: Remind button — quick access without opening thread */}
+          {onRemind && !isTerminal && (
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onRemind(); }}
+              title="Send reminder"
+              className="flex-shrink-0 h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-orange-600 hover:bg-orange-50 transition-colors"
+            >
+              <Bell size={13} />
+            </button>
+          )}
+
           <button type="button" className="text-muted-foreground flex-shrink-0">
             {expanded ? <ChevronUp size={15}/> : <ChevronDown size={15}/>}
           </button>
@@ -482,14 +564,21 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
     });
   };
 
-  const displayed = queries.filter(q => {
+  // Phase 3F: urgency-sorted displayed list
+  const filtered = queries.filter(q => {
     if (filter === "open")    return q.status === "Open" || q.status === "Client Acknowledged";
     if (filter === "replied") return q.status === "Reply Received";
     if (filter === "closed")  return q.status === "Clarified" || q.status === "Closed";
     return true;
   });
+  const displayed = urgencySort(filtered);
 
-  const newReplies = queries.filter(q => q.status === "Reply Received").length;
+  const newReplies  = queries.filter(q => q.status === "Reply Received").length;
+  const overdueCount = queries.filter(q =>
+    q.due_date &&
+    !["Clarified","Closed"].includes(q.status) &&
+    getDueStatus(q.due_date).status === "overdue",
+  ).length;
 
   if (loading) {
     return (
@@ -504,12 +593,18 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold flex items-center gap-2">
+          <h2 className="text-sm font-semibold flex items-center gap-2 flex-wrap">
             <MessageSquareWarning size={16} className="text-orange-600"/>
             Client Query Inbox
             {newReplies > 0 && (
               <Badge className="bg-primary text-primary-foreground text-[10px] h-4 px-1.5">
                 {newReplies} new {newReplies === 1 ? "reply" : "replies"}
+              </Badge>
+            )}
+            {/* Phase 3F: overdue badge */}
+            {overdueCount > 0 && (
+              <Badge className="bg-red-600 text-white text-[10px] h-4 px-1.5 flex items-center gap-0.5">
+                <AlertTriangle size={9} /> {overdueCount} overdue
               </Badge>
             )}
           </h2>
@@ -574,7 +669,12 @@ export function AuditClientInboxTab({ data, engagementId }: Props) {
       ) : (
         <div className="space-y-3">
           {displayed.map(q => (
-            <QueryThread key={q.id} query={q} onStatusChange={fetchQueries}/>
+            <QueryThread
+              key={q.id}
+              query={q}
+              onStatusChange={fetchQueries}
+              onRemind={() => openEmail("audit_query_reminder", [q])}
+            />
           ))}
         </div>
       )}

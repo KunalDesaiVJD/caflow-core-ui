@@ -30,9 +30,10 @@ import {
   Plus, Trash2, Download, Upload, FileSpreadsheet,
   Search, X, BookOpen, Send, CheckCircle2,
   ChevronRight, ArrowRight, AlertTriangle,
-  CheckSquare, Square, Calendar, Rocket,
+  CheckSquare, Square, Calendar, Rocket, BarChart2,
 } from "lucide-react";
-import { LedgerSidePanel } from "./LedgerSidePanel";
+import { LedgerSidePanel }        from "./LedgerSidePanel";
+import { QueryAnalyticsSidebar }  from "./QueryAnalyticsSidebar";
 import { QueryCombobox, COMMON_REQUIRED_DOCS } from "./QueryCombobox";
 import { useQueryStatusSync } from "./hooks/useQueryStatusSync";
 import { toast } from "sonner";
@@ -459,6 +460,9 @@ export default function QuerySheet({
   const [dispatchingId,    setDispatchingId]    = useState<string | null>(null);
   const [dispatchingAll,   setDispatchingAll]   = useState(false);
 
+  // Phase 3F: analytics sidebar
+  const [showAnalytics, setShowAnalytics] = useState(false);
+
   // Phase 3C: selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDispatchOpen, setBulkDispatchOpen] = useState(false);
@@ -700,6 +704,19 @@ export default function QuerySheet({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Phase 3F: Analytics toggle */}
+          <Button size="sm" variant="outline"
+            className={cn(
+              "gap-1 h-7 text-xs transition-colors",
+              showAnalytics
+                ? "border-orange-400 bg-orange-50 text-orange-700"
+                : "border-muted-foreground/30 text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setShowAnalytics(v => !v)}>
+            <BarChart2 size={12} />
+            Analytics
+          </Button>
+
           <Button size="sm" variant="outline"
             className="gap-1 h-7 text-xs border-green-600 text-green-700 hover:bg-green-50"
             onClick={() => exportToExcel(queries, data.clientName, data.financialYear)}
@@ -991,6 +1008,14 @@ export default function QuerySheet({
           </p>
         )}
       </div>
+
+      {/* ══════════ ANALYTICS SIDEBAR (Phase 3F) ══════════ */}
+      <QueryAnalyticsSidebar
+        open={showAnalytics}
+        onClose={() => setShowAnalytics(false)}
+        queries={queries}
+        onJumpStatus={s => setStatusFilter(s)}
+      />
 
       {/* ══════════ LEDGER SIDE PANEL ══════════ */}
       <LedgerSidePanel
