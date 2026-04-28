@@ -362,6 +362,7 @@ function CustomRowEditor({
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
   isOpen: isOpenProp, onToggle: onToggleProp, hasSubRows,
+  sourceLabelOverrides, onChangeSourceLabel,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -382,6 +383,10 @@ function CustomRowEditor({
   onToggle?: () => void;
   /** Whether this row has attached child custom rows (so +/- shows even without Tally sources) */
   hasSubRows?: boolean;
+  /** Per-ledger label overrides keyed as `${rowId}::${originalLedger}` */
+  sourceLabelOverrides?: Record<string, string>;
+  /** Called when user edits a source-ledger display name */
+  onChangeSourceLabel?: (rowId: string, ledger: string, newLabel: string) => void;
 }) {
   const hasSources = (row.sources?.length ?? 0) > 0;
   const [sourcesOpenLocal, setSourcesOpenLocal] = useState(false);
@@ -441,18 +446,24 @@ function CustomRowEditor({
       </TableRow>
 
       {/* Inline source-ledger sub-rows */}
-      {hasSources && sourcesOpen && row.sources!.map((s, i) => (
+      {hasSources && sourcesOpen && row.sources!.map((s, i) => {
+        const slKey = `${row.id}::${s.ledger}`;
+        const slLabel = sourceLabelOverrides?.[slKey] ?? s.ledger;
+        return (
         <TableRow key={i} className="bg-blue-50/10 hover:bg-blue-50/20">
           <TableCell className={cn("py-0.5 pl-10 pr-1 text-xs text-muted-foreground", isPatternA && "border-r")}>
             <div className="flex items-center gap-1.5">
-              <span className="truncate flex-1 italic">
-                {s.ledger}
-                {s.column && (
-                  <span className="text-[9px] uppercase ml-1 font-semibold not-italic">
-                    [{s.column}]
-                  </span>
-                )}
-              </span>
+              <Input
+                value={slLabel}
+                onChange={e => onChangeSourceLabel?.(row.id, s.ledger, e.target.value)}
+                className="h-5 text-xs px-1 border border-input/40 hover:border-input focus:border-input bg-background/50 italic flex-1 min-w-0"
+                title={`Original: ${s.ledger}`}
+              />
+              {s.column && (
+                <span className="text-[9px] uppercase shrink-0 font-semibold text-muted-foreground/60">
+                  [{s.column}]
+                </span>
+              )}
               {onEjectCustomSource && (
                 <SubLedgerActionsMenu
                   ledger={s.ledger}
@@ -484,7 +495,8 @@ function CustomRowEditor({
           )}
           <TableCell className="py-0.5" />
         </TableRow>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -596,6 +608,8 @@ function PatternBTable({
                       hasSubRows={customSubRows.length > 0}
                       isOpen={crIsOpen}
                       onToggle={() => toggleSources(cr.id)}
+                      sourceLabelOverrides={sourceLabelOverrides}
+                      onChangeSourceLabel={onChangeSourceLabel}
                     />
                     {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
@@ -616,6 +630,8 @@ function PatternBTable({
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
                         onAddRow={onAddRow}
+                        sourceLabelOverrides={sourceLabelOverrides}
+                        onChangeSourceLabel={onChangeSourceLabel}
                       />
                     ))}
                   </Fragment>
@@ -740,6 +756,8 @@ function PatternBTable({
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                   onAddRow={onAddRow}
+                  sourceLabelOverrides={sourceLabelOverrides}
+                  onChangeSourceLabel={onChangeSourceLabel}
                 />
               ))}
             </>
@@ -920,6 +938,8 @@ function PatternATable({
                       hasSubRows={customSubRows.length > 0}
                       isOpen={crIsOpen}
                       onToggle={() => toggleSources(cr.id)}
+                      sourceLabelOverrides={sourceLabelOverrides}
+                      onChangeSourceLabel={onChangeSourceLabel}
                     />
                     {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
@@ -943,6 +963,8 @@ function PatternATable({
                         onPromote={(targetId) => onPromote(sub.id, targetId)}
                         onEjectCustomSource={(ledger, amt) => onEjectCustomSource(sub.id, ledger, amt)}
                         onAddRow={onAddRow}
+                        sourceLabelOverrides={sourceLabelOverrides}
+                        onChangeSourceLabel={onChangeSourceLabel}
                       />
                     ))}
                   </Fragment>
@@ -1095,6 +1117,8 @@ function PatternATable({
                   onPromote={(targetId) => onPromote(cr.id, targetId)}
                   onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                   onAddRow={onAddRow}
+                  sourceLabelOverrides={sourceLabelOverrides}
+                  onChangeSourceLabel={onChangeSourceLabel}
                 />
               ))}
             </>
