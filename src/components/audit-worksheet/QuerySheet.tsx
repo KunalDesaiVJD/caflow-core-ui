@@ -1,14 +1,17 @@
 /**
  * QuerySheet — Sheet 5 "QUERY SHEET"
  *
- * Query tracking with Correction Status gate (Req #6).
+ * Phase 3A: Tally-linked type-ahead comboboxes for Group, Ledger, and
+ *           Required Documents fields.  Shows "TB" badge when Tally data
+ *           is available.
  *
- * Columns: SR NO | Group/Subgroup | Ledger | Query Description |
- *          Required Documents | Remark | Correction Status
- *
- * Gate rule: ALL queries must have Correction Status = "Yes" before
- * the engagement can progress to the next pipeline stage.
- * Zero queries = gate is open (no pending corrections).
+ * Phase 3B: Full query state machine
+ *   draft → raised → dispatched → response_received → resolved | escalated
+ *   • Pipeline funnel bar (counts per state) at top
+ *   • Status pill + quick advance/escalate buttons per row
+ *   • Priority badge (High/Medium/Low) — click to cycle
+ *   • Filter by state + filter by priority
+ *   • allCorrected gate: resolved || correction_status = "Yes"
  */
 import { useState, useRef, useMemo, useEffect } from "react";
 import * as XLSX from "xlsx";
@@ -17,7 +20,10 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge }    from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuTrigger, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -26,24 +32,26 @@ import {
 } from "@/components/ui/table";
 import {
   Save, Loader2, MessageSquareWarning,
-  Plus, Trash2, Download, Upload, FileSpreadsheet, Search, X, BookOpen, Send, CheckCircle2,
+  Plus, Trash2, Download, Upload, FileSpreadsheet,
+  Search, X, BookOpen, Send, CheckCircle2,
+  ChevronRight, Flag, ArrowRight, AlertTriangle,
 } from "lucide-react";
 import { LedgerSidePanel } from "./LedgerSidePanel";
+import { QueryCombobox, COMMON_REQUIRED_DOCS } from "./QueryCombobox";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
-import { useQuerySheetStorage } from "./hooks/useQuerySheetStorage";
-import type { QueryRow } from "./hooks/useQuerySheetStorage";
+import { useQuerySheetStorage, STATUS_META, PRIORITY_META } from "./hooks/useQuerySheetStorage";
+import type { QueryRow, QueryStatus, QueryPriority } from "./hooks/useQuerySheetStorage";
+import { useTallyOptions } from "./hooks/useTallyOptions";
 import type { AuditWorksheetData } from "./hooks/useAuditWorksheetData";
 
 // ─── Excel helpers ────────────────────────────────────────────────────────────
 
-// Column order is the contract for Excel import/export.
-// Parser reads by index (row[1], row[2]…) so header label changes are
-// safe — only the order matters.
 const HEADERS = [
   "SR.", "GROUP/SUBGROUP", "LEDGER", "QUERY DESCRIPTION",
   "REQUIRED DOCUMENTS", "REMARK", "CORRECTION STATUS",
+  "QUERY STATUS", "PRIORITY",
 ];
 
 function exportToExcel(queries: QueryRow[], clientName: string, fy: string) {
@@ -55,12 +63,13 @@ function exportToExcel(queries: QueryRow[], clientName: string, fy: string) {
     q.required_documents,
     q.remark,
     q.correction_status || "Pending",
+    q.query_status,
+    q.priority,
   ]);
   const ws = XLSX.utils.aoa_to_sheet([HEADERS, ...rows]);
-  // Column widths
   ws["!cols"] = [
     { wch: 5 }, { wch: 18 }, { wch: 22 }, { wch: 35 },
-    { wch: 28 }, { wch: 22 }, { wch: 18 },
+    { wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Queries");
@@ -72,7 +81,7 @@ function downloadTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([HEADERS]);
   ws["!cols"] = [
     { wch: 5 }, { wch: 18 }, { wch: 22 }, { wch: 35 },
-    { wch: 28 }, { wch: 22 }, { wch: 18 },
+    { wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Queries");
@@ -87,76 +96,214 @@ function parseWorkbook(file: File): Promise<Array<Omit<QueryRow, "id">>> {
         const wb = XLSX.read(e.target?.result, { type: "binary" });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const raw = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1 });
-        // Skip header row(s): detect by checking if first cell is "SR." or numeric
         const dataRows = raw.filter((row, i) => {
-          if (i === 0) return false; // always skip first row (header)
+          if (i === 0) return false;
           return row.some((c: any) => c !== undefined && c !== null && c !== "");
         });
+        const VALID_STATUSES: QueryStatus[] = ["draft","raised","dispatched","response_received","resolved","escalated"];
+        const VALID_PRIO: QueryPriority[]   = ["High","Medium","Low"];
         const parsed: Array<Omit<QueryRow, "id">> = dataRows.map((row: any[]) => ({
           head:               String(row[1] ?? ""),
           particulars:        String(row[2] ?? ""),
           query_description:  String(row[3] ?? ""),
           required_documents: String(row[4] ?? ""),
           remark:             String(row[5] ?? ""),
-          correction_status:  (["Yes", "No"].includes(String(row[6] ?? ""))
-            ? String(row[6]) : "") as "" | "Yes" | "No",
+          correction_status:  (["Yes","No"].includes(String(row[6] ?? "")) ? String(row[6]) : "") as "" | "Yes" | "No",
+          query_status:       (VALID_STATUSES.includes(String(row[7] ?? "") as QueryStatus) ? String(row[7]) : "raised") as QueryStatus,
+          priority:           (VALID_PRIO.includes(String(row[8] ?? "") as QueryPriority) ? String(row[8]) : "Medium") as QueryPriority,
         }));
         resolve(parsed.filter(r => r.head || r.particulars || r.query_description));
-      } catch (err) {
-        reject(err);
-      }
+      } catch (err) { reject(err); }
     };
     reader.onerror = reject;
     reader.readAsBinaryString(file);
   });
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-/** Pre-fill payload sent from Ledger Explorer when user clicks "Raise Query" */
 export interface QueryPrefill {
-  head:       string;
+  head:        string;
   particulars: string;
   note?:       string;
 }
 
 interface Props {
-  data:            AuditWorksheetData;
-  engagementId:    string;
-  onSaved?:        () => void;
-  /** When set, auto-adds a pre-filled query row (from Ledger Explorer) */
-  externalPrefill?: QueryPrefill | null;
-  /** Called after externalPrefill is consumed so parent can clear it */
+  data:               AuditWorksheetData;
+  engagementId:       string;
+  onSaved?:           () => void;
+  externalPrefill?:   QueryPrefill | null;
   onPrefillConsumed?: () => void;
 }
 
-// ─── Correction Status Select ─────────────────────────────────────────────────
+// ─── Pipeline funnel bar ──────────────────────────────────────────────────────
 
-function CorrectionSelect({
-  value,
-  onChange,
+const FUNNEL_STEPS: QueryStatus[] = [
+  "draft", "raised", "dispatched", "response_received", "resolved",
+];
+
+function PipelineFunnel({
+  counts, activeFilter, onFilter,
 }: {
-  value:    string;
-  onChange: (v: string) => void;
+  counts:       Record<QueryStatus, number>;
+  activeFilter: QueryStatus | "all";
+  onFilter:     (s: QueryStatus | "all") => void;
 }) {
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+
   return (
-    <Select value={value || "__pending__"} onValueChange={v => onChange(v === "__pending__" ? "" : v)}>
-      <SelectTrigger
-        className={cn(
-          "h-7 text-xs w-full min-w-[90px]",
-          value === "Yes" && "border-green-400 text-green-700 bg-green-50",
-          value === "No"  && "border-red-400   text-red-700   bg-red-50",
-          value === ""    && "border-orange-300"
-        )}
-      >
-        <SelectValue placeholder="Select…" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="__pending__">— Pending —</SelectItem>
-        <SelectItem value="Yes">✓ Yes</SelectItem>
-        <SelectItem value="No">✗ No</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="flex flex-wrap items-center gap-1 px-4 py-2 border-b bg-muted/10">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide mr-1">Pipeline</span>
+      {FUNNEL_STEPS.map((s, i) => {
+        const m = STATUS_META[s];
+        const active = activeFilter === s;
+        const cnt = counts[s];
+        return (
+          <div key={s} className="flex items-center gap-1">
+            {i > 0 && <ChevronRight size={10} className="text-muted-foreground/50 flex-shrink-0" />}
+            <button
+              type="button"
+              onClick={() => onFilter(active ? "all" : s)}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors",
+                active
+                  ? cn(m.bg, m.color, m.border)
+                  : "text-muted-foreground border-transparent hover:border-border hover:bg-muted/40",
+              )}
+            >
+              <span>{m.label}</span>
+              {cnt > 0 && <span className={cn("font-bold", active ? m.color : "")}>{cnt}</span>}
+            </button>
+          </div>
+        );
+      })}
+      {/* Escalated */}
+      {counts.escalated > 0 && (
+        <div className="flex items-center gap-1 ml-1">
+          <span className="text-[10px] text-muted-foreground/50">|</span>
+          <button
+            type="button"
+            onClick={() => onFilter(activeFilter === "escalated" ? "all" : "escalated")}
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors",
+              activeFilter === "escalated"
+                ? cn(STATUS_META.escalated.bg, STATUS_META.escalated.color, STATUS_META.escalated.border)
+                : "text-red-600 border-transparent hover:border-red-200 hover:bg-red-50",
+            )}
+          >
+            <AlertTriangle size={9} />
+            <span>Escalated</span>
+            <span className="font-bold">{counts.escalated}</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Status pill + actions ────────────────────────────────────────────────────
+
+function QueryStatusCell({
+  row,
+  onAdvance,
+  onSetStatus,
+}: {
+  row:         QueryRow;
+  onAdvance:   () => void;
+  onSetStatus: (s: QueryStatus) => void;
+}) {
+  const m    = STATUS_META[row.query_status];
+  const next = row.query_status !== "resolved" && row.query_status !== "escalated"
+    ? (row.query_status === "response_received" ? "resolved" : null)
+    : null;
+  const canAdvance = !["resolved", "escalated"].includes(row.query_status);
+
+  return (
+    <div className="flex flex-col gap-1 items-start">
+      {/* Status pill */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border cursor-pointer",
+              m.bg, m.color, m.border,
+            )}
+          >
+            {m.label}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="text-xs">
+          {(Object.keys(STATUS_META) as QueryStatus[]).map(s => {
+            const sm = STATUS_META[s];
+            return (
+              <DropdownMenuItem
+                key={s}
+                onClick={() => onSetStatus(s)}
+                className={cn("gap-2", s === row.query_status && "font-semibold")}
+              >
+                <span className={cn("inline-block w-2 h-2 rounded-full flex-shrink-0", sm.bg, "border", sm.border)} />
+                {sm.label}
+                {s === row.query_status && " ✓"}
+              </DropdownMenuItem>
+            );
+          })}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => onSetStatus("escalated")}
+            className="text-red-600 gap-2"
+          >
+            <AlertTriangle size={10} /> Escalate
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Advance button */}
+      {canAdvance && (
+        <button
+          type="button"
+          onClick={onAdvance}
+          title={`Advance to ${STATUS_META[Object.keys(STATUS_META).find(k => k === (row.query_status === "response_received" ? "resolved" : { draft:"raised", raised:"dispatched", dispatched:"response_received", response_received:"resolved" }[row.query_status])) as QueryStatus]?.label ?? "next step"}`}
+          className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 transition-colors"
+        >
+          <ArrowRight size={9} />
+          {STATUS_META[{
+            draft:             "raised",
+            raised:            "dispatched",
+            dispatched:        "response_received",
+            response_received: "resolved",
+            resolved:          "resolved",
+            escalated:         "escalated",
+          }[row.query_status] as QueryStatus]?.label ?? "next"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Priority badge ───────────────────────────────────────────────────────────
+
+function PriorityBadge({
+  priority, onClick,
+}: {
+  priority: QueryPriority;
+  onClick:  () => void;
+}) {
+  const m = PRIORITY_META[priority];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Click to change priority"
+      className={cn(
+        "inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[9px] font-semibold border transition-colors",
+        m.bg, m.color, "border-current/20 hover:opacity-80",
+      )}
+    >
+      <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", m.dot)} />
+      {priority}
+    </button>
   );
 }
 
@@ -168,30 +315,29 @@ export default function QuerySheet({
 }: Props) {
   const {
     queries, addQuery, addQueryPrefilled, updateQuery, deleteQuery, bulkAddQueries,
-    manualSave, saving, allCorrected, pendingCount,
+    advanceStatus, setQueryStatus, cyclePriority,
+    manualSave, saving, allCorrected, pendingCount, statusCounts,
   } = useQuerySheetStorage(engagementId, data.engagement?.firm_id);
 
-  // Consume externalPrefill (from Ledger Explorer) — fire once per change
+  // Phase 3A: Tally options
+  const { groups, getLedgersForGroup, hasTallyData } = useTallyOptions(
+    data.engagement?.client_id,
+    data.financialYear,
+  );
+
+  // Consume externalPrefill
   useEffect(() => {
     if (!externalPrefill) return;
     addQueryPrefilled(externalPrefill.head, externalPrefill.particulars, externalPrefill.note);
     onPrefillConsumed?.();
   }, [externalPrefill]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Delete confirmation state: tracks which row is awaiting confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  // View Ledger side panel state
-  const [viewLedger, setViewLedger] = useState<{ name: string; group: string } | null>(null);
-
-  // Dispatch to Client state
-  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  const [viewLedger,      setViewLedger]      = useState<{ name: string; group: string } | null>(null);
+  const [dispatchingId,   setDispatchingId]   = useState<string | null>(null);
 
   const dispatchToClient = async (row: QueryRow) => {
-    if (!data.engagement?.client_id) {
-      toast.error("No client linked to this engagement");
-      return;
-    }
+    if (!data.engagement?.client_id) { toast.error("No client linked"); return; }
     setDispatchingId(row.id);
     try {
       const { data: created, error } = await supabase
@@ -201,7 +347,7 @@ export default function QuerySheet({
           required_documents: row.required_documents || null,
           ledger_name:        row.particulars || null,
           group_name:         row.head || null,
-          priority:           "Medium",
+          priority:           row.priority || "Medium",
           engagement_id:      engagementId,
           client_id:          data.engagement.client_id,
           firm_id:            data.engagement.firm_id || null,
@@ -215,6 +361,8 @@ export default function QuerySheet({
       if (error) throw error;
       if (created) {
         updateQuery(row.id, "dispatched_query_id" as any, (created as any).id);
+        // Also advance status to dispatched if still in raised
+        if (row.query_status === "raised") setQueryStatus(row.id, "dispatched");
       }
       toast.success("Query dispatched to client portal");
     } catch (err: any) {
@@ -224,55 +372,40 @@ export default function QuerySheet({
     }
   };
 
-  // ── Search + Filter state ────────────────────────────────────────────────────
-  // statusFilter: null = show all; "corrected" = Yes only; "pending" = not Yes
-  const [searchText,   setSearchText]   = useState("");
-  const [statusFilter, setStatusFilter] = useState<null | "corrected" | "pending">(null);
+  // ── Filters ─────────────────────────────────────────────────────────────────
+  const [searchText,    setSearchText]    = useState("");
+  const [statusFilter,  setStatusFilter]  = useState<QueryStatus | "all">("all");
+  const [priorityFilter,setPriorityFilter]= useState<QueryPriority | "all">("all");
 
   const displayedQueries = useMemo(() => {
-    return queries.filter((q) => {
-      // Status filter
-      if (statusFilter === "corrected" && q.correction_status !== "Yes") return false;
-      if (statusFilter === "pending"   && q.correction_status === "Yes") return false;
-      // Search filter (across group, ledger, description, documents, remark)
+    return queries.filter(q => {
+      if (statusFilter   !== "all" && q.query_status !== statusFilter)   return false;
+      if (priorityFilter !== "all" && q.priority     !== priorityFilter) return false;
       if (searchText) {
         const s = searchText.toLowerCase();
-        const hit =
-          q.head?.toLowerCase().includes(s) ||
-          q.particulars?.toLowerCase().includes(s) ||
-          q.query_description?.toLowerCase().includes(s) ||
-          q.required_documents?.toLowerCase().includes(s) ||
-          q.remark?.toLowerCase().includes(s);
-        if (!hit) return false;
+        if (!(q.head?.toLowerCase().includes(s)
+          || q.particulars?.toLowerCase().includes(s)
+          || q.query_description?.toLowerCase().includes(s)
+          || q.required_documents?.toLowerCase().includes(s)
+          || q.remark?.toLowerCase().includes(s))) return false;
       }
       return true;
     });
-  }, [queries, statusFilter, searchText]);
+  }, [queries, statusFilter, priorityFilter, searchText]);
 
-  // Toggle status filter chip — clicking same chip again clears the filter
-  const toggleFilter = (f: "corrected" | "pending") => {
-    setStatusFilter((prev) => (prev === f ? null : f));
-  };
-
-  // ── Import state ────────────────────────────────────────────────────────────
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // ── Import state ─────────────────────────────────────────────────────────────
+  const fileInputRef  = useRef<HTMLInputElement>(null);
   const [importPreview, setImportPreview] = useState<Array<Omit<QueryRow, "id">> | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [importing,     setImporting]     = useState(false);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const rows = await parseWorkbook(file);
-      if (rows.length === 0) {
-        toast.error("No valid data rows found in the file.");
-      } else {
-        setImportPreview(rows);
-      }
-    } catch {
-      toast.error("Could not parse the file. Please use the CAFlow template.");
-    }
-    // Reset so same file can be re-selected
+      if (rows.length === 0) toast.error("No valid data rows found.");
+      else setImportPreview(rows);
+    } catch { toast.error("Could not parse file. Use the CAFlow template."); }
     e.target.value = "";
   };
 
@@ -280,91 +413,99 @@ export default function QuerySheet({
     if (!importPreview) return;
     setImporting(true);
     bulkAddQueries(importPreview);
-    toast.success(`${importPreview.length} ${importPreview.length === 1 ? "query" : "queries"} imported successfully.`);
+    toast.success(`${importPreview.length} ${importPreview.length === 1 ? "query" : "queries"} imported.`);
     setImportPreview(null);
     setImporting(false);
   };
+
+  const activeFilters = statusFilter !== "all" || priorityFilter !== "all" || !!searchText;
 
   return (
     <div className="space-y-0 bg-card border rounded-lg overflow-hidden">
 
       {/* ══════════ PAGE HEADER ══════════ */}
-      <div className="bg-orange-600 text-white px-6 py-4 space-y-0.5">
+      <div className="bg-orange-600 text-white px-6 py-4">
         <div className="flex items-center gap-2">
           <MessageSquareWarning size={18} />
-          <span className="text-base font-semibold tracking-wide">
-            {data.firmName || "CA Firm"}
-          </span>
+          <span className="text-base font-semibold tracking-wide">{data.firmName || "CA Firm"}</span>
+          {hasTallyData && (
+            <span className="ml-2 text-[10px] font-bold bg-white/20 border border-white/30 rounded px-1.5 py-px">
+              TB Linked
+            </span>
+          )}
         </div>
         <p className="text-[13px] font-bold opacity-95 tracking-widest uppercase">
-          Query of Client
-          {data.clientName ? ` — ${data.clientName}` : ""}
+          Query of Client{data.clientName ? ` — ${data.clientName}` : ""}
         </p>
       </div>
 
-      {/* ══════════ SUB-HEADER (Add + counts + search + Save) ══════════ */}
+      {/* ══════════ PIPELINE FUNNEL (Phase 3B) ══════════ */}
+      <PipelineFunnel
+        counts={statusCounts}
+        activeFilter={statusFilter}
+        onFilter={setStatusFilter}
+      />
+
+      {/* ══════════ SUB-HEADER ══════════ */}
       <div className="border-b bg-muted/30 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             size="sm"
             variant="outline"
             className="gap-1.5 h-7 text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
             onClick={() => { addQuery(); setConfirmDeleteId(null); }}
           >
-            <Plus size={12} />
-            Add New Query
+            <Plus size={12} /> Add New Query
           </Button>
+
           <span className="text-xs text-muted-foreground">
             {queries.length === 0
               ? "No queries yet"
               : `${queries.length} ${queries.length === 1 ? "query" : "queries"}`}
           </span>
+
+          {/* Priority filter chips */}
           {queries.length > 0 && (
-            <>
-              {/* ── Clickable filter badges ── */}
-              <button
-                type="button"
-                title="Click to filter corrected queries"
-                onClick={() => toggleFilter("corrected")}
-                className={cn(
-                  "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer select-none",
-                  statusFilter === "corrected"
-                    ? "bg-green-600 text-white ring-2 ring-green-500 ring-offset-1"
-                    : "bg-green-100 text-green-700 hover:bg-green-200"
-                )}
-              >
-                {queries.filter(q => q.correction_status === "Yes").length} corrected
-              </button>
-              {pendingCount > 0 && (
-                <button
-                  type="button"
-                  title="Click to filter pending queries"
-                  onClick={() => toggleFilter("pending")}
-                  className={cn(
-                    "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer select-none",
-                    statusFilter === "pending"
-                      ? "bg-red-600 text-white ring-2 ring-red-500 ring-offset-1"
-                      : "bg-red-100 text-red-700 hover:bg-red-200"
-                  )}
-                >
-                  {pendingCount} pending
-                </button>
-              )}
-              {/* Clear filter chip */}
-              {statusFilter && (
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter(null)}
-                  className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-                  title="Clear filter"
-                >
-                  <X size={10} /> clear filter
-                </button>
-              )}
-            </>
+            <div className="flex items-center gap-1">
+              {(["High","Medium","Low"] as QueryPriority[]).map(p => {
+                const cnt = queries.filter(q => q.priority === p).length;
+                if (cnt === 0) return null;
+                const m = PRIORITY_META[p];
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPriorityFilter(priorityFilter === p ? "all" : p)}
+                    className={cn(
+                      "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-semibold border transition-colors",
+                      priorityFilter === p
+                        ? cn(m.bg, m.color, "border-current")
+                        : "text-muted-foreground border-transparent hover:bg-muted/40",
+                    )}
+                  >
+                    <span className={cn("w-1.5 h-1.5 rounded-full", m.dot)} /> {p} {cnt}
+                  </button>
+                );
+              })}
+            </div>
           )}
 
-          {/* ── Search input ── */}
+          {activeFilters && (
+            <button
+              type="button"
+              onClick={() => { setStatusFilter("all"); setPriorityFilter("all"); setSearchText(""); }}
+              className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            >
+              <X size={10} /> clear filters
+            </button>
+          )}
+          {activeFilters && (
+            <span className="text-[10px] text-muted-foreground">
+              {displayedQueries.length} of {queries.length}
+            </span>
+          )}
+
+          {/* Search */}
           <div className="relative">
             <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
@@ -375,97 +516,66 @@ export default function QuerySheet({
               className="h-7 pl-6 pr-6 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring w-44"
             />
             {searchText && (
-              <button
-                type="button"
-                onClick={() => setSearchText("")}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
+              <button type="button" onClick={() => setSearchText("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 <X size={10} />
               </button>
             )}
           </div>
-          {/* Active filter indicator */}
-          {(statusFilter || searchText) && (
-            <span className="text-[10px] text-muted-foreground">
-              {displayedQueries.length} of {queries.length} shown
-            </span>
-          )}
         </div>
+
         <div className="flex items-center gap-1.5">
-          {/* Export Excel */}
-          <Button
-            size="sm"
-            variant="outline"
+          <Button size="sm" variant="outline"
             className="gap-1 h-7 text-xs border-green-600 text-green-700 hover:bg-green-50"
             onClick={() => exportToExcel(queries, data.clientName, data.financialYear)}
             disabled={queries.length === 0}
-            title="Export all queries to Excel"
-          >
-            <FileSpreadsheet size={12} />
-            Export Excel
+            title="Export all queries to Excel">
+            <FileSpreadsheet size={12} /> Export Excel
           </Button>
-
-          {/* Import Excel */}
-          <div className="flex flex-col items-center">
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1 h-7 text-xs border-[#1A2744] text-[#1A2744] hover:bg-[#1A2744]/5"
-              onClick={() => fileInputRef.current?.click()}
-              title="Import queries from Excel"
-            >
-              <Upload size={12} />
-              Import Excel
-            </Button>
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={handleFileChange}
-          />
-
-          {/* Save */}
-          <Button
-            size="sm"
-            className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
-            onClick={async () => { await manualSave(); onSaved?.(); }}
-            disabled={saving}
-          >
-            {saving
-              ? <Loader2 size={12} className="animate-spin" />
-              : <Save    size={12} />
-            }
+          <Button size="sm" variant="outline"
+            className="gap-1 h-7 text-xs border-[#1A2744] text-[#1A2744] hover:bg-[#1A2744]/5"
+            onClick={() => fileInputRef.current?.click()}
+            title="Import queries from Excel">
+            <Upload size={12} /> Import Excel
+          </Button>
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv"
+            className="hidden" onChange={handleFileChange} />
+          <Button size="sm" className="gap-1 h-7 text-xs bg-orange-600 hover:bg-orange-700"
+            onClick={async () => { await manualSave(); onSaved?.(); }} disabled={saving}>
+            {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             Save
           </Button>
         </div>
       </div>
 
-      {/* ── Download Template link ── */}
+      {/* Download template */}
       <div className="border-b bg-muted/10 px-4 py-1.5 flex items-center gap-1">
         <Download size={11} className="text-muted-foreground" />
-        <button
-          type="button"
+        <button type="button"
           className="text-[11px] text-primary underline underline-offset-2 hover:text-primary/80"
-          onClick={downloadTemplate}
-        >
+          onClick={downloadTemplate}>
           Download blank import template (QuerySheet_Template_CAFlow.xlsx)
         </button>
       </div>
 
       {/* ══════════ TABLE ══════════ */}
       <div className="overflow-auto">
-        <table className="w-full text-sm border-collapse min-w-[920px]">
+        <table className="w-full text-sm border-collapse min-w-[980px]">
           <thead>
             <tr className="bg-orange-600 text-white text-[11px] uppercase tracking-wide">
               <th className="border border-orange-500 px-2 py-2.5 text-center w-12">Sr.</th>
-              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[130px]">Group/Subgroup</th>
-              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[140px]">Ledger</th>
+              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[140px]">
+                Group/Subgroup
+                {hasTallyData && <span className="ml-1 text-[8px] font-bold bg-white/20 rounded px-0.5">TB</span>}
+              </th>
+              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[150px]">
+                Ledger
+                {hasTallyData && <span className="ml-1 text-[8px] font-bold bg-white/20 rounded px-0.5">TB</span>}
+              </th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[190px]">Query Description</th>
               <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[150px]">Required Documents</th>
-              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[130px]">Remark</th>
-              <th className="border border-orange-500 px-2 py-2.5 text-center min-w-[120px]">Correction Status</th>
+              <th className="border border-orange-500 px-3 py-2.5 text-left min-w-[120px]">Remark</th>
+              <th className="border border-orange-500 px-2 py-2.5 text-center min-w-[110px]">Status</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center w-16">Del</th>
               <th className="border border-orange-500 px-2 py-2.5 text-center w-20">Dispatch</th>
             </tr>
@@ -473,19 +583,11 @@ export default function QuerySheet({
           <tbody>
             {queries.length === 0 ? (
               <tr>
-                <td
-                  colSpan={9}
-                  className="border border-border py-12 text-center text-muted-foreground"
-                >
+                <td colSpan={9} className="border border-border py-12 text-center text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <MessageSquareWarning size={28} className="text-muted-foreground/40" />
                     <span className="text-sm">No queries yet.</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1 h-7 text-xs"
-                      onClick={addQuery}
-                    >
+                    <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={addQuery}>
                       <Plus size={12} /> Add First Query
                     </Button>
                   </div>
@@ -494,62 +596,64 @@ export default function QuerySheet({
             ) : displayedQueries.length === 0 ? (
               <tr>
                 <td colSpan={9} className="border border-border py-8 text-center text-muted-foreground text-sm">
-                  No queries match the current filter
-                  {(statusFilter || searchText) && (
-                    <button
-                      type="button"
-                      onClick={() => { setStatusFilter(null); setSearchText(""); }}
-                      className="ml-2 text-primary underline text-xs"
-                    >
-                      clear filters
-                    </button>
-                  )}
+                  No queries match the current filters
+                  <button type="button"
+                    onClick={() => { setStatusFilter("all"); setPriorityFilter("all"); setSearchText(""); }}
+                    className="ml-2 text-primary underline text-xs">
+                    clear filters
+                  </button>
                 </td>
               </tr>
             ) : (
               displayedQueries.map((row, idx) => {
-                const isDone = row.correction_status === "Yes";
+                const sm = STATUS_META[row.query_status];
+                const pm = PRIORITY_META[row.priority];
+                const isResolved = row.query_status === "resolved";
+                const isEscalated = row.query_status === "escalated";
 
                 return (
                   <tr
                     key={row.id}
                     className={cn(
                       "align-top transition-colors",
-                      isDone
-                        ? "bg-green-50/70 hover:bg-green-50"
-                        : "bg-red-50/60   hover:bg-red-50"
+                      isResolved  ? "bg-green-50/60 hover:bg-green-50" : "",
+                      isEscalated ? "bg-red-50/60   hover:bg-red-50"   : "",
+                      !isResolved && !isEscalated ? "bg-background hover:bg-muted/10" : "",
                     )}
                   >
-                    {/* Sr No */}
+                    {/* Sr + Priority */}
                     <td className="border border-border px-2 py-2 text-center align-middle">
-                      <span className="text-xs font-mono text-muted-foreground">
-                        {idx + 1}
-                      </span>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs font-mono text-muted-foreground">{idx + 1}</span>
+                        <PriorityBadge priority={row.priority} onClick={() => cyclePriority(row.id)} />
+                      </div>
                     </td>
 
-                    {/* Group/Subgroup */}
+                    {/* Group/Subgroup — Phase 3A combobox */}
                     <td className="border border-border px-2 py-2 align-top">
-                      <Input
-                        className="h-7 text-xs w-full"
-                        placeholder="Group/Subgroup…"
+                      <QueryCombobox
                         value={row.head}
-                        onChange={e => updateQuery(row.id, "head", e.target.value)}
+                        onChange={v => updateQuery(row.id, "head", v)}
+                        options={hasTallyData ? groups : []}
+                        placeholder="Group/Subgroup…"
+                        isTallyLinked={hasTallyData}
                       />
                     </td>
 
-                    {/* Ledger */}
+                    {/* Ledger — Phase 3A combobox filtered by group */}
                     <td className="border border-border px-2 py-2 align-top">
                       <div className="flex items-center gap-1">
-                        <Input
-                          className="h-7 text-xs flex-1 min-w-0"
-                          placeholder="Ledger…"
+                        <QueryCombobox
                           value={row.particulars}
-                          onChange={e => updateQuery(row.id, "particulars", e.target.value)}
+                          onChange={v => updateQuery(row.id, "particulars", v)}
+                          options={hasTallyData ? getLedgersForGroup(row.head) : []}
+                          placeholder="Ledger…"
+                          isTallyLinked={hasTallyData}
+                          className="flex-1 min-w-0"
                         />
                         {row.particulars && (
                           <Button
-                            size="sm"
-                            variant="ghost"
+                            size="sm" variant="ghost"
                             className="h-7 w-7 p-0 flex-shrink-0 text-blue-600 hover:bg-blue-50"
                             title={`View ledger: ${row.particulars}`}
                             onClick={() => setViewLedger({ name: row.particulars, group: row.head })}
@@ -560,7 +664,7 @@ export default function QuerySheet({
                       </div>
                     </td>
 
-                    {/* Query Description — textarea for longer text */}
+                    {/* Query Description */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Textarea
                         rows={2}
@@ -571,13 +675,13 @@ export default function QuerySheet({
                       />
                     </td>
 
-                    {/* Required Documents */}
+                    {/* Required Documents — Phase 3A combobox with templates */}
                     <td className="border border-border px-2 py-2 align-top">
-                      <Input
-                        className="h-7 text-xs w-full"
-                        placeholder="Documents needed…"
+                      <QueryCombobox
                         value={row.required_documents}
-                        onChange={e => updateQuery(row.id, "required_documents", e.target.value)}
+                        onChange={v => updateQuery(row.id, "required_documents", v)}
+                        options={COMMON_REQUIRED_DOCS}
+                        placeholder="Documents needed…"
                       />
                     </td>
 
@@ -591,55 +695,34 @@ export default function QuerySheet({
                       />
                     </td>
 
-                    {/* Correction Status */}
+                    {/* Status — Phase 3B state machine */}
                     <td className="border border-border px-2 py-2 align-middle">
-                      <CorrectionSelect
-                        value={row.correction_status}
-                        onChange={v => updateQuery(row.id, "correction_status", v)}
+                      <QueryStatusCell
+                        row={row}
+                        onAdvance={() => advanceStatus(row.id)}
+                        onSetStatus={s => setQueryStatus(row.id, s)}
                       />
-                      <p className={cn(
-                        "text-[10px] mt-0.5 font-medium text-center",
-                        isDone                           && "text-green-700",
-                        row.correction_status === "No"  && "text-red-700",
-                        row.correction_status === ""    && "text-orange-600"
-                      )}>
-                        {isDone                           ? "✓ Corrected"
-                          : row.correction_status === "No"  ? "✗ Not corrected"
-                          : "⏳ Pending"}
-                      </p>
                     </td>
 
                     {/* Delete */}
                     <td className="border border-border px-2 py-2 align-middle text-center">
                       {confirmDeleteId === row.id ? (
                         <div className="flex flex-col gap-1">
-                          <Button
-                            size="sm"
-                            variant="destructive"
+                          <Button size="sm" variant="destructive"
                             className="h-6 text-[10px] px-1 w-full"
-                            onClick={() => {
-                              deleteQuery(row.id);
-                              setConfirmDeleteId(null);
-                            }}
-                          >
+                            onClick={() => { deleteQuery(row.id); setConfirmDeleteId(null); }}>
                             Confirm
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
+                          <Button size="sm" variant="ghost"
                             className="h-6 text-[10px] px-1 w-full"
-                            onClick={() => setConfirmDeleteId(null)}
-                          >
+                            onClick={() => setConfirmDeleteId(null)}>
                             Cancel
                           </Button>
                         </div>
                       ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
+                        <Button size="sm" variant="ghost"
                           className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-                          onClick={() => setConfirmDeleteId(row.id)}
-                        >
+                          onClick={() => setConfirmDeleteId(row.id)}>
                           <Trash2 size={13} />
                         </Button>
                       )}
@@ -653,14 +736,11 @@ export default function QuerySheet({
                           <span className="text-[9px] text-green-700">Sent</span>
                         </div>
                       ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
+                        <Button size="sm" variant="ghost"
                           className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           title="Dispatch to client portal"
                           disabled={dispatchingId === row.id}
-                          onClick={() => dispatchToClient(row)}
-                        >
+                          onClick={() => dispatchToClient(row)}>
                           {dispatchingId === row.id
                             ? <Loader2 size={12} className="animate-spin" />
                             : <Send size={12} />}
@@ -681,9 +761,8 @@ export default function QuerySheet({
           {allCorrected
             ? queries.length === 0
               ? "No queries — pipeline unblocked"
-              : `✓ All ${queries.length} ${queries.length === 1 ? "query" : "queries"} corrected`
-            : `${pendingCount} of ${queries.length} pending correction`
-          }
+              : `✓ All ${queries.length} ${queries.length === 1 ? "query" : "queries"} resolved`
+            : `${pendingCount} of ${queries.length} pending resolution`}
         </p>
         {saving && (
           <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -715,20 +794,17 @@ export default function QuerySheet({
               Import Queries Preview
             </DialogTitle>
           </DialogHeader>
-
           <p className="text-sm text-muted-foreground px-1">
             You are about to import{" "}
             <span className="font-semibold text-foreground">{importPreview?.length}</span>{" "}
             {(importPreview?.length ?? 0) === 1 ? "query" : "queries"}.{" "}
             Existing queries will <strong>not</strong> be deleted.
           </p>
-
-          {/* Preview table — first 5 rows */}
           <div className="overflow-auto rounded border flex-1 min-h-0">
             <Table className="text-xs">
               <TableHeader>
                 <TableRow className="bg-muted/60">
-                  {["#", "Group/Subgroup", "Ledger", "Query Description", "Correction Status"].map(h => (
+                  {["#", "Group/Subgroup", "Ledger", "Query Description", "Status", "Priority"].map(h => (
                     <TableHead key={h} className="text-xs py-2">{h}</TableHead>
                   ))}
                 </TableRow>
@@ -741,22 +817,20 @@ export default function QuerySheet({
                     <TableCell className="max-w-[120px] truncate">{r.particulars || "—"}</TableCell>
                     <TableCell className="max-w-[200px] truncate">{r.query_description || "—"}</TableCell>
                     <TableCell>
-                      <Badge
-                        className={cn(
-                          "text-[10px]",
-                          r.correction_status === "Yes" && "bg-green-100 text-green-700",
-                          r.correction_status === "No"  && "bg-red-100 text-red-700",
-                          !r.correction_status          && "bg-orange-100 text-orange-700",
-                        )}
-                      >
-                        {r.correction_status || "Pending"}
+                      <Badge className={cn("text-[10px]", STATUS_META[r.query_status]?.bg, STATUS_META[r.query_status]?.color)}>
+                        {STATUS_META[r.query_status]?.label ?? r.query_status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge className={cn("text-[10px]", PRIORITY_META[r.priority]?.bg, PRIORITY_META[r.priority]?.color)}>
+                        {r.priority}
                       </Badge>
                     </TableCell>
                   </TableRow>
                 ))}
                 {(importPreview?.length ?? 0) > 5 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-2 text-xs">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-2 text-xs">
                       … and {(importPreview?.length ?? 0) - 5} more rows
                     </TableCell>
                   </TableRow>
@@ -764,21 +838,11 @@ export default function QuerySheet({
               </TableBody>
             </Table>
           </div>
-
           <DialogFooter className="gap-2 pt-2">
-            <Button variant="outline" size="sm" onClick={() => setImportPreview(null)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              className="bg-[#1A2744] hover:bg-[#1A2744]/90 text-white gap-1.5"
-              onClick={confirmImport}
-              disabled={importing}
-            >
-              {importing
-                ? <Loader2 size={13} className="animate-spin" />
-                : <Upload size={13} />
-              }
+            <Button variant="outline" size="sm" onClick={() => setImportPreview(null)}>Cancel</Button>
+            <Button size="sm" className="bg-[#1A2744] hover:bg-[#1A2744]/90 text-white gap-1.5"
+              onClick={confirmImport} disabled={importing}>
+              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
               Import All ({importPreview?.length})
             </Button>
           </DialogFooter>
