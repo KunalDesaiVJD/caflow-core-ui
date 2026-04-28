@@ -531,6 +531,48 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
   });
 
+  // ─── Fetch PY shell TB + coa_mapping for P&L comparative amounts ───
+  // The CY trial balance's opening_balance is always ₹0 for P&L accounts
+  // (Tally resets P&L each year). To show PY P&L figures in the Variance Drill
+  // we must load the PY shell engagement's own closing balances.
+  const { data: pyShellTbData } = useQuery({
+    queryKey: ["py-shell-tb", engagement?.client_id, engagement?.financial_year],
+    queryFn: async () => {
+      if (!engagement?.client_id || !engagement?.financial_year) return null;
+      const fyParts = (engagement.financial_year || "").split("-");
+      if (fyParts.length !== 2) return null;
+      const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
+
+      // Find the PY shell (or prior CY) engagement
+      const { data: pyEng } = await supabase
+        .from("audit_engagements")
+        .select("id, coa_mapping")
+        .eq("client_id", engagement.client_id)
+        .eq("financial_year", prevFy)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!pyEng) return null;
+
+      // Paginated fetch of PY shell TB (closing_balance only needed)
+      const TB_COLS = "ledger_name, closing_balance, balance_type";
+      const PAGE = 1000;
+      const all: any[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from("tally_trial_balance")
+          .select(TB_COLS)
+          .eq("engagement_id", (pyEng as any).id)
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < PAGE) break;
+      }
+      return { coaMapping: ((pyEng as any).coa_mapping as Record<string, any>) || {}, tbRows: all };
+    },
+    enabled: !!engagement?.client_id && !!engagement?.financial_year && !(engagement as any)?.is_py_shell,
+  });
+
   // TB accounts — Tally Sync is the sole authoritative source.
   // closing_balance is unsigned; balance_type (Dr/Cr) gives the sign.
   const tbAccounts: {
@@ -1389,6 +1431,44 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     for (const item of activeTree) computeTotal(item);
     return amounts;
   }, [tbAccounts, coaMapping, isNonCorporate]);
+
+  // ═══════ PY SHELL P&L AMOUNTS ═══════
+  // When a PY shell engagement exists, compute P&L closing amounts from its TB.
+  // Opening_balance on CY TB is always ₹0 for P&L accounts (Tally yearly reset),
+  // so this is the only way to show PY P&L figures in the Variance Drill.
+  const pyShellPLAmounts: Record<string, number> = useMemo(() => {
+    if (!pyShellTbData?.tbRows?.length || !pyShellTbData?.coaMapping) return {};
+    const amounts: Record<string, number> = {};
+    for (const row of pyShellTbData.tbRows) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      // Use PY shell's own coa_mapping first, fall back to CY mapping
+      const mapping =
+        (pyShellTbData.coaMapping as Record<string, any>)[name] ||
+        (coaMapping as Record<string, any>)[name];
+      if (!mapping?.code) continue;
+      const item = activeFlatItems.find(i => i.code === mapping.code);
+      if (!item) continue;
+      const sec = String((item as any).section || "").toLowerCase();
+      const isPL =
+        sec.includes("pl") || sec.includes("p_l") ||
+        sec.includes("revenue") || sec.includes("expense") || sec.includes("income");
+      if (!isPL) continue; // BS items handled via opening_balance in computedAmountsPY
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      amounts[mapping.code] = (amounts[mapping.code] || 0) + (isDr ? cb : -cb);
+    }
+    // Roll up parent P&L nodes
+    const computeParent = (item: FSLineItem): number => {
+      if (!item.children || item.children.length === 0) return amounts[item.code] || 0;
+      const total = item.children.reduce((sum, child) => sum + computeParent(child), 0);
+      if (total !== 0) amounts[item.code] = total;
+      return total;
+    };
+    for (const item of activeTree) computeParent(item);
+    return amounts;
+  }, [pyShellTbData, coaMapping, activeFlatItems, activeTree]);
 
   // ═══════ FS LEDGER SEARCH ═══════
   // When the user types in the right-panel search box, build a flat result list:
@@ -2465,7 +2545,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
                     const amountCY = computedAmounts[item.code]   || 0;
-                    const amountPY = computedAmountsPY[item.code] || 0;
+                    // PY: BS items → opening_balance from CY TB; P&L items → PY shell closing_balance
+                    const amountPY =
+                      computedAmountsPY[item.code] ||   // BS: opening_balance-derived
+                      pyShellPLAmounts[item.code]  ||   // P&L: PY shell closing_balance
+                      pyAmounts[item.code]         ||   // P&L fallback: prior fa_financial_statements
+                      0;
                     const delta    = amountCY - amountPY;
                     const pct      = Math.abs(amountPY) > 0.005
                       ? Math.round((delta / Math.abs(amountPY)) * 100)
