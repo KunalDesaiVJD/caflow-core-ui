@@ -727,25 +727,49 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
     r += 2;
 
     // ── Border helpers — matching NOTE 1.xlsx template EXACTLY ──────────────
-    // Template border rules:
-    //   Rows 2–5 (header): outer-box only on B–J
-    //     col B  = top + bottom + LEFT   (left edge of content area)
-    //     col C–I = top + bottom only    (no side borders on interior)
-    //     col J  = top + bottom + RIGHT  (right edge of content area)
-    //     col A, K = NO border
-    //   Row 6 (blank separator): only B.left + J.right (no top/bottom)
-    //   Rows 7+ (notes, signature): NO BORDERS AT ALL
+    //
+    // Each header row (2–5) gets an outer box: top + bottom across the full
+    // B–J band, left edge on B, right edge on J.
+    //
+    // The trick: ExcelJS only allows setting border properties on the MASTER
+    // cell of a merged range (setting them on slave cells silently fails or
+    // throws). Each row has a different merge layout, so we handle them
+    // individually:
+    //
+    //   Row 2:  B2:J2 fully merged → B is master.
+    //           Set B { top, bottom, left, RIGHT } — right on master = right edge of J.
+    //
+    //   Row 3:  B3:H3 merged + I3 standalone + J3 standalone.
+    //           B { top, bottom, left }, I { top, bottom }, J { top, bottom, RIGHT }.
+    //
+    //   Row 4:  B4:J4 fully merged → same as row 2.
+    //
+    //   Row 5:  B5 standalone + C5 standalone + D5:J5 merged → D is master.
+    //           B { top, bottom, left }, C { top, bottom },
+    //           D { top, bottom, RIGHT } — right on master D = right edge of J.
+    //
+    //   Row 6:  No merges. B { left }, J { right } (separator, no top/bottom).
 
-    // Apply outer-box border to one header row (rows 2–5)
     const hdrBorder = (rn: number) => {
-      ws.getRow(rn).getCell(2).border  = { top: thin, bottom: thin, left: thin };   // B
-      for (let c = 3; c <= 9; c++) {
-        try { ws.getRow(rn).getCell(c).border = { top: thin, bottom: thin }; } catch(_e) {}
+      const row = ws.getRow(rn);
+      if (rn === 2 || rn === 4) {
+        // B:J fully merged — B is master; .right on master renders at J's right edge
+        row.getCell(2).border = { top: thin, bottom: thin, left: thin, right: thin };
+      } else if (rn === 3) {
+        // B:H merged + I standalone + J standalone
+        row.getCell(2).border  = { top: thin, bottom: thin, left: thin };   // B (master B–H)
+        row.getCell(9).border  = { top: thin, bottom: thin };               // I standalone
+        row.getCell(10).border = { top: thin, bottom: thin, right: thin };  // J standalone
+      } else if (rn === 5) {
+        // B standalone + C standalone + D:J merged — D is master
+        row.getCell(2).border = { top: thin, bottom: thin, left: thin };    // B
+        row.getCell(3).border = { top: thin, bottom: thin };                // C
+        row.getCell(4).border = { top: thin, bottom: thin, right: thin };   // D (master D–J); .right → J's right edge
       }
-      try { ws.getRow(rn).getCell(10).border = { top: thin, bottom: thin, right: thin }; } catch(_e) {} // J
     };
 
-    // Apply separator row borders (only vertical side lines, no horizontal)
+    // Separator row (row 6): only left (B) and right (J) side lines, no top/bottom.
+    // Row 6 has no merges so getCell(10) is always a standalone cell.
     const sepBorder = (rn: number) => {
       ws.getRow(rn).getCell(2).border  = { left:  thin };  // B
       ws.getRow(rn).getCell(10).border = { right: thin };  // J
