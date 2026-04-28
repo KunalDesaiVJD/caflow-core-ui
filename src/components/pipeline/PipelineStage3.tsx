@@ -547,32 +547,32 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${(parseInt(fyParts[0])).toString().slice(-2)}`;
 
-      // Prefer the PY shell (is_py_shell=true) — it has the synced TB data.
-      // Fall back to any FY-1 engagement if no PY shell exists.
-      let pyEng: any = null;
-      const { data: shellFirst } = await (supabase.from as any)("audit_engagements")
-        .select("id, coa_mapping")
+      // Find the PY shell with actual TB data — iterate all FY-1 engagements
+      // (PY shells first) and pick the one that has tally_trial_balance rows.
+      // NOTE: audit_engagements has no created_at column — do NOT order by it.
+      const { data: allFY1 } = await (supabase.from as any)("audit_engagements")
+        .select("id, coa_mapping, is_py_shell")
         .eq("client_id", engagement.client_id)
-        .eq("financial_year", prevFy)
-        .eq("is_py_shell", true)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (shellFirst) {
-        pyEng = shellFirst;
-      } else {
-        const { data: fallback } = await (supabase.from as any)("audit_engagements")
-          .select("id, coa_mapping")
-          .eq("client_id", engagement.client_id)
-          .eq("financial_year", prevFy)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        pyEng = fallback;
+        .eq("financial_year", prevFy);
+
+      const fy1List = ((allFY1 || []) as any[]);
+      // Sort: PY shells first (they have the synced TB data)
+      fy1List.sort((a: any, b: any) => (b.is_py_shell ? 1 : 0) - (a.is_py_shell ? 1 : 0));
+
+      let pyEng: any = null;
+      for (const row of fy1List) {
+        // Check if this engagement has actual TB rows
+        const { count } = await supabase
+          .from("tally_trial_balance")
+          .select("ledger_name", { count: "exact", head: true })
+          .eq("engagement_id", row.id);
+        if ((count ?? 0) > 0) { pyEng = row; break; }
       }
+      // If no TB data in any, use first available (UI still needs coa_mapping)
+      if (!pyEng && fy1List.length > 0) pyEng = fy1List[0];
       if (!pyEng) return null;
 
-      // Paginated fetch of PY shell TB (closing_balance only needed)
+      // Paginated fetch of PY shell TB (closing_balance needed for PY amounts)
       const TB_COLS = "ledger_name, closing_balance, balance_type";
       const PAGE = 1000;
       const all: any[] = [];
@@ -1488,6 +1488,26 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     return amounts;
   }, [pyShellTbData, coaMapping, activeFlatItems, activeTree]);
 
+  // ═══════ PY SHELL LEDGER AMOUNTS (per-ledger) ═══════
+  // Maps ledger_name → signed closing_balance from PY shell TB.
+  // Used by the Variance Drill modal to show PY amounts per ledger
+  // (the FS-level pyShellPLAmounts aggregates to code level, not ledger level).
+  // For BS ledgers, CY opening_balance already gives the PY figure — this only
+  // provides data for P&L ledgers where opening = 0.
+  const pyShellLedgerAmounts: Record<string, number> = useMemo(() => {
+    if (!pyShellTbData?.tbRows?.length) return {};
+    const map: Record<string, number> = {};
+    for (const row of pyShellTbData.tbRows) {
+      const name = String(row.ledger_name || "").trim();
+      if (!name) continue;
+      const cb = Math.abs(Number(row.closing_balance ?? 0));
+      if (cb < 0.005) continue;
+      const isDr = String(row.balance_type ?? "").toUpperCase() === "DR";
+      map[name] = isDr ? cb : -cb;
+    }
+    return map;
+  }, [pyShellTbData]);
+
   // ═══════ FS LEDGER SEARCH ═══════
   // When the user types in the right-panel search box, build a flat result list:
   // each entry = { ledger name, FS item code, FS item name, depth breadcrumb, confidence }
@@ -1573,7 +1593,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       })
       .map(a => {
         const cy = a.balance;
-        const py = a.opening_balance ?? 0;
+        // PY: prefer PY shell closing_balance (for P&L accounts where opening=0);
+        // fall back to opening_balance on CY TB (correct for BS accounts).
+        const pyFromShell = pyShellLedgerAmounts[a.account_name];
+        const py = (pyFromShell !== undefined && Math.abs(pyFromShell) > 0.005)
+          ? pyFromShell
+          : (a.opening_balance ?? 0);
         return {
           ledger: a.account_name,
           group: a.account_group || "",
@@ -1587,7 +1612,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       })
       .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
     return rows;
-  }, [varianceDrill, tbAccounts, coaMapping, aliases]);
+  }, [varianceDrill, tbAccounts, coaMapping, aliases, pyShellLedgerAmounts]);
 
   // ═══════ ALIAS HANDLERS (Task 3) ═══════
   const saveAlias = async (priorName: string, currentName: string) => {
