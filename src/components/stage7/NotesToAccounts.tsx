@@ -676,40 +676,53 @@ export function NCENotesToAccounts({ engagementId, engagement }: Props) {
       { width: 3.3  },  // K  (11) narrow right spacer
     ];
 
-    // Helper: apply thin border to every cell in a row's B:D range BEFORE
-    // calling mergeCells() — ExcelJS nullifies non-master cells on merge, so
-    // borders must be set while those cells still exist.
-    const hdrBorder = (row: number) => {
-      const borderAll = { top: { style: "thin" as const }, bottom: { style: "thin" as const }, left: { style: "thin" as const }, right: { style: "thin" as const } };
-      for (const col of ["B", "C", "D"]) {
-        ws.getCell(`${col}${row}`).border = borderAll;
+    // Helper: apply a thin box border on every cell from startCol to endCol in
+    // the given row BEFORE calling mergeCells().
+    // IMPORTANT: must use ws.getRow(r).getCell(colNumber) — NOT ws.getCell("B2")
+    // — because ExcelJS stores and serialises cells from the row's internal
+    // _cells map; the string-address accessor uses a separate cache that gets
+    // dropped when the merge is recorded.  Column numbers: A=1, B=2, C=3, D=4.
+    const preMergeBorder = (row: number, startCol: number, endCol: number) => {
+      const s = "thin" as const;
+      const b = { top: { style: s }, bottom: { style: s }, left: { style: s }, right: { style: s } };
+      for (let c = startCol; c <= endCol; c++) {
+        ws.getRow(row).getCell(c).border = b;
       }
     };
 
     let r = 2;
-    // ── Row 2 — Entity name ──────────────────────────────────────────────────
-    hdrBorder(r);
-    ws.getCell(`B${r}`).value = header.entityNameOverride || displayEntityName;
-    ws.getCell(`B${r}`).font = { bold: true, size: 13 };
+
+    // ── Row 2 — Entity name (B:D merged, centered, bold 13pt) ───────────────
+    preMergeBorder(r, 2, 4);          // set borders BEFORE merge (B=2, C=3, D=4)
     ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).value     = header.entityNameOverride || displayEntityName;
+    ws.getCell(`B${r}`).font      = { bold: true, size: 13 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
     ws.getRow(r).height = 21;
     r++;
-    // ── Row 3 — "Notes forming part of..." ──────────────────────────────────
-    hdrBorder(r);
-    ws.getCell(`B${r}`).value =
-      `Notes forming part of the Financial Statements for the year ended 31st March, ${auditYear}`;
-    ws.getCell(`B${r}`).font = { bold: true, size: 11 };
+
+    // ── Row 3 — "Notes forming part of..." (B:D merged, centered, bold 11pt) ─
+    preMergeBorder(r, 2, 4);
     ws.mergeCells(`B${r}:D${r}`);
+    ws.getCell(`B${r}`).value     = `Notes forming part of the Financial Statements for the year ended 31st March, ${auditYear}`;
+    ws.getCell(`B${r}`).font      = { bold: true, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "center", vertical: "middle" };
     ws.getRow(r).height = 18;
     r++;
-    // ── Row 4 — "Note: Summary of Significant Accounting Policies" ──────────
-    hdrBorder(r);
-    ws.getCell(`B${r}`).value = "Note:   Summary of Significant Accounting Policies";
-    ws.getCell(`B${r}`).font = { bold: true, size: 11 };
-    ws.mergeCells(`B${r}:D${r}`);
+
+    // ── Row 4 — "Note :" | "Summary of Significant Accounting Policies" ──────
+    // Two bordered sections matching the reference: B = "Note :", C:D = title.
+    // Set borders on B, C, D BEFORE merging C:D so D's right edge is preserved.
+    preMergeBorder(r, 2, 4);
+    // B4 — "Note :" label (no merge; borders already set)
+    ws.getCell(`B${r}`).value     = "Note :";
+    ws.getCell(`B${r}`).font      = { bold: false, size: 11 };
     ws.getCell(`B${r}`).alignment = { horizontal: "left", vertical: "middle" };
+    // C4:D4 — title text (merge C:D; C is master and retains its borders)
+    ws.mergeCells(`C${r}:D${r}`);
+    ws.getCell(`C${r}`).value     = "Summary of Significant Accounting Policies";
+    ws.getCell(`C${r}`).font      = { bold: false, size: 11 };
+    ws.getCell(`C${r}`).alignment = { horizontal: "left", vertical: "middle" };
     ws.getRow(r).height = 18;
     r += 2;
 
