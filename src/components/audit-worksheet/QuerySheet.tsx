@@ -31,9 +31,12 @@ import {
   Search, X, BookOpen, Send, CheckCircle2,
   ChevronRight, ArrowRight, AlertTriangle,
   CheckSquare, Square, Calendar, Rocket, BarChart2,
+  Sparkles, FileText,
 } from "lucide-react";
-import { LedgerSidePanel }        from "./LedgerSidePanel";
-import { QueryAnalyticsSidebar }  from "./QueryAnalyticsSidebar";
+import { LedgerSidePanel }              from "./LedgerSidePanel";
+import { QueryAnalyticsSidebar }        from "./QueryAnalyticsSidebar";
+import { getDraftSuggestion }           from "./QueryDraftEngine";
+import { generateQueryProgressReport }  from "./QueryProgressReport";
 import { QueryCombobox, COMMON_REQUIRED_DOCS } from "./QueryCombobox";
 import { useQueryStatusSync } from "./hooks/useQueryStatusSync";
 import { toast } from "sonner";
@@ -828,6 +831,13 @@ export default function QuerySheet({
             <FileSpreadsheet size={12} /> Export Excel
           </Button>
           <Button size="sm" variant="outline"
+            className="gap-1 h-7 text-xs border-purple-600 text-purple-700 hover:bg-purple-50"
+            onClick={() => generateQueryProgressReport(queries, data)}
+            disabled={queries.length === 0}
+            title="Export Audit Query Progress Report as PDF">
+            <FileText size={12} /> Export PDF
+          </Button>
+          <Button size="sm" variant="outline"
             className="gap-1 h-7 text-xs border-[#1A2744] text-[#1A2744] hover:bg-[#1A2744]/5"
             onClick={() => fileInputRef.current?.click()}>
             <Upload size={12} /> Import Excel
@@ -1013,11 +1023,24 @@ export default function QuerySheet({
                       </div>
                     </td>
 
-                    {/* Query Description */}
+                    {/* Query Description — Phase 4D: Smart Draft button */}
                     <td className="border border-border px-2 py-2 align-top">
                       <Textarea rows={2} className="text-xs resize-none w-full min-h-[52px]"
                         placeholder="Describe the query…" value={row.query_description}
                         onChange={e => updateQuery(row.id, "query_description", e.target.value)} />
+                      {(row.head || row.particulars) && !row.query_description?.trim() && (
+                        <button
+                          type="button"
+                          className="mt-1 flex items-center gap-1 text-[10px] text-purple-600 hover:text-purple-800 transition-colors"
+                          title="Generate professional audit query draft"
+                          onClick={() => {
+                            const draft = getDraftSuggestion(row.head, row.particulars);
+                            updateQuery(row.id, "query_description", draft);
+                          }}
+                        >
+                          <Sparkles size={10} /> Smart Draft
+                        </button>
+                      )}
                     </td>
 
                     {/* Required Documents — Phase 3A */}
@@ -1113,12 +1136,13 @@ export default function QuerySheet({
         )}
       </div>
 
-      {/* ══════════ ANALYTICS SIDEBAR (Phase 3F) ══════════ */}
+      {/* ══════════ ANALYTICS SIDEBAR (Phase 3F / 4E) ══════════ */}
       <QueryAnalyticsSidebar
         open={showAnalytics}
         onClose={() => setShowAnalytics(false)}
         queries={queries}
         onJumpStatus={s => setStatusFilter(s)}
+        data={data}
       />
 
       {/* ══════════ LEDGER SIDE PANEL ══════════ */}

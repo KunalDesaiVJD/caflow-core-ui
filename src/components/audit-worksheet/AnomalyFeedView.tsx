@@ -26,7 +26,8 @@ import {
   VoucherRow,
   TBRow,
 } from "@/lib/anomalyEngine";
-import { LedgerSidePanel } from "./LedgerSidePanel";
+import { LedgerSidePanel }    from "./LedgerSidePanel";
+import { getDraftSuggestion } from "./QueryDraftEngine";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -198,7 +199,16 @@ function AnomalyCard({
             onClick={() => onRaiseQuery(
               flag.parent_group,
               flag.ledger_name || flag.voucher_type || "",
-              `[${ANOMALY_META[flag.flag_type].label}] ${flag.flag_detail} (Voucher: ${flag.voucher_number || flag.voucher_id}, Date: ${flag.voucher_date})`,
+              /* Phase 4D: pre-drafted professional query text */
+              getDraftSuggestion(
+                flag.parent_group,
+                flag.ledger_name || flag.voucher_type || "",
+                flag.flag_type,
+                {
+                  amount: Math.abs(flag.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                  date:   flag.voucher_date,
+                },
+              ),
             )}
           >
             <MessageSquareWarning size={10} />

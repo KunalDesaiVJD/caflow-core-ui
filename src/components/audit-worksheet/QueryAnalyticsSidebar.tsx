@@ -13,10 +13,14 @@ import { useMemo } from "react";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
-import { cn } from "@/lib/utils";
-import { AlertTriangle, CheckCircle2, TrendingUp } from "lucide-react";
-import type { QueryRow, QueryStatus } from "./hooks/useQuerySheetStorage";
-import { STATUS_META, PRIORITY_META } from "./hooks/useQuerySheetStorage";
+import { Button } from "@/components/ui/button";
+import { cn }     from "@/lib/utils";
+import { AlertTriangle, CheckCircle2, TrendingUp, FileText, Loader2 } from "lucide-react";
+import { useState } from "react";
+import type { QueryRow, QueryStatus }  from "./hooks/useQuerySheetStorage";
+import { STATUS_META, PRIORITY_META }  from "./hooks/useQuerySheetStorage";
+import { generateQueryProgressReport } from "./QueryProgressReport";
+import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +77,7 @@ interface Props {
   onClose:      () => void;
   queries:      QueryRow[];
   onJumpStatus: (s: QueryStatus | "all") => void;
+  data?:        AuditWorksheetData;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -82,8 +87,9 @@ const STATUS_ORDER: QueryStatus[] = [
 ];
 
 export function QueryAnalyticsSidebar({
-  open, onClose, queries, onJumpStatus,
+  open, onClose, queries, onJumpStatus, data,
 }: Props) {
+  const [exportingPdf, setExportingPdf] = useState(false);
   const total    = queries.length;
   const resolved = queries.filter(q => q.query_status === "resolved").length;
   const escalated = queries.filter(q => q.query_status === "escalated").length;
@@ -326,6 +332,29 @@ export function QueryAnalyticsSidebar({
                 <p className="text-xs text-muted-foreground">No overdue or pending items.</p>
               </div>
             )}
+
+            {/* ── Phase 4E: Export PDF Report ────────────────────── */}
+            <div className="pt-2 border-t">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full gap-1.5 text-xs border-purple-400 text-purple-700 hover:bg-purple-50"
+                disabled={exportingPdf || queries.length === 0}
+                onClick={async () => {
+                  setExportingPdf(true);
+                  try {
+                    await generateQueryProgressReport(queries, data ?? {} as AuditWorksheetData);
+                  } finally {
+                    setExportingPdf(false);
+                  }
+                }}
+              >
+                {exportingPdf
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <FileText size={12} />}
+                Export PDF Report
+              </Button>
+            </div>
 
           </div>
         )}
