@@ -11,7 +11,8 @@
 import { useState } from "react";
 import { Link2, GitCompareArrows, AlertOctagon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TdsPartyMappingPanel } from "./TdsPartyMappingPanel";
+import { TdsPartyMappingPanel }  from "./TdsPartyMappingPanel";
+import { TdsReconFlagsPanel }   from "./TdsReconFlagsPanel";
 
 type TdsTab = "mappings" | "recon" | "missing";
 
@@ -31,7 +32,7 @@ const TABS: Array<{ id: TdsTab; label: string; icon: React.ReactNode; phase: str
     id:    "recon",
     label: "Reconciliation",
     icon:  <GitCompareArrows size={13} />,
-    phase: "TDS-3/4",
+    phase: "TDS-3",
   },
   {
     id:    "missing",
@@ -97,12 +98,7 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
       )}
 
       {activeTab === "recon" && (
-        <PlaceholderPanel
-          icon={<GitCompareArrows size={32} className="text-muted-foreground/25" />}
-          title="Reconciliation Engine"
-          description="Phase TDS-3/4 will reconcile Tally journal entries against TDS Management module entries and detect short/over deductions per Income Tax Act sections."
-          phase="TDS-3/4"
-        />
+        <TdsReconFlagsPanel clientId={clientId} financialYear={financialYear} />
       )}
 
       {activeTab === "missing" && (
