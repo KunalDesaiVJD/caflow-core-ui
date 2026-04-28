@@ -67,6 +67,7 @@ export const NOTE_META: Record<string, NoteMeta> = {
   inventories:       { noteNumber: "17",      shortName: "Inventories",                   section: "BS" },
   trade_receivables: { noteNumber: "18",      shortName: "Trade Receivables",             section: "BS" },
   cash_bank:         { noteNumber: "19",      shortName: "Cash and Bank Balances",        section: "BS" },
+  st_loans:          { noteNumber: "20",      shortName: "Short-term Loans and Advances", section: "BS" },
   other_ca:          { noteNumber: "21",      shortName: "Other Current Assets",          section: "BS" },
   revenue_ops:       { noteNumber: "22",      shortName: "Revenue from Operations",       section: "PL" },
   other_income:      { noteNumber: "23",      shortName: "Other Income",                  section: "PL" },
@@ -377,6 +378,29 @@ export const NOTES_CONFIG: NoteConfig[] = [
         id: "total_ab", label: "Total (A + B)", isTotal: true,
         formulaAdd: ["la_total","lb_total"],
       },
+    ],
+  },
+
+  // ── Note: Short-term Loans and Advances (Pattern B) ─────────────────────
+  {
+    noteType: "st_loans",
+    title: "Note 20: Short-term Loans and Advances",
+    pattern: "B",
+    rows: [
+      { id: "la_hdr",          label: "(a) Loans and advances to related parties", isSectionHeader: true },
+      { id: "la_secured",      label: "Secured, considered good",                  indent: 1 },
+      { id: "la_unsecured",    label: "Unsecured, considered good",                indent: 1 },
+      { id: "la_doubtful",     label: "Doubtful",                                  indent: 1 },
+      { id: "la_total",        label: "Total (a)", isTotal: true, indent: 1,
+        formulaAdd: ["la_secured","la_unsecured","la_doubtful"] },
+      { id: "lb_hdr",          label: "(b) Others", isSectionHeader: true },
+      { id: "lb_secured",      label: "Secured, considered good",                  indent: 1 },
+      { id: "lb_unsecured",    label: "Unsecured, considered good",                indent: 1 },
+      { id: "lb_doubtful",     label: "Doubtful",                                  indent: 1 },
+      { id: "lb_total",        label: "Total (b)", isTotal: true, indent: 1,
+        formulaAdd: ["lb_secured","lb_unsecured","lb_doubtful"] },
+      { id: "total",           label: "Total (a + b)", isTotal: true,
+        formulaAdd: ["la_total","lb_total"] },
     ],
   },
 

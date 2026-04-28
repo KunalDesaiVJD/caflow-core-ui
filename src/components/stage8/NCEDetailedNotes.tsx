@@ -68,10 +68,29 @@ function newCustomId(): string {
 }
 
 // ─── Sub-ledger actions menu (single eject action) ─────────────────────────
-function SubLedgerActionsMenu({ ledger, onEject }: { ledger: string; onEject: () => void }) {
-  const [open, setOpen] = useState(false);
+function SubLedgerActionsMenu({
+  ledger, onEject, headingOptions, onEjectAndAttach,
+}: {
+  ledger: string;
+  onEject: () => void;
+  headingOptions?: { id: string; label: string }[];
+  onEjectAndAttach?: (targetId: string) => void;
+}) {
+  const [open,      setOpen]      = useState(false);
+  const [showMove,  setShowMove]  = useState(false);
+  const [search,    setSearch]    = useState("");
+
+  const filtered = useMemo(
+    () => !headingOptions ? [] : search
+      ? headingOptions.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+      : headingOptions,
+    [headingOptions, search],
+  );
+
+  const closeAll = () => { setOpen(false); setShowMove(false); setSearch(""); };
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={v => { setOpen(v); if (!v) { setShowMove(false); setSearch(""); } }}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -81,14 +100,62 @@ function SubLedgerActionsMenu({ ledger, onEject }: { ledger: string; onEject: ()
           <MoreVertical className="h-3 w-3" />
         </button>
       </PopoverTrigger>
-      <PopoverContent side="bottom" align="end" className="w-44 p-1">
-        <button
-          type="button"
-          className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
-          onClick={() => { onEject(); setOpen(false); }}
-        >
-          <CornerUpRight className="h-3 w-3 shrink-0" /> Move to its own row
-        </button>
+      <PopoverContent side="bottom" align="end" className="w-48 p-1">
+        {showMove ? (
+          <>
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted flex items-center gap-1 mb-0.5"
+              onClick={() => { setShowMove(false); setSearch(""); }}
+            >
+              ← Back
+            </button>
+            <div className="relative mb-1 px-0.5">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+              <Input
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search heading…"
+                className="h-6 text-xs pl-6"
+              />
+            </div>
+            <div className="max-h-40 overflow-auto space-y-0.5">
+              {filtered.length === 0
+                ? <p className="text-xs text-muted-foreground px-2 py-1 italic">No match</p>
+                : filtered.map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted transition-colors"
+                    onMouseDown={e => { e.preventDefault(); onEjectAndAttach?.(opt.id); closeAll(); }}
+                  >
+                    {opt.label}
+                  </button>
+                ))
+              }
+            </div>
+          </>
+        ) : (
+          <div className="space-y-0.5">
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+              onClick={() => { onEject(); closeAll(); }}
+            >
+              <CornerUpRight className="h-3 w-3 shrink-0" /> Move to its own row
+            </button>
+            {headingOptions && headingOptions.length > 0 && onEjectAndAttach && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1 rounded text-xs hover:bg-muted flex items-center gap-1.5 transition-colors"
+                onClick={() => setShowMove(true)}
+              >
+                <CornerUpRight className="h-3 w-3 shrink-0" /> Move to heading…
+              </button>
+            )}
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -305,7 +372,7 @@ function CustomRowEditor({
   onChangeLabel: (s: string) => void; onDelete: () => void;
   headingOptions: { id: string; label: string }[];
   onPromote: (staticId: string) => void;
-  onEjectCustomSource?: (ledger: string, amountCy: number) => void;
+  onEjectCustomSource?: (ledger: string, amountCy: number, attachToId?: string) => void;
   onAddRow?: () => void;
 }) {
   const hasSources = (row.sources?.length ?? 0) > 0;
@@ -375,7 +442,12 @@ function CustomRowEditor({
                 )}
               </span>
               {onEjectCustomSource && (
-                <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectCustomSource(s.ledger, s.amountCy)} />
+                <SubLedgerActionsMenu
+                  ledger={s.ledger}
+                  onEject={() => onEjectCustomSource(s.ledger, s.amountCy)}
+                  headingOptions={headingOptions}
+                  onEjectAndAttach={(targetId) => onEjectCustomSource(s.ledger, s.amountCy, targetId)}
+                />
               )}
             </div>
           </TableCell>
@@ -429,8 +501,8 @@ function PatternBTable({
   onHideStatic: (id: string) => void;
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
-  onEjectSource:(rowId: string, ledger: string, amount: number) => void;
-  onEjectCustomSource:(customRowId: string, ledger: string, amount: number) => void;
+  onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
+  onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -589,7 +661,12 @@ function PatternBTable({
                     <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate flex-1 italic">{s.ledger}</span>
-                        <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)} />
+                        <SubLedgerActionsMenu
+                          ledger={s.ledger}
+                          onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                          headingOptions={allHeadingOptions.filter(o => o.id !== row.id)}
+                          onEjectAndAttach={(targetId) => onEjectSource(row.id, s.ledger, s.amountCy, targetId)}
+                        />
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
@@ -664,8 +741,8 @@ function PatternATable({
   onHideStatic: (id: string) => void;
   onChangeStaticLabel: (id: string, label: string) => void;
   onPromote:    (customId: string, staticId: string) => void;
-  onEjectSource:(rowId: string, ledger: string, amount: number) => void;
-  onEjectCustomSource:(customRowId: string, ledger: string, amount: number) => void;
+  onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
+  onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -893,7 +970,12 @@ function PatternATable({
                             <span className="text-[9px] uppercase ml-1 font-semibold not-italic">[{(s as any).column}]</span>
                           )}
                         </span>
-                        <SubLedgerActionsMenu ledger={s.ledger} onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)} />
+                        <SubLedgerActionsMenu
+                          ledger={s.ledger}
+                          onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)}
+                          headingOptions={allHeadingOptions.filter(o => o.id !== row.id)}
+                          onEjectAndAttach={(targetId) => onEjectSource(row.id, s.ledger, s.amountCy, targetId)}
+                        />
                       </div>
                     </TableCell>
                     <TableCell className="py-0.5 text-xs text-right text-muted-foreground tabular-nums">
@@ -1193,13 +1275,27 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       // the custom row's own keys — they continue to roll up into the same
       // section/grand total via computeDisplayData. The target row itself is
       // untouched so the move is fully reversible.
+      //
+      // Section propagation: when the target is a sectionless custom row and
+      // the source has a section, promote the target into the same section so
+      // both rows appear in the same section total (e.g. both count in Total B).
+      const sourceRow = cur.customRows.find(r => r.id === customId);
+      const shouldPromoteTarget =
+        targetCustomRow !== undefined && // target IS a custom row
+        !targetCustomRow.section &&       // target has no section yet
+        !!sourceRow?.section;             // source HAS a section to propagate
+
       const next = { ...prev, [noteType]: {
         ...cur,
-        customRows: cur.customRows.map(r =>
-          r.id === customId
-            ? { ...r, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) }
-            : r,
-        ),
+        customRows: cur.customRows.map(r => {
+          if (r.id === customId) {
+            return { ...r, attachedTo: targetId, ...(targetSection !== undefined ? { section: targetSection } : {}) };
+          }
+          if (r.id === targetId && shouldPromoteTarget) {
+            return { ...r, section: sourceRow!.section };
+          }
+          return r;
+        }),
       }};
       scheduleSave(next);
       return next;
@@ -1207,10 +1303,34 @@ export function NCEDetailedNotes({ engagementId }: Props) {
     toast.success("Attached under selected heading");
   }, [scheduleSave]);
 
-  // Eject a mapped Tally ledger from a static row → new custom row
-  const handleEjectSource = useCallback((noteType: string, rowId: string, ledger: string, amount: number) => {
+  // Shared helper: resolve the sectionTag for a given target row/custom-row id.
+  const resolveSection = useCallback((
+    config: NoteConfig | undefined,
+    cur: { customRows?: NCECustomRow[] },
+    targetId: string,
+  ): string | undefined => {
+    const targetCustom = (cur.customRows ?? []).find(r => r.id === targetId);
+    if (targetCustom) return targetCustom.section;
+    if (!config) return undefined;
+    let sectionStart = 0;
+    for (let i = 0; i < config.rows.length; i++) {
+      const row = config.rows[i];
+      if (row.isTotal && row.sectionTag) {
+        for (let j = sectionStart; j < i; j++) {
+          if (config.rows[j].id === targetId) return row.sectionTag;
+        }
+        sectionStart = i + 1;
+      }
+    }
+    return undefined;
+  }, []);
+
+  // Eject a mapped Tally ledger from a static row → new custom row.
+  // If attachToId is provided the new row is immediately attached to that heading.
+  const handleEjectSource = useCallback((noteType: string, rowId: string, ledger: string, amount: number, attachToId?: string) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const config = NOTES_CONFIG.find(c => c.noteType === noteType);
       // 1. Remove ledger from cy_sources
       const newCySources = { ...(cur.cy_sources ?? {}) };
       const sourceEntry = (newCySources[rowId] ?? []).find(s => s.ledger === ledger);
@@ -1227,7 +1347,12 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       //    Mark as "manual" so it survives Re-sync from COA.
       //    Store ejectedSource so deleting this row can clean up ejectedLedgers.
       const newId = newCustomId();
-      const newRow: NCECustomRow = { id: newId, label: ledger, source: "manual", ejectedSource: ledger };
+      const targetSection = attachToId ? resolveSection(config, cur, attachToId) : undefined;
+      const newRow: NCECustomRow = {
+        id: newId, label: ledger, source: "manual", ejectedSource: ledger,
+        ...(attachToId ? { attachedTo: attachToId } : {}),
+        ...(targetSection ? { section: targetSection } : {}),
+      };
       newCy[newId] = amount;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
       if (column === "lt") newCy[newId + "_lt"] = amount;
@@ -1244,13 +1369,15 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       scheduleSave(next);
       return next;
     });
-    toast.success(`"${ledger}" moved to a separate row`);
-  }, [scheduleSave]);
+    toast.success(attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to a separate row`);
+  }, [scheduleSave, resolveSection]);
 
-  // Eject a source ledger from a CUSTOM (auto/merged) row → new standalone custom row
-  const handleEjectCustomSource = useCallback((noteType: string, customRowId: string, ledger: string, amountCy: number) => {
+  // Eject a source ledger from a CUSTOM (auto/merged) row → new standalone custom row.
+  // If attachToId is provided the new row is immediately attached to that heading.
+  const handleEjectCustomSource = useCallback((noteType: string, customRowId: string, ledger: string, amountCy: number, attachToId?: string) => {
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const config = NOTES_CONFIG.find(c => c.noteType === noteType);
       // Find the source entry to get its column (Pattern A: "lt" | "st")
       const sourceEntry = cur.customRows.find(r => r.id === customRowId)?.sources?.find(s => s.ledger === ledger);
       const column = (sourceEntry as any)?.column as string | undefined;
@@ -1269,19 +1396,24 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       // Mark as "manual" so it survives Re-sync from COA.
       // Store ejectedSource so deleting this row can clean up ejectedLedgers.
       const newId = newCustomId();
+      const targetSection = attachToId ? resolveSection(config, cur, attachToId) : undefined;
       newCy[newId] = amountCy;
       // For Pattern A notes, also store with the column suffix so computeDisplayData picks it up
       if (column === "lt") newCy[newId + "_lt"] = amountCy;
       if (column === "st") newCy[newId + "_st"] = amountCy;
-      const newRow: NCECustomRow = { id: newId, label: ledger, source: "manual", ejectedSource: ledger };
+      const newRow: NCECustomRow = {
+        id: newId, label: ledger, source: "manual", ejectedSource: ledger,
+        ...(attachToId ? { attachedTo: attachToId } : {}),
+        ...(targetSection ? { section: targetSection } : {}),
+      };
       // Record this ledger in ejectedLedgers so Re-sync skips it from auto-grouping
       const newEjectedLedgers = [...new Set([...(cur.ejectedLedgers ?? []), ledger])];
       const next = { ...prev, [noteType]: { ...cur, cy: newCy, customRows: [...updatedRows, newRow], ejectedLedgers: newEjectedLedgers } };
       scheduleSave(next);
       return next;
     });
-    toast.success(`"${ledger}" moved to its own row`);
-  }, [scheduleSave]);
+    toast.success(attachToId ? `"${ledger}" moved to heading` : `"${ledger}" moved to its own row`);
+  }, [scheduleSave, resolveSection]);
 
   // ── Re-sync ─────────────────────────────────────────────────────────────
   const handleResync = useCallback(async () => {
@@ -1416,8 +1548,8 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
-                    onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
-                    onEjectCustomSource={(cid, ledger, amt) => handleEjectCustomSource(nc.noteType, cid, ledger, amt)}
+                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
+                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
                   />
                 ) : (
                   <PatternBTable
@@ -1436,8 +1568,8 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onHideStatic={id => handleHideStatic(nc.noteType, id)}
                     onChangeStaticLabel={(id, lbl) => handleChangeStaticLabel(nc.noteType, id, lbl)}
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
-                    onEjectSource={(rid, ledger, amt) => handleEjectSource(nc.noteType, rid, ledger, amt)}
-                    onEjectCustomSource={(cid, ledger, amt) => handleEjectCustomSource(nc.noteType, cid, ledger, amt)}
+                    onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
+                    onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
                   />
                 )}
               </div>
