@@ -1540,8 +1540,17 @@ export default function TallySyncPage() {
                   </div>
                   {/* Balance check strip */}
                   <div className="border-t bg-muted/30 px-4 py-1.5 text-[11px] font-semibold flex justify-end gap-4">
-                    <span className={cn(Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>
-                      {Math.abs(tbDrTotal - tbCrTotal) < 1 ? "✓ Closing Balanced" : `⚠ Closing Diff: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))}`}
+                    <span className={cn(Math.abs(tbDrTotal - tbCrTotal) < 1 ? "text-emerald-600" : "text-amber-600")}
+                      title={
+                        Math.abs(tbDrTotal - tbCrTotal) >= 1 && Math.abs(tbDebitTotal - tbCreditTotal) < 1
+                          ? "Movement is balanced ✓ but opening balances are unbalanced. Tally may have a hidden 'Difference in Opening Balances' entry absorbing this. Fix opening balances in Tally to resolve."
+                          : undefined
+                      }>
+                      {Math.abs(tbDrTotal - tbCrTotal) < 1
+                        ? "✓ Closing Balanced"
+                        : Math.abs(tbDebitTotal - tbCreditTotal) < 1
+                          ? `⚠ Opening Imbalance: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))} — Movement balanced ✓`
+                          : `⚠ Closing Diff: ${fmtAmt(Math.abs(tbDrTotal - tbCrTotal))}`}
                     </span>
                     {hasDebitCredit && (
                       <span className={cn(Math.abs(tbDebitTotal - tbCreditTotal) < 1 ? "text-emerald-600" : "text-amber-600")}>

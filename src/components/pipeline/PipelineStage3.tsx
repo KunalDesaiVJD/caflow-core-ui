@@ -1838,6 +1838,20 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         />
       )}
 
+      {/* PY Shell info banner — P&L opening balances are always ₹0 by design */}
+      {(engagement as any)?.is_py_shell && (
+        <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900">
+          <AlertDescription className="text-[11px] text-blue-800 dark:text-blue-300">
+            <span className="font-semibold">PY Shell — {engagement?.financial_year}:</span>{" "}
+            Map all ledgers to their Schedule III line items. The{" "}
+            <span className="font-semibold">FY {engagement?.financial_year} (Closing)</span> column shows the actual amounts from Tally —
+            these will become the PY comparative figures in the current-year financial statements.
+            The prior-year column (one year older) will show ₹0 for P&L accounts — this is normal
+            since Tally resets income/expense each year.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Opening-TB balance banner (Task 2) */}
       {openingTbImbalanced && (
         <Alert className="bg-destructive/5 border-destructive/30">
@@ -2424,13 +2438,29 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
                   ) : (
                   <>
                   {/* ── NORMAL TREE MODE ── */}
-                  {/* Column header: CY | PY | Δ */}
-                  <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-1 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
-                    <span>FS Line Item</span>
-                    <span className="text-right">Current Yr</span>
-                    <span className="text-right">Prior Yr</span>
-                    <span className="text-right">Δ %</span>
-                  </div>
+                  {/* Column header: CY | PY | Δ — show actual FY so PY-shell users
+                      know which year's data they are looking at */}
+                  {(() => {
+                    const fy = (engagement?.financial_year || "") as string;
+                    const parts = fy.split("-");
+                    const cyLabel = fy ? `FY ${fy}` : "Current Yr";
+                    const pyLabel = (() => {
+                      if (parts.length === 2) {
+                        const prevStart = parseInt(parts[0]) - 1;
+                        const prevEnd   = (parseInt(parts[0])).toString().slice(-2);
+                        return `FY ${prevStart}-${prevEnd}`;
+                      }
+                      return "Prior Yr";
+                    })();
+                    return (
+                      <div className="sticky top-0 z-10 bg-muted/60 border-b px-2 py-1 grid grid-cols-[1fr_90px_90px_60px] gap-1 text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                        <span>FS Line Item</span>
+                        <span className="text-right" title="Closing balance for current engagement period">{cyLabel}</span>
+                        <span className="text-right" title="Opening balance (prior year closing)">{pyLabel}</span>
+                        <span className="text-right">Δ %</span>
+                      </div>
+                    );
+                  })()}
                   {filteredFsItems.map(item => {
                     const isHeader = item.children && item.children.length > 0;
                     const mappedAccounts = tbAccounts.filter(a => coaMapping[a.account_name]?.code === item.code);
