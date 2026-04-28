@@ -361,6 +361,7 @@ function CustomRowEditor({
   cyLtVal, cyStVal, pyLtVal, pyStVal,
   onChangeCy, onChangePy, onChangeCyLt, onChangeCySt, onChangePyLt, onChangePySt,
   onChangeLabel, onDelete, headingOptions, onPromote, onEjectCustomSource, onAddRow,
+  isOpen: isOpenProp, onToggle: onToggleProp, hasSubRows,
 }: {
   row: NCECustomRow;
   cyVal: number; pyVal: number;
@@ -375,22 +376,32 @@ function CustomRowEditor({
   onPromote: (staticId: string) => void;
   onEjectCustomSource?: (ledger: string, amountCy: number, attachToId?: string) => void;
   onAddRow?: () => void;
+  /** External open state — when provided, overrides internal sourcesOpen */
+  isOpen?: boolean;
+  /** Called when the +/- button is clicked (required when isOpen is provided) */
+  onToggle?: () => void;
+  /** Whether this row has attached child custom rows (so +/- shows even without Tally sources) */
+  hasSubRows?: boolean;
 }) {
   const hasSources = (row.sources?.length ?? 0) > 0;
-  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourcesOpenLocal, setSourcesOpenLocal] = useState(false);
+  // If parent passes isOpen/onToggle, use external state; otherwise use local
+  const sourcesOpen = isOpenProp !== undefined ? isOpenProp : sourcesOpenLocal;
+  const handleToggle = onToggleProp ?? (() => setSourcesOpenLocal(o => !o));
+  const showToggle = hasSources || hasSubRows;
   const colCount = isPatternA ? 6 : 4;
   return (
     <>
       <TableRow className={cn("hover:bg-blue-50/50", isChild ? "bg-blue-50/10 border-l-2 border-l-blue-200" : "bg-blue-50/30")}>
         <TableCell className={cn("p-1", isPatternA && "border-r", isChild && "pl-8")}>
           <div className="flex items-center gap-1 min-w-0">
-            {/* +/- toggle for merged/source ledgers */}
-            {hasSources ? (
+            {/* +/- toggle for merged/source ledgers and/or attached sub-rows */}
+            {showToggle ? (
               <button
                 type="button"
                 className="w-5 h-5 flex items-center justify-center rounded border border-blue-300 bg-background text-blue-600 hover:bg-blue-50 shrink-0"
-                onClick={() => setSourcesOpen(o => !o)}
-                title={sourcesOpen ? "Collapse source ledgers" : "Expand source ledgers"}
+                onClick={handleToggle}
+                title={sourcesOpen ? "Collapse" : "Expand"}
               >
                 {sourcesOpen ? <Minus className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
               </button>
@@ -563,6 +574,7 @@ function PatternBTable({
               {insertCustomBefore && unattachedAtGrand.map(cr => {
                 // Custom rows "promoted" to sit under THIS custom row
                 const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                const crIsOpen = openSources.has(cr.id);
                 return (
                   <Fragment key={cr.id}>
                     <CustomRowEditor
@@ -581,8 +593,11 @@ function PatternBTable({
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                       onAddRow={onAddRow}
+                      hasSubRows={customSubRows.length > 0}
+                      isOpen={crIsOpen}
+                      onToggle={() => toggleSources(cr.id)}
                     />
-                    {customSubRows.map(sub => (
+                    {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
                         key={sub.id}
                         row={sub}
@@ -880,6 +895,7 @@ function PatternATable({
             <>
               {sectionRows.map(cr => {
                 const customSubRows = customRows.filter(sub => sub.attachedTo === cr.id);
+                const crIsOpen = openSources.has(cr.id);
                 return (
                   <Fragment key={cr.id}>
                     <CustomRowEditor
@@ -901,8 +917,11 @@ function PatternATable({
                       onPromote={(targetId) => onPromote(cr.id, targetId)}
                       onEjectCustomSource={(ledger, amt) => onEjectCustomSource(cr.id, ledger, amt)}
                       onAddRow={onAddRow}
+                      hasSubRows={customSubRows.length > 0}
+                      isOpen={crIsOpen}
+                      onToggle={() => toggleSources(cr.id)}
                     />
-                    {customSubRows.map(sub => (
+                    {customSubRows.length > 0 && crIsOpen && customSubRows.map(sub => (
                       <CustomRowEditor
                         key={sub.id}
                         row={sub}
