@@ -483,8 +483,10 @@ function CustomRowEditor({
 function PatternBTable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
   customRows, hiddenRows, labelOverrides, cySources,
+  sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
+  onChangeSourceLabel,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -494,6 +496,7 @@ function PatternBTable({
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
   cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
@@ -504,6 +507,7 @@ function PatternBTable({
   onPromote:    (customId: string, staticId: string) => void;
   onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
+  onChangeSourceLabel: (rowId: string, ledger: string, newLabel: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -670,11 +674,19 @@ function PatternBTable({
 
               {/* Inline source-ledger sub-rows for static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.map((s, i) => (
+                cySources[row.id]?.map((s, i) => {
+                  const slKey = `${row.id}::${s.ledger}`;
+                  const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
+                  return (
                   <TableRow key={i} className="bg-muted/5 hover:bg-muted/10">
                     <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate flex-1 italic">{s.ledger}</span>
+                        <Input
+                          value={slLabel}
+                          onChange={e => onChangeSourceLabel(row.id, s.ledger, e.target.value)}
+                          className="h-5 text-xs px-1 border-transparent hover:border-input focus:border-input bg-transparent italic flex-1 min-w-0"
+                          title={s.ledger}
+                        />
                         <SubLedgerActionsMenu
                           ledger={s.ledger}
                           onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)}
@@ -689,7 +701,8 @@ function PatternBTable({
                     <TableCell className="py-0.5" />
                     <TableCell className="py-0.5" />
                   </TableRow>
-                ))
+                  );
+                })
               }
 
               {/* Custom rows attached under this static row — only visible when expanded */}
@@ -737,8 +750,10 @@ function PatternBTable({
 function PatternATable({
   config, cy: rawCy, py: rawPy, cyYear, pyYear,
   customRows, hiddenRows, labelOverrides, cySources,
+  sourceLabelOverrides,
   onChangeCy, onChangePy, onAddRow, onDeleteRow, onChangeLabel,
   onHideStatic, onChangeStaticLabel, onPromote, onEjectSource, onEjectCustomSource,
+  onChangeSourceLabel,
 }: {
   config:       NoteConfig;
   cy:           Record<string, number>;
@@ -748,6 +763,7 @@ function PatternATable({
   hiddenRows:   string[];
   labelOverrides: Record<string, string>;
   cySources:    Record<string, { ledger: string; amountCy: number }[]>;
+  sourceLabelOverrides: Record<string, string>;
   onChangeCy:   (key: string, v: number) => void;
   onChangePy:   (key: string, v: number) => void;
   onAddRow:     () => void;
@@ -758,6 +774,7 @@ function PatternATable({
   onPromote:    (customId: string, staticId: string) => void;
   onEjectSource:(rowId: string, ledger: string, amount: number, attachToId?: string) => void;
   onEjectCustomSource:(customRowId: string, ledger: string, amount: number, attachToId?: string) => void;
+  onChangeSourceLabel: (rowId: string, ledger: string, newLabel: string) => void;
 }) {
   const { cy, py } = useMemo(
     () => computeDisplayData(config, rawCy, rawPy, customRows),
@@ -998,16 +1015,22 @@ function PatternATable({
 
               {/* Inline source-ledger sub-rows for Pattern A static rows */}
               {!row.isSectionHeader && !row.isTotal && openSources.has(row.id) &&
-                cySources[row.id]?.map((s, i) => (
+                cySources[row.id]?.map((s, i) => {
+                  const slKey = `${row.id}::${s.ledger}`;
+                  const slLabel = sourceLabelOverrides[slKey] ?? s.ledger;
+                  return (
                   <TableRow key={i} className="bg-muted/5 hover:bg-muted/10">
                     <TableCell className="py-0.5 pl-10 pr-1 text-xs text-muted-foreground border-r">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate flex-1 italic">
-                          {s.ledger}
-                          {(s as any).column && (
-                            <span className="text-[9px] uppercase ml-1 font-semibold not-italic">[{(s as any).column}]</span>
-                          )}
-                        </span>
+                        <Input
+                          value={slLabel}
+                          onChange={e => onChangeSourceLabel(row.id, s.ledger, e.target.value)}
+                          className="h-5 text-xs px-1 border-transparent hover:border-input focus:border-input bg-transparent italic flex-1 min-w-0"
+                          title={s.ledger}
+                        />
+                        {(s as any).column && (
+                          <span className="text-[9px] uppercase shrink-0 font-semibold text-muted-foreground/60">[{(s as any).column}]</span>
+                        )}
                         <SubLedgerActionsMenu
                           ledger={s.ledger}
                           onEject={() => onEjectSource(row.id, s.ledger, s.amountCy)}
@@ -1026,7 +1049,8 @@ function PatternATable({
                     <TableCell className="py-0.5" />
                     <TableCell className="py-0.5" />
                   </TableRow>
-                ))
+                  );
+                })
               }
 
               {/* Custom rows attached under this static row — only visible when expanded */}
@@ -1276,6 +1300,17 @@ export function NCEDetailedNotes({ engagementId }: Props) {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
       const next = { ...prev, [noteType]: { ...cur, labelOverrides: overrides } };
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  const handleChangeSourceLabel = useCallback((noteType: string, rowId: string, ledger: string, newLabel: string) => {
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const key = `${rowId}::${ledger}`;
+      const overrides = { ...(cur.sourceLabelOverrides ?? {}), [key]: newLabel };
+      const next = { ...prev, [noteType]: { ...cur, sourceLabelOverrides: overrides } };
       scheduleSave(next);
       return next;
     });
@@ -1579,6 +1614,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     hiddenRows={d.hiddenRows ?? []}
                     labelOverrides={d.labelOverrides ?? {}}
                     cySources={d.cy_sources ?? {}}
+                    sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}
@@ -1589,6 +1625,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
+                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}
                   />
                 ) : (
                   <PatternBTable
@@ -1599,6 +1636,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     hiddenRows={d.hiddenRows ?? []}
                     labelOverrides={d.labelOverrides ?? {}}
                     cySources={d.cy_sources ?? {}}
+                    sourceLabelOverrides={d.sourceLabelOverrides ?? {}}
                     onChangeCy={(key, v) => handleChange(nc.noteType, key, true,  v)}
                     onChangePy={(key, v) => handleChange(nc.noteType, key, false, v)}
                     onAddRow={() => handleAddRow(nc.noteType)}
@@ -1609,6 +1647,7 @@ export function NCEDetailedNotes({ engagementId }: Props) {
                     onPromote={(cid, sid) => handlePromoteCustomToStatic(nc.noteType, cid, sid)}
                     onEjectSource={(rid, ledger, amt, attachToId?) => handleEjectSource(nc.noteType, rid, ledger, amt, attachToId)}
                     onEjectCustomSource={(cid, ledger, amt, attachToId?) => handleEjectCustomSource(nc.noteType, cid, ledger, amt, attachToId)}
+                    onChangeSourceLabel={(rid, ledger, lbl) => handleChangeSourceLabel(nc.noteType, rid, ledger, lbl)}
                   />
                 )}
               </div>

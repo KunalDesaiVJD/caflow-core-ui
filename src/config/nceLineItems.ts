@@ -69,7 +69,7 @@ export const NCE_FS_ITEMS: FSLineItem[] = [
       { code: "NCE_STCK", name: "(b) Inventories",                   noteRef: 17, section: "NCE_BS_assets", scheduleRef: "BS+P&L" },
       { code: "NCE_TR",   name: "(c) Trade receivables",             noteRef: 18, section: "NCE_BS_assets" },
       { code: "NCE_CASH", name: "(d) Cash and bank balances",        noteRef: 19, section: "NCE_BS_assets" },
-      { code: "NCE_STLA", name: "(e) Short-term loans and advances", noteRef: 20, section: "NCE_BS_assets" },
+      { code: "NCE_STLA", name: "(e) Short-term loans and advances", noteRef: 14, section: "NCE_BS_assets" },
       { code: "NCE_OCA",  name: "(f) Other current assets",          noteRef: 21, section: "NCE_BS_assets" },
     ]},
   ]},

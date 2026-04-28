@@ -225,6 +225,10 @@ export interface NCENoteData {
    *  A ledger is removed from this list when the user deletes its standalone row,
    *  at which point re-sync will include it again in auto-grouping. */
   ejectedLedgers?: string[];
+  /** User-edited display labels for source sub-ledger rows.
+   *  Keyed as `${staticRowId}::${originalLedgerName}`.
+   *  Amounts remain locked to Tally TB data; only the label is overridden. */
+  sourceLabelOverrides?: Record<string, string>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
