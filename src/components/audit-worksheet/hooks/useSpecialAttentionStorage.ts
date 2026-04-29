@@ -64,6 +64,13 @@ export interface AuditorEntry {
   name: string;
 }
 
+/** A user-added custom checklist row (particulars + optional documents) */
+export interface ExtraRow {
+  id:           string;
+  particulars:  string;
+  documents?:   string;
+}
+
 export interface SpecialAttentionFormData {
   /** Dynamic auditor list — replaces fixed auditor1/2 slots */
   audit_carried_by: AuditorEntry[];
@@ -73,6 +80,8 @@ export interface SpecialAttentionFormData {
   auditor2_id:   string;
   auditor2_name: string;
   rows: Record<string, SARowState>;
+  /** User-added custom rows appended after the static checklist */
+  extra_rows: ExtraRow[];
 }
 
 export const BLANK_SA: SpecialAttentionFormData = {
@@ -82,6 +91,7 @@ export const BLANK_SA: SpecialAttentionFormData = {
   auditor2_id:   "",
   auditor2_name: "",
   rows: {},
+  extra_rows: [],
 };
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -110,7 +120,10 @@ export function useSpecialAttentionStorage(
     for (const [rowId, row] of Object.entries(saved.rows || {})) {
       migratedRows[rowId] = migrateRow(row);
     }
-    return { ...BLANK_SA, ...saved, audit_carried_by: carried, rows: migratedRows };
+    const extraRows: ExtraRow[] = Array.isArray((saved as any).extra_rows)
+      ? (saved as any).extra_rows
+      : [];
+    return { ...BLANK_SA, ...saved, audit_carried_by: carried, rows: migratedRows, extra_rows: extraRows };
   }
 
   useEffect(() => {
@@ -205,6 +218,44 @@ export function useSpecialAttentionStorage(
     [debounce]
   );
 
+  // ── extra_rows mutations ───────────────────────────────────────────────────
+
+  /** Append a blank custom row */
+  const addExtraRow = useCallback(() => {
+    setData(prev => {
+      const id   = `extra_${Date.now()}`;
+      const next = { ...prev, extra_rows: [...prev.extra_rows, { id, particulars: "", documents: "" }] };
+      debounce(next);
+      return next;
+    });
+  }, [debounce]);
+
+  /** Remove a custom row (and its saved state) by id */
+  const deleteExtraRow = useCallback((id: string) => {
+    setData(prev => {
+      const extra_rows = prev.extra_rows.filter(r => r.id !== id);
+      // Also drop the interactive row state so no orphan data lingers
+      const rows = { ...prev.rows };
+      delete rows[id];
+      const next = { ...prev, extra_rows, rows };
+      debounce(next);
+      return next;
+    });
+  }, [debounce]);
+
+  /** Update particulars or documents of a custom row */
+  const updateExtraRow = useCallback(
+    (id: string, patch: Partial<Pick<ExtraRow, "particulars" | "documents">>) => {
+      setData(prev => {
+        const extra_rows = prev.extra_rows.map(r => r.id === id ? { ...r, ...patch } : r);
+        const next = { ...prev, extra_rows };
+        debounce(next, `Special Attention · ${id}`);
+        return next;
+      });
+    },
+    [debounce]
+  );
+
   // ── manualSave ─────────────────────────────────────────────────────────────
   const manualSave = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -219,6 +270,7 @@ export function useSpecialAttentionStorage(
 
   return {
     data, setHeader, setRowField, patchRow, getRow,
+    addExtraRow, deleteExtraRow, updateExtraRow,
     manualSave, saving, loaded,
   };
 }

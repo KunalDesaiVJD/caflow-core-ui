@@ -21,7 +21,7 @@ import { Badge }     from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Save, Loader2, Building2, Plus, Trash2 } from "lucide-react";
 
-import { useSpecialAttentionStorage, type AuditorEntry } from "./hooks/useSpecialAttentionStorage";
+import { useSpecialAttentionStorage, type AuditorEntry, type ExtraRow } from "./hooks/useSpecialAttentionStorage";
 import { useEmployeeDropdown }         from "./hooks/useEmployeeDropdown";
 import type { AuditWorksheetData }     from "./hooks/useAuditWorksheetData";
 import { awLoad }                      from "@/lib/awStorage";
@@ -281,6 +281,7 @@ interface Props {
 export default function SpecialAttention({ data, engagementId, taxAuditMode = false, onSaved }: Props) {
   const {
     data: m, setHeader, setRowField, patchRow, getRow,
+    addExtraRow, deleteExtraRow, updateExtraRow,
     manualSave, saving, loaded,
   } = useSpecialAttentionStorage(engagementId, data.engagement?.firm_id);
 
@@ -654,6 +655,171 @@ export default function SpecialAttention({ data, engagementId, taxAuditMode = fa
                 </tr>
               );
             })}
+            {/* ══ User-added extra rows ══ */}
+            {m.extra_rows.map((extraRow: ExtraRow, idx: number) => {
+              // Static top-level items go up to "10", so custom rows start at 11
+              const srNum = idx + 11;
+              const rs = getRow(extraRow.id);
+              return (
+                <tr
+                  key={extraRow.id}
+                  className={cn(
+                    "hover:bg-muted/20 transition-colors group",
+                    rs.query === "yes" && "bg-amber-50"
+                  )}
+                >
+                  {/* Sr.No */}
+                  <td className="border border-border px-2 py-1.5 text-center text-xs font-mono text-muted-foreground align-top">
+                    {srNum}
+                  </td>
+
+                  {/* Particulars — editable */}
+                  <td className="border border-border px-2 py-1.5 align-top">
+                    <div className="flex items-start gap-1">
+                      <textarea
+                        rows={2}
+                        value={extraRow.particulars}
+                        onChange={e => updateExtraRow(extraRow.id, { particulars: e.target.value })}
+                        placeholder="Enter particulars…"
+                        className="flex-1 text-sm leading-snug bg-transparent resize-none border-0 p-0 focus:outline-none focus:ring-0 w-full"
+                      />
+                      <button
+                        type="button"
+                        title="Delete row"
+                        onClick={() => deleteExtraRow(extraRow.id)}
+                        className="mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-600 shrink-0"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+
+                  {/* Checked By — multi-select chips */}
+                  <td className="border border-border px-2 py-1.5 align-top min-w-[140px]">
+                    {rs.checked_by_names.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {rs.checked_by_names.map((name, ci) => name ? (
+                          <span
+                            key={ci}
+                            className="inline-flex items-center gap-0.5 bg-green-50 border border-green-200 rounded-full px-1.5 py-0.5 text-[10px] text-green-800 font-medium"
+                          >
+                            ✓ {name}
+                            <button
+                              type="button"
+                              className="text-green-400 hover:text-red-600 leading-none font-bold ml-0.5"
+                              onClick={() => patchRow(extraRow.id, {
+                                checked_by_ids:   rs.checked_by_ids.filter((_, j) => j !== ci),
+                                checked_by_names: rs.checked_by_names.filter((_, j) => j !== ci),
+                              })}
+                            >×</button>
+                          </span>
+                        ) : null)}
+                      </div>
+                    )}
+                    <Select
+                      value=""
+                      onValueChange={id => {
+                        if (!id || rs.checked_by_ids.includes(id)) return;
+                        const emp = employees.find(e => e.id === id);
+                        patchRow(extraRow.id, {
+                          checked_by_ids:   [...rs.checked_by_ids, id],
+                          checked_by_names: [...rs.checked_by_names, emp?.name || ""],
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-6 text-[10px] border-dashed border-green-300 text-green-600 hover:bg-green-50">
+                        <SelectValue placeholder="+ Add checker" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employees
+                          .filter(e => !rs.checked_by_ids.includes(e.id))
+                          .map(e => (
+                            <SelectItem key={e.id} value={e.id} className="text-xs">
+                              {e.name || "—"}{e.role ? ` · ${e.role}` : ""}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+
+                  {/* Verified By */}
+                  <td className="border border-border px-2 py-1.5 align-top">
+                    <EmpSelect
+                      value={rs.verified_by_id}
+                      placeholder="Verified by…"
+                      onChange={(id, name) => patchRow(extraRow.id, {
+                        verified_by_id: id, verified_by_name: name,
+                      })}
+                      employees={employees}
+                    />
+                    {rs.verified_by_name && (
+                      <p className="text-[10px] text-blue-700 mt-0.5 font-medium truncate">
+                        ✓ {rs.verified_by_name}
+                      </p>
+                    )}
+                  </td>
+
+                  {/* Query Y/N */}
+                  <td className="border border-border px-2 py-1.5 text-center align-top">
+                    <Select
+                      value={rs.query || "__none__"}
+                      onValueChange={v => setRowField(extraRow.id, "query", v === "__none__" ? "" : v)}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-20 mx-auto">
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">—</SelectItem>
+                        <SelectItem value="yes">Yes</SelectItem>
+                        <SelectItem value="no">No</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {rs.query === "yes" && (
+                      <Badge className="mt-1 text-[9px] px-1 py-0 bg-amber-100 text-amber-700 block">
+                        Query raised
+                      </Badge>
+                    )}
+                  </td>
+
+                  {/* Remarks */}
+                  <td className="border border-border px-2 py-1.5 align-top">
+                    <Textarea
+                      rows={2}
+                      className="text-xs min-w-[120px] resize-none"
+                      placeholder="Remarks…"
+                      value={rs.remarks}
+                      onChange={e => setRowField(extraRow.id, "remarks", e.target.value)}
+                    />
+                  </td>
+
+                  {/* Documents — editable for custom rows */}
+                  <td className="border border-border px-2 py-1.5 align-top">
+                    <textarea
+                      rows={2}
+                      value={extraRow.documents ?? ""}
+                      onChange={e => updateExtraRow(extraRow.id, { documents: e.target.value })}
+                      placeholder="Documents to verify…"
+                      className="w-full text-[11px] text-muted-foreground leading-snug bg-transparent resize-none border-0 p-0 focus:outline-none focus:ring-0 italic"
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+
+            {/* ══ Add Row button row ══ */}
+            <tr>
+              <td colSpan={7} className="border border-border px-3 py-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 h-7 text-xs border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  onClick={addExtraRow}
+                >
+                  <Plus size={12} /> Add Row
+                </Button>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
