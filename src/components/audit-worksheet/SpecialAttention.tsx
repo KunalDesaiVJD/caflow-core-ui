@@ -212,6 +212,14 @@ const CHECKLIST: ChecklistRow[] = [
     documents: "Written answers to each CARO reporting point from management",
     isSection: false, indent: true,
   },
+
+  // ── 11 — MSME ──
+  {
+    id: "11", sr: "11",
+    particulars: "MSME — Verification of outstanding dues to Micro and Small Enterprises under MSMED Act, 2006",
+    documents: "MSME Declaration / Udyam Registration Certificate of all Suppliers / Creditors",
+    isSection: false, indent: false,
+  },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
