@@ -117,15 +117,12 @@ export function CorporateSignatureBlock({
             partnerName:  eng?.signing_partner_name ?? "",
             partnerMemNo: eng?.signing_partner_membership_no ?? "",
           });
-          // Auto-populate directors from Block C if localStorage is empty
+          // Auto-populate directors from Block C — Block C always takes priority
           const engDirs: Director[] = ((eng?.questionnaire_answers as any)?.directors ?? [])
-            .map((d: any) => ({ name: d.name ?? "", din: d.din ?? "" }));
+            .map((d: any) => ({ name: d.name ?? "", din: d.din ?? "" }))
+            .filter((d: Director) => d.name.trim() || d.din.trim());
           if (engDirs.length > 0) {
-            setDir(prev => {
-              const anyFilled = prev.directors.some(d => d.name.trim() || d.din.trim());
-              if (anyFilled) return prev; // keep localStorage data
-              return { ...prev, directors: engDirs };
-            });
+            setDir(prev => ({ ...prev, directors: engDirs }));
           }
         }
       } catch { /* keep blanks */ }
