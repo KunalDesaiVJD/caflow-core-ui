@@ -67,6 +67,7 @@ const NoticeDetail             = lazy(() => import("./pages/NoticeDetail"));
 const RolesPermissions         = lazy(() => import("./pages/RolesPermissions"));
 const FirmSettings             = lazy(() => import("./pages/FirmSettings"));
 const ServiceMasters           = lazy(() => import("./pages/ServiceMasters"));
+const RequiredDocsMaster       = lazy(() => import("./pages/RequiredDocsMaster"));
 const TaxAuditTemplateSettings = lazy(() => import("./pages/TaxAuditTemplateSettings"));
 const Chat                     = lazy(() => import("./pages/Chat"));
 const Depreciation             = lazy(() => import("./pages/Depreciation"));
@@ -241,6 +242,7 @@ const App = () => (
               <Route path="/settings/firm" element={<FirmSettings />} />
               <Route path="/settings/roles" element={<RolesPermissions />} />
               <Route path="/settings/services" element={<ServiceMasters />} />
+              <Route path="/settings/required-docs" element={<RequiredDocsMaster />} />
               <Route path="/settings/tax-audit-templates" element={<TaxAuditTemplateSettings />} />
               <Route path="/notices" element={<Navigate to="/itr" replace />} />
               <Route path="/notices/:id" element={<NoticeDetail />} />
