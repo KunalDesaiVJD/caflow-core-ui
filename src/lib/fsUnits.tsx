@@ -17,7 +17,7 @@ import {
   createContext, useContext, useEffect, useMemo, useState, type ReactNode,
 } from "react";
 
-export type FsScale = "actual" | "thousands" | "lakhs" | "crores";
+export type FsScale = "actual" | "thousands";
 
 export interface FsScaleMeta {
   key:        FsScale;
@@ -26,11 +26,11 @@ export interface FsScaleMeta {
   divisor:    number;
 }
 
+// Per Sch III for Pvt / Public Ltd, only "actual" or "in '000" are mandated
+// for the on-screen FS view in our current scope — user removed Lakhs/Crores.
 export const FS_SCALES: FsScaleMeta[] = [
-  { key: "actual",    label: "Actual",     suffix: "(₹)",        divisor: 1            },
-  { key: "thousands", label: "Rs. in '000", suffix: "(₹ in '000)", divisor: 1_000        },
-  { key: "lakhs",     label: "Lakhs",      suffix: "(₹ in lakhs)", divisor: 1_00_000     },
-  { key: "crores",    label: "Crores",     suffix: "(₹ in crores)", divisor: 1_00_00_000  },
+  { key: "actual",    label: "Actual",      suffix: "(₹)",         divisor: 1     },
+  { key: "thousands", label: "Rs. in '000", suffix: "(₹ in '000)", divisor: 1_000 },
 ];
 
 interface FsUnitsContextValue {
@@ -86,9 +86,7 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
     if (typeof window === "undefined") return "actual";
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
-      if (stored === "actual" || stored === "thousands" || stored === "lakhs" || stored === "crores") {
-        return stored;
-      }
+      if (stored === "actual" || stored === "thousands") return stored;
     } catch { /* ignore */ }
     return "actual";
   });
@@ -97,11 +95,8 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY(engagementId));
-      if (stored === "actual" || stored === "thousands" || stored === "lakhs" || stored === "crores") {
-        setScaleState(stored);
-      } else {
-        setScaleState("actual");
-      }
+      if (stored === "actual" || stored === "thousands") setScaleState(stored);
+      else setScaleState("actual");
     } catch { /* ignore */ }
   }, [engagementId]);
 
@@ -110,12 +105,14 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
     try { localStorage.setItem(STORAGE_KEY(engagementId), s); } catch { /* ignore */ }
   };
 
-  // Keep the module-level divisor in sync so legacy helpers can scale too.
-  useEffect(() => {
-    const m = FS_SCALES.find(s => s.key === scale)!;
+  // CRITICAL: set the module-level divisor *synchronously during render* so
+  // children that call formatINR / formatScaledINRWhole during this same
+  // render pass see the new scale immediately. Doing this in useEffect would
+  // run after children render, leaving them one click behind.
+  {
+    const m = FS_SCALES.find(s => s.key === scale) ?? FS_SCALES[0];
     _activeDivisor = m.divisor;
-    return () => { _activeDivisor = 1; };
-  }, [scale]);
+  }
 
   const value = useMemo<FsUnitsContextValue>(() => {
     const meta = FS_SCALES.find(s => s.key === scale)!;

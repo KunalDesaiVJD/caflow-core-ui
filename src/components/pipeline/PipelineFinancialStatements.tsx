@@ -34,7 +34,7 @@ import { RatiosTab } from "@/components/stage7/RatiosTab";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen, TrendingUp,
+  BookOpen, TrendingUp, RefreshCw,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -4833,6 +4833,9 @@ export default function PipelineFinancialStatements({
         </div>
         <div className="flex items-center gap-2">
           <FsUnitsToggle />
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="gap-1" title="Hard refresh — re-renders all FS figures with the active unit scale">
+            <RefreshCw size={14} /> Refresh
+          </Button>
           <Button variant="outline" size="sm" onClick={exportToExcel} className="gap-1">
             <Download size={14} /> Export Excel
           </Button>
