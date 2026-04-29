@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import {
-  Sparkles, Loader2, Save, Lock, CheckCircle2, Download, FileType, Info,
+  Loader2, Save, Lock, CheckCircle2, Download, FileType, Info,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -212,6 +212,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   const [loading, setLoading] = useState(true);
   const [autoFilling, setAutoFilling] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [openClauses, setOpenClauses] = useState<string[]>([]);
 
   // Header / signature data
   const [firm, setFirm] = useState<any>(null);
@@ -220,6 +221,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   const [reportDate, setReportDate] = useState<string>(
     new Date().toISOString().slice(0, 10),
   );
+  const [udin, setUdin] = useState<string>(() => {
+    try { return localStorage.getItem(`caro_udin_${engagement?.id}`) || ""; } catch { return ""; }
+  });
+  const saveUdin = (v: string) => {
+    setUdin(v);
+    try { localStorage.setItem(`caro_udin_${engagement?.id}`, v); } catch { /**/ }
+  };
 
   const isApplicable = engagement?.caro_applicable !== false; // null/undefined → applicable
 
@@ -234,20 +242,33 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   });
   const [editingIntro, setEditingIntro] = useState(false);
 
+  // ── FY end year: "FY 2025-26" → "2026" ──────────────────────────────────
+  const fyEndYear = (() => {
+    const fy = engagement?.financial_year || '';
+    const m = fy.match(/(\d{4})\s*[-–]\s*(\d{2,4})/);
+    if (m) {
+      const end = m[2];
+      return end.length === 2 ? m[1].slice(0, 2) + end : end;
+    }
+    return '20XX';
+  })();
+
   // Load correct default if nothing saved yet
   useEffect(() => {
     if (!engagement?.id) return;
     try {
       const saved = localStorage.getItem(introLsKey);
       if (!saved) {
-        const def = isApplicable ? CARO_INTRO_DEFAULT : CARO_NOT_APPLICABLE_FULL;
+        const raw = isApplicable ? CARO_INTRO_DEFAULT : CARO_NOT_APPLICABLE_FULL;
+        // Replace placeholder year with actual FY end year
+        const def = fyEndYear !== '20XX' ? raw.replace(/20XX/g, fyEndYear) : raw;
         setIntroText(def);
       } else {
         setIntroText(saved);
       }
     } catch { /**/ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engagement?.id, isApplicable]);
+  }, [engagement?.id, isApplicable, fyEndYear]);
 
   const saveIntro = (text: string) => {
     setIntroText(text);
@@ -349,6 +370,14 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
     }
     setLoading(false);
   }
+
+  // Expand all clauses by default once rows are loaded
+  useEffect(() => {
+    if (rows.length > 0 && openClauses.length === 0) {
+      setOpenClauses(rows.map(r => `clause-${r.clause_number}`));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length]);
 
   function updateRow(idx: number, field: keyof CaroRow, value: any) {
     setRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
@@ -558,6 +587,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
               firmName={firmName} firmFRN={firmFRN} partnerName={partnerName}
               membershipNo={membershipNo} place={place} setPlace={setPlace}
               reportDate={reportDate} setReportDate={setReportDate}
+              udin={udin} setUdin={saveUdin}
             />
             <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
               <Info className="h-4 w-4 shrink-0 mt-0.5" />
@@ -604,12 +634,17 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
           <Button variant="outline" size="sm" onClick={() => setEditingIntro(v => !v)} className="gap-1 text-xs">
             {editingIntro ? "Done Editing Intro" : "Edit Intro Text"}
           </Button>
-          <Button onClick={autoFillAll} disabled={autoFilling} variant="outline" className="gap-1">
-            {autoFilling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            Auto-Fill All
+          <Button
+            variant="outline" size="sm" className="gap-1 text-xs"
+            onClick={() => setOpenClauses(rows.map(r => `clause-${r.clause_number}`))}
+          >
+            ↕ Expand All
           </Button>
-          <Button onClick={approveAll} variant="outline" className="gap-1">
-            <CheckCircle2 className="w-4 h-4" /> Approve All
+          <Button
+            variant="outline" size="sm" className="gap-1 text-xs"
+            onClick={() => setOpenClauses([])}
+          >
+            ↕ Collapse All
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -682,6 +717,18 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         </CardContent>
       </Card>
 
+      {/* Signature block — appears after main report intro, before Annexure-A */}
+      <Card>
+        <CardContent className="p-4">
+          <SignatureBlock
+            firmName={firmName} firmFRN={firmFRN} partnerName={partnerName}
+            membershipNo={membershipNo} place={place} setPlace={setPlace}
+            reportDate={reportDate} setReportDate={setReportDate}
+            udin={udin} setUdin={saveUdin}
+          />
+        </CardContent>
+      </Card>
+
       {/* Annexure-A header */}
       <Card>
         <CardContent className="p-4 text-center">
@@ -693,7 +740,7 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
         </CardContent>
       </Card>
 
-      <Accordion type="multiple" className="space-y-2">
+      <Accordion type="multiple" value={openClauses} onValueChange={setOpenClauses} className="space-y-2">
         {rows.map((row, idx) => (
           <AccordionItem key={row.clause_number} value={`clause-${row.clause_number}`} className="border rounded-lg">
             <AccordionTrigger className="px-4 py-3 hover:no-underline">
@@ -805,24 +852,34 @@ interface SigProps {
   setPlace: (v: string) => void;
   reportDate: string;
   setReportDate: (v: string) => void;
+  udin: string;
+  setUdin: (v: string) => void;
 }
 function SignatureBlock({
   firmName, firmFRN, partnerName, membershipNo,
   place, setPlace, reportDate, setReportDate,
+  udin, setUdin,
 }: SigProps) {
   return (
-    <div className="space-y-3 text-sm">
-      <div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-sm">
+      {/* Left column */}
+      <div className="space-y-1">
         <p className="font-semibold">For, {firmName}</p>
         <p className="text-muted-foreground">Chartered Accountants</p>
         <p className="text-muted-foreground">Firm Regi. No.: {firmFRN}</p>
+        <div className="pt-4 space-y-1">
+          <p className="font-semibold">{partnerName}</p>
+          <p className="text-muted-foreground">Partner</p>
+          <p className="text-muted-foreground">Membership No.: {membershipNo}</p>
+        </div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {/* Right column */}
+      <div className="space-y-3">
         <div>
           <Label className="text-xs">Place</Label>
           <Input
             value={place} onChange={e => setPlace(e.target.value)}
-            placeholder="e.g. Mumbai" className="h-8 text-xs"
+            placeholder="e.g. Ahmedabad" className="h-8 text-xs"
           />
         </div>
         <div>
@@ -833,10 +890,13 @@ function SignatureBlock({
             className="h-8 text-xs"
           />
         </div>
-      </div>
-      <div>
-        <p className="font-semibold">{partnerName}</p>
-        <p className="text-muted-foreground">Partner &nbsp; Membership No.: {membershipNo}</p>
+        <div>
+          <Label className="text-xs">UDIN</Label>
+          <Input
+            value={udin} onChange={e => setUdin(e.target.value)}
+            placeholder="e.g. 24047146AAAAAA0000" className="h-8 text-xs"
+          />
+        </div>
       </div>
     </div>
   );

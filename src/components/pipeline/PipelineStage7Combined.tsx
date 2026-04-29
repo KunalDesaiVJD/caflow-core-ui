@@ -139,12 +139,14 @@ function CorporateStage7Tabs({ engagementId, engagement, activeTab, setActiveTab
       // engagement. The CARO / IFC / Cash Flow tabs below are the annexures,
       // gated by their own Block C applicability flags.
       { id: 'iar',      label: 'IAR',               icon: FileText,      show: true },
-      { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: visible(engagement?.caro_applicable) },
+      // CARO tab is always visible for corporate entities — content switches
+      // between "Not Applicable" and "21 Clauses" based on Block C flag.
+      { id: 'caro',     label: 'CARO 2020',         icon: Shield,        show: true },
       { id: 'ifc',      label: 'IFC Report',        icon: Shield,        show: visible(engagement?.ifc_applicable) },
       { id: 'mrl',      label: 'MRL',               icon: ClipboardList, show: true },
     ];
     return all.filter(t => t.show);
-  }, [engagement?.caro_applicable, engagement?.ifc_applicable]);
+  }, [engagement?.ifc_applicable]);
 
   // If activeTab vanished (Block C toggled), reset to first available.
   useEffect(() => {
