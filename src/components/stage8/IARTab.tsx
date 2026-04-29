@@ -152,6 +152,27 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
   // explaining the migration step, instead of a scary red toast.
   const [tableMissing, setTableMissing] = useState(false);
 
+  // ── Editable sign-off date (date picker) ─────────────────────────────────
+  // Source: engagement.sign_off_date or signed_at. User edits flow back to DB.
+  const initialSignOff =
+    (engagement?.sign_off_date as string)
+    || (engagement?.signed_at ? String(engagement.signed_at).slice(0, 10) : "");
+  const [signOffDate, setSignOffDate] = useState<string>(initialSignOff);
+  // Sync if engagement prop refreshes (e.g. after a different tab saved it)
+  useEffect(() => {
+    setSignOffDate(initialSignOff);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engagement?.sign_off_date, engagement?.signed_at]);
+  const saveSignOffDate = async (iso: string) => {
+    setSignOffDate(iso);
+    if (!engagement?.id) return;
+    const { error } = await supabase
+      .from("audit_engagements")
+      .update({ sign_off_date: iso || null } as any)
+      .eq("id", engagement.id);
+    if (error) toast({ title: "Could not save date", description: error.message, variant: "destructive" });
+  };
+
   // ── Auto-linked metadata (read-only) ────────────────────────────────────
   const companyName = client?.name || "[Company Name]";
   const companyPan  = client?.pan || "";
@@ -162,7 +183,7 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
     ? String(parseInt(String(engagement.financial_year).split("-")[0], 10) + 1)
     : "20XX";
   const reportDate  = formatDateDotDmy(
-    engagement?.sign_off_date || engagement?.signed_at,
+    signOffDate || engagement?.sign_off_date || engagement?.signed_at,
   );
   const udinValue   = engagement?.udin && String(engagement.udin).trim()
     ? String(engagement.udin).trim()
@@ -176,8 +197,17 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
     // Default to "Ahmedabad" (firm's primary city) instead of state.
     return "Ahmedabad";
   })();
-  const partnerName   = partner?.name || "[Partner Name]";
-  const partnerMemNo  = partner?.icai_reg_no || "[Mem No]";
+  // Partner sources: engagement.partner_name → firm.membership_numbers JSON → users
+  const engPartnerName = ((engagement as any)?.partner_name || "").trim();
+  const firmMnoEntry   = Array.isArray((firm as any)?.membership_numbers)
+    ? ((firm as any).membership_numbers as any[]).find(
+        (m: any) => (m?.partner_name || "").trim() === engPartnerName
+      )
+    : null;
+  const partnerName   = engPartnerName || partner?.name || "[Partner Name]";
+  const partnerMemNo  = firmMnoEntry?.membership_no
+    || partner?.icai_reg_no
+    || "[Mem No]";
 
   // ── Auto-generated conditional fragments from Block C flags ─────────────
   const fragments = useMemo(() => {
@@ -188,21 +218,21 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
       pan:           client?.pan,
       firmName:      firm?.display_name || firm?.name,
       frn:           firm?.icai_firm_reg_no,
-      partnerName:   partner?.name,
-      membershipNo:  partner?.icai_reg_no,
+      partnerName:   partnerName,
+      membershipNo:  partnerMemNo,
       udin:          engagement?.udin,
       place:         firmCity,
       financialYear: engagement?.financial_year,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engagement, client, firm, partner, firmCity]);
+  }, [engagement, client, firm, partner, firmCity, partnerName, partnerMemNo]);
 
   // ── Load firm ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!engagement?.firm_id) return;
     supabase
       .from("firms")
-      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state")
+      .select("name, display_name, icai_firm_reg_no, icai_reg_no, address, state, membership_numbers")
       .eq("id", engagement.firm_id)
       .maybeSingle()
       .then(({ data }) => { if (data) setFirm(data); });
@@ -860,7 +890,15 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
             {/* Right column */}
             <div className="space-y-2 text-right">
               <p>Place: <span className="font-semibold">{firmCity}</span></p>
-              <p>Date: <span className="font-mono">{reportDate}</span></p>
+              <div className="flex items-center justify-end gap-2">
+                <span>Date:</span>
+                <Input
+                  type="date"
+                  value={signOffDate}
+                  onChange={e => saveSignOffDate(e.target.value)}
+                  className="h-8 text-xs w-[160px] text-right"
+                />
+              </div>
               <div className="h-24" />
               <p>UDIN: <span className="font-mono">{udinValue}</span></p>
             </div>
