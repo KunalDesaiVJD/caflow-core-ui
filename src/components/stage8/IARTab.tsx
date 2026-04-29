@@ -173,8 +173,8 @@ export function IARTab({ engagement, client, onUpdate }: Props) {
   const firmCity      = (() => {
     const addr = firm?.address;
     if (addr && typeof addr === "object" && typeof addr.city === "string" && addr.city.trim()) return addr.city;
-    if (firm?.state) return firm.state;
-    return "[City]";
+    // Default to "Ahmedabad" (firm's primary city) instead of state.
+    return "Ahmedabad";
   })();
   const partnerName   = partner?.name || "[Partner Name]";
   const partnerMemNo  = partner?.icai_reg_no || "[Mem No]";
