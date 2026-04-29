@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuditContext } from "@/hooks/useAuditContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -83,18 +83,42 @@ export default function LedgerVouchersView() {
   const { ledgerName: encodedName } = useParams<{ ledgerName: string }>();
   const ledgerName = encodedName ? decodeURIComponent(encodedName) : "";
   const navigate   = useNavigate();
-  const { selectedEngagementId, selectedEngagement } = useAuditContext();
+  const [searchParams] = useSearchParams();
+  // ?eng=<engagement_id> overrides the global audit-context engagement so that
+  // a ledger opened from a PY Shell embedded view stays scoped to that PY
+  // engagement (otherwise the page falls back to the CY engagement and shows
+  // empty/wrong-FY data).
+  const engOverride = searchParams.get("eng");
+  const { selectedEngagement } = useAuditContext();
 
   const [vouchers,     setVouchers]     = useState<LedgerVoucher[]>([]);
   const [tbRow,        setTbRow]        = useState<TBRow | null>(null);
   const [recon,        setRecon]        = useState<Reconciliation | null>(null);
   const [loading,      setLoading]      = useState(true);
   const [engId,        setEngId]        = useState<string | null>(null);
+  const [scopedFy,     setScopedFy]     = useState<string | null>(null);
+  const [scopedIsPy,   setScopedIsPy]   = useState<boolean>(false);
   const [expandedRow,  setExpandedRow]  = useState<string | null>(null);
 
   // Resolve the tally engagement_id (same logic as TallySyncPage)
   useEffect(() => {
     async function resolveEngId() {
+      // Priority 1: explicit ?eng=<id> from the URL — used when navigating
+      // from a PY Shell embedded view so we honour the originating FY.
+      if (engOverride) {
+        const { data } = await supabase
+          .from("engagements" as any)
+          .select("id, financial_year, is_py_shell")
+          .eq("id", engOverride)
+          .maybeSingle();
+        if (data) {
+          setEngId((data as any).id);
+          setScopedFy((data as any).financial_year ?? null);
+          setScopedIsPy(!!(data as any).is_py_shell);
+          return;
+        }
+      }
+
       if (!selectedEngagement) return;
       const clientId = (selectedEngagement as any).client_id;
       const fy       = (selectedEngagement as any).financial_year;
@@ -119,9 +143,11 @@ export default function LedgerVouchersView() {
         id = (data as any)?.engagement_id ?? null;
       }
       setEngId(id);
+      setScopedFy(fy ?? null);
+      setScopedIsPy(!!(selectedEngagement as any)?.is_py_shell);
     }
     resolveEngId();
-  }, [selectedEngagement]);
+  }, [selectedEngagement, engOverride]);
 
   // Load vouchers for this ledger and the TB row
   useEffect(() => {
@@ -216,7 +242,8 @@ export default function LedgerVouchersView() {
   const closingAbs  = Math.abs(closing);
   const closingType = closing >= 0 ? "Dr" : "Cr";
 
-  const fy = (selectedEngagement as any)?.financial_year ?? "";
+  // Prefer the engagement we actually scoped to (handles PY Shell override)
+  const fy = scopedFy || ((selectedEngagement as any)?.financial_year ?? "");
 
   return (
     <div className="p-6 space-y-4 max-w-6xl mx-auto">
@@ -229,6 +256,12 @@ export default function LedgerVouchersView() {
         <span className="text-muted-foreground text-sm">/ Tally Sync /</span>
         <span className="text-sm font-medium text-foreground">{decodeHtml(ledgerName)}</span>
       </div>
+
+      {scopedIsPy && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <b>PY Shell context</b> — viewing FY {fy || "—"} ledger data scoped to the Prior-Year shell engagement.
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">
@@ -322,7 +355,7 @@ export default function LedgerVouchersView() {
                                           <td className="px-3 py-1.5">
                                             <button
                                               className="text-left hover:underline hover:text-blue-700 transition-colors"
-                                              onClick={e => { e.stopPropagation(); navigate(`/audit/tally-sync/ledger/${encodeURIComponent(item.ledger_name)}`); }}
+                                              onClick={e => { e.stopPropagation(); navigate(`/audit/tally-sync/ledger/${encodeURIComponent(item.ledger_name)}${engOverride ? `?eng=${engOverride}` : ""}`); }}
                                             >
                                               {decodeHtml(item.ledger_name)}
                                             </button>

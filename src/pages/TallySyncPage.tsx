@@ -1784,7 +1784,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                                   <TableCell className="text-foreground" style={{ paddingLeft: `${indent + 20}px` }}>
                                     <button
                                       className="text-left hover:underline hover:text-blue-700 transition-colors"
-                                      onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(r.ledger_name)}`)}
+                                      onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(r.ledger_name)}${tallyEngId ? `?eng=${tallyEngId}` : ""}`)}
                                     >
                                       {decodeHtml(r.ledger_name)}
                                     </button>
@@ -1949,7 +1949,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                               <TableCell className="text-foreground" style={{ paddingLeft: `${depth * 16 + 32}px` }}>
                                 <button
                                   className="text-left hover:underline hover:text-blue-700 transition-colors"
-                                  onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(l.ledger_name)}`)}
+                                  onClick={() => navigate(`/audit/tally-sync/ledger/${encodeURIComponent(l.ledger_name)}${tallyEngId ? `?eng=${tallyEngId}` : ""}`)}
                                 >
                                   {decodeHtml(l.ledger_name)}
                                 </button>
@@ -2198,7 +2198,7 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
                                               <td className="px-3 py-1.5">
                                                 <button
                                                   className="text-left hover:underline hover:text-blue-700 transition-colors"
-                                                  onClick={e => { e.stopPropagation(); navigate(`/audit/tally-sync/ledger/${encodeURIComponent(item.ledger_name)}`); }}
+                                                  onClick={e => { e.stopPropagation(); navigate(`/audit/tally-sync/ledger/${encodeURIComponent(item.ledger_name)}${tallyEngId ? `?eng=${tallyEngId}` : ""}`); }}
                                                 >
                                                   {decodeHtml(item.ledger_name)}
                                                 </button>
