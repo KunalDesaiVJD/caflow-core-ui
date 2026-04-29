@@ -154,12 +154,14 @@ const buildDefaults = (companyName: string, fyEnd: string): SectionMap => ({
     `effectively as at ${fyEnd}.`,
 });
 
-// FY end string → "31st March, 20XX"
+// FY end string → "31st March, 2026"
+// Handles formats: "FY 2025-26", "2025-26", "2025-2026", "2025-26"
 function fyEndDate(fy?: string | null): string {
   if (!fy) return '31st March, 20XX';
-  const m = String(fy).match(/^(\d{4})-(\d{2})$/);
+  const m = String(fy).match(/(\d{4})\s*[-–]\s*(\d{2,4})/);
   if (!m) return '31st March, 20XX';
-  const endYear = parseInt(m[1]) + 1;
+  const end = m[2];
+  const endYear = end.length === 2 ? m[1].slice(0, 2) + end : end;
   return `31st March, ${endYear}`;
 }
 
@@ -173,6 +175,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [openSections, setOpenSections] = useState<string[]>(SECTIONS.map(s => s.key));
 
   // Header / signature
   const [firm, setFirm] = useState<any>(null);
@@ -328,6 +331,18 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="outline" size="sm" className="gap-1 text-xs"
+            onClick={() => setOpenSections(SECTIONS.map(s => s.key))}
+          >
+            ↕ Expand All
+          </Button>
+          <Button
+            variant="outline" size="sm" className="gap-1 text-xs"
+            onClick={() => setOpenSections([])}
+          >
+            ↕ Collapse All
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="gap-1">
@@ -362,7 +377,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       </Card>
 
       {/* Six editable sections */}
-      <Accordion type="multiple" defaultValue={SECTIONS.map(s => s.key)} className="space-y-2">
+      <Accordion type="multiple" value={openSections} onValueChange={setOpenSections} className="space-y-2">
         {SECTIONS.map((s, idx) => (
           <AccordionItem key={s.key} value={s.key} className="border rounded-lg">
             <AccordionTrigger className="px-4 py-3 hover:no-underline">
