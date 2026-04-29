@@ -73,11 +73,29 @@ type SmartRule = { rowId: string; keywords: string[] };
 
 export const NOTE_SMART_MAP: Record<string, SmartRule[]> = {
   // ── Other Current Liabilities ──────────────────────────────────────────────
+  // Smart-merge groups multiple ledgers with similar names into a single static
+  // row. Example: "TDS 192B", "TDS 194I", "TDS 194C" all merge into "TDS Payable".
+  // Individual ledger names remain visible via the "+" expander on the static row.
   other_cl: [
-    { rowId: "tds_payable",  keywords: ["tds", "tax deducted"] },
-    { rowId: "gst_payable",  keywords: ["gst payable", "output gst", "gst liability", "igst payable", "cgst payable", "sgst payable"] },
-    { rowId: "emp_payable",  keywords: ["salary payable", "wages payable", "employee payable", "staff payable"] },
-    { rowId: "inc_advance",  keywords: ["advance from customer", "income received in advance", "customer advance"] },
+    { rowId: "tds_payable",  keywords: [
+        "tds", "tax deducted", "t.d.s",
+        "tds payable", "tds 192", "tds 194", "tds 195",
+        "tds on salary", "tds on rent", "tds on professional", "tds on contractor",
+        "tds on commission", "tds on interest",
+    ] },
+    { rowId: "gst_payable",  keywords: [
+        "gst payable", "output gst", "gst liability",
+        "igst payable", "cgst payable", "sgst payable",
+        "gst output", "rcm payable", "reverse charge",
+    ] },
+    { rowId: "emp_payable",  keywords: [
+        "salary payable", "wages payable", "employee payable", "staff payable",
+        "salary outstanding", "wages outstanding", "salary due", "wages due",
+    ] },
+    { rowId: "inc_advance",  keywords: [
+        "advance from customer", "income received in advance", "customer advance",
+        "advance received", "advance payment received",
+    ] },
   ],
 
   // ── Cash & Bank Balances ───────────────────────────────────────────────────

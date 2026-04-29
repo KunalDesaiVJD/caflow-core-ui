@@ -171,7 +171,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
     engagement?.client_name || engagement?.clients?.name || '[Company Name]';
 
   const [sections, setSections] = useState<SectionMap>(() => buildDefaults(companyName, fyEnd));
-  const [place, setPlace] = useState('');
+  const [place, setPlace] = useState('Ahmedabad'); // firm's primary city; user-editable
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -194,7 +194,7 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
       .then(({ data }) => {
         if (data) {
           setFirm(data);
-          if (!place) setPlace(data.state || '');
+          // Default place stays as "Ahmedabad" — don't override with firm.state
         }
       });
   }, [engagement?.firm_id]);
@@ -203,10 +203,13 @@ export function IFCReportTab({ engagementId, engagement }: Props) {
     if (!engagement?.partner_id) return;
     supabase
       .from('users')
-      .select('name, icai_reg_no')
+      .select('name, icai_reg_no, email')
       .eq('id', engagement.partner_id)
-      .single()
-      .then(({ data }) => { if (data) setPartner(data); });
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) { console.warn('[IFCReportTab] partner fetch failed:', error.message); return; }
+        if (data) setPartner(data);
+      });
   }, [engagement?.partner_id]);
 
   // ── Load saved IFC data ──

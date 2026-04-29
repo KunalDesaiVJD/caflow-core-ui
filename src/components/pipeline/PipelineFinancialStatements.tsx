@@ -828,7 +828,8 @@ function buildNCEBSRows(
     { kind: "item", label: "(b) Inventories",                          noteNo: sn(17, cy["NCE_STCK"],  py["NCE_STCK"]),  cy: pos("NCE_STCK"),  py: pospy("NCE_STCK"),  indent: 1, code: "NCE_STCK" },
     { kind: "item", label: "(c) Trade receivables",                    noteNo: sn(18, cy["NCE_TR"],    py["NCE_TR"]),    cy: pos("NCE_TR"),    py: pospy("NCE_TR"),    indent: 1, code: "NCE_TR" },
     { kind: "item", label: "(d) Cash and bank balances",               noteNo: sn(19, cy["NCE_CASH"],  py["NCE_CASH"]),  cy: pos("NCE_CASH"),  py: pospy("NCE_CASH"),  indent: 1, code: "NCE_CASH" },
-    { kind: "item", label: "(e) Short-term loans and advances",        noteNo: sn(20, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
+    // NCE: short-term loans share Note 14 with long-term loans (combined LT/ST in NCENotesConfig)
+    { kind: "item", label: "(e) Short-term loans and advances",        noteNo: sn(14, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
     { kind: "item", label: "(f) Other current assets",                 noteNo: sn(21, cy["NCE_OCA"],   py["NCE_OCA"]),   cy: pos("NCE_OCA"),   py: pospy("NCE_OCA"),   indent: 1, code: "NCE_OCA" },
     { kind: "spacer" },
     { kind: "total", label: "TOTAL ASSETS", cy: totalAst, py: totalAstPy },

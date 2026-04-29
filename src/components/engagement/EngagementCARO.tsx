@@ -217,7 +217,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
   // Header / signature data
   const [firm, setFirm] = useState<any>(null);
   const [partner, setPartner] = useState<any>(null);
-  const [place, setPlace] = useState<string>("");
+  // Default place is Ahmedabad (firm's primary city); user-editable.
+  const [place, setPlace] = useState<string>("Ahmedabad");
   const [reportDate, setReportDate] = useState<string>(
     new Date().toISOString().slice(0, 10),
   );
@@ -286,7 +287,8 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
       .then(({ data }) => {
         if (data) {
           setFirm(data);
-          if (!place) setPlace(data.state || data.address || "");
+          // Place defaults to "Ahmedabad" (firm's primary city). Don't override
+          // unless user has explicitly typed something different.
         }
       });
   }, [engagement?.firm_id]);
@@ -295,10 +297,13 @@ export function EngagementCARO({ engagement, client, onUpdate }: Props) {
     if (!engagement?.partner_id) return;
     supabase
       .from("users")
-      .select("name, icai_reg_no")
+      .select("name, icai_reg_no, email")
       .eq("id", engagement.partner_id)
-      .single()
-      .then(({ data }) => { if (data) setPartner(data); });
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) { console.warn('[EngagementCARO] partner fetch failed:', error.message); return; }
+        if (data) setPartner(data);
+      });
   }, [engagement?.partner_id]);
 
   // ── Load clause rows (only if applicable) ──
