@@ -445,6 +445,21 @@ export async function getPreviousYearFsAmounts(
  * decide presentation. The Stage 5 BS view applies sign by section, so we
  * keep sums signed here for symmetry.
  */
+// Detects Tally's special "Profit & Loss A/c" ledger by any of its common names.
+// MUST stay in sync with PipelineStage3.tsx::isTallyPLAccount.
+// In Tally, this ledger's closing balance = opening retained earnings + current-year
+// net profit. When mapped to a BS code (Reserves & Surplus), summing the closing
+// balance double-counts net profit because Stage3 already auto-credits the CY
+// profit to BS_EQ_RS via computeTotal. Use opening_balance only for BS codes.
+function isTallyPLAccount(name: string): boolean {
+  const n = (name || "").toLowerCase().trim();
+  if (n === "profit & loss a/c" || n === "profit and loss a/c" ||
+      n === "p & l a/c"         || n === "p&l a/c"             ||
+      n === "profit & loss account" || n === "profit and loss account" ||
+      n === "p & l account") return true;
+  return /^profit\s*[&and]+\s*loss(\s*(a\/c|account))?$/i.test((name || "").trim());
+}
+
 export function sumLedgersByFsCodes(
   tb: TBLedger[],
   mapping: COAMapping,
@@ -452,10 +467,19 @@ export function sumLedgersByFsCodes(
 ): number {
   if (!fsCodes.length) return 0;
   const codeSet = new Set(fsCodes);
+  // If ALL target codes are BS codes, the Tally P&L A/c must contribute its
+  // OPENING balance only (prior retained earnings). The CY net profit is
+  // already aggregated separately into BS_EQ_RS by Stage3's computedAmounts.
+  const allBS = fsCodes.every(c => c.startsWith("BS_"));
   let total = 0;
   for (const acct of tb) {
     const code = mapping[acct.account_name]?.code;
-    if (code && codeSet.has(code)) total += acct.balance;
+    if (!code || !codeSet.has(code)) continue;
+    if (allBS && isTallyPLAccount(acct.account_name)) {
+      total += acct.opening_balance ?? 0;
+    } else {
+      total += acct.balance;
+    }
   }
   return Math.round(total * 100) / 100;
 }
