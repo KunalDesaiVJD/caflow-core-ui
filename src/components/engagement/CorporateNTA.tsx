@@ -27,7 +27,8 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Save, RotateCcw, Printer, Plus, Loader2 } from "lucide-react";
+import { Save, RotateCcw, FileDown, Plus, Loader2 } from "lucide-react";
+import { exportToWord } from "@/lib/exportUtils";
 import {
   NTA_POLICY_META,
   NTA_POLICY_DEFAULTS,
@@ -393,6 +394,40 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
     toast.info("Reset to defaults — auto-saving…");
   }
 
+  // ── Export Word ───────────────────────────────────────────────────────────
+  function handleExportWord() {
+    const policiesHtml = data.policies.map((p, i) => {
+      const num = `2.${i + 1}`;
+      const body = resolvePolicy(p);
+      return `<h3>${num} ${p.title || ""}</h3><p>${body.replace(/\n/g, "<br/>")}</p>`;
+    }).join("");
+
+    const generalNotesHtml = data.general_notes.map((n, i) => {
+      const body = resolveGeneralNote(n);
+      return `<p><strong>${i + 1}.</strong> ${body.replace(/\n/g, "<br/>")}</p>`;
+    }).join("");
+
+    const incDateFormatted = fmtDate(incDateIso) || "____";
+
+    const html = `
+      <h1>Note No: 1 — DISCLOSURE OF ACCOUNTING POLICIES &amp; NOTES FORMING PART OF THE ANNUAL ACCOUNTS</h1>
+      <h2>Section (a) — Overview of the Reporting Entity</h2>
+      <p>
+        <strong>${companyName || "[Company Name]"}</strong> (hereinafter referred to as "the Company")
+        is a company incorporated under the Companies Act, ${actYear} on ${incDateFormatted}.
+        The Company's CIN is <strong>${cin || "____"}</strong>.
+        Its registered office is situated at ${regAddress || "____"}.
+        The Company is primarily engaged in ${bizActivity || "____"}.
+      </p>
+      <h2>Section (b) — Significant Accounting Policies</h2>
+      ${policiesHtml}
+      <h2>Section (c) — General Notes</h2>
+      ${generalNotesHtml}
+    `;
+    const fyLabel = (engagement?.financial_year ?? "").replace("/", "-");
+    exportToWord(html, `Notes_to_Accounts_${companyName}_FY${fyLabel}.doc`);
+  }
+
   // ── Add-policy inline form ─────────────────────────────────────────────────
   const [showAddPolicy,  setShowAddPolicy]  = useState(false);
   const [newPolicyTitle, setNewPolicyTitle] = useState("");
@@ -410,8 +445,8 @@ export function CorporateNTA({ engagement, client, onUpdate }: Props) {
           <Button variant="outline" size="sm" onClick={resetToDefaults} disabled={saving}>
             <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset to Defaults
           </Button>
-          <Button variant="outline" size="sm" onClick={() => window.print()}>
-            <Printer className="w-3.5 h-3.5 mr-1" /> Print
+          <Button variant="outline" size="sm" onClick={handleExportWord}>
+            <FileDown className="w-3.5 h-3.5 mr-1" /> Export Word
           </Button>
           <Button size="sm" onClick={saveNow} disabled={saving}>
             {saving

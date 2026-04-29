@@ -41,8 +41,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import {
-  Droplets, Save, Loader2, Sparkles, Info, AlertTriangle,
+  Droplets, Save, Loader2, Sparkles, Info, AlertTriangle, FileDown,
 } from 'lucide-react';
+import { exportToWord } from '@/lib/exportUtils';
 
 interface Props {
   engagementId: string;
@@ -195,6 +196,35 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
     setAutoFilling(false);
   }
 
+  // ── Export Word ─────────────────────────────────────────────────────────
+  function handleExportWord() {
+    const fmt = (n: number | null) => (n != null ? fmtINR(n) : '—');
+    const method = (engagement?.cash_flow_method || 'indirect').toUpperCase();
+    const fy = engagement?.financial_year ?? '';
+
+    const html = `
+      <h1>Cash Flow Statement — Notes</h1>
+      <p>Financial Year: <strong>${fy}</strong> &nbsp;|&nbsp; Method: <strong>${method}</strong></p>
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%">
+        <thead>
+          <tr style="background:#f0f0f0">
+            <th style="text-align:left">Particulars</th>
+            <th style="text-align:right">Amount (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Cash &amp; Cash Equivalents — Opening Balance</td><td style="text-align:right">${fmt(data.opening_balance)}</td></tr>
+          <tr><td>Net Cash from Operating Activities (A)</td><td style="text-align:right">${fmt(data.net_operating)}</td></tr>
+          <tr><td>Net Cash from Investing Activities (B)</td><td style="text-align:right">${fmt(data.net_investing)}</td></tr>
+          <tr><td>Net Cash from Financing Activities (C)</td><td style="text-align:right">${fmt(data.net_financing)}</td></tr>
+          <tr style="font-weight:bold"><td>Cash &amp; Cash Equivalents — Closing Balance</td><td style="text-align:right">${fmt(data.closing_balance)}</td></tr>
+        </tbody>
+      </table>
+      ${data.disclosure_notes ? `<h2>Disclosure Notes</h2><p>${data.disclosure_notes.replace(/\n/g, '<br/>')}</p>` : ''}
+    `;
+    exportToWord(html, `CashFlow_Notes_FY${fy}.doc`);
+  }
+
   // Reconciliation check — does (opening + ops + inv + fin) ≈ closing?
   const recon = (() => {
     const { opening_balance: o, closing_balance: c, net_operating: a, net_investing: b, net_financing: f } = data;
@@ -235,6 +265,10 @@ export function CashFlowNotesTab({ engagementId, engagement }: Props) {
           >
             {autoFilling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             Auto-fill from TB
+          </Button>
+          <Button variant="outline" onClick={handleExportWord} className="gap-1">
+            <FileDown className="w-4 h-4" />
+            Export Word
           </Button>
           <Button onClick={saveAll} disabled={saving} className="gap-1">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
