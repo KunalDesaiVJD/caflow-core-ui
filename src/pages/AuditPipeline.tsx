@@ -201,8 +201,7 @@ export default function AuditPipeline() {
     client_id: "", financial_year: "2024-25", audit_period_type: "annual", period_label: "",
     audit_type: "statutory", entity_type: "company", audit_firm_id: "", partner_id: "", partner_name: "",
   });
-  const [questionnaire, setQuestionnaire] = useState<Record<string, string>>({});
-  const [directors, setDirectors] = useState<{name:string;din:string}[]>([{name:"",din:""}]);
+  const [questionnaire, setQuestionnaire] = useState<Record<string, any>>({});
   const [planning, setPlanning] = useState({
     materiality: "", perf_materiality_pct: "75", team_members: [] as string[],
     key_areas: "", risk_profile: "medium", risk_justification: "",
@@ -498,11 +497,7 @@ export default function AuditPipeline() {
       partner_name: engagement.partner_name || "",
     });
     if (engagement.questionnaire_answers && typeof engagement.questionnaire_answers === "object") {
-      const qa = engagement.questionnaire_answers as any;
-      setQuestionnaire(qa as Record<string, string>);
-      if (Array.isArray(qa?.directors) && qa.directors.length > 0) {
-        setDirectors(qa.directors);
-      }
+      setQuestionnaire(engagement.questionnaire_answers as Record<string, any>);
     }
     if (engagement.materiality) {
       const m = engagement.materiality as any;
@@ -594,10 +589,19 @@ export default function AuditPipeline() {
   }, [form1A.entity_type, form1A.audit_type, questionnaire]);
 
   const setQ = (key: string, val: string) => setQuestionnaire(q => ({ ...q, [key]: val }));
-  const addDirector = () => setDirectors(d => [...d, {name:"",din:""}]);
-  const removeDirector = (idx: number) => setDirectors(d => d.filter((_,i)=>i!==idx));
+
+  // Directors live inside questionnaire state — no separate state, no stale-closure risk
+  const directors: {name:string;din:string}[] = useMemo(() => {
+    const d = (questionnaire as any).directors;
+    return Array.isArray(d) && d.length > 0 ? d : [{name:"",din:""}];
+  }, [questionnaire]);
+
+  const addDirector = () =>
+    setQuestionnaire(q => ({ ...q, directors: [...directors, {name:"",din:""}] }));
+  const removeDirector = (idx: number) =>
+    setQuestionnaire(q => ({ ...q, directors: directors.filter((_,i) => i !== idx) }));
   const updateDirector = (idx: number, field: "name"|"din", val: string) =>
-    setDirectors(d => d.map((item,i) => i===idx ? {...item,[field]:val} : item));
+    setQuestionnaire(q => ({ ...q, directors: directors.map((d,i) => i===idx ? {...d,[field]:val} : d) }));
 
   // ─── Validation ───
   const block1AValid = form1A.client_id && form1A.financial_year && form1A.entity_type && form1A.audit_type && form1A.audit_firm_id;
@@ -747,7 +751,7 @@ export default function AuditPipeline() {
       period_label: form1A.period_label || null,
       audit_firm_id: form1A.audit_firm_id || null,
       partner_name:  form1A.partner_name  || null,
-      questionnaire_answers: { ...questionnaire, directors },
+      questionnaire_answers: questionnaire,
       // Sync PY data-source choice to the dedicated column so Stage 10 can
       // query it without parsing questionnaire JSON. Map questionnaire values
       // to canonical py_source strings (prior_engagement | py_shell | manual | none).
@@ -804,7 +808,7 @@ export default function AuditPipeline() {
     refetchEng();
     queryClient.invalidateQueries({ queryKey: ["audit-engagements-list"] });
     setSaving(false);
-  }, [selectedEngId, form1A, questionnaire, directors, planning, autoFlags, stageStatuses, isCorporateForBlockC]);
+  }, [selectedEngId, form1A, questionnaire, planning, autoFlags, stageStatuses, isCorporateForBlockC]);
 
   const partners = (firmUsers || []).filter(u => ["partner_ca", "firm_admin"].includes(u.role));
   const grouped = useMemo(() => {
