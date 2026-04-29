@@ -160,19 +160,35 @@ export function MRLTab({ engagementId, engagement }: Props) {
   // ── Load saved MRL data ──
   const loadData = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await (supabase as any)
-      .from("mrl_data")
-      .select("clauses_json, header_data")
-      .eq("engagement_id", engagementId)
-      .maybeSingle();
 
+    // Always fetch directors directly from audit_engagements.questionnaire_answers —
+    // the `engagement` prop may arrive before questionnaire_answers is populated,
+    // so we query it directly to guarantee Block C data is available.
+    const [mrlResult, engResult] = await Promise.all([
+      (supabase as any)
+        .from("mrl_data")
+        .select("clauses_json, header_data")
+        .eq("engagement_id", engagementId)
+        .maybeSingle(),
+      (supabase as any)
+        .from("audit_engagements")
+        .select("questionnaire_answers")
+        .eq("id", engagementId)
+        .maybeSingle(),
+    ]);
+
+    const { data, error } = mrlResult;
     if (error && error.code !== "PGRST116") {
       toast.error("Failed to load MRL: " + error.message);
     }
 
+    // Directors from Block C always win over any previously saved MRL header_data
+    const engDirs: {name:string;din:string}[] =
+      ((engResult.data?.questionnaire_answers as any)?.directors ?? [])
+        .filter((d: any) => d.name?.trim() || d.din?.trim());
+
     if (data) {
       if (data.clauses_json?.length) {
-        // Merge saved clause text/selected with current template order
         const savedMap = new Map<string, { selected: boolean; text: string }>(
           (data.clauses_json as any[]).map((r: any) => [r.id, r])
         );
@@ -186,13 +202,10 @@ export function MRLTab({ engagementId, engagement }: Props) {
       }
       if (data.header_data) {
         const saved = data.header_data as Partial<HeaderData>;
-        // Block C directors ALWAYS take priority — same rule as CorporateSignatureBlock.
-        // If engagement has directors from questionnaire_answers, use them unconditionally.
-        // Fall back to whatever was saved in header_data only when Block C is empty.
-        const engDirs: {name:string;din:string}[] = (engagement as any)?.questionnaire_answers?.directors ?? [];
         setHeader((prev) => ({
           ...prev,
           ...saved,
+          // Block C takes priority; fall back to saved only if Block C is empty
           director1Name: engDirs[0]?.name || saved.director1Name || "",
           director1Din:  engDirs[0]?.din  || saved.director1Din  || "",
           director2Name: engDirs[1]?.name || saved.director2Name || "",
@@ -202,7 +215,6 @@ export function MRLTab({ engagementId, engagement }: Props) {
     } else {
       // First load: pre-fill opening para with year + directors from Block C
       setClauses(buildDefaultClauses());
-      const engDirs: {name:string;din:string}[] = (engagement as any)?.questionnaire_answers?.directors ?? [];
       setHeader((prev) => ({
         ...prev,
         openingPara: MRL_OPENING_PARA_TEMPLATE.replace(/\[YEAR\]/g, auditYear),
@@ -213,8 +225,7 @@ export function MRLTab({ engagementId, engagement }: Props) {
       }));
     }
     setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engagementId, buildDefaultClauses, auditYear, engagement?.questionnaire_answers]);
+  }, [engagementId, buildDefaultClauses, auditYear]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
