@@ -60,6 +60,22 @@ export function formatINRWhole(n: number | null | undefined): string {
   return v < 0 ? `(${abs})` : abs;
 }
 
+/**
+ * Module-level active divisor. The Provider keeps this in sync with the
+ * selected scale so legacy formatters (which can't easily call hooks because
+ * they're invoked from non-component scopes — Excel writers, deeply nested
+ * helpers, etc.) can still scale by importing `formatScaledINRWhole`.
+ */
+let _activeDivisor = 1;
+export function getActiveFsDivisor(): number { return _activeDivisor; }
+
+/** Scale + whole-rupee Indian formatter that reads the module-level scale. */
+export function formatScaledINRWhole(n: number | null | undefined): string {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "-";
+  return formatINRWhole(v / _activeDivisor);
+}
+
 interface ProviderProps {
   engagementId?: string | null;
   children:      ReactNode;
@@ -93,6 +109,13 @@ export function FsUnitsProvider({ engagementId, children }: ProviderProps) {
     setScaleState(s);
     try { localStorage.setItem(STORAGE_KEY(engagementId), s); } catch { /* ignore */ }
   };
+
+  // Keep the module-level divisor in sync so legacy helpers can scale too.
+  useEffect(() => {
+    const m = FS_SCALES.find(s => s.key === scale)!;
+    _activeDivisor = m.divisor;
+    return () => { _activeDivisor = 1; };
+  }, [scale]);
 
   const value = useMemo<FsUnitsContextValue>(() => {
     const meta = FS_SCALES.find(s => s.key === scale)!;

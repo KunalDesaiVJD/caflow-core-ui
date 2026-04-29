@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { FsUnitsProvider, FsUnitsToggle } from "@/lib/fsUnits";
+import { FsUnitsProvider, FsUnitsToggle, formatScaledINRWhole } from "@/lib/fsUnits";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -240,17 +240,12 @@ interface PipelineFinancialStatementsProps {
 // Phase UI-2/3/4 — Pixel-perfect in-UI render helpers
 // ═══════════════════════════════════════
 
-// Indian numbering (1,23,45,678.00) with parens for negatives and "-" for zero.
-// Mirrors the Excel money format `#,##0.00;(#,##0.00);"-"` so the on-screen
-// statement reads identically to the exported workbook.
+// Indian numbering, whole rupees (no paise — auditor-friendly per user
+// instruction), parens for negatives, "-" for zero. Reads the active
+// FsUnits scale so a "Rs. in '000" / Lakhs / Crores toggle in the toolbar
+// applies to every figure in BS/PL/Notes without touching call sites.
 function formatINR(n: number | null | undefined): string {
-  const v = Number(n);
-  if (!Number.isFinite(v) || Math.abs(v) < 0.005) return "-";
-  const abs = Math.abs(v).toLocaleString("en-IN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return v < 0 ? `(${abs})` : abs;
+  return formatScaledINRWhole(n);
 }
 
 // Smart note: only show a note number when at least one year has non-zero data.
@@ -4962,27 +4957,27 @@ export default function PipelineFinancialStatements({
         <Card className={cn(activeBsBalanced ? "border-primary/30" : "border-destructive/30")}>
           <CardContent className="p-3 text-center">
             <p className={cn("text-2xl font-bold", activeBsBalanced ? "text-primary" : "text-destructive")}>
-              {activeBsBalanced ? "✓" : `₹${Math.abs(activeBsDiff).toLocaleString("en-IN")}`}
+              {activeBsBalanced ? "✓" : `₹${formatINR(Math.abs(activeBsDiff))}`}
             </p>
             <p className="text-[10px] text-muted-foreground uppercase">BS Check</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-foreground">₹{Math.abs(activeTotalAssets).toLocaleString("en-IN")}</p>
+            <p className="text-2xl font-bold text-foreground">₹{formatINR(Math.abs(activeTotalAssets))}</p>
             <p className="text-[10px] text-muted-foreground uppercase">Total Assets</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-foreground">₹{Math.abs(activeTotalLiabilities).toLocaleString("en-IN")}</p>
+            <p className="text-2xl font-bold text-foreground">₹{formatINR(Math.abs(activeTotalLiabilities))}</p>
             <p className="text-[10px] text-muted-foreground uppercase">Total Equity + Liabilities</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
             <p className={cn("text-2xl font-bold", activeNetProfit >= 0 ? "text-primary" : "text-destructive")}>
-              {activeNetProfit >= 0 ? "+" : ""}₹{Math.abs(activeNetProfit).toLocaleString("en-IN")}
+              {activeNetProfit >= 0 ? "+" : ""}₹{formatINR(Math.abs(activeNetProfit))}
             </p>
             <p className="text-[10px] text-muted-foreground uppercase">Net Profit / (Loss)</p>
           </CardContent>

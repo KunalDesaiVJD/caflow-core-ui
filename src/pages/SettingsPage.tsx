@@ -5,6 +5,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import RequiredDocsMaster from "./RequiredDocsMaster";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -315,12 +316,13 @@ const SettingsPage = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="team" className="text-xs">Team</TabsTrigger>
           <TabsTrigger value="notifications" className="text-xs">Notifications</TabsTrigger>
           <TabsTrigger value="scrutiny-rules" className="text-xs">Scrutiny Rules</TabsTrigger>
           <TabsTrigger value="billing" className="text-xs">Billing</TabsTrigger>
           <TabsTrigger value="tax-audit" className="text-xs">Tax Audit</TabsTrigger>
+          <TabsTrigger value="required-docs" className="text-xs">Required Docs</TabsTrigger>
         </TabsList>
 
         {/* ─── TAB 1: Team ─── */}
@@ -558,6 +560,11 @@ const SettingsPage = () => {
               </Link>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ─── TAB 6: Required Docs ─── */}
+        <TabsContent value="required-docs">
+          <RequiredDocsMaster embedded />
         </TabsContent>
       </Tabs>
 

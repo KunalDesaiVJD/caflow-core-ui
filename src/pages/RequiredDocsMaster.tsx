@@ -31,7 +31,8 @@ const blank: DraftRow = {
   doc_name: "", description: "", category: "Other", is_active: true, sort_order: 0,
 };
 
-export default function RequiredDocsMaster() {
+interface RDMProps { embedded?: boolean }
+export default function RequiredDocsMaster({ embedded = false }: RDMProps) {
   const { firmId, rows, loading, refresh, seedDefaults } = useRequiredDocsMaster();
   const { toast } = useToast();
   const [busy, setBusy]     = useState(false);
@@ -97,14 +98,23 @@ export default function RequiredDocsMaster() {
   };
 
   return (
-    <div className="p-6 space-y-4 max-w-5xl mx-auto">
+    <div className={embedded ? "space-y-4" : "p-6 space-y-4 max-w-5xl mx-auto"}>
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Required Documents Master</h1>
-          <p className="text-sm text-muted-foreground">
-            Curate the document list shown in the Query Sheet "Required Documents" dropdown.
-          </p>
-        </div>
+        {!embedded && (
+          <div>
+            <h1 className="text-2xl font-bold">Required Documents Master</h1>
+            <p className="text-sm text-muted-foreground">
+              Curate the document list shown in the Query Sheet "Required Documents" dropdown.
+            </p>
+          </div>
+        )}
+        {embedded && (
+          <div>
+            <p className="text-sm text-muted-foreground">
+              Curate the document list shown in the Query Sheet "Required Documents" dropdown.
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           {rows.length === 0 && !loading && (
             <Button variant="outline" onClick={async () => { setBusy(true); await seedDefaults(); setBusy(false); }} disabled={busy}>
