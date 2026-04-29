@@ -111,7 +111,7 @@ function wPara(
     pPrParts.push(
       `<w:spacing${opts.spaceBefore !== undefined ? ` w:before="${opts.spaceBefore}"` : ""}` +
       `${opts.spaceAfter !== undefined ? ` w:after="${opts.spaceAfter}"` : ""}` +
-      ` w:line="276" w:lineRule="auto"/>`
+      ` w:line="360" w:lineRule="auto"/>`
     );
   }
   if (opts.keepNext) pPrParts.push("<w:keepNext/>");
@@ -165,7 +165,7 @@ function clausePara(num: number, text: string, spaceAfterTwips: number): string 
     `<w:jc w:val="both"/>` +
     `<w:tabs><w:tab w:val="left" w:pos="${indLeft}"/></w:tabs>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="276" w:lineRule="auto"/>` +
+    `<w:spacing w:after="${spaceAfterTwips}" w:line="360" w:lineRule="auto"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(`${num}.`, { bold: true })}${wTab()}${wRun(text)}</w:p>`;
 }
@@ -184,7 +184,7 @@ function subClausePara(text: string, spaceAfterTwips: number): string {
   const pPr = `<w:pPr>` +
     `<w:jc w:val="both"/>` +
     `<w:ind w:left="${indLeft}" w:hanging="${indHang}"/>` +
-    `<w:spacing w:after="${spaceAfterTwips}" w:line="276" w:lineRule="auto"/>` +
+    `<w:spacing w:after="${spaceAfterTwips}" w:line="360" w:lineRule="auto"/>` +
     `</w:pPr>`;
   return `<w:p>${pPr}${wRun(text)}</w:p>`;
 }
@@ -350,7 +350,7 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
   <w:body>
     ${paras.join("\n    ")}
     <w:sectPr>
-      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1800"
                w:header="708" w:footer="708" w:gutter="0"/>
     </w:sectPr>
@@ -374,7 +374,7 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     <w:pPrDefault>
       <w:pPr>
         <w:jc w:val="both"/>
-        <w:spacing w:after="0" w:line="276" w:lineRule="auto"/>
+        <w:spacing w:after="0" w:line="360" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>
   </w:docDefaults>
@@ -382,7 +382,7 @@ export async function exportMrlToDocx(params: MRLDocxParams, filename: string): 
     <w:name w:val="Normal"/>
     <w:pPr>
       <w:jc w:val="both"/>
-      <w:spacing w:after="0" w:line="276" w:lineRule="auto"/>
+      <w:spacing w:after="0" w:line="360" w:lineRule="auto"/>
     </w:pPr>
     <w:rPr>
       <w:rFonts w:ascii="Cambria" w:hAnsi="Cambria" w:cs="Cambria"/>
